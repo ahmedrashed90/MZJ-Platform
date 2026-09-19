@@ -54,10 +54,13 @@ create table if not exists marketing.creative_types (
   name text not null unique,
   short_code text not null,
   primary_department_id uuid references marketing.departments(id) on delete set null,
+  supported_publish_formats jsonb not null default '[]'::jsonb,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table marketing.creative_types add column if not exists supported_publish_formats jsonb not null default '[]'::jsonb;
 
 create table if not exists marketing.campaign_types (
   id uuid primary key default gen_random_uuid(),

@@ -121,11 +121,15 @@ function PlatformEditor({
   value,
   onChange,
   onYouTubeSelected,
+  supportedFormats = [],
+  preserveSelectedUnsupported = false,
 }: {
   meta: MarketingMeta | null;
   value: PlatformAssignment[];
   onChange: (value: PlatformAssignment[]) => void;
   onYouTubeSelected: () => void;
+  supportedFormats?: string[];
+  preserveSelectedUnsupported?: boolean;
 }) {
   return <div className="marketing-publish-platform-editor">{meta?.platforms.map((platform) => {
     const selected = value.find((item) => item.platformId === platform.id);
@@ -146,7 +150,12 @@ function PlatformEditor({
         />
         <span>{platform.name}</span>
       </label>
-      {selected ? <div className="marketing-publish-post-types">{meta.postTypes.filter((item) => item.platform_id === platform.id).map((postType) => {
+      {selected ? <div className="marketing-publish-post-types">{meta.postTypes.filter((item) => {
+        if (item.platform_id !== platform.id) return false;
+        if (!supportedFormats.length) return true;
+        const checked = selected.postTypeIds.includes(item.id);
+        return supportedFormats.includes(normalizeMarketingPublishFormat(item.name)) || (preserveSelectedUnsupported && checked);
+      }).map((postType) => {
         const checked = selected.postTypeIds.includes(postType.id);
         return <label key={postType.id} className={checked ? "selected" : ""}>
           <input
@@ -696,7 +705,7 @@ export function PublishPrepPage() {
           {manualUpload?.active ? <div className="marketing-manual-upload-status"><SpinnerGap className="marketing-spin" size={19} /><span>جارٍ رفع الملفات إلى Zoho WorkDrive بالترتيب...</span><button type="button" className="secondary" onClick={() => manualUploadControlRef.current?.cancel()}>إلغاء الرفع</button></div> : null}
         </section>
 
-        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>بوست الصور يُنشر كمنشور متعدد الصور، والستوري تُنشر كإطارات مستقلة بنفس ترتيب الملفات.</p></div></header><PlatformEditor meta={meta} value={manual.platforms} onChange={(platforms) => setManual((current) => ({ ...current, platforms }))} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
+        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>بوست الصور يُنشر كمنشور متعدد الصور، والستوري تُنشر كإطارات مستقلة بنفس ترتيب الملفات.</p></div></header><PlatformEditor meta={meta} value={manual.platforms} supportedFormats={manualSelectedCreativeType?.supported_publish_formats || []} onChange={(platforms) => setManual((current) => ({ ...current, platforms }))} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
 
         <section className="marketing-publish-edit-section"><header><div><h3>موعد ومحتوى النشر</h3><p>حدد موعد النشر، ثم اكتب الكابشن والهاشتاج الخاصين بهذا النشر اليدوي.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>موعد النشر</span><input type="date" value={manual.publishDate} onChange={(event) => setManual((current) => ({ ...current, publishDate: event.target.value }))} /></label><label className="full"><span>Caption</span><textarea rows={7} value={manual.caption} onChange={(event) => setManual((current) => ({ ...current, caption: event.target.value }))} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={manual.hashtags} onChange={(event) => setManual((current) => ({ ...current, hashtags: event.target.value }))} /></label></div></section>
 
@@ -712,7 +721,7 @@ export function PublishPrepPage() {
     <Modal open={Boolean(editing)} title={editing?.task_kind === "manual_publish" ? "تعديل النشر اليدوي" : "تعديل تجهيز النشر"} subtitle={editing ? `${editing.source_name || ""} — ${editing.creative_name || ""}` : undefined} onClose={() => setEditing(null)} className="marketing-publish-edit-modal" footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={18} />حفظ تجهيز النشر</button></>}>
       {editing ? <div className="marketing-publish-edit-workspace">
         <section className="marketing-publish-edit-summary"><div><small>{editing.task_kind === "manual_publish" ? "نوع النشر" : "الحملة / الأجندة"}</small><strong>{editing.source_name || "—"}</strong></div><div><small>الكرييتيف</small><strong>{editing.creative_name || "—"}</strong></div><div><small>المسؤول</small><strong>{editing.assigned_name || "—"}</strong></div><div><small>القسم</small><strong>{editing.department_name || "—"}</strong></div></section>
-        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>اختر المنصات المطلوبة ثم حدد أنواع النشر داخل كل منصة.</p></div></header><PlatformEditor meta={meta} value={editing.platforms || []} onChange={(platforms) => setEditing({ ...editing, platforms })} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
+        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>اختر المنصات المطلوبة ثم حدد أنواع النشر داخل كل منصة.</p></div></header><PlatformEditor meta={meta} value={editing.platforms || []} supportedFormats={meta?.creativeTypes.find((item) => item.id === editing.creative_type_id)?.supported_publish_formats || []} preserveSelectedUnsupported onChange={(platforms) => setEditing({ ...editing, platforms })} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
         <section className="marketing-publish-edit-section"><header><div><h3>تاريخ ومحتوى النشر</h3><p>تاريخ النشر مرجع للجدول كموعد مخطط، لكن زر نشر الآن يعمل في أي وقت بعد اكتمال البيانات.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>تاريخ النشر</span><input type="date" value={editing.publish_date || ""} onChange={(event) => setEditing({ ...editing, publish_date: event.target.value })} /></label><label className="full"><span>Caption</span><textarea rows={7} value={editing.caption || ""} onChange={(event) => setEditing({ ...editing, caption: event.target.value })} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={editing.hashtags || ""} onChange={(event) => setEditing({ ...editing, hashtags: event.target.value })} /></label></div></section>
         {selectionsIncludeYouTube(editing.platforms || []) ? <YouTubeOptionsFields value={editing.youtubeOptions} onChange={(youtubeOptions) => setEditing({ ...editing, youtubeOptions })} categories={youtubeCategories} playlists={youtubePlaylists} loading={youtubeOptionsLoading} /> : null}
       </div> : null}

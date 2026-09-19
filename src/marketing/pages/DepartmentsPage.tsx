@@ -6,6 +6,15 @@ import type { MarketingMeta } from "../types";
 
 type PlatformPostDraft = { name: string; width: string; height: string };
 
+const CREATIVE_PUBLISH_FORMAT_OPTIONS = [
+  { value: "story", label: "Story" },
+  { value: "reel", label: "Reel" },
+  { value: "photo_post", label: "Photo Post" },
+  { value: "carousel", label: "Carousel" },
+  { value: "video", label: "Video" },
+  { value: "short", label: "Shorts" },
+] as const;
+
 export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [meta, setMeta] = useState<MarketingMeta | null>(null);
   const [error, setError] = useState("");
@@ -14,7 +23,7 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
   const [department, setDepartment] = useState({ id: "", name: "", userIds: [] as string[], isContent: false });
   const [userSearch, setUserSearch] = useState("");
   const [assignmentAction, setAssignmentAction] = useState({ id: "", departmentId: "", name: "", percentage: "", adminOnly: false, sortOrder: "0" });
-  const [creative, setCreative] = useState({ id: "", name: "", shortCode: "", primaryDepartmentId: "" });
+  const [creative, setCreative] = useState({ id: "", name: "", shortCode: "", primaryDepartmentId: "", supportedPublishFormats: [] as string[] });
   const [campaignType, setCampaignType] = useState({ id: "", name: "", shortCode: "", codePrefix: "" });
   const [platform, setPlatform] = useState({ id: "", name: "", code: "", postTypes: [{ name: "", width: "", height: "" }] as PlatformPostDraft[] });
 
@@ -100,11 +109,16 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
         <label>القسم المرتبط بالكرييتيف<select value={creative.primaryDepartmentId} onChange={(e) => setCreative({ ...creative, primaryDepartmentId: e.target.value })}><option value="">اختر القسم الأساسي</option>{meta?.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>اسم الكرييتيف<input value={creative.name} onChange={(e) => setCreative({ ...creative, name: e.target.value })} /></label>
         <label>الكود المختصر<input dir="ltr" value={creative.shortCode} onChange={(e) => setCreative({ ...creative, shortCode: e.target.value })} /></label>
-        <button className="marketing-primary" disabled={busy} onClick={() => void save("save_creative_type", creative, () => setCreative({ id: "", name: "", shortCode: "", primaryDepartmentId: "" }))}>{creative.id ? "تعديل الكرييتيف" : "إضافة الكرييتيف"}</button>
+        <div className="marketing-creative-publish-formats">
+          <div className="marketing-creative-publish-formats-head"><span>أنواع النشر المدعومة</span><small>حدد كل الأنواع التي يمكن استخدام هذا الكرييتيف معها في تجهيز النشر.</small></div>
+          <div className="marketing-creative-publish-format-options">{CREATIVE_PUBLISH_FORMAT_OPTIONS.map((option) => { const checked = creative.supportedPublishFormats.includes(option.value); return <label key={option.value} className={checked ? "selected" : ""}><input type="checkbox" checked={checked} onChange={(event) => setCreative({ ...creative, supportedPublishFormats: event.target.checked ? [...new Set([...creative.supportedPublishFormats, option.value])] : creative.supportedPublishFormats.filter((value) => value !== option.value) })} /><span>{option.label}</span></label>; })}</div>
+          <small className="marketing-department-source-note">إذا لم تحدد أي نوع سيظل الكرييتيف متوافقًا مع السلوك السابق إلى أن يتم ضبطه.</small>
+        </div>
+        <button className="marketing-primary" disabled={busy} onClick={() => void save("save_creative_type", creative, () => setCreative({ id: "", name: "", shortCode: "", primaryDepartmentId: "", supportedPublishFormats: [] }))}>{creative.id ? "تعديل الكرييتيف" : "إضافة الكرييتيف"}</button>
       </section>
       <section className="marketing-card marketing-list-card">
         <h2>قائمة الكرييتيفات</h2>
-        {(meta?.creativeTypes || []).map((item) => <article key={item.id}><div><strong>{item.name} — {item.short_code}</strong><small>{item.primary_department_name}</small></div><div className="marketing-inline-actions"><button onClick={() => setCreative({ id: item.id, name: item.name, shortCode: item.short_code, primaryDepartmentId: item.primary_department_id })}><PencilSimple /></button><button className="danger" onClick={() => void remove("creative_type", item.id)}><Trash /></button></div></article>)}
+        {(meta?.creativeTypes || []).map((item) => <article key={item.id}><div><strong>{item.name} — {item.short_code}</strong><small>{item.primary_department_name}{item.supported_publish_formats?.length ? ` · ${CREATIVE_PUBLISH_FORMAT_OPTIONS.filter((option) => item.supported_publish_formats.includes(option.value)).map((option) => option.label).join("، ")}` : " · أنواع النشر غير محددة"}</small></div><div className="marketing-inline-actions"><button onClick={() => setCreative({ id: item.id, name: item.name, shortCode: item.short_code, primaryDepartmentId: item.primary_department_id, supportedPublishFormats: Array.isArray(item.supported_publish_formats) ? [...item.supported_publish_formats] : [] })}><PencilSimple /></button><button className="danger" onClick={() => void remove("creative_type", item.id)}><Trash /></button></div></article>)}
       </section>
 
       <section className="marketing-card">

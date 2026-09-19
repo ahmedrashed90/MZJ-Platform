@@ -5725,3 +5725,14 @@
 .marketing-task-folder-upload:hover,.marketing-task-folder-download:hover{background:#fff9f6;border-color:#cfa895}
 .marketing-task-folder-upload-progress-head button,.marketing-task-folder-actions button{border:1px solid #e2cfc7;border-radius:9px;background:#fff;color:#6c3329;cursor:pointer}
 .marketing-task-folder-upload-progress-head button.danger,.marketing-task-folder-actions button.danger{color:#b93d3d;background:#fff4f2;border-color:#f2ceca}
+
+
+/* Creative supported publish formats */
+.marketing-creative-publish-formats { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fffaf8; }
+.marketing-creative-publish-formats-head { display: grid; gap: 3px; }
+.marketing-creative-publish-formats-head > span { font-weight: 900; color: #55352d; }
+.marketing-creative-publish-formats-head > small { color: var(--muted); font-size: 11px; }
+.marketing-creative-publish-format-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.marketing-creative-publish-format-options > label { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer; font-weight: 800; }
+.marketing-creative-publish-format-options > label.selected { border-color: #9a4937; background: #fff3ed; color: #743a2d; }
+.marketing-creative-publish-format-options input { accent-color: #9a4937; }

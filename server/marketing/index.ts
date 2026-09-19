@@ -433,7 +433,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       order by d.is_content desc,cd.name
     `,
     sql<any[]>`select a.id::text,a.department_id::text,cd.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join core.departments cd on cd.id=a.department_id and cd.system_code='marketing' where a.is_active=true order by cd.name,a.sort_order,a.created_at`,
-    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
+    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,coalesce(c.supported_publish_formats,'[]'::jsonb) as supported_publish_formats,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
     sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
     sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
     sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
@@ -2586,7 +2586,13 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
 }
 
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
-async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
+const CREATIVE_SUPPORTED_PUBLISH_FORMATS:MarketingPublishFormat[]=['story','reel','photo_post','carousel','video','short'];
+function creativeSupportedPublishFormats(value:unknown):MarketingPublishFormat[]{
+  const allowed=new Set<MarketingPublishFormat>(CREATIVE_SUPPORTED_PUBLISH_FORMATS);
+  return [...new Set(arrayValue<string>(value).map((item)=>clean(item) as MarketingPublishFormat).filter((item)=>allowed.has(item)))];
+}
+async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId),supportedPublishFormats=creativeSupportedPublishFormats(body.supportedPublishFormats);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,supported_publish_formats=${sql.json(dbJson(supportedPublishFormats))},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id,supported_publish_formats) values(${name},${shortCode},${departmentId}::uuid,${sql.json(dbJson(supportedPublishFormats))}) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
+
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
 async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
 async function packageSettings(sql:ReturnType<typeof getSql>){
@@ -3347,6 +3353,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(error_data.publish_errors,'[]'::jsonb) as publish_errors,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
       c.name as creative_name,
+      c.creative_type_id::text as creative_type_id,
       c.instance_code,
       coalesce(cam.name,ag.name,case when t.source_type='manual' then 'نشر يدوي' end) as source_name,
       t.progress::float,
@@ -3520,10 +3527,21 @@ async function normalizePublishScheduleRequest(sql:ReturnType<typeof getSql>,bod
   return{publishDate,normalizedPlatforms,combinations,youtubeOptions};
 }
 
+async function assertCreativePublishFormats(sql:ReturnType<typeof getSql>,creativeTypeId:string,combinations:PublishScheduleCombination[]){
+  if(!creativeTypeId)return;
+  const[creativeType]=await sql<any[]>`select coalesce(supported_publish_formats,'[]'::jsonb) as supported_publish_formats from marketing.creative_types where id=${creativeTypeId}::uuid and is_active=true`;
+  if(!creativeType)return;
+  const supported=creativeSupportedPublishFormats(creativeType.supported_publish_formats);
+  if(!supported.length)return;
+  const unsupported=[...new Set(combinations.map((item)=>item.publishFormat).filter((format)=>!supported.includes(format)))];
+  if(unsupported.length)throw new Error("نوع النشر المختار غير مدعوم لهذا الكرييتيف. عدّل الأنواع من إعدادات التسويق أو اختر نوعًا مدعومًا");
+}
+
 async function activePublishTask(sql:ReturnType<typeof getSql>,taskId:string,allowedKinds:string[]){
   const[task]=await sql<any[]>`
-    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text,c.creative_type_id::text
     from marketing.tasks t
+    join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     where t.id=${taskId}::uuid and t.task_kind in ${sql(allowedKinds)} and t.is_deleted=false and t.publish_prep_removed_at is null
@@ -3612,6 +3630,7 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(!publishTask)throw new Error("تجهيز النشر المرتبط غير موجود أو لم يعد متاحًا");
   await assertPublishEntryAccess(sql,user,publishTask);
   const request=await normalizePublishScheduleRequest(sql,body);
+  await assertCreativePublishFormats(sql,clean(publishTask.creative_type_id),request.combinations);
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   const caption=clean(body.caption),hashtags=clean(body.hashtags);
@@ -3630,6 +3649,7 @@ async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,u
   const creativeTypeId=clean(body.creativeTypeId);
   if(!creativeTypeId)throw new Error("اختر نوع الكرييتيف من قائمة الكرييتيفات");
   const request=await normalizePublishScheduleRequest(sql,body);
+  await assertCreativePublishFormats(sql,creativeTypeId,request.combinations);
   const files=manualPublishFileDescriptors(body.files);
   validateManualPublishFiles(files,request.combinations);
   const caption=clean(body.caption),hashtags=clean(body.hashtags);
