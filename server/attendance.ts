@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { isIP } from "node:net";
-import { requireAdmin, requireUser, requestIp } from "./_auth.js";
+import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
@@ -17,39 +16,8 @@ function bodyObject(request: VercelRequest) {
   return {};
 }
 
-function attendanceCoordinates(value: unknown) {
-  if (!value || typeof value !== "object") return null;
-  const source = value as Record<string, unknown>;
-  const latitude = Number(source.latitude);
-  const longitude = Number(source.longitude);
-  const accuracy = source.accuracy === null || source.accuracy === undefined ? null : Number(source.accuracy);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
-  return {
-    latitude,
-    longitude,
-    accuracy: Number.isFinite(accuracy) ? accuracy : null,
-  };
-}
-
 function asArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
-}
-
-function normalizeIpValue(value: unknown) {
-  let ip = clean(value).toLowerCase();
-  if (!ip) return "";
-  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
-  if (ip.startsWith("[") && ip.includes("]")) ip = ip.slice(1, ip.indexOf("]"));
-  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.replace(/:\d+$/, "");
-  return ip;
-}
-
-function publicIpList(value: unknown) {
-  const raw = Array.isArray(value) ? value : String(value ?? "").split(/[\s,;]+/);
-  const normalized = Array.from(new Set(raw.map(normalizeIpValue).filter(Boolean)));
-  const invalid = normalized.filter((ip) => isIP(ip) === 0);
-  if (invalid.length) throw new AttendanceError("INVALID_ATTENDANCE_NETWORK_IP", `Public IP غير صالح: ${invalid[0]}`);
-  return normalized;
 }
 
 function validUuid(value: string) {
@@ -174,18 +142,12 @@ function reportDateFromTimestamp(value: unknown) {
   return validDate(result) ? result : "";
 }
 
-async function adminBootstrap(request: VercelRequest) {
+async function adminBootstrap() {
   const sql = getSql();
   const [settings] = await sql<{ enforcement_enabled: boolean }[]>`
     select enforcement_enabled from core.attendance_settings where id=1 limit 1
   `;
-  const [locations, schedules, periods, users, branches] = await Promise.all([
-    sql<any[]>`
-      select id::text,branch_id::text,name,latitude::float8,longitude::float8,radius_m,allowed_public_ips,is_active
-      from core.attendance_locations
-      where is_active=true
-      order by name
-    `,
+  const [schedules, periods, users, branches] = await Promise.all([
     sql<any[]>`
       select id::text,name,is_active
       from core.attendance_schedules
@@ -203,9 +165,9 @@ async function adminBootstrap(request: VercelRequest) {
         u.id::text,u.employee_no,u.full_name,u.email,u.mobile,
         coalesce(ab.id::text,crm_branch.id,global_branch.id) as branch_id,
         coalesce(ab.name,crm_branch.name,global_branch.name,'—') as branch_name,
-        a.id::text as assignment_id,a.schedule_id::text,a.location_id::text,a.weekly_off_day,
+        a.id::text as assignment_id,a.schedule_id::text,a.weekly_off_day,
         coalesce(a.period_ids,'{}'::uuid[]) as period_ids,
-        s.name as schedule_name,l.name as location_name
+        s.name as schedule_name
       from core.users u
       left join lateral (
         select ax.*
@@ -216,7 +178,6 @@ async function adminBootstrap(request: VercelRequest) {
         order by ax.effective_from desc,ax.created_at desc limit 1
       ) a on true
       left join core.attendance_schedules s on s.id=a.schedule_id
-      left join core.attendance_locations l on l.id=a.location_id
       left join core.branches ab on ab.id=a.branch_id and ab.is_active=true
       left join lateral (
         select b.id::text,b.name
@@ -257,8 +218,6 @@ async function adminBootstrap(request: VercelRequest) {
   return {
     ok: true,
     settings: { enforcementEnabled: Boolean(settings?.enforcement_enabled) },
-    currentPublicIp: normalizeIpValue(requestIp(request)),
-    locations,
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
     users,
     branches,
@@ -292,53 +251,6 @@ async function saveSettings(body: Record<string, any>, adminId: string) {
   }
 
   return { ok: true, enforcementEnabled, forcedLogoutUsers };
-}
-
-async function saveLocation(body: Record<string, any>, adminId: string) {
-  const sql = getSql();
-  const id = clean(body.id);
-  const name = clean(body.name);
-  const branchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
-  const latitude = Number(body.latitude);
-  const longitude = Number(body.longitude);
-  const radiusM = Math.max(10, Math.min(50000, Math.floor(Number(body.radiusM) || 150)));
-  const allowedPublicIps = publicIpList(body.allowedPublicIps);
-  if (!name) throw new AttendanceError("LOCATION_NAME_REQUIRED", "اكتب اسم مكان الحضور");
-  if (!Number.isFinite(latitude) || Math.abs(latitude) > 90 || !Number.isFinite(longitude) || Math.abs(longitude) > 180) {
-    throw new AttendanceError("INVALID_LOCATION", "أدخل إحداثيات صحيحة لمكان الحضور");
-  }
-  if (id && validUuid(id)) {
-    const [row] = await sql<any[]>`
-      update core.attendance_locations
-      set branch_id=${branchId}::uuid,name=${name},latitude=${latitude},longitude=${longitude},radius_m=${radiusM},
-          allowed_public_ips=${allowedPublicIps}::text[],is_active=true,updated_by=${adminId}::uuid,updated_at=now()
-      where id=${id}::uuid
-      returning id::text
-    `;
-    if (!row) throw new AttendanceError("LOCATION_NOT_FOUND", "مكان الحضور غير موجود", 404);
-    return { ok: true, id: row.id };
-  }
-  const [row] = await sql<any[]>`
-    insert into core.attendance_locations(branch_id,name,latitude,longitude,radius_m,allowed_public_ips,created_by,updated_by)
-    values(${branchId}::uuid,${name},${latitude},${longitude},${radiusM},${allowedPublicIps}::text[],${adminId}::uuid,${adminId}::uuid)
-    returning id::text
-  `;
-  return { ok: true, id: row.id };
-}
-
-async function deleteLocation(body: Record<string, any>, adminId: string) {
-  const sql = getSql();
-  const id = clean(body.id);
-  if (!validUuid(id)) throw new AttendanceError("LOCATION_NOT_FOUND", "مكان الحضور غير موجود", 404);
-  const [inUse] = await sql<any[]>`
-    select 1
-    from core.attendance_user_schedules
-    where location_id=${id}::uuid and effective_to is null
-    limit 1
-  `;
-  if (inUse) throw new AttendanceError("LOCATION_IN_USE", "لا يمكن حذف المكان لأنه محدد حاليًا لموظفين");
-  await sql`update core.attendance_locations set is_active=false,updated_by=${adminId}::uuid,updated_at=now() where id=${id}::uuid`;
-  return { ok: true };
 }
 
 async function saveSchedule(body: Record<string, any>, adminId: string) {
@@ -419,7 +331,6 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const userIds = asArray(body.userIds).filter(validUuid);
   const scheduleId = validUuid(clean(body.scheduleId)) ? clean(body.scheduleId) : "";
   const periodIds = normalizedIdList(body.periodIds);
-  const locationId = validUuid(clean(body.locationId)) ? clean(body.locationId) : null;
   const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
@@ -441,10 +352,6 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
     if (selectedPeriods.length !== periodIds.length) throw new AttendanceError("INVALID_PERIOD_SELECTION", "بعض فترات العمل المختارة لا تتبع جدول العمل الحالي");
     assertSelectedPeriodsDoNotOverlap(selectedPeriods);
   }
-  if (locationId) {
-    const [location] = await sql<any[]>`select id::text from core.attendance_locations where id=${locationId}::uuid and is_active=true`;
-    if (!location) throw new AttendanceError("INVALID_LOCATION", "مكان الحضور غير متاح");
-  }
   if (requestedBranchId) {
     const [branch] = await sql<any[]>`select id::text from core.branches where id=${requestedBranchId}::uuid and is_active=true`;
     if (!branch) throw new AttendanceError("INVALID_BRANCH", "الفرع المختار غير متاح");
@@ -455,7 +362,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       const [user] = await tx<any[]>`select id::text from core.users where id=${userId}::uuid and is_active=true`;
       if (!user) continue;
       const [current] = await tx<any[]>`
-        select id::text,schedule_id::text,location_id::text,branch_id::text,period_ids,weekly_off_day,effective_from::text
+        select id::text,schedule_id::text,branch_id::text,period_ids,weekly_off_day,effective_from::text
         from core.attendance_user_schedules
         where user_id=${userId}::uuid and effective_to is null
         order by effective_from desc,created_at desc limit 1
@@ -501,7 +408,6 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
 
       const same = current
         && clean(current.schedule_id) === scheduleId
-        && clean(current.location_id) === clean(locationId)
         && clean(current.branch_id) === clean(effectiveBranchId)
         && sameIdList(current.period_ids, periodIds)
         && parseWeeklyOffDay(current.weekly_off_day) === weeklyOffDay;
@@ -510,7 +416,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       if (current && dateOnlyValue(current.effective_from) === currentRiyadhDate()) {
         await tx`
           update core.attendance_user_schedules
-          set schedule_id=${scheduleId}::uuid,location_id=${locationId}::uuid,branch_id=${effectiveBranchId}::uuid,
+          set schedule_id=${scheduleId}::uuid,branch_id=${effectiveBranchId}::uuid,
               period_ids=${periodIds}::uuid[],weekly_off_day=${weeklyOffDay}
           where id=${current.id}::uuid
         `;
@@ -523,8 +429,8 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
           `;
         }
         await tx`
-          insert into core.attendance_user_schedules(user_id,schedule_id,location_id,branch_id,period_ids,weekly_off_day,effective_from,created_by)
-          values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
+          insert into core.attendance_user_schedules(user_id,schedule_id,branch_id,period_ids,weekly_off_day,effective_from,created_by)
+          values(${userId}::uuid,${scheduleId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
       if (enforcementEnabled) await tx`delete from core.sessions where user_id=${userId}::uuid`;
@@ -621,12 +527,11 @@ async function reportData(request: VercelRequest) {
   const [assignments, periods, records] = await Promise.all([
     sql<any[]>`
       select
-        a.id::text,a.user_id::text,a.schedule_id::text,a.location_id::text,a.branch_id::text,
+        a.id::text,a.user_id::text,a.schedule_id::text,a.branch_id::text,
         coalesce(a.period_ids,'{}'::uuid[]) as period_ids,a.weekly_off_day,
-        a.effective_from::text,a.effective_to::text,s.name as schedule_name,l.name as location_name,b.name as branch_name
+        a.effective_from::text,a.effective_to::text,s.name as schedule_name,b.name as branch_name
       from core.attendance_user_schedules a
       join core.attendance_schedules s on s.id=a.schedule_id
-      left join core.attendance_locations l on l.id=a.location_id
       left join core.branches b on b.id=a.branch_id
       where a.user_id::text in ${sql(userIds)}
         and a.effective_from <= ${to}::date
@@ -643,10 +548,7 @@ async function reportData(request: VercelRequest) {
         id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,
         work_date::text as work_date,period_name,period_sort_order,grace_minutes,
         scheduled_start_at,scheduled_end_at,check_in,check_out,checkout_source,
-        delay_minutes,work_minutes,status,
-        required_location_name,legacy_source_key,
-        check_in_latitude::float8,check_in_longitude::float8,check_in_accuracy_m::float8,check_in_distance_m::float8,check_in_nearest_distance_m::float8,
-        check_in_ip,location_verification_method,location_result
+        delay_minutes,work_minutes,status,legacy_source_key
       from core.attendance_records
       where user_id::text in ${sql(userIds)}
         and (
@@ -750,40 +652,6 @@ async function reportData(request: VercelRequest) {
       }
       slots.sort((a, b) => a.sortOrder - b.sortOrder);
 
-      const checkedRecords = slots.map((slot) => slot.record).filter(Boolean);
-      const locatedRecords = checkedRecords.filter((record) =>
-        record.check_in_latitude !== null
-        && record.check_in_latitude !== undefined
-        && record.check_in_longitude !== null
-        && record.check_in_longitude !== undefined
-      );
-      const gpsVerifiedRecords = locatedRecords.filter((record) => {
-        const method = clean(record.location_verification_method);
-        return method === "gps" || method === "gps_and_network" || !method || method === "unknown";
-      });
-      const networkVerifiedRecords = checkedRecords.filter((record) =>
-        ["network", "gps_and_network"].includes(clean(record.location_verification_method))
-        && clean(record.check_in_ip)
-      );
-      const primaryLocatedRecord = gpsVerifiedRecords[0] || null;
-      const primaryVerificationRecord = checkedRecords.find((record) => clean(record.location_verification_method) && clean(record.location_verification_method) !== "unknown") || null;
-      const actualLocations = Array.from(new Set(gpsVerifiedRecords
-        .map((record) => `${Number(record.check_in_latitude).toFixed(6)}, ${Number(record.check_in_longitude).toFixed(6)}`)));
-      const networkLocations = Array.from(new Set(networkVerifiedRecords.map((record) => `شبكة الفرع • ${clean(record.check_in_ip)}`)));
-      const requiredLocations = Array.from(new Set(checkedRecords
-        .map((record) => clean(record.required_location_name))
-        .filter(Boolean)));
-      const hasRequiredLocation = requiredLocations.length > 0 || Boolean(assignment?.location_id);
-      const hasRecordedCheckIn = checkedRecords.some((record) => Boolean(record.check_in));
-      const hasLocationVerification = locatedRecords.length > 0 || checkedRecords.some((record) => ["gps", "network", "gps_and_network"].includes(clean(record.location_verification_method)));
-      const missingRequiredLocationCapture = hasRequiredLocation && hasRecordedCheckIn && !hasLocationVerification;
-      let locationResult = hasRequiredLocation ? "—" : "غير مطلوب";
-      if (hasRequiredLocation && checkedRecords.length) {
-        locationResult = checkedRecords.some((record) => record.location_result === "mismatched") ? "غير مطابق"
-          : checkedRecords.some((record) => record.location_result === "matched") ? "مطابق"
-          : "—";
-      }
-
       const periodsByKey = new Map<string, any>();
       for (const slot of slots) {
         const record = slot.record;
@@ -828,26 +696,6 @@ async function reportData(request: VercelRequest) {
         userId: user.id,
         employeeNo: user.employee_no,
         name: user.full_name,
-        location: {
-          actual: actualLocations.length ? actualLocations.join(" / ") : networkLocations.length ? networkLocations.join(" / ") : missingRequiredLocationCapture ? "لم يتم حفظ إثبات المكان" : "—",
-          required: requiredLocations.length ? requiredLocations.join(" / ") : assignment?.location_name || "غير مطلوب",
-          result: locationResult,
-          missingRequiredCapture: missingRequiredLocationCapture,
-          latitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_latitude) : null,
-          longitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_longitude) : null,
-          distanceM: primaryLocatedRecord?.check_in_distance_m === null || primaryLocatedRecord?.check_in_distance_m === undefined
-            ? null
-            : Number(primaryLocatedRecord.check_in_distance_m),
-          accuracyM: primaryLocatedRecord?.check_in_accuracy_m === null || primaryLocatedRecord?.check_in_accuracy_m === undefined
-            ? null
-            : Number(primaryLocatedRecord.check_in_accuracy_m),
-          nearestDistanceM: primaryLocatedRecord?.check_in_nearest_distance_m === null || primaryLocatedRecord?.check_in_nearest_distance_m === undefined
-            ? null
-            : Number(primaryLocatedRecord.check_in_nearest_distance_m),
-          verificationMethod: primaryVerificationRecord ? clean(primaryVerificationRecord.location_verification_method) : "unknown",
-          checkInIp: primaryVerificationRecord ? clean(primaryVerificationRecord.check_in_ip) || null : null,
-          captures: actualLocations.length + networkLocations.length,
-        },
         scheduleName: assignment?.schedule_name || null,
         periodsByKey,
       });
@@ -879,7 +727,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (view === "admin") {
         const admin = await requireAdmin(request, response);
         if (!admin) return;
-        return response.status(200).json(await adminBootstrap(request));
+        return response.status(200).json(await adminBootstrap());
       }
       if (view === "report") {
         const admin = await requireAdmin(request, response);
@@ -894,20 +742,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const action = clean(body.action);
 
     if (action === "self_check_in") {
-      const coordinates = attendanceCoordinates(body.location);
-      const stateBefore = await getSelfAttendanceState(user.id);
-      if (stateBefore.locationRequired && !coordinates && body.allowNetworkFallback !== true) {
-        throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع أو التحقق من شبكة الفرع لتسجيل الحضور", 409, {
-          locationRequired: true,
-          requiredLocationName: stateBefore.requiredLocationName,
-          periodName: stateBefore.activePeriod?.name || null,
-          networkFallbackConfigured: stateBefore.networkFallbackConfigured,
-        });
-      }
-      await checkInCurrentAttendance(user.id, coordinates, {
-        requestIp: requestIp(request),
-        allowNetworkFallback: body.allowNetworkFallback === true,
-      });
+      await checkInCurrentAttendance(user.id);
       return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
     }
 
@@ -915,8 +750,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!admin) return;
     let result: any;
     if (action === "save_settings") result = await saveSettings(body, admin.id);
-    else if (action === "save_location") result = await saveLocation(body, admin.id);
-    else if (action === "delete_location") result = await deleteLocation(body, admin.id);
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);
     else if (action === "delete_schedule") result = await deleteSchedule(body, admin.id);
     else if (action === "assign_users") result = await assignUsers(body, admin.id);

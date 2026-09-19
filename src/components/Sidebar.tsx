@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ChartBar, Crown, Database, Gear, Globe, House, MapPin, Megaphone, Pulse, Question, SignIn, SignOut, SuitcaseSimple, UserSwitch, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { attendanceFetch, formatAttendanceTime } from "../attendance/api";
-import { getBrowserAttendanceLocation } from "../attendance/location";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canAccessWebsite, canOpenSettings, hasPermission } from "../systemAccess";
 import { firstAllowedPage } from "../../shared/access-control";
@@ -46,22 +45,10 @@ type SelfAttendanceState = {
     checkoutSource: string | null;
     delayMinutes: number;
     workMinutes: number;
-    locationResult: string;
-    latitude: number | null;
-    longitude: number | null;
-    accuracy: number | null;
-    distance: number | null;
-    nearestDistance: number | null;
-    checkInIp: string | null;
-    verificationMethod: string;
+    status: string;
   } | null;
   canCheckIn: boolean;
   canCheckOut: boolean;
-  locationRequired: boolean;
-  locationCaptured: boolean;
-  needsLocationCapture: boolean;
-  networkFallbackConfigured: boolean;
-  requiredLocationName: string | null;
 };
 
 type SelfAttendancePayload = { ok: true; state: SelfAttendanceState };
@@ -81,13 +68,7 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
   if (state.isDayOff) return "اليوم إجازة";
   if (!state.activePeriod) return "خارج فترة العمل";
   if (state.canCheckOut && state.record?.checkIn) {
-    const verificationText = state.record.verificationMethod === "network"
-      ? " • شبكة الفرع"
-      : state.record.verificationMethod === "gps_and_network"
-        ? " • GPS + شبكة الفرع"
-        : " • اللوكيشن محفوظ";
-    const locationText = state.locationRequired ? (state.locationCaptured ? verificationText : " • إثبات المكان غير محفوظ") : "";
-    return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}${locationText}`;
+    return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}`;
   }
   if (state.canCheckIn) return `${state.activePeriod.name} • لم يسجل الحضور`;
   if (state.record?.checkOut) return `${state.activePeriod.name} • تم الانصراف`;
@@ -97,9 +78,8 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const [attendanceState, setAttendanceState] = useState<SelfAttendanceState | null>(null);
-  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "location" | "logout">("");
+  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "logout">("");
   const [attendanceError, setAttendanceError] = useState("");
-  const locationRecoveryAttempt = useRef("");
 
   const systemAllowed: Record<string, boolean> = {
     crm: canAccessCrm(user),
@@ -138,64 +118,14 @@ export function Sidebar() {
     };
   }, [user?.id]);
 
-  async function captureMissingAttendanceLocation() {
-    if (!attendanceState?.needsLocationCapture || !attendanceState.locationRequired) return attendanceState;
-    setAttendanceBusy("location");
-    setAttendanceError("");
-    try {
-      let location = null;
-      try {
-        location = await getBrowserAttendanceLocation();
-      } catch (locationError) {
-        if (!attendanceState.networkFallbackConfigured) throw locationError;
-      }
-      const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "self_check_in",
-          location,
-          allowNetworkFallback: attendanceState.networkFallbackConfigured,
-        }),
-      });
-      setAttendanceState(payload.state);
-      return payload.state;
-    } catch (error) {
-      setAttendanceError(error instanceof Error ? error.message : "تعذر حفظ لوكيشن الحضور");
-      throw error;
-    } finally {
-      setAttendanceBusy("");
-    }
-  }
-
-  useEffect(() => {
-    const key = attendanceState?.needsLocationCapture && attendanceState.record?.checkIn
-      ? `${user?.id || ""}:${attendanceState.record.checkIn}`
-      : "";
-    if (!key || locationRecoveryAttempt.current === key) return;
-    locationRecoveryAttempt.current = key;
-    void captureMissingAttendanceLocation().catch(() => undefined);
-  }, [attendanceState?.needsLocationCapture, attendanceState?.record?.checkIn, user?.id]);
-
   async function handleCheckIn() {
     if (attendanceBusy) return;
     setAttendanceBusy("checkin");
     setAttendanceError("");
     try {
-      let location = null;
-      if (attendanceState?.locationRequired) {
-        try {
-          location = await getBrowserAttendanceLocation();
-        } catch (locationError) {
-          if (!attendanceState.networkFallbackConfigured) throw locationError;
-        }
-      }
       const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
         method: "POST",
-        body: JSON.stringify({
-          action: "self_check_in",
-          location,
-          allowNetworkFallback: Boolean(attendanceState?.networkFallbackConfigured),
-        }),
+        body: JSON.stringify({ action: "self_check_in" }),
       });
       setAttendanceState(payload.state);
     } catch (error) {
@@ -207,12 +137,9 @@ export function Sidebar() {
 
   async function handleLogout() {
     if (attendanceBusy) return;
+    setAttendanceBusy("logout");
     setAttendanceError("");
     try {
-      if (attendanceState?.needsLocationCapture) {
-        await captureMissingAttendanceLocation();
-      }
-      setAttendanceBusy("logout");
       await logout();
     } catch (error) {
       setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الانصراف وتسجيل الخروج");
@@ -226,7 +153,7 @@ export function Sidebar() {
   const actionLabel = needsCheckIn
     ? attendanceBusy === "checkin" ? "جاري تسجيل الحضور..." : "تسجيل حضور"
     : hasOpenAttendance
-      ? attendanceBusy === "location" ? "جاري حفظ اللوكيشن..." : attendanceBusy === "logout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"
+      ? attendanceBusy === "logout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"
       : attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج";
   const ActionIcon = needsCheckIn ? SignIn : SignOut;
   const stateLabel = attendanceStateLabel(attendanceState);

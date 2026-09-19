@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Export, MapPin, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { Export, UsersThree, WarningCircle } from "@phosphor-icons/react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
@@ -34,28 +34,12 @@ type ReportPeriod = {
   workMinutes: number;
 };
 
-type ReportLocation = {
-  actual: string;
-  required: string;
-  result: string;
-  latitude: number | null;
-  longitude: number | null;
-  distanceM: number | null;
-  nearestDistanceM: number | null;
-  accuracyM: number | null;
-  verificationMethod: string;
-  checkInIp: string | null;
-  captures: number;
-  missingRequiredCapture: boolean;
-};
-
 type ReportRow = {
   date: string;
   branch: string;
   userId: string;
   employeeNo: string | null;
   name: string;
-  location: ReportLocation;
   scheduleName: string | null;
   periods: Array<ReportPeriod | null>;
 };
@@ -85,11 +69,6 @@ function resultLabel(result: string | null | undefined) {
   if (value.includes("متأخر")) return "متأخر";
   if (value.includes("حاضر")) return "حاضر";
   return value || "—";
-}
-
-function locationHref(location: ReportLocation) {
-  if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) return "";
-  return `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
 }
 
 export function AttendancePage() {
@@ -176,7 +155,7 @@ export function AttendancePage() {
   if (!isAdmin) return <Navigate to="/" replace />;
 
   const periodHeaders = report?.periodHeaders || [];
-  const totalColumns = 8 + periodHeaders.length * 3;
+  const totalColumns = 5 + periodHeaders.length * 3;
   const employeeSummary = employeeIds.length
     ? employeeIds.length === 1
       ? adminUsers.find((employee) => employee.id === employeeIds[0])?.full_name || "موظف واحد"
@@ -256,11 +235,6 @@ export function AttendancePage() {
           </button>
         </form>
 
-        <div className="attendance-report-hint">
-          <MapPin size={17} />
-          <span>مكان الحضور هو الإحداثيات المحفوظة فعليًا وقت تسجيل الحضور. اضغط الإحداثيات لفتحها على الخريطة.</span>
-        </div>
-
         <div className="attendance-report-table-wrap attendance-report-table-fit">
           <table id="attendance-report-table" className={`attendance-report-table attendance-report-table-compact periods-${Math.min(periodHeaders.length, 4)}`}>
             <colgroup>
@@ -269,9 +243,6 @@ export function AttendancePage() {
               <col className="attendance-col-day" />
               <col className="attendance-col-branch" />
               <col className="attendance-col-name" />
-              <col className="attendance-col-location" />
-              <col className="attendance-col-required" />
-              <col className="attendance-col-location-result" />
               {periodHeaders.flatMap((header) => [
                 <col key={`${header}-col-in`} className="attendance-col-period-time" />,
                 <col key={`${header}-col-out`} className="attendance-col-period-time" />,
@@ -285,13 +256,9 @@ export function AttendancePage() {
                 <th rowSpan={2}>اليوم</th>
                 <th rowSpan={2}>الفرع</th>
                 <th rowSpan={2}>الاسم</th>
-                <th colSpan={3}>اللوكيشن</th>
                 {periodHeaders.map((header) => <th key={`${header}-group`} colSpan={3}>{header}</th>)}
               </tr>
               <tr className="attendance-sub-head-row">
-                <th>مكان الحضور</th>
-                <th>المكان المطلوب</th>
-                <th>النتيجة</th>
                 {periodHeaders.flatMap((header) => [
                   <th key={`${header}-in`}>الحضور</th>,
                   <th key={`${header}-out`}>الانصراف</th>,
@@ -300,9 +267,7 @@ export function AttendancePage() {
               </tr>
             </thead>
             <tbody>
-              {(report?.rows || []).map((row, index) => {
-                const mapHref = locationHref(row.location);
-                return (
+              {(report?.rows || []).map((row, index) => (
                   <tr key={`${row.userId}:${row.date}`}>
                     <td>{index + 1}</td>
                     <td className="attendance-date-cell"><bdi dir="ltr">{formatAttendanceDate(row.date)}</bdi></td>
@@ -311,30 +276,6 @@ export function AttendancePage() {
                     <td className="attendance-name-cell">
                       <strong>{row.name}</strong>
                       {row.employeeNo ? <small>{row.employeeNo}</small> : null}
-                    </td>
-                    <td className="attendance-location-cell">
-                      {mapHref ? (
-                        <>
-                          <a href={mapHref} target="_blank" rel="noreferrer" className="attendance-plain-location-link" title={`${Number(row.location.latitude).toFixed(6)}, ${Number(row.location.longitude).toFixed(6)}`}>
-                            <bdi dir="ltr">{Number(row.location.latitude).toFixed(5)}</bdi>
-                            <bdi dir="ltr">{Number(row.location.longitude).toFixed(5)}</bdi>
-                          </a>
-                          {row.location.accuracyM !== null ? <small>دقة ±{Math.round(row.location.accuracyM)} م</small> : null}
-                          {row.location.distanceM !== null ? <small>مركز القراءة {Math.round(row.location.distanceM)} م</small> : null}
-                          {row.location.nearestDistanceM !== null ? <small>أقرب نقطة {Math.round(row.location.nearestDistanceM)} م</small> : null}
-                        </>
-                      ) : row.location.verificationMethod === "network" || row.location.verificationMethod === "gps_and_network" ? (
-                        <>
-                          <strong>{row.location.verificationMethod === "gps_and_network" ? "GPS + شبكة الفرع" : "شبكة الفرع"}</strong>
-                          {row.location.checkInIp ? <small><bdi dir="ltr">{row.location.checkInIp}</bdi></small> : null}
-                        </>
-                      ) : row.location.missingRequiredCapture ? (
-                        <span className="attendance-location-missing-text">لم يتم حفظ إثبات المكان</span>
-                      ) : "—"}
-                    </td>
-                    <td>{row.location.required}</td>
-                    <td className={`attendance-text-result ${row.location.result === "مطابق" ? "present" : row.location.result === "غير مطابق" ? "missing" : "neutral"}`}>
-                      {row.location.result}
                     </td>
                     {periodHeaders.flatMap((_, periodIndex) => {
                       const period = row.periods[periodIndex];
@@ -355,8 +296,7 @@ export function AttendancePage() {
                       ];
                     })}
                   </tr>
-                );
-              })}
+              ))}
               {!reportLoading && !report?.rows?.length ? (
                 <tr>
                   <td colSpan={totalColumns} className="attendance-empty-table-cell">لا توجد نتائج مطابقة للفلاتر.</td>

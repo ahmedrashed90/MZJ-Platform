@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Clock,
   FloppyDisk,
-  MapPin,
   MagnifyingGlass,
   PencilSimple,
   Plus,
@@ -11,16 +10,6 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { attendanceFetch } from "./api";
-
-type LocationRow = {
-  id: string;
-  branch_id: string | null;
-  name: string;
-  latitude: number;
-  longitude: number;
-  radius_m: number;
-  allowed_public_ips: string[];
-};
 
 type PeriodRow = {
   id?: string;
@@ -48,10 +37,8 @@ type UserRow = {
   assignment_id: string | null;
   schedule_id: string | null;
   period_ids: string[];
-  location_id: string | null;
   weekly_off_day: number | null;
   schedule_name: string | null;
-  location_name: string | null;
 };
 
 type BranchRow = { id: string; code: string; name: string };
@@ -59,11 +46,9 @@ type BranchRow = { id: string; code: string; name: string };
 type AdminPayload = {
   ok: true;
   settings: { enforcementEnabled: boolean };
-  locations: LocationRow[];
   schedules: ScheduleRow[];
   users: UserRow[];
   branches: BranchRow[];
-  currentPublicIp: string;
 };
 
 const WEEKLY_OFF_DAYS = [
@@ -82,7 +67,6 @@ function weeklyOffDayLabel(value: number | null | undefined) {
   return option?.label || "بدون إجازة أسبوعية";
 }
 
-const blankLocation = { id: "", branchId: "", name: "", latitude: "", longitude: "", radiusM: "150", publicIps: "" };
 const blankSchedule = (): { id: string; name: string; periods: PeriodRow[] } => ({
   id: "",
   name: "",
@@ -95,13 +79,11 @@ export function AttendanceSettingsPanel() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [locationForm, setLocationForm] = useState(blankLocation);
   const [scheduleForm, setScheduleForm] = useState(blankSchedule);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [assignmentScheduleId, setAssignmentScheduleId] = useState("");
   const [assignmentPeriodIds, setAssignmentPeriodIds] = useState<string[]>([]);
   const [assignmentBranchId, setAssignmentBranchId] = useState("");
-  const [assignmentLocationId, setAssignmentLocationId] = useState("");
   const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
   const [userSearch, setUserSearch] = useState("");
@@ -140,7 +122,6 @@ export function AttendanceSettingsPanel() {
     setAssignmentScheduleId("");
     setAssignmentPeriodIds([]);
     setAssignmentBranchId("");
-    setAssignmentLocationId("");
     setAssignmentWeeklyOffDay("");
     setEditingUserId("");
   }
@@ -160,62 +141,6 @@ export function AttendanceSettingsPanel() {
       await load();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "تعذر حفظ إعداد تطبيق الحضور");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function saveLocation(event: React.FormEvent) {
-    event.preventDefault();
-    resetMessages();
-    setBusy("location");
-    try {
-      await attendanceFetch("/api/attendance", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "save_location",
-          id: locationForm.id || undefined,
-          branchId: locationForm.branchId || undefined,
-          name: locationForm.name,
-          latitude: Number(locationForm.latitude),
-          longitude: Number(locationForm.longitude),
-          radiusM: Number(locationForm.radiusM),
-          allowedPublicIps: locationForm.publicIps,
-        }),
-      });
-      setLocationForm(blankLocation);
-      setMessage("تم حفظ مكان الحضور");
-      await load();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ المكان");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  function editLocation(location: LocationRow) {
-    resetMessages();
-    setLocationForm({
-      id: location.id,
-      branchId: location.branch_id || "",
-      name: location.name,
-      latitude: String(location.latitude),
-      longitude: String(location.longitude),
-      radiusM: String(location.radius_m),
-      publicIps: (location.allowed_public_ips || []).join("\n"),
-    });
-  }
-
-  async function deleteLocation(id: string) {
-    resetMessages();
-    if (!window.confirm("حذف مكان الحضور؟")) return;
-    setBusy(`delete-location:${id}`);
-    try {
-      await attendanceFetch("/api/attendance", { method: "POST", body: JSON.stringify({ action: "delete_location", id }) });
-      setMessage("تم حذف مكان الحضور");
-      await load();
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "تعذر حذف المكان");
     } finally {
       setBusy("");
     }
@@ -333,7 +258,6 @@ export function AttendanceSettingsPanel() {
     const fallbackPeriods = schedule?.periods.map((period) => period.id).filter(Boolean) as string[] | undefined;
     setAssignmentPeriodIds(user.period_ids?.length ? user.period_ids : fallbackPeriods || []);
     setAssignmentBranchId(user.branch_id || "");
-    setAssignmentLocationId(user.location_id || "");
     setAssignmentWeeklyOffDay(user.weekly_off_day === null || user.weekly_off_day === undefined ? "" : String(user.weekly_off_day));
     window.setTimeout(() => document.getElementById("attendance-assignment-editor")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
   }
@@ -362,11 +286,10 @@ export function AttendanceSettingsPanel() {
           scheduleId: unassign ? "" : assignmentScheduleId,
           periodIds: unassign ? [] : assignmentPeriodIds,
           branchId: unassign ? "" : assignmentBranchId,
-          locationId: unassign ? "" : assignmentLocationId,
           weeklyOffDay: unassign ? "" : assignmentWeeklyOffDay,
         }),
       });
-      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : editingUserId ? "تم تعديل بيانات دوام الموظف" : "تم تطبيق جدول العمل والفترات والفرع والمكان المطلوب ويوم الإجازة على اليوزرات المحددين");
+      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : editingUserId ? "تم تعديل بيانات دوام الموظف" : "تم تطبيق جدول العمل والفترات والفرع ويوم الإجازة على اليوزرات المحددين");
       resetAssignmentEditor();
       await load();
     } catch (assignError) {
@@ -381,7 +304,7 @@ export function AttendanceSettingsPanel() {
   return (
     <div className="attendance-settings">
       <div className="attendance-settings-intro">
-        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات والفرع ومكان الحضور المطلوب ويوم الإجازة لكل يوزر.</small></span></div>
+        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات والفرع ويوم الإجازة لكل يوزر.</small></span></div>
       </div>
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
@@ -404,55 +327,6 @@ export function AttendanceSettingsPanel() {
           >
             {busy === "settings" ? "جاري الحفظ..." : data?.settings?.enforcementEnabled ? "إيقاف الإلزام" : "تفعيل الإلزام"}
           </button>
-        </div>
-      </section>
-
-      <section className="attendance-settings-card panel">
-        <header><div><MapPin size={22} weight="duotone" /><span><h2>أماكن الحضور المطلوبة</h2><p>حدد لوكيشن الفرع ونطاق السماح بالمتر. لو لم تختَر مكانًا للموظف لن يتم طلب اللوكيشن منه.</p></span></div></header>
-        <div className="attendance-settings-two-columns">
-          <form className="attendance-location-form" onSubmit={saveLocation}>
-            <label><span>اسم المكان</span><input required value={locationForm.name} onChange={(event) => setLocationForm((current) => ({ ...current, name: event.target.value }))} placeholder="مثال: فرع الملتقى" /></label>
-            <label><span>الفرع</span><select value={locationForm.branchId} onChange={(event) => setLocationForm((current) => ({ ...current, branchId: event.target.value }))}><option value="">بدون ربط بفرع</option>{(data?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
-            <label><span>Latitude</span><input required inputMode="decimal" value={locationForm.latitude} onChange={(event) => setLocationForm((current) => ({ ...current, latitude: event.target.value }))} placeholder="24.000000" /></label>
-            <label><span>Longitude</span><input required inputMode="decimal" value={locationForm.longitude} onChange={(event) => setLocationForm((current) => ({ ...current, longitude: event.target.value }))} placeholder="46.000000" /></label>
-            <label><span>نطاق السماح بالمتر</span><input required type="number" min={10} max={50000} value={locationForm.radiusM} onChange={(event) => setLocationForm((current) => ({ ...current, radiusM: event.target.value }))} /></label>
-            <label className="attendance-location-network-field">
-              <span>Public IP لشبكة الفرع</span>
-              <textarea
-                value={locationForm.publicIps}
-                onChange={(event) => setLocationForm((current) => ({ ...current, publicIps: event.target.value }))}
-                placeholder="IP واحد أو أكثر — كل IP في سطر"
-                rows={3}
-              />
-              <small>يُستخدم كتحقق بديل لأجهزة الكمبيوتر إذا لم يرجع المتصفح GPS. يمكن إضافة أكثر من Public IP.</small>
-              {data?.currentPublicIp ? (
-                <span className="attendance-current-ip">
-                  IP الحالي: <bdi dir="ltr">{data.currentPublicIp}</bdi>
-                  <button
-                    type="button"
-                    onClick={() => setLocationForm((current) => ({
-                      ...current,
-                      publicIps: Array.from(new Set([...current.publicIps.split(/\s+/).filter(Boolean), data.currentPublicIp])).join("\n"),
-                    }))}
-                  >استخدم IP الحالي</button>
-                </span>
-              ) : null}
-            </label>
-            <div className="attendance-form-actions">
-              <button className="attendance-save-button" type="submit" disabled={busy === "location"}><FloppyDisk size={18} /> {locationForm.id ? "حفظ التعديل" : "إضافة المكان"}</button>
-              {locationForm.id ? <button className="secondary-button" type="button" onClick={() => setLocationForm(blankLocation)}>إلغاء</button> : null}
-            </div>
-          </form>
-
-          <div className="attendance-compact-list">
-            {(data?.locations || []).map((location) => (
-              <article key={location.id}>
-                <div><strong>{location.name}</strong><span>{Number(location.latitude).toFixed(6)}, {Number(location.longitude).toFixed(6)} • {location.radius_m} م{location.allowed_public_ips?.length ? ` • شبكة ${location.allowed_public_ips.length} IP` : ""}</span></div>
-                <div><button type="button" onClick={() => editLocation(location)} title="تعديل"><PencilSimple size={17} /></button><button type="button" onClick={() => void deleteLocation(location.id)} disabled={busy === `delete-location:${location.id}`} title="حذف"><Trash size={17} /></button></div>
-              </article>
-            ))}
-            {!data?.locations?.length ? <p className="attendance-empty">لم تتم إضافة أماكن حضور بعد.</p> : null}
-          </div>
         </div>
       </section>
 
@@ -492,11 +366,10 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول العمل والفترات الفعلية والفرع والمكان المطلوب ويوم الإجازة. يمكن تعديل كل يوزر منفردًا بعد الحفظ.</p></span></div></header>
+        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول العمل والفترات الفعلية والفرع ويوم الإجازة. يمكن تعديل كل يوزر منفردًا بعد الحفظ.</p></span></div></header>
         <div className="attendance-assignment-toolbar" id="attendance-assignment-editor">
           <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => changeAssignmentSchedule(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
           <label><span>الفرع</span><select value={assignmentBranchId} onChange={(event) => setAssignmentBranchId(event.target.value)}><option value="">استخدام الفرع الحالي للموظف</option>{(data?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
-          <label><span>المكان المطلوب</span><select value={assignmentLocationId} onChange={(event) => setAssignmentLocationId(event.target.value)}><option value="">غير محدد — بدون طلب لوكيشن</option>{(data?.locations || []).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
           <label><span>يوم الإجازة</span><select value={assignmentWeeklyOffDay} onChange={(event) => setAssignmentWeeklyOffDay(event.target.value)}><option value="">بدون إجازة أسبوعية</option>{WEEKLY_OFF_DAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label>
           <div className="attendance-assignment-actions">
             <button className="attendance-save-button" type="button" onClick={() => void applyAssignment(false)} disabled={busy === "assignment" || !selectedUsers.length}><FloppyDisk size={18} /> {editingUserId ? "حفظ تعديل اليوزر" : `تطبيق على المحدد (${selectedUsers.length})`}</button>
@@ -528,7 +401,7 @@ export function AttendanceSettingsPanel() {
 
         <div className="unified-table-wrap attendance-users-table-wrap">
           <table>
-            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>المكان المطلوب</th><th>يوم الإجازة</th><th>تعديل</th></tr></thead>
+            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>يوم الإجازة</th><th>تعديل</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id} className={selectedUsers.includes(user.id) ? "selected" : ""}>
@@ -537,12 +410,11 @@ export function AttendanceSettingsPanel() {
                   <td>{user.branch_name || "—"}</td>
                   <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
                   <td>{user.schedule_id ? userPeriodNames(user) : <span className="attendance-muted">غير محدد</span>}</td>
-                  <td>{user.location_name || <span className="attendance-muted">غير مطلوب</span>}</td>
                   <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون إجازة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
                   <td><button className="attendance-row-edit" type="button" onClick={() => editUserAssignment(user)}><PencilSimple size={16} /> تعديل</button></td>
                 </tr>
               ))}
-              {!filteredUsers.length ? <tr><td colSpan={8}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
+              {!filteredUsers.length ? <tr><td colSpan={7}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
             </tbody>
           </table>
         </div>

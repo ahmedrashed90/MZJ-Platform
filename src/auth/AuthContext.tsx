@@ -22,31 +22,8 @@ export type AuthUser = {
 };
 
 
-export type AttendanceLoginRequirement = {
-  attendanceRequired: true;
-  locationRequired: boolean;
-  scheduleName?: string | null;
-  periodName?: string | null;
-  startTime?: string | null;
-  endTime?: string | null;
-  requiredLocationName?: string | null;
-  networkFallbackConfigured?: boolean;
-};
-
-export class AttendanceLoginRequiredError extends Error {
-  requirement: AttendanceLoginRequirement;
-
-  constructor(message: string, requirement: AttendanceLoginRequirement) {
-    super(message);
-    this.name = "AttendanceLoginRequiredError";
-    this.requirement = requirement;
-  }
-}
-
 type LoginOptions = {
   attendanceCheckIn?: boolean;
-  location?: { latitude: number; longitude: number; accuracy?: number | null } | null;
-  allowNetworkFallback?: boolean;
 };
 
 export type SetupStatus = {
@@ -148,24 +125,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         identifier,
         password,
         attendanceCheckIn: options.attendanceCheckIn === true,
-        location: options.location || undefined,
-        allowNetworkFallback: options.allowNetworkFallback === true,
       }),
     });
     const payload = await readJson(response);
     if (!response.ok || !payload.ok) {
-      if (payload?.code === "ATTENDANCE_REQUIRED" || payload?.code === "ATTENDANCE_LOCATION_REQUIRED") {
-        throw new AttendanceLoginRequiredError(payload.error || "سجل الحضور لإكمال الدخول", {
-          attendanceRequired: true,
-          locationRequired: Boolean(payload.locationRequired),
-          scheduleName: payload.scheduleName || null,
-          periodName: payload.periodName || null,
-          startTime: payload.startTime || null,
-          endTime: payload.endTime || null,
-          requiredLocationName: payload.requiredLocationName || null,
-          networkFallbackConfigured: Boolean(payload.networkFallbackConfigured),
-        });
-      }
       throw new Error(payload.error || "تعذر تسجيل الدخول");
     }
     setUser(payload.user);

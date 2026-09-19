@@ -70,20 +70,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(401).json({ ok: false, error: "بيانات تسجيل الدخول غير صحيحة" });
     }
 
-    const coordinatePayload = body.location && typeof body.location === "object" ? body.location : {};
-    const latitude = Number(coordinatePayload.latitude);
-    const longitude = Number(coordinatePayload.longitude);
-    const accuracy = coordinatePayload.accuracy === null || coordinatePayload.accuracy === undefined ? null : Number(coordinatePayload.accuracy);
-    const coordinates = Number.isFinite(latitude) && Number.isFinite(longitude)
-      ? { latitude, longitude, accuracy: Number.isFinite(accuracy) ? accuracy : null }
-      : null;
-
     try {
       await requireAttendanceForLogin(user.id, {
         confirmCheckIn: body.attendanceCheckIn === true,
-        coordinates,
-        requestIp: requestIp(request),
-        allowNetworkFallback: body.allowNetworkFallback === true,
       });
     } catch (attendanceError) {
       if (attendanceError instanceof AttendanceError) {
