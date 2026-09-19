@@ -539,6 +539,28 @@ end $$;
 
 -- v1226: pre-sale registered customers may own referral links without being promoted to sold members.
 update owners.schema_state set version=greatest(version,1226),updated_at=now() where id=1;
+
+-- v1227: MZJ Club portal design selector.
+-- This migration is required for databases created before portal_design existed.
+alter table owners.settings add column if not exists portal_design text not null default 'design_1';
+update owners.settings
+set portal_design='design_1',updated_at=now()
+where portal_design is null or portal_design not in ('design_1','design_2','design_3');
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint c
+    where c.conrelid='owners.settings'::regclass
+      and c.contype='c'
+      and pg_get_constraintdef(c.oid) ilike '%portal_design%'
+  ) then
+    alter table owners.settings
+      add constraint owners_settings_portal_design_check
+      check (portal_design in ('design_1','design_2','design_3'));
+  end if;
+end $$;
+update owners.schema_state set version=greatest(version,1227),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -564,6 +586,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_registration_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_qualified_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_sale_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='portal_design')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
@@ -606,7 +629,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1226;
+  return Number(state?.version || 0) >= 1227;
 }
 
 export function ensureOwnersSchema() {
