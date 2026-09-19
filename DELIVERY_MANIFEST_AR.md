@@ -498,3 +498,7 @@
 - إضافة ترحيل schema v1227 لحقل `owners.settings.portal_design`.
 - تعديل فحص جاهزية Owners Schema حتى لا يعتبر قاعدة البيانات جاهزة قبل وجود الحقل.
 - لا تغيير في منطق النقاط أو الدعوات أو المكافآت أو CRM أو الحضور أو التسويق.
+
+## v94 — MZJ Club build verification consistency
+- Canonical Owners Community verification now derives the schema readiness version from the runtime source, so schema v1227 is validated without stale hard-coded version alternatives.
+- No runtime business logic changes.
