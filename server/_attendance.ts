@@ -2,6 +2,7 @@ import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 
 export const ATTENDANCE_TIME_ZONE = "Asia/Riyadh";
+const MAX_ATTENDANCE_ACCURACY_M = 15;
 
 export type AttendanceCoordinates = {
   latitude: number;
@@ -106,6 +107,21 @@ function resolveAttendanceLocation(period: ActiveAttendancePeriod, coordinates: 
     latitude = lat;
     longitude = lng;
     accuracy = numberOrNull(coordinates.accuracy);
+    if (period.location_id && (accuracy === null || accuracy <= 0 || accuracy > MAX_ATTENDANCE_ACCURACY_M)) {
+      const accuracyText = accuracy === null ? "غير معروفة" : `±${Math.round(accuracy)}م`;
+      throw new AttendanceError(
+        "ATTENDANCE_LOCATION_ACCURACY_LOW",
+        `دقة الموقع ${accuracyText}. يجب أن تكون دقة موقع الحضور 15م أو أفضل.`,
+        409,
+        {
+          locationRequired: true,
+          requiredLocationName: period.location_name,
+          periodName: period.period_name,
+          accuracy,
+          maxAccuracyM: MAX_ATTENDANCE_ACCURACY_M,
+        },
+      );
+    }
     if (period.location_id && period.required_latitude !== null && period.required_longitude !== null && period.required_radius_m !== null) {
       distance = haversineMeters(lat, lng, period.required_latitude, period.required_longitude);
       locationResult = distance <= period.required_radius_m ? "matched" : "mismatched";
