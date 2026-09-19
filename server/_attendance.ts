@@ -2,7 +2,7 @@ import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 
 export const ATTENDANCE_TIME_ZONE = "Asia/Riyadh";
-const MAX_ATTENDANCE_ACCURACY_M = 15;
+const MAX_ATTENDANCE_ACCURACY_M = 75;
 
 export type AttendanceCoordinates = {
   latitude: number;
@@ -111,7 +111,7 @@ function resolveAttendanceLocation(period: ActiveAttendancePeriod, coordinates: 
       const accuracyText = accuracy === null ? "غير معروفة" : `±${Math.round(accuracy)}م`;
       throw new AttendanceError(
         "ATTENDANCE_LOCATION_ACCURACY_LOW",
-        `دقة الموقع ${accuracyText}. يجب أن تكون دقة موقع الحضور 15م أو أفضل.`,
+        `دقة الموقع ${accuracyText}. الحد الأقصى المقبول لأجهزة الكمبيوتر هو 75م.`,
         409,
         {
           locationRequired: true,

@@ -6,10 +6,9 @@ export type BrowserAttendanceLocation = {
 
 type PermissionStateLike = PermissionState | "unknown";
 
-const TARGET_ATTENDANCE_ACCURACY_M = 10;
-const MAX_ATTENDANCE_ACCURACY_M = 15;
+const TARGET_ATTENDANCE_ACCURACY_M = 15;
+const MAX_DESKTOP_ATTENDANCE_ACCURACY_M = 75;
 const LOCATION_CAPTURE_TIMEOUT_MS = 15000;
-const ACCEPTABLE_SAMPLE_SETTLE_MS = 2500;
 
 function positionFromBrowser(position: GeolocationPosition): BrowserAttendanceLocation {
   const latitude = Number(position.coords.latitude);
@@ -48,20 +47,20 @@ function geolocationErrorMessage(
     return "صلاحية الموقع مرفوضة لهذا الموقع. اسمح للمنصة بالوصول إلى اللوكيشن ثم أعد المحاولة.";
   }
 
-  if (bestAccuracy !== null && bestAccuracy > MAX_ATTENDANCE_ACCURACY_M) {
-    return `دقة الموقع الحالية ±${Math.round(bestAccuracy)}م، والمطلوب دقة 15م أو أفضل. انتظر ثوانٍ أو انتقل لمكان يسمح بتحديد GPS أدق ثم أعد المحاولة.`;
+  if (bestAccuracy !== null && bestAccuracy > MAX_DESKTOP_ATTENDANCE_ACCURACY_M) {
+    return `أفضل دقة رجعها الكمبيوتر ±${Math.round(bestAccuracy)}م، وهي أضعف من الحد المقبول ±75م. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.`;
   }
 
   if (error?.code === 2) {
     return "المتصفح لديه إذن الموقع لكن الجهاز لم يرجع إحداثيات دقيقة. تأكد من تشغيل خدمة Location ثم أعد المحاولة.";
   }
   if (error?.code === 3) {
-    return "انتهت مهلة تحديد الموقع قبل الوصول لدقة 15م أو أفضل. أعد المحاولة من مكان يسمح بتحديد موقع أدق.";
+    return "انتهت مهلة تحديد الموقع ولم يرجع الكمبيوتر قراءة موثوقة بما يكفي. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.";
   }
   if (permission === "granted") {
-    return "إذن اللوكيشن مفتوح لكن الجهاز لم يرسل موقعًا بدقة 15م أو أفضل. أعد المحاولة بعد ثوانٍ.";
+    return "إذن اللوكيشن مفتوح لكن الكمبيوتر لم يرسل قراءة موثوقة بما يكفي. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.";
   }
-  return "تعذر تحديد موقع الحضور بدقة 15م أو أفضل. تأكد من السماح بالموقع وتشغيل خدمة Location ثم أعد المحاولة.";
+  return "تعذر تحديد موقع الحضور من الكمبيوتر بدقة مقبولة. تأكد من السماح بالموقع وتشغيل Location وWi-Fi ثم أعد المحاولة.";
 }
 
 export async function getBrowserAttendanceLocation() {
@@ -87,12 +86,10 @@ export async function getBrowserAttendanceLocation() {
     let lastError: GeolocationPositionError | null = null;
     let bestLocation: BrowserAttendanceLocation | null = null;
     let hardTimeout = 0;
-    let settleTimeout = 0;
     let watchId: number | null = null;
 
     const cleanup = () => {
       window.clearTimeout(hardTimeout);
-      window.clearTimeout(settleTimeout);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     };
 
@@ -124,21 +121,12 @@ export async function getBrowserAttendanceLocation() {
         bestLocation = location;
       }
 
-      // A reading of 10 m or better is the preferred result and can be used immediately.
+      // 15 m or better is excellent even on desktop, so use it immediately.
       if (location.accuracy <= TARGET_ATTENDANCE_ACCURACY_M) {
         resolveLocation(location);
-        return;
       }
-
-      // 10–15 m is acceptable, but keep sampling briefly in case the device can improve it.
-      if (location.accuracy <= MAX_ATTENDANCE_ACCURACY_M) {
-        window.clearTimeout(settleTimeout);
-        settleTimeout = window.setTimeout(() => {
-          if (bestLocation && bestLocation.accuracy <= MAX_ATTENDANCE_ACCURACY_M) {
-            resolveLocation(bestLocation);
-          }
-        }, ACCEPTABLE_SAMPLE_SETTLE_MS);
-      }
+      // For normal desktop readings (15–75 m), keep sampling until the hard timeout
+      // so we save the best fresh reading instead of the first reading returned.
     };
 
     const handleError = (error: GeolocationPositionError) => {
@@ -158,7 +146,7 @@ export async function getBrowserAttendanceLocation() {
     watchId = navigator.geolocation.watchPosition(considerPosition, handleError, options);
 
     hardTimeout = window.setTimeout(() => {
-      if (bestLocation && bestLocation.accuracy <= MAX_ATTENDANCE_ACCURACY_M) {
+      if (bestLocation && bestLocation.accuracy <= MAX_DESKTOP_ATTENDANCE_ACCURACY_M) {
         resolveLocation(bestLocation);
         return;
       }

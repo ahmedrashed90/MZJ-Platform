@@ -316,7 +316,8 @@ export function AttendancePage() {
                             <bdi dir="ltr">{Number(row.location.latitude).toFixed(5)}</bdi>
                             <bdi dir="ltr">{Number(row.location.longitude).toFixed(5)}</bdi>
                           </a>
-                          {row.location.distanceM !== null ? <small>{Math.round(row.location.distanceM)} م</small> : null}
+                          {row.location.accuracyM !== null ? <small>دقة ±{Math.round(row.location.accuracyM)} م</small> : null}
+                          {row.location.distanceM !== null ? <small>بعد {Math.round(row.location.distanceM)} م</small> : null}
                         </>
                       ) : row.location.missingRequiredCapture ? (
                         <span className="attendance-location-missing-text">لم يتم حفظ اللوكيشن</span>
