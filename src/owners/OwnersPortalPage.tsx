@@ -183,6 +183,9 @@ export function OwnersPortalPage() {
     && (!activePackageCategoryId || item.categoryId === activePackageCategoryId),
   );
   const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
+  const portalDesign = ["design_1", "design_2", "design_3"].includes(String(me?.portalDesign)) ? String(me.portalDesign) : "design_1";
+  const profileKind = me?.profileKind === "member" ? "member" : "legacy";
+  const discountConfig = me?.discountConfig || {};
 
   async function copyInvite() {
     try {
@@ -221,7 +224,7 @@ export function OwnersPortalPage() {
   }
 
   return (
-    <div className="owners-public portal" dir="rtl">
+    <div className={`owners-public portal owners-club-design ${portalDesign}`} dir="rtl">
       <header className="owners-public-head">
         <div><img src="/logo.png" alt="MZJ" /><div><span>MZJ Club Community</span><strong>أهلًا {member.name || "بك"} 👋</strong></div></div>
         <button onClick={() => void logout()}><SignOut size={18} /> خروج</button>
@@ -292,7 +295,7 @@ export function OwnersPortalPage() {
           </section>
         ) : null}
 
-        <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
+        <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} profileKind={profileKind} discountConfig={discountConfig} />
 
         <section className="owners-public-section">
           <h2>المكافآت المتاحة</h2>

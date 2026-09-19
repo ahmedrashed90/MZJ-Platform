@@ -18,6 +18,7 @@ import { DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE, queueLegacyOwnerWelcomeSms, que
 import { getWebsiteStock } from "./_website-stock.js";
 import { ownerPurchaseLedger, ownerPurchaseSummary, ownerOwnsSalesOrder } from "./_owners-purchases.js";
 import { downloadNextErpSalesInvoicePdf, listNextErpSalesInvoices, ownerInvoiceError } from "./_owners-invoices.js";
+import { getOwnersDiscountConfig } from "./_owners-discount-config.js";
 
 const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
 
@@ -304,10 +305,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
         `;
         if (!customer) return response.status(404).json({ ok: false, error: "العميل غير موجود ضمن العملاء الجديدة" });
         const websiteCars = await websiteCarsForDiscountCalculator();
-        const [pointsSettings] = await sql<any[]>`select points_repurchase,points_sale,points_unique_open from owners.settings where id='default'`;
+        const [[pointsSettings], discountConfig] = await Promise.all([
+          sql<any[]>`select points_repurchase,points_sale,points_unique_open,portal_design from owners.settings where id='default'`,
+          getOwnersDiscountConfig(),
+        ]);
         return response.status(200).json({
           ok: true,
           profileKind: "legacy",
+          portalDesign: pointsSettings?.portal_design || "design_1",
+          discountConfig,
           member: {
             id: customer.id,
             name: customer.customer_name || "عميل MZJ",
@@ -391,10 +397,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ]);
 
       const websiteCars = await websiteCarsForDiscountCalculator();
-      const [pointsSettings] = await sql<any[]>`select points_repurchase,points_sale,points_unique_open from owners.settings where id='default'`;
+      const [[pointsSettings], discountConfig] = await Promise.all([
+        sql<any[]>`select points_repurchase,points_sale,points_unique_open,portal_design from owners.settings where id='default'`,
+        getOwnersDiscountConfig(),
+      ]);
       return response.status(200).json({
         ok: true,
         profileKind: "member",
+        portalDesign: pointsSettings?.portal_design || "design_1",
+        discountConfig,
         member: {
           id: member.id,
           name: member.customer_name || "عميل MZJ",
@@ -575,6 +586,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const uniqueOpenPoints = integer(payload.pointsUniqueOpen, 50, 0, 1_000_000);
     const salePoints = integer(payload.pointsSale, 700, 0, 1_000_000);
     const dailyOpenPointsCap = Math.max(uniqueOpenPoints, integer(payload.dailyOpenPointsCap, 50, 0, 1_000_000));
+    const portalDesign = ["design_1", "design_2", "design_3"].includes(clean(payload.portalDesign)) ? clean(payload.portalDesign) : "design_1";
     const [settings] = await sql<any[]>`
       update owners.settings set
         is_enabled=${payload.isEnabled !== false},
@@ -602,6 +614,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         referral_default_branch=${clean(payload.referralDefaultBranch) || "online"},
         friend_benefit_title=${clean(payload.friendBenefitTitle) || "دعوة من مجموعة محمد بن ذعار العجمي"},
         friend_benefit_text=${clean(payload.friendBenefitText) || "سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك."},
+        portal_design=${portalDesign},
         welcome_message_enabled=${payload.welcomeMessageEnabled === true},
         welcome_message_template=${clean(payload.welcomeMessageTemplate) || DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE},
         updated_by=${actor.id}::uuid,

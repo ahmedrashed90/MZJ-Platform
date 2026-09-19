@@ -32,6 +32,7 @@ type OwnersSettingsForm = {
   referralDefaultBranch: string;
   friendBenefitTitle: string;
   friendBenefitText: string;
+  portalDesign: "design_1" | "design_2" | "design_3";
 };
 
 const DEFAULT_WELCOME_MESSAGE_TEMPLATE = `مرحباً : {customer_name}
@@ -70,6 +71,7 @@ const emptyForm: OwnersSettingsForm = {
   referralDefaultBranch: "online",
   friendBenefitTitle: "دعوة من مجموعة محمد بن ذعار العجمي",
   friendBenefitText: "سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.",
+  portalDesign: "design_1",
 };
 
 function errorMessage(error: unknown) {
@@ -115,6 +117,7 @@ export function OwnersSettingsPanel() {
       referralDefaultBranch: settings.referral_default_branch || "online",
       friendBenefitTitle: settings.friend_benefit_title || emptyForm.friendBenefitTitle,
       friendBenefitText: settings.friend_benefit_text || emptyForm.friendBenefitText,
+      portalDesign: ["design_1", "design_2", "design_3"].includes(String(settings.portal_design)) ? settings.portal_design : "design_1",
     });
     setLoaded(true);
   }
@@ -162,6 +165,31 @@ export function OwnersSettingsPanel() {
       </header>
 
       {message ? <div className="owners-notice">{message}</div> : null}
+
+      <section className="owners-settings-card owners-design-settings-card">
+        <h3><ShieldCheck size={21} /> اختيار التصميم</h3>
+        <div className="owners-design-options" role="radiogroup" aria-label="اختيار تصميم MZJ Club Community">
+          {([
+            { id: "design_1", label: "التصميم 1", image: "/owners-designs/design-1.webp" },
+            { id: "design_2", label: "التصميم 2", image: "/owners-designs/design-2.webp" },
+            { id: "design_3", label: "التصميم 3", image: "/owners-designs/design-3.webp" },
+          ] as const).map((design) => (
+            <label key={design.id} className={`owners-design-choice ${form.portalDesign === design.id ? "active" : ""}`}>
+              <input
+                type="radio"
+                name="owners-portal-design"
+                value={design.id}
+                checked={form.portalDesign === design.id}
+                disabled={!editable}
+                onChange={() => setForm({ ...form, portalDesign: design.id })}
+              />
+              <span className="owners-design-preview"><img src={design.image} alt={`معاينة ${design.label}`} /></span>
+              <strong>{design.label}</strong>
+              <small>{form.portalDesign === design.id ? "التصميم النشط" : "اختيار التصميم"}</small>
+            </label>
+          ))}
+        </div>
+      </section>
 
       <section className="owners-settings-card">
         <h3><ChatCircleText size={21} /> قناة OTP والتحقق</h3>

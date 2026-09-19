@@ -32,6 +32,7 @@ create table if not exists owners.settings (
   referral_default_branch text not null default 'online',
   friend_benefit_title text not null default 'دعوة من مجموعة محمد بن ذعار العجمي',
   friend_benefit_text text not null default 'سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.',
+  portal_design text not null default 'design_1' check (portal_design in ('design_1','design_2','design_3')),
   welcome_message_enabled boolean not null default false,
   welcome_message_template text,
   updated_by uuid references core.users(id) on delete set null,
@@ -56,6 +57,7 @@ alter table owners.settings add column if not exists points_sale_enabled boolean
 alter table owners.settings add column if not exists silver_points integer not null default 1000;
 alter table owners.settings add column if not exists gold_points integer not null default 3000;
 alter table owners.settings add column if not exists platinum_points integer not null default 7000;
+alter table owners.settings add column if not exists portal_design text not null default 'design_1';
 
 create table if not exists owners.members (
   id uuid primary key default gen_random_uuid(),

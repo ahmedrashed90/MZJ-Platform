@@ -77,9 +77,11 @@ export function OwnersMemberPreviewPage() {
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
   const websiteCars = Array.isArray(data?.websiteCars) ? data.websiteCars : [];
   const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
+  const portalDesign = ["design_1", "design_2", "design_3"].includes(String(data?.portalDesign)) ? String(data.portalDesign) : "design_1";
+  const discountConfig = data?.discountConfig || {};
 
   return (
-    <div className="module-page owners-admin-page owners-member-preview" dir="rtl">
+    <div className={`module-page owners-admin-page owners-member-preview owners-club-design ${portalDesign}`} dir="rtl">
       <header className="owners-hero">
         <div>
           <span className="owners-hero-icon"><IdentificationCard size={30} weight="duotone" /></span>
@@ -153,10 +155,10 @@ export function OwnersMemberPreviewPage() {
             </section>
           ) : null}
 
-          <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
+          <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} profileKind={kind} discountConfig={discountConfig} />
 
           <section className="owners-public-section">
-            <h2>المكافآت المتاحة حسب رصيد النقاط</h2>
+            <h2>المكافآت المتاحة</h2>
             <div className="owners-public-rewards">
               {rewards.length ? rewards.map((reward: any) => (
                 <article key={reward.id}>

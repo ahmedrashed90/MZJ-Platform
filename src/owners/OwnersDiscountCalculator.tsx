@@ -7,9 +7,20 @@ type WebsiteCar = {
   priceBeforeTax?: number;
 };
 
+type DiscountConfig = {
+  firstPurchasePercent?: number;
+  repeatPurchasePercent?: number;
+  friendGiftPercent?: number;
+  priceBasis?: string;
+  roundingMode?: string;
+  roundingUnit?: number;
+};
+
 type OwnersDiscountCalculatorProps = {
   websiteCars: WebsiteCar[];
   referralCode?: string;
+  profileKind?: "legacy" | "member";
+  discountConfig?: DiscountConfig;
 };
 
 function normalizeVehicleSearch(value: unknown) {
@@ -24,7 +35,23 @@ function normalizeVehicleSearch(value: unknown) {
     .trim();
 }
 
-export function OwnersDiscountCalculator({ websiteCars, referralCode }: OwnersDiscountCalculatorProps) {
+function percent(value: unknown, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+function discountAmount(priceBeforeTax: unknown, ratePercent: unknown, roundingUnit: unknown) {
+  const price = Math.max(0, Number(priceBeforeTax || 0));
+  const rate = percent(ratePercent, 1);
+  const unitRaw = Math.trunc(Number(roundingUnit || 100));
+  const unit = Number.isFinite(unitRaw) && unitRaw > 0 ? unitRaw : 100;
+  if (!(price > 0) || !(rate > 0)) return 0;
+  const raw = price * (rate / 100);
+  return Math.min(price, Math.floor((raw + 1e-9) / unit) * unit);
+}
+
+export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKind = "legacy", discountConfig }: OwnersDiscountCalculatorProps) {
   const [vehicleId, setVehicleId] = useState("");
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -41,8 +68,13 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode }: OwnersDi
     });
   }, [websiteCars, normalizedQuery]);
 
-  const rawDiscount = selectedCar ? Number(selectedCar.priceBeforeTax || 0) * 0.01 : 0;
-  const discount = rawDiscount > 0 ? Math.floor((rawDiscount + 1e-9) / 100) * 100 : 0;
+  const personalRate = profileKind === "member"
+    ? percent(discountConfig?.repeatPurchasePercent, 1)
+    : percent(discountConfig?.firstPurchasePercent, 1);
+  const friendGiftRate = percent(discountConfig?.friendGiftPercent, 1);
+  const unit = discountConfig?.roundingUnit ?? 100;
+  const personalDiscount = selectedCar ? discountAmount(selectedCar.priceBeforeTax, personalRate, unit) : 0;
+  const friendGiftDiscount = selectedCar ? discountAmount(selectedCar.priceBeforeTax, friendGiftRate, unit) : 0;
 
   const chooseCar = (car: WebsiteCar) => {
     setVehicleId(String(car.vehicleId || ""));
@@ -53,7 +85,7 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode }: OwnersDi
 
   return (
     <section className="owners-public-section owners-code-calculator">
-      <div className="owners-calculator-head"><Calculator size={26} /><div><h2>احسب خصمك</h2></div></div>
+      <div className="owners-calculator-head"><Calculator size={26} /><div><h2>اعرف خصمك</h2></div></div>
       <div className="owners-calculator-combobox-label">
         <span>اختر السيارة</span>
         <div
@@ -123,8 +155,9 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode }: OwnersDi
         </div>
       </div>
       <div className="owners-calculator-result">
-        <div className="highlight"><span>الخصم</span><strong>{selectedCar ? `${discount.toLocaleString("ar-SA-u-nu-latn")} ر.س` : "—"}</strong></div>
         <div><span>كود العميل</span><strong dir="ltr">{referralCode || "—"}</strong></div>
+        <div className="highlight"><span>الخصم الشخصي</span><strong>{selectedCar ? `${personalDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س` : "—"}</strong></div>
+        <div className="highlight friend"><span>خصم إهداء لصديق</span><strong>{selectedCar ? `${friendGiftDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س` : "—"}</strong></div>
       </div>
       {!websiteCars.length ? <p className="owners-calculator-empty">تعذر تحميل سيارات الموقع حاليًا. حاول مرة أخرى لاحقًا.</p> : null}
     </section>

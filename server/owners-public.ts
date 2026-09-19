@@ -30,6 +30,7 @@ import { getWebsiteStock } from "./_website-stock.js";
 import { ownerPurchaseLedger, ownerPurchaseSummary, ownerOwnsSalesOrder } from "./_owners-purchases.js";
 import { downloadNextErpSalesInvoicePdf, listNextErpSalesInvoices, ownerInvoiceError } from "./_owners-invoices.js";
 import { ensureMarketingSchema } from "./_marketing-schema.js";
+import { getOwnersDiscountConfig } from "./_owners-discount-config.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -1965,7 +1966,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (legacyCustomer) {
     if (request.method === "GET" && action === "me") {
       const settings = await getOwnerSettings();
-      const packageCatalog = await ownerPublicPackageCatalog();
+      const [packageCatalog, discountConfig] = await Promise.all([ownerPublicPackageCatalog(), getOwnersDiscountConfig()]);
       let websiteCars: Array<{ vehicleId: string; title: string; price: number; priceBeforeTax: number }> = [];
       let websiteCarsWarning = "";
       try {
@@ -1980,6 +1981,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({
         ok: true,
         profileKind: "legacy",
+        portalDesign: settings.portal_design || "design_1",
+        discountConfig,
         member: {
           id: legacyCustomer.id,
           name: legacyCustomer.customer_name || "عميل MZJ",
@@ -2064,7 +2067,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "GET" && action === "me") {
     const settings = await getOwnerSettings();
-    const packageCatalog = await ownerPublicPackageCatalog();
+    const [packageCatalog, discountConfig] = await Promise.all([ownerPublicPackageCatalog(), getOwnersDiscountConfig()]);
     const referrals = await sql<any[]>`
       select id::text,referred_name,status,registered_at,qualified_at,sold_at,created_at
       from owners.referrals
@@ -2115,6 +2118,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     return response.status(200).json({
       ok: true,
+      profileKind: "member",
+      portalDesign: settings.portal_design || "design_1",
+      discountConfig,
       member: {
         id: member.id,
         name: member.customer_name,
