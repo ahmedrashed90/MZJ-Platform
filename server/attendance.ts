@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
-import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
+import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, checkoutCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
 import { adminDeviceSnapshot, approveUserDevice, revokeUserDevice, setUserDevicePolicy } from "./_device-agent.js";
 
 function clean(value: unknown) {
@@ -476,6 +476,7 @@ async function reportData(request: VercelRequest) {
   ));
   const legacyEmployeeId = validUuid(clean(request.query.employeeId)) ? clean(request.query.employeeId) : "";
   if (!employeeIds.length && legacyEmployeeId) employeeIds.push(legacyEmployeeId);
+  const branchId = validUuid(clean(request.query.branchId)) ? clean(request.query.branchId) : "";
 
   const users = employeeIds.length
     ? await sql<any[]>`
@@ -497,7 +498,23 @@ async function reportData(request: VercelRequest) {
               order by ub.is_primary desc,b.sort_order,b.name limit 1
             ),
             '—'
-          ) as branch_name
+          ) as branch_name,
+          coalesce(
+            (
+              select b.id::text
+              from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=u.id and usb.system_code='crm'
+              order by usb.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            (
+              select b.id::text
+              from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id
+              order by ub.is_primary desc,b.sort_order,b.name limit 1
+            )
+          ) as branch_id
         from core.users u
         where u.is_active=true
           and u.id::text in ${sql(employeeIds)}
@@ -522,7 +539,23 @@ async function reportData(request: VercelRequest) {
               order by ub.is_primary desc,b.sort_order,b.name limit 1
             ),
             '—'
-          ) as branch_name
+          ) as branch_name,
+          coalesce(
+            (
+              select b.id::text
+              from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=u.id and usb.system_code='crm'
+              order by usb.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            (
+              select b.id::text
+              from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id
+              order by ub.is_primary desc,b.sort_order,b.name limit 1
+            )
+          ) as branch_id
         from core.users u
         where u.is_active=true
         order by u.full_name
@@ -617,6 +650,8 @@ async function reportData(request: VercelRequest) {
     for (const user of users) {
       const userAssignments = assignmentMap.get(String(user.id)) || [];
       const assignment = userAssignments.find((item) => dateOnlyValue(item.effective_from) <= day && (!item.effective_to || dateOnlyValue(item.effective_to) >= day)) || null;
+      const effectiveBranchId = clean(assignment?.branch_id || user.branch_id);
+      if (branchId && effectiveBranchId !== branchId) continue;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
       const visibleDayRecords = dayRecords.filter((record) => {
         const legacySourceKey = clean(record.legacy_source_key);
@@ -716,7 +751,7 @@ async function reportData(request: VercelRequest) {
     periodsByKey: undefined,
   }));
 
-  return { ok: true, from, to, rows, periodHeaders, users: users.map((user) => ({ id: user.id, fullName: user.full_name })) };
+  return { ok: true, from, to, branchId: branchId || null, rows, periodHeaders, users: users.map((user) => ({ id: user.id, fullName: user.full_name })) };
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -749,6 +784,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     if (action === "self_check_in") {
       await checkInCurrentAttendance(user.id);
+      return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+    }
+    if (action === "self_check_out") {
+      await checkoutCurrentAttendance(user.id, { allowMissing: false, revokeSessions: false });
       return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
     }
 

@@ -169,6 +169,8 @@ a { color: inherit; text-decoration: none; }
   color: #80665d;
 }
 .attendance-account-action.logout:hover { background: #faf7f5; border-color: #cdbab1; }
+.attendance-account-action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+.attendance-account-action-row .attendance-account-action { min-width: 0; padding-inline: 7px; font-size: 9px; }
 .attendance-account-action:disabled { opacity: .6; cursor: wait; }
 
 .page-shell {
@@ -8020,7 +8022,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .attendance-report-filters {
   display: grid;
-  grid-template-columns: repeat(3,minmax(190px,1fr)) auto;
+  grid-template-columns: repeat(4,minmax(160px,1fr)) auto;
   gap: 10px;
   align-items: end;
   padding: 15px;

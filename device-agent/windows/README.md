@@ -1,6 +1,6 @@
 # MZJ Device Agent for Windows
 
-`MZJ-Device-Agent-Setup.exe` is both the one-time installer and the protocol handler.
+`MZJ-Device-Agent-Setup.exe` is both the one-time installer and the protocol handler. The default production build targets Windows x86 so the same installer runs on both 32-bit and 64-bit Intel/AMD Windows installations (and Windows ARM systems that provide x86 emulation).
 
 - Installs per Windows user under `%LOCALAPPDATA%\MZJ\DeviceAgent`.
 - Registers `mzjagent://` in HKCU.

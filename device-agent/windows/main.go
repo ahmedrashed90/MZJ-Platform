@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	agentVersion = "1.0.0"
+	agentVersion = "1.1.0"
 	appName      = "MZJ Device Agent"
 )
 
@@ -45,14 +45,14 @@ type identity struct {
 }
 
 type verifyRequest struct {
-	ChallengeID    string `json:"challengeId"`
-	DeviceID       string `json:"deviceId"`
-	DeviceName     string `json:"deviceName"`
-	Platform       string `json:"platform"`
-	AgentVersion   string `json:"agentVersion"`
-	PublicKeyPEM   string `json:"publicKeyPem"`
+	ChallengeID     string `json:"challengeId"`
+	DeviceID        string `json:"deviceId"`
+	DeviceName      string `json:"deviceName"`
+	Platform        string `json:"platform"`
+	AgentVersion    string `json:"agentVersion"`
+	PublicKeyPEM    string `json:"publicKeyPem"`
 	FingerprintHash string `json:"fingerprintHash"`
-	Signature      string `json:"signature"`
+	Signature       string `json:"signature"`
 }
 
 type verifyResponse struct {
@@ -63,13 +63,13 @@ type verifyResponse struct {
 }
 
 var (
-	crypt32                   = syscall.NewLazyDLL("crypt32.dll")
-	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
-	user32                    = syscall.NewLazyDLL("user32.dll")
-	procCryptProtectData      = crypt32.NewProc("CryptProtectData")
-	procCryptUnprotectData    = crypt32.NewProc("CryptUnprotectData")
-	procLocalFree             = kernel32.NewProc("LocalFree")
-	procMessageBoxW           = user32.NewProc("MessageBoxW")
+	crypt32                = syscall.NewLazyDLL("crypt32.dll")
+	kernel32               = syscall.NewLazyDLL("kernel32.dll")
+	user32                 = syscall.NewLazyDLL("user32.dll")
+	procCryptProtectData   = crypt32.NewProc("CryptProtectData")
+	procCryptUnprotectData = crypt32.NewProc("CryptUnprotectData")
+	procLocalFree          = kernel32.NewProc("LocalFree")
+	procMessageBoxW        = user32.NewProc("MessageBoxW")
 )
 
 func main() {

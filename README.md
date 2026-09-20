@@ -473,3 +473,6 @@ Before deploying, read:
 
 ## GLOBAL ATTENDANCE CLEAN v83
 Removed the legacy marketing migration label from attendance report period columns while preserving historical records.
+
+## Attendance / Device Agent v97
+راجع `DELIVERY-GLOBAL-ATTENDANCE-DEVICE-CLEAN-V97.md` لتفاصيل فلتر الفرع، فصل تسجيل الخروج عن الانصراف، ونسخة Device Agent المتوافقة.

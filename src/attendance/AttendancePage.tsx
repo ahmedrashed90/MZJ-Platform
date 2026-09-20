@@ -17,7 +17,9 @@ type AdminUser = {
   branch_name?: string | null;
 };
 
-type AdminPayload = { ok: true; users: AdminUser[] };
+type AdminBranch = { id: string; code?: string | null; name: string };
+
+type AdminPayload = { ok: true; users: AdminUser[]; branches: AdminBranch[] };
 
 type ReportPeriod = {
   name: string;
@@ -124,10 +126,12 @@ export function AttendancePage() {
   const { user } = useAuth();
   const isAdmin = hasPermission(user, "platform.superadmin");
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminBranches, setAdminBranches] = useState<AdminBranch[]>([]);
   const [report, setReport] = useState<ReportPayload | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [employeeIds, setEmployeeIds] = useState<string[]>([]);
+  const [branchId, setBranchId] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
@@ -148,25 +152,28 @@ export function AttendancePage() {
     try {
       const payload = await attendanceFetch<AdminPayload>("/api/attendance?view=admin");
       setAdminUsers(payload.users || []);
+      setAdminBranches(payload.branches || []);
     } catch {
       setAdminUsers([]);
+      setAdminBranches([]);
     }
   }
 
-  async function fetchReportPayload(nextFrom = from, nextTo = to, nextEmployees = employeeIds) {
+  async function fetchReportPayload(nextFrom = from, nextTo = to, nextEmployees = employeeIds, nextBranchId = branchId) {
     const params = new URLSearchParams({ view: "report" });
     if (nextFrom) params.set("from", nextFrom);
     if (nextTo) params.set("to", nextTo);
     if (nextEmployees.length) params.set("employeeIds", nextEmployees.join(","));
+    if (nextBranchId) params.set("branchId", nextBranchId);
     return attendanceFetch<ReportPayload>(`/api/attendance?${params.toString()}`);
   }
 
-  async function loadReport(nextFrom = from, nextTo = to, nextEmployees = employeeIds) {
+  async function loadReport(nextFrom = from, nextTo = to, nextEmployees = employeeIds, nextBranchId = branchId) {
     if (!isAdmin) return;
     setReportLoading(true);
     setError("");
     try {
-      const payload = await fetchReportPayload(nextFrom, nextTo, nextEmployees);
+      const payload = await fetchReportPayload(nextFrom, nextTo, nextEmployees, nextBranchId);
       setReport(payload);
       setCollapsedDays(new Set());
     } catch (loadError) {
@@ -187,7 +194,7 @@ export function AttendancePage() {
     setReportExporting(true);
     setError("");
     try {
-      const payload = await fetchReportPayload(from, to, employeeIds);
+      const payload = await fetchReportPayload(from, to, employeeIds, branchId);
       setReport(payload);
       setCollapsedDays(new Set());
 
@@ -261,6 +268,13 @@ export function AttendancePage() {
           <label>
             <span>إلى تاريخ</span>
             <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </label>
+          <label>
+            <span>الفرع</span>
+            <select value={branchId} onChange={(event) => setBranchId(event.target.value)}>
+              <option value="">كل الفروع</option>
+              {adminBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            </select>
           </label>
           <label className="attendance-employee-multifilter">
             <span>الموظف</span>

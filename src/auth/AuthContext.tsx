@@ -224,7 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     const payload = await readJson(response);
     if (!response.ok || payload?.ok === false) {
-      throw new Error(payload?.error || "تعذر تسجيل الانصراف وتسجيل الخروج");
+      throw new Error(payload?.error || "تعذر تسجيل الخروج");
     }
     setUser(null);
   }, []);

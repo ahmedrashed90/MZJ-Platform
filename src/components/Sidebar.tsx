@@ -78,7 +78,7 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const [attendanceState, setAttendanceState] = useState<SelfAttendanceState | null>(null);
-  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "logout">("");
+  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "checkout" | "logout">("");
   const [attendanceError, setAttendanceError] = useState("");
 
   const systemAllowed: Record<string, boolean> = {
@@ -135,6 +135,23 @@ export function Sidebar() {
     }
   }
 
+  async function handleCheckOut() {
+    if (attendanceBusy) return;
+    setAttendanceBusy("checkout");
+    setAttendanceError("");
+    try {
+      await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "self_check_out" }),
+      });
+      await logout();
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الانصراف");
+    } finally {
+      setAttendanceBusy("");
+    }
+  }
+
   async function handleLogout() {
     if (attendanceBusy) return;
     setAttendanceBusy("logout");
@@ -142,7 +159,7 @@ export function Sidebar() {
     try {
       await logout();
     } catch (error) {
-      setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الانصراف وتسجيل الخروج");
+      setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الخروج");
     } finally {
       setAttendanceBusy("");
     }
@@ -152,9 +169,7 @@ export function Sidebar() {
   const hasOpenAttendance = Boolean(attendanceState?.canCheckOut);
   const actionLabel = needsCheckIn
     ? attendanceBusy === "checkin" ? "جاري تسجيل الحضور..." : "تسجيل حضور"
-    : hasOpenAttendance
-      ? attendanceBusy === "logout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"
-      : attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج";
+    : attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج";
   const ActionIcon = needsCheckIn ? SignIn : SignOut;
   const stateLabel = attendanceStateLabel(attendanceState);
 
@@ -177,17 +192,44 @@ export function Sidebar() {
           <span className="account-role" title={roleText}>{roleText}</span>
           {stateLabel ? <span className={`attendance-account-state ${needsCheckIn ? "needs-checkin" : hasOpenAttendance ? "checked-in" : ""}`}>{stateLabel}</span> : null}
           {attendanceError ? <span className="attendance-account-error" title={attendanceError}>{attendanceError}</span> : null}
-          <button
-            type="button"
-            className={`attendance-account-action ${needsCheckIn ? "checkin" : hasOpenAttendance ? "checkout" : "logout"}`}
-            onClick={() => needsCheckIn ? void handleCheckIn() : void handleLogout()}
-            disabled={Boolean(attendanceBusy)}
-            aria-label={actionLabel}
-            title={actionLabel}
-          >
-            <ActionIcon size={17} />
-            <span>{actionLabel}</span>
-          </button>
+          {hasOpenAttendance ? (
+            <div className="attendance-account-action-row">
+              <button
+                type="button"
+                className="attendance-account-action checkout"
+                onClick={() => void handleCheckOut()}
+                disabled={Boolean(attendanceBusy)}
+                aria-label="تسجيل انصراف"
+                title="تسجيل انصراف"
+              >
+                <SignOut size={17} />
+                <span>{attendanceBusy === "checkout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف"}</span>
+              </button>
+              <button
+                type="button"
+                className="attendance-account-action logout"
+                onClick={() => void handleLogout()}
+                disabled={Boolean(attendanceBusy)}
+                aria-label="تسجيل خروج"
+                title="تسجيل خروج بدون إنهاء فترة الحضور"
+              >
+                <SignOut size={17} />
+                <span>{attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج"}</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={`attendance-account-action ${needsCheckIn ? "checkin" : "logout"}`}
+              onClick={() => needsCheckIn ? void handleCheckIn() : void handleLogout()}
+              disabled={Boolean(attendanceBusy)}
+              aria-label={actionLabel}
+              title={actionLabel}
+            >
+              <ActionIcon size={17} />
+              <span>{actionLabel}</span>
+            </button>
+          )}
         </div>
       </div>
     </aside>
