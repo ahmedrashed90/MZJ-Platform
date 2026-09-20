@@ -84,7 +84,7 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
   };
 
   return (
-    <section className="owners-public-section owners-code-calculator">
+    <section className="owners-public-section owners-code-calculator owners-club-main-section">
       <div className="owners-calculator-head"><Calculator size={26} /><div><h2>اعرف خصمك</h2></div></div>
       <div className="owners-calculator-combobox-label">
         <span>اختر السيارة</span>

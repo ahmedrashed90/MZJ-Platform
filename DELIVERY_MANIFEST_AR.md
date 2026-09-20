@@ -502,3 +502,9 @@
 ## v94 — MZJ Club build verification consistency
 - Canonical Owners Community verification now derives the schema readiness version from the runtime source, so schema v1227 is validated without stale hard-coded version alternatives.
 - No runtime business logic changes.
+
+## v95 — MZJ Club Community Design Switch
+- إصلاح عرض التصميم المختار فعليًا في صفحة العضوية ومعاينة الإدارة.
+- 3 Layouts حقيقية ومختلفة وليست مجرد اختلاف ألوان.
+- تحديث تلقائي للصفحة المفتوحة بعد حفظ اختيار التصميم.
+- بدون تغيير Business Logic أو Schema أو أي سيستم آخر.

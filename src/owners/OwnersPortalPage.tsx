@@ -97,7 +97,20 @@ export function OwnersPortalPage() {
   }
 
   useEffect(() => {
-    void load();
+    const refresh = () => { void load(); };
+    const handleVisibility = () => { if (!document.hidden) refresh(); };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "mzj-owners-portal-design-revision") refresh();
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
 
   async function requestOtp() {
@@ -224,7 +237,7 @@ export function OwnersPortalPage() {
   }
 
   return (
-    <div className={`owners-public portal owners-club-design ${portalDesign}`} dir="rtl">
+    <div className={`owners-public portal owners-club-design ${portalDesign}`} data-portal-design={portalDesign} dir="rtl">
       <header className="owners-public-head">
         <div><img src="/logo.png" alt="MZJ" /><div><span>MZJ Club Community</span><strong>أهلًا {member.name || "بك"} 👋</strong></div></div>
         <button onClick={() => void logout()}><SignOut size={18} /> خروج</button>
@@ -236,8 +249,18 @@ export function OwnersPortalPage() {
           <button type="button" className={portalTab === "packages" ? "active" : ""} onClick={() => setPortalTab("packages")}><Package size={18} /> الباقات</button>
         </nav>
         {portalTab === "home" ? (<>
-        <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
-          <div className="owners-membership-card">
+        <section className="owners-club-hero" aria-label="بطاقة العضوية والترحيب">
+          <div className="owners-club-hero-copy">
+            <span className="owners-club-kicker">MZJ Club Community</span>
+            <h1>أهلًا {member.name || "بك"} 👋</h1>
+            <p>كل رحلة أجمل مع مجتمعنا، ونقاطك ومزاياك في مكان واحد.</p>
+            <div className="owners-club-hero-meta">
+              <span><small>رصيد النقاط</small><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+              <span><small>كود العميل</small><strong dir="ltr">{member.referralCode || "—"}</strong></span>
+            </div>
+          </div>
+          <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
+            <div className="owners-membership-card">
             <div className="owners-membership-face front">
               <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Club Community</span><strong>بطاقة العضوية</strong></div></div>
               <div className="owners-card-name"><small>العضو</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
@@ -262,10 +285,11 @@ export function OwnersPortalPage() {
               </div>
               <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowCounterClockwise size={15} /> اضغط للعودة</small></div>
             </div>
-          </div>
+            </div>
+          </section>
         </section>
 
-        <section className="owners-public-section owners-points-list-section">
+        <section className="owners-public-section owners-points-list-section owners-club-main-section">
           <h2>قائمة النقاط</h2>
           <div className="owners-ledger">
             <article><span>إعادة الشراء</span><strong>{Number(pointsMenu.repurchase ?? 500).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
@@ -275,7 +299,7 @@ export function OwnersPortalPage() {
         </section>
 
         {member.inviteUrl ? (
-          <section className="owners-invite-card owners-member-invite-card">
+          <section className="owners-invite-card owners-member-invite-card owners-club-main-section">
             <div>
               <ShareNetwork size={28} />
               <div>
@@ -297,7 +321,7 @@ export function OwnersPortalPage() {
 
         <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} profileKind={profileKind} discountConfig={discountConfig} />
 
-        <section className="owners-public-section">
+        <section className="owners-public-section owners-rewards-section owners-club-main-section">
           <h2>المكافآت المتاحة</h2>
           <div className="owners-public-rewards">
             {rewards.length ? rewards.map((reward: any) => (
@@ -314,7 +338,7 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
-        <section className="owners-public-section owners-movement-section">
+        <section className="owners-public-section owners-movement-section owners-club-main-section">
           <h2>سجل الحركة</h2>
           <div className="owners-movement-table">
             <div className="owners-movement-head"><span>التاريخ</span><span>البيان</span><span>النقاط</span></div>
@@ -333,7 +357,7 @@ export function OwnersPortalPage() {
         </section>
 
         {redemptions.length ? (
-          <section className="owners-public-section">
+          <section className="owners-public-section owners-redemptions-section owners-club-main-section">
             <h2>استبدالاتي</h2>
             <div className="owners-redemption-cards">
               {redemptions.map((redemption: any) => (

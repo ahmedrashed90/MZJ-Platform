@@ -67,7 +67,20 @@ export function OwnersMemberPreviewPage() {
   }
 
   useEffect(() => {
-    void load();
+    const refresh = () => { void load(); };
+    const handleVisibility = () => { if (!document.hidden) refresh(); };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "mzj-owners-portal-design-revision") refresh();
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [kind, id]);
 
   const member = data?.member || {};
@@ -81,7 +94,7 @@ export function OwnersMemberPreviewPage() {
   const discountConfig = data?.discountConfig || {};
 
   return (
-    <div className={`module-page owners-admin-page owners-member-preview owners-club-design ${portalDesign}`} dir="rtl">
+    <div className={`module-page owners-admin-page owners-member-preview owners-club-design ${portalDesign}`} data-portal-design={portalDesign} dir="rtl">
       <header className="owners-hero">
         <div>
           <span className="owners-hero-icon"><IdentificationCard size={30} weight="duotone" /></span>
@@ -100,8 +113,18 @@ export function OwnersMemberPreviewPage() {
         <main className="owners-member-preview-body">
           {kind === "legacy" ? <div className="owners-notice">العميل ما زال ضمن «العملاء الجديدة». النقاط والمكافآت تظهر بعد وجود رصيد فعلي للعضوية.</div> : null}
 
-          <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
-            <div className="owners-membership-card">
+          <section className="owners-club-hero owners-club-preview-hero" aria-label="معاينة تصميم صفحة العضوية">
+            <div className="owners-club-hero-copy">
+              <span className="owners-club-kicker">MZJ Club Community</span>
+              <h1>أهلًا {member.name || "بك"} 👋</h1>
+              <p>معاينة مباشرة للتصميم النشط بنفس بيانات العضوية.</p>
+              <div className="owners-club-hero-meta">
+                <span><small>رصيد النقاط</small><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+                <span><small>كود العميل</small><strong dir="ltr">{member.referralCode || "—"}</strong></span>
+              </div>
+            </div>
+            <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
+              <div className="owners-membership-card">
               <div className="owners-membership-face front">
                 <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Club Community</span><strong>بطاقة العضوية</strong></div></div>
                 <div className="owners-card-name"><small>العميل</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
@@ -126,10 +149,11 @@ export function OwnersMemberPreviewPage() {
                 </div>
                 <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowsClockwise size={15} /> اضغط للعودة</small></div>
               </div>
-            </div>
+              </div>
+            </section>
           </section>
 
-          <section className="owners-public-section owners-points-list-section">
+          <section className="owners-public-section owners-points-list-section owners-club-main-section">
             <h2>قائمة النقاط</h2>
             <div className="owners-ledger">
               <article><span>إعادة الشراء</span><strong>{Number(pointsMenu.repurchase ?? 500).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
@@ -139,7 +163,7 @@ export function OwnersMemberPreviewPage() {
           </section>
 
           {member.inviteUrl ? (
-            <section className="owners-invite-card owners-admin-invite-card owners-member-invite-card">
+            <section className="owners-invite-card owners-admin-invite-card owners-member-invite-card owners-club-main-section">
               <div>
                 <ShareNetwork size={28} />
                 <div>
@@ -157,7 +181,7 @@ export function OwnersMemberPreviewPage() {
 
           <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} profileKind={kind} discountConfig={discountConfig} />
 
-          <section className="owners-public-section">
+          <section className="owners-public-section owners-rewards-section owners-club-main-section">
             <h2>المكافآت المتاحة</h2>
             <div className="owners-public-rewards">
               {rewards.length ? rewards.map((reward: any) => (
@@ -173,7 +197,7 @@ export function OwnersMemberPreviewPage() {
             </div>
           </section>
 
-          <section className="owners-public-section owners-movement-section">
+          <section className="owners-public-section owners-movement-section owners-club-main-section">
             <h2>سجل الحركة</h2>
             <div className="owners-movement-table">
               <div className="owners-movement-head"><span>التاريخ</span><span>البيان</span><span>النقاط</span></div>
@@ -192,7 +216,7 @@ export function OwnersMemberPreviewPage() {
           </section>
 
           {redemptions.length ? (
-            <section className="owners-public-section">
+            <section className="owners-public-section owners-redemptions-section owners-club-main-section">
               <h2>أكواد ومكافآت العميل</h2>
               <div className="owners-ledger">
                 {redemptions.map((redemption: any) => <article key={redemption.id}><span>{redemption.reward_name || "مكافأة"}</span><strong>{redemption.redemption_code || "—"}</strong><small>{formatDate(redemption.created_at)}</small></article>)}

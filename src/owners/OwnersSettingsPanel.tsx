@@ -134,6 +134,7 @@ export function OwnersSettingsPanel() {
     setMessage("");
     try {
       await ownersAdminPost({ action: "save_settings", ...form });
+      try { localStorage.setItem("mzj-owners-portal-design-revision", String(Date.now())); } catch { /* storage may be unavailable */ }
       setMessage("تم حفظ إعدادات MZJ Club Community");
       await load();
     } catch (error) {
