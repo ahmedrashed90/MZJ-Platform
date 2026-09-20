@@ -301,7 +301,7 @@ export function AttendancePage() {
                       />
                       <span>
                         <strong>{employee.full_name}</strong>
-                        <small>{[employee.employee_no, employee.branch_name].filter(Boolean).join(" • ")}</small>
+                        <small>{employee.branch_name || ""}</small>
                       </span>
                     </label>
                   ))}
@@ -364,7 +364,6 @@ export function AttendancePage() {
                             <td>{row.branch}</td>
                             <td className="attendance-name-cell">
                               <strong>{row.name}</strong>
-                              {row.employeeNo ? <small>{row.employeeNo}</small> : null}
                             </td>
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
