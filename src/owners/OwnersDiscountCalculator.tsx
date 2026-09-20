@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Calculator, CarProfile, MagnifyingGlass } from "@phosphor-icons/react";
+import { useMemo, useRef, useState } from "react";
+import { Calculator, CaretDown, CarProfile, MagnifyingGlass, X } from "@phosphor-icons/react";
 
 type WebsiteCar = {
   vehicleId?: string;
@@ -56,6 +56,7 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const selectedCar = websiteCars.find((car) => String(car.vehicleId || "") === vehicleId) || null;
   const normalizedQuery = normalizeVehicleSearch(query);
@@ -76,11 +77,35 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
   const personalDiscount = selectedCar ? discountAmount(selectedCar.priceBeforeTax, personalRate, unit) : 0;
   const friendGiftDiscount = selectedCar ? discountAmount(selectedCar.priceBeforeTax, friendGiftRate, unit) : 0;
 
+  const restoreSelectedLabel = () => {
+    if (selectedCar) setQuery(String(selectedCar.title || ""));
+  };
+
+  const openSelector = () => {
+    if (selectedCar) setQuery("");
+    setIsOpen(true);
+    setActiveIndex(-1);
+  };
+
+  const closeSelector = () => {
+    setIsOpen(false);
+    setActiveIndex(-1);
+    restoreSelectedLabel();
+  };
+
   const chooseCar = (car: WebsiteCar) => {
     setVehicleId(String(car.vehicleId || ""));
     setQuery(String(car.title || ""));
     setIsOpen(false);
     setActiveIndex(-1);
+  };
+
+  const clearCar = () => {
+    setVehicleId("");
+    setQuery("");
+    setIsOpen(true);
+    setActiveIndex(-1);
+    window.requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   return (
@@ -92,20 +117,25 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
           className="owners-calculator-combobox"
           onBlur={(event) => {
             const next = event.relatedTarget as Node | null;
-            if (!next || !event.currentTarget.contains(next)) setIsOpen(false);
+            if (!next || !event.currentTarget.contains(next)) closeSelector();
           }}
         >
           <div className="owners-calculator-combobox-input">
             <CarProfile size={20} />
             <input
+              ref={inputRef}
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
-                setVehicleId("");
                 setIsOpen(true);
                 setActiveIndex(-1);
               }}
-              onFocus={() => setIsOpen(true)}
+              onFocus={() => {
+                if (!isOpen) openSelector();
+              }}
+              onClick={() => {
+                if (!isOpen) openSelector();
+              }}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
@@ -119,7 +149,7 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
                   event.preventDefault();
                   chooseCar(filteredCars[activeIndex]);
                 } else if (event.key === "Escape") {
-                  setIsOpen(false);
+                  closeSelector();
                 }
               }}
               placeholder="اكتب اسم السيارة، مثال: اكسنت"
@@ -130,7 +160,36 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode, profileKin
               role="combobox"
               autoComplete="off"
             />
-            <MagnifyingGlass size={20} />
+            {(selectedCar || query) ? (
+              <button
+                type="button"
+                className="owners-calculator-combobox-action clear"
+                aria-label="مسح السيارة المختارة"
+                title="مسح الاختيار"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={clearCar}
+              >
+                <X size={17} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`owners-calculator-combobox-action toggle ${isOpen ? "open" : ""}`}
+              aria-label={isOpen ? "إغلاق قائمة السيارات" : "فتح قائمة السيارات"}
+              title={isOpen ? "إغلاق القائمة" : "عرض السيارات"}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                if (isOpen) {
+                  closeSelector();
+                  return;
+                }
+                openSelector();
+                window.requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+            >
+              <CaretDown size={18} />
+            </button>
+            <MagnifyingGlass size={20} className="owners-calculator-search-icon" />
           </div>
           {isOpen ? (
             <div className="owners-calculator-options" id="owners-vehicle-options" role="listbox">
