@@ -16,6 +16,7 @@ create table if not exists core.user_devices (
   public_key_pem text not null,
   fingerprint_hash text,
   status text not null default 'pending' check (status in ('pending','approved','revoked')),
+  is_primary boolean not null default false,
   approved_by uuid references core.users(id) on delete set null,
   approved_at timestamptz,
   revoked_by uuid references core.users(id) on delete set null,
@@ -29,16 +30,16 @@ create table if not exists core.user_devices (
 );
 create index if not exists user_devices_user_status_idx on core.user_devices(user_id,status,updated_at desc);
 create index if not exists user_devices_device_id_idx on core.user_devices(device_id);
-with duplicate_approved as (
-  select id,row_number() over(partition by user_id order by approved_at desc nulls last,updated_at desc,id desc) as rn
+with ranked_approved as (
+  select id,row_number() over(partition by user_id order by is_primary desc,approved_at desc nulls last,updated_at desc,id desc) as rn
   from core.user_devices
   where status='approved'
 )
 update core.user_devices d
-set status='revoked',revoked_at=coalesce(d.revoked_at,now()),updated_at=now()
-from duplicate_approved r
-where d.id=r.id and r.rn>1;
-create unique index if not exists user_devices_one_approved_per_user_idx on core.user_devices(user_id) where status='approved';
+set is_primary=(r.rn=1),updated_at=case when d.is_primary is distinct from (r.rn=1) then now() else d.updated_at end
+from ranked_approved r
+where d.id=r.id;
+create unique index if not exists user_devices_one_primary_per_user_idx on core.user_devices(user_id) where status='approved' and is_primary=true;
 
 create table if not exists core.device_login_challenges (
   id uuid primary key default gen_random_uuid(),

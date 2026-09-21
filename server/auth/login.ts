@@ -28,9 +28,12 @@ async function finishAttendanceLogin(
   userId: string,
   confirmCheckIn: boolean,
   verifiedDeviceId?: string | null,
+  verifiedDeviceIsPrimary?: boolean | null,
 ) {
   try {
-    await requireAttendanceForLogin(userId, { confirmCheckIn });
+    if (!verifiedDeviceId || verifiedDeviceIsPrimary !== false) {
+      await requireAttendanceForLogin(userId, { confirmCheckIn });
+    }
   } catch (attendanceError) {
     if (attendanceError instanceof AttendanceError) {
       return response.status(attendanceError.status).json({
@@ -85,6 +88,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         verified.user_id,
         Boolean(verified.attendance_check_in),
         verified.device_id,
+        Boolean(verified.is_primary),
       );
     }
 
@@ -166,7 +170,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       });
     }
 
-    return finishAttendanceLogin(request, response, user.id, body.attendanceCheckIn === true, null);
+    return finishAttendanceLogin(request, response, user.id, body.attendanceCheckIn === true, null, null);
   } catch (error: any) {
     console.error("Login failed", error);
     const identifier = clean(body.identifier);

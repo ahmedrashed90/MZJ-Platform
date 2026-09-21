@@ -6877,7 +6877,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .attendance-device-status.approved { background: #eef8f0; color: #347241; }
 .attendance-device-status.pending { background: #fff8e7; color: #8a641a; }
 .attendance-device-status.revoked { background: #fff0ed; color: #9b3f34; }
-.attendance-device-actions { display: flex; align-items: center; }
+.attendance-device-actions { display: flex; align-items: center; gap: 6px; }
+.attendance-device-primary-label { font-weight: 900; color: #245f31; }
 .attendance-device-actions .attendance-save-button,
 .attendance-device-actions .secondary-button { min-height: 34px; font-size: 9px; }
 .attendance-device-empty {

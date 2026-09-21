@@ -1,3 +1,12 @@
+## CLEAN v101 — اعتماد أكثر من جهاز + جهاز أساسي للحضور
+- المصدر: CLEAN v100 مباشرة.
+- السماح بأكثر من جهاز Approved لنفس اليوزر بدل إلغاء الجهاز السابق.
+- جهاز واحد فقط يكون «أساسي» للحضور والانصراف، ويمكن تغييره من نفس شاشة الأجهزة.
+- الأجهزة الثانوية تسجل دخول للمنصة عادي، لكن لا تنشئ أو تغلق سجل حضور.
+- عند إلغاء اعتماد الجهاز الأساسي يتم ترقية جهاز Approved آخر تلقائيًا إذا وجد.
+- Migration رسمية: `database/migrations/20260921_device_agent_multi_approved_primary_v101.sql`.
+- الملف: `DELIVERY-GLOBAL-ATTENDANCE-MULTI-DEVICE-PRIMARY-CLEAN-V101.md`.
+
 ## CLEAN v90 — Device Agent + تقرير الحضور
 - المصدر: CLEAN v89 بدون Location.
 - إضافة Windows Device Agent مع Required/Exempt لكل مستخدم واعتماد/إلغاء جهاز العمل.

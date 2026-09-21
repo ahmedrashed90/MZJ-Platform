@@ -21,6 +21,7 @@ export type SessionUser = EffectiveAccessSnapshot & {
   departmentCodes: string[];
   branches: string[];
   branchCodes: string[];
+  verifiedDeviceId?: string | null;
 };
 
 function parseCookies(header: string | undefined) {
@@ -150,8 +151,8 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
   }
 
   const sql = getSql();
-  const [session] = await sql<{ user_id: string }[]>`
-    select s.user_id::text
+  const [session] = await sql<{ user_id: string; verified_device_id: string | null }[]>`
+    select s.user_id::text,s.verified_device_id
     from core.sessions s
     join core.users u on u.id=s.user_id and u.is_active=true
     where s.token_hash=${tokenHash(token)}
@@ -163,7 +164,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     return null;
   }
 
-  const attendanceAllowed = await isAttendanceSessionAllowed(session.user_id);
+  const attendanceAllowed = await isAttendanceSessionAllowed(session.user_id, session.verified_device_id);
   if (!attendanceAllowed) {
     await sql`delete from core.sessions where token_hash=${tokenHash(token)}`.catch(() => undefined);
     requestWithCache[REQUEST_USER_KEY] = null;
@@ -171,6 +172,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
   }
 
   const user = await loadUserProfile(session.user_id);
+  if (user) user.verifiedDeviceId = session.verified_device_id || null;
   requestWithCache[REQUEST_USER_KEY] = user;
   if (!user) return null;
 

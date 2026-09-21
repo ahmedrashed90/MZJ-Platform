@@ -1,3 +1,14 @@
+# MZJ Platform — Multi Device + Primary Attendance Device CLEAN v101
+
+- يمكن اعتماد أكثر من جهاز Windows لنفس المستخدم.
+- أول جهاز Approved يصبح الجهاز الأساسي تلقائيًا، ويمكن نقل «الأساسي» لأي جهاز Approved آخر.
+- الجهاز الأساسي فقط يسجل الحضور والانصراف ويخضع لإلزام الحضور.
+- الأجهزة الثانوية تدخل المنصة عادي بدون إنشاء أو إنهاء Attendance Record.
+- جميع مزايا فترات الدوام وExcel من CLEAN v100 محفوظة كما هي.
+- تفاصيل التسليم: `DELIVERY-GLOBAL-ATTENDANCE-MULTI-DEVICE-PRIMARY-CLEAN-V101.md`.
+
+---
+
 # MZJ Platform — Device Agent + Attendance Report CLEAN v90
 
 - Windows Device Agent مدمج مع Login للمستخدمين المحددين كـ **مطلوب**، وباقي المستخدمين **مستثنى**.

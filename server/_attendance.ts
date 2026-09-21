@@ -391,10 +391,25 @@ export async function registerAttendanceCheckIn(
   });
 }
 
-export async function isAttendanceSessionAllowed(userId: string) {
+export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceId?: string | null) {
   await ensureAttendanceSchema();
-  if (!(await isAttendanceEnforcementEnabled())) return true;
   const sql = getSql();
+
+  const normalizedDeviceId = String(verifiedDeviceId || "").trim();
+  const [deviceState] = await sql<{ verification_required: boolean; status: string | null; is_primary: boolean | null }[]>`
+    select coalesce(p.verification_required,false) as verification_required,d.status,d.is_primary
+    from core.users u
+    left join core.user_device_policies p on p.user_id=u.id
+    left join core.user_devices d on d.user_id=u.id and d.device_id=${normalizedDeviceId || "__NO_DEVICE__"}
+    where u.id=${userId}::uuid
+    limit 1
+  `.catch(() => [] as any);
+  if (deviceState?.verification_required) {
+    if (!normalizedDeviceId || deviceState.status !== "approved") return false;
+    if (deviceState.is_primary === false) return true;
+  }
+
+  if (!(await isAttendanceEnforcementEnabled())) return true;
   const [row] = await sql<{ allowed: boolean }[]>`
     with clock as (
       select now() as current_at,

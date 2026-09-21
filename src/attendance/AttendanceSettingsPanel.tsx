@@ -39,6 +39,7 @@ type DeviceRow = {
   platform: string;
   agentVersion: string | null;
   status: "pending" | "approved" | "revoked";
+  isPrimary: boolean;
   approvedAt: string | null;
   revokedAt: string | null;
   lastVerifiedAt: string | null;
@@ -381,6 +382,23 @@ export function AttendanceSettingsPanel() {
     }
   }
 
+  async function setPrimaryDevice(deviceRecordId: string) {
+    resetMessages();
+    setBusy(`primary-device:${deviceRecordId}`);
+    try {
+      await attendanceFetch("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "set_primary_device", deviceRecordId }),
+      });
+      setMessage("تم تعيين الجهاز الأساسي للحضور والانصراف");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر تعيين الجهاز الأساسي");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function revokeDevice(deviceRecordId: string) {
     resetMessages();
     if (!window.confirm("إلغاء اعتماد هذا الجهاز؟")) return;
@@ -518,13 +536,16 @@ export function AttendanceSettingsPanel() {
                     <small>{device.lastVerifiedAt ? `آخر تحقق ${new Date(device.lastVerifiedAt).toLocaleString("ar-SA")}` : "لم يسجل دخول بعد"}</small>
                   </div>
                   <div className={`attendance-device-status ${device.status}`}>
-                    {device.status === "approved" ? <><CheckCircle size={16} weight="fill" /> معتمد</> : device.status === "pending" ? <><WarningCircle size={16} weight="fill" /> بانتظار الاعتماد</> : <><XCircle size={16} weight="fill" /> ملغي</>}
+                    {device.status === "approved" ? <><CheckCircle size={16} weight="fill" /> معتمد{device.isPrimary ? <span className="attendance-device-primary-label">• أساسي</span> : null}</> : device.status === "pending" ? <><WarningCircle size={16} weight="fill" /> بانتظار الاعتماد</> : <><XCircle size={16} weight="fill" /> ملغي</>}
                   </div>
                   <div className="attendance-device-actions">
                     {device.status !== "approved" ? (
                       <button className="attendance-save-button" type="button" disabled={busy === `approve-device:${device.id}`} onClick={() => void approveDevice(device.id)}><ShieldCheck size={17} /> اعتماد</button>
                     ) : (
-                      <button className="secondary-button danger" type="button" disabled={busy === `revoke-device:${device.id}`} onClick={() => void revokeDevice(device.id)}><ShieldSlash size={17} /> إلغاء الاعتماد</button>
+                      <>
+                        {!device.isPrimary ? <button className="attendance-save-button" type="button" disabled={busy === `primary-device:${device.id}`} onClick={() => void setPrimaryDevice(device.id)}><ShieldCheck size={17} /> تعيين أساسي</button> : null}
+                        <button className="secondary-button danger" type="button" disabled={busy === `revoke-device:${device.id}`} onClick={() => void revokeDevice(device.id)}><ShieldSlash size={17} /> إلغاء الاعتماد</button>
+                      </>
                     )}
                   </div>
                 </article>

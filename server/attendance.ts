@@ -3,7 +3,7 @@ import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, checkoutCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
-import { adminDeviceSnapshot, approveUserDevice, revokeUserDevice, setUserDevicePolicy } from "./_device-agent.js";
+import { adminDeviceSnapshot, approveUserDevice, getUserDeviceAttendanceRole, revokeUserDevice, setPrimaryUserDevice, setUserDevicePolicy } from "./_device-agent.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -807,6 +807,17 @@ async function reportData(request: VercelRequest) {
   };
 }
 
+async function selfAttendanceStateForSession(user: { id: string; verifiedDeviceId?: string | null }) {
+  const state: any = await getSelfAttendanceState(user.id);
+  const deviceAttendanceRole = await getUserDeviceAttendanceRole(user.id, user.verifiedDeviceId || null);
+  state.deviceAttendanceRole = deviceAttendanceRole;
+  if (deviceAttendanceRole === "secondary" || deviceAttendanceRole === "unverified") {
+    state.canCheckIn = false;
+    state.canCheckOut = false;
+  }
+  return state;
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   try {
     await ensureAttendanceSchema();
@@ -816,7 +827,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (request.method === "GET") {
       const view = clean(request.query.view);
       if (view === "self") {
-        return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+        return response.status(200).json({ ok: true, state: await selfAttendanceStateForSession(user) });
       }
       if (view === "admin") {
         const admin = await requireAdmin(request, response);
@@ -836,12 +847,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const action = clean(body.action);
 
     if (action === "self_check_in") {
+      const deviceRole = await getUserDeviceAttendanceRole(user.id, user.verifiedDeviceId || null);
+      if (deviceRole === "secondary" || deviceRole === "unverified") throw new AttendanceError("PRIMARY_DEVICE_REQUIRED", "تسجيل الحضور متاح من الجهاز الأساسي فقط", 403);
       await checkInCurrentAttendance(user.id);
-      return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+      return response.status(200).json({ ok: true, state: await selfAttendanceStateForSession(user) });
     }
     if (action === "self_check_out") {
+      const deviceRole = await getUserDeviceAttendanceRole(user.id, user.verifiedDeviceId || null);
+      if (deviceRole === "secondary" || deviceRole === "unverified") throw new AttendanceError("PRIMARY_DEVICE_REQUIRED", "تسجيل الانصراف متاح من الجهاز الأساسي فقط", 403);
       await checkoutCurrentAttendance(user.id, { allowMissing: false, revokeSessions: false });
-      return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+      return response.status(200).json({ ok: true, state: await selfAttendanceStateForSession(user) });
     }
 
     const admin = await requireAdmin(request, response);
@@ -859,6 +874,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const deviceRecordId = clean(body.deviceRecordId);
       if (!validUuid(deviceRecordId)) throw new AttendanceError("DEVICE_NOT_FOUND", "الجهاز غير موجود", 404);
       result = await approveUserDevice(deviceRecordId, admin.id);
+    } else if (action === "set_primary_device") {
+      const deviceRecordId = clean(body.deviceRecordId);
+      if (!validUuid(deviceRecordId)) throw new AttendanceError("DEVICE_NOT_FOUND", "الجهاز غير موجود", 404);
+      result = await setPrimaryUserDevice(deviceRecordId, admin.id);
     } else if (action === "revoke_device") {
       const deviceRecordId = clean(body.deviceRecordId);
       if (!validUuid(deviceRecordId)) throw new AttendanceError("DEVICE_NOT_FOUND", "الجهاز غير موجود", 404);

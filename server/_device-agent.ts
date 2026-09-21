@@ -226,6 +226,7 @@ export async function consumeApprovedDeviceChallenge(challengeId: string, pollTo
     user_id: string;
     attendance_check_in: boolean;
     device_id: string;
+    is_primary: boolean;
   }[]>`
     update core.device_login_challenges c
     set consumed_at=now()
@@ -239,7 +240,7 @@ export async function consumeApprovedDeviceChallenge(challengeId: string, pollTo
       and d.user_id=c.user_id
       and d.device_id=c.device_id
       and d.status='approved'
-    returning c.user_id::text,c.attendance_check_in,c.device_id
+    returning c.user_id::text,c.attendance_check_in,c.device_id,d.is_primary
   `;
   return row || null;
 }
@@ -250,7 +251,7 @@ export async function adminDeviceSnapshot() {
   const [policies, devices] = await Promise.all([
     sql<any[]>`select user_id::text,verification_required from core.user_device_policies`,
     sql<any[]>`
-      select id::text,user_id::text,device_id,device_name,platform,agent_version,status,
+      select id::text,user_id::text,device_id,device_name,platform,agent_version,status,is_primary,
              approved_at::text,revoked_at::text,last_verified_at::text,created_at::text
       from core.user_devices
       order by created_at desc
@@ -268,6 +269,7 @@ export async function adminDeviceSnapshot() {
       platform: device.platform,
       agentVersion: device.agent_version,
       status: device.status,
+      isPrimary: Boolean(device.is_primary),
       approvedAt: device.approved_at,
       revokedAt: device.revoked_at,
       lastVerifiedAt: device.last_verified_at,
@@ -296,8 +298,84 @@ export async function approveUserDevice(deviceRecordId: string, adminId: string)
   await ensureDeviceAgentSchema();
   const sql = getSql();
   return sql.begin(async (tx) => {
+    const [target] = await tx<{ user_id: string; device_id: string; status: string; is_primary: boolean }[]>`
+      select user_id::text,device_id,status,is_primary
+      from core.user_devices
+      where id=${deviceRecordId}::uuid
+      for update
+    `;
+    if (!target) throw new Error("DEVICE_NOT_FOUND");
+
+    const [primary] = await tx<{ id: string }[]>`
+      select id::text
+      from core.user_devices
+      where user_id=${target.user_id}::uuid and status='approved' and is_primary=true and id<>${deviceRecordId}::uuid
+      limit 1
+      for update
+    `;
+    const makePrimary = Boolean(target.is_primary || !primary);
+    const [row] = await tx<{ user_id: string; device_id: string; is_primary: boolean }[]>`
+      update core.user_devices
+      set status='approved',is_primary=${makePrimary},approved_by=${adminId}::uuid,approved_at=coalesce(approved_at,now()),
+          revoked_by=null,revoked_at=null,updated_at=now()
+      where id=${deviceRecordId}::uuid
+      returning user_id::text,device_id,is_primary
+    `;
+    return { ok: true, userId: row.user_id, deviceId: row.device_id, isPrimary: Boolean(row.is_primary) };
+  });
+}
+
+export async function setPrimaryUserDevice(deviceRecordId: string, adminId: string) {
+  await ensureDeviceAgentSchema();
+  const sql = getSql();
+  return sql.begin(async (tx) => {
     const [target] = await tx<{ user_id: string; device_id: string }[]>`
       select user_id::text,device_id
+      from core.user_devices
+      where id=${deviceRecordId}::uuid and status='approved'
+      for update
+    `;
+    if (!target) throw new Error("DEVICE_NOT_APPROVED");
+
+    await tx`
+      update core.user_devices
+      set is_primary=false,updated_at=now()
+      where user_id=${target.user_id}::uuid and status='approved' and is_primary=true and id<>${deviceRecordId}::uuid
+    `;
+    await tx`
+      update core.user_devices
+      set is_primary=true,approved_by=coalesce(approved_by,${adminId}::uuid),approved_at=coalesce(approved_at,now()),updated_at=now()
+      where id=${deviceRecordId}::uuid
+    `;
+    return { ok: true, userId: target.user_id, deviceId: target.device_id, isPrimary: true };
+  });
+}
+
+export async function getUserDeviceAttendanceRole(userId: string, verifiedDeviceId?: string | null) {
+  await ensureDeviceAgentSchema();
+  const sql = getSql();
+  const [policy] = await sql<{ verification_required: boolean }[]>`
+    select verification_required from core.user_device_policies where user_id=${userId}::uuid
+  `;
+  if (!policy?.verification_required) return "exempt" as const;
+  const deviceId = clean(verifiedDeviceId, 120);
+  if (!deviceId) return "unverified" as const;
+  const [device] = await sql<{ status: string; is_primary: boolean }[]>`
+    select status,is_primary
+    from core.user_devices
+    where user_id=${userId}::uuid and device_id=${deviceId}
+    limit 1
+  `;
+  if (device?.status !== "approved") return "unverified" as const;
+  return device.is_primary ? "primary" as const : "secondary" as const;
+}
+
+export async function revokeUserDevice(deviceRecordId: string, adminId: string) {
+  await ensureDeviceAgentSchema();
+  const sql = getSql();
+  return sql.begin(async (tx) => {
+    const [target] = await tx<{ user_id: string; device_id: string; is_primary: boolean }[]>`
+      select user_id::text,device_id,is_primary
       from core.user_devices
       where id=${deviceRecordId}::uuid
       for update
@@ -306,30 +384,30 @@ export async function approveUserDevice(deviceRecordId: string, adminId: string)
 
     await tx`
       update core.user_devices
-      set status='revoked',revoked_by=${adminId}::uuid,revoked_at=now(),updated_at=now()
-      where user_id=${target.user_id}::uuid and id<>${deviceRecordId}::uuid and status='approved'
-    `;
-    const [row] = await tx<{ user_id: string; device_id: string }[]>`
-      update core.user_devices
-      set status='approved',approved_by=${adminId}::uuid,approved_at=now(),revoked_by=null,revoked_at=null,updated_at=now()
+      set status='revoked',is_primary=false,revoked_by=${adminId}::uuid,revoked_at=now(),updated_at=now()
       where id=${deviceRecordId}::uuid
-      returning user_id::text,device_id
     `;
-    await tx`delete from core.sessions where user_id=${target.user_id}::uuid`;
-    return { ok: true, userId: row.user_id, deviceId: row.device_id };
-  });
-}
 
-export async function revokeUserDevice(deviceRecordId: string, adminId: string) {
-  await ensureDeviceAgentSchema();
-  const sql = getSql();
-  const [row] = await sql<{ user_id: string; device_id: string }[]>`
-    update core.user_devices
-    set status='revoked',revoked_by=${adminId}::uuid,revoked_at=now(),updated_at=now()
-    where id=${deviceRecordId}::uuid
-    returning user_id::text,device_id
-  `;
-  if (!row) throw new Error("DEVICE_NOT_FOUND");
-  await sql`delete from core.sessions where user_id=${row.user_id}::uuid`;
-  return { ok: true, userId: row.user_id, deviceId: row.device_id };
+    let promotedDeviceId: string | null = null;
+    if (target.is_primary) {
+      const [replacement] = await tx<{ id: string; device_id: string }[]>`
+        select id::text,device_id
+        from core.user_devices
+        where user_id=${target.user_id}::uuid and status='approved' and id<>${deviceRecordId}::uuid
+        order by last_verified_at desc nulls last,approved_at desc nulls last,updated_at desc,id desc
+        limit 1
+        for update
+      `;
+      if (replacement) {
+        await tx`update core.user_devices set is_primary=true,updated_at=now() where id=${replacement.id}::uuid`;
+        promotedDeviceId = replacement.device_id;
+      }
+    }
+
+    await tx`
+      delete from core.sessions
+      where user_id=${target.user_id}::uuid and verified_device_id=${target.device_id}
+    `;
+    return { ok: true, userId: target.user_id, deviceId: target.device_id, promotedDeviceId };
+  });
 }

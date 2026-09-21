@@ -49,6 +49,7 @@ type SelfAttendanceState = {
   } | null;
   canCheckIn: boolean;
   canCheckOut: boolean;
+  deviceAttendanceRole?: "primary" | "secondary" | "exempt" | "unverified";
 };
 
 type SelfAttendancePayload = { ok: true; state: SelfAttendanceState };
@@ -64,6 +65,7 @@ function Item({ href, label, icon: Icon }: NavItem) {
 }
 
 function attendanceStateLabel(state: SelfAttendanceState | null) {
+  if (state?.deviceAttendanceRole === "secondary") return "جهاز ثانوي • الحضور من الجهاز الأساسي";
   if (!state?.assigned) return "";
   if (state.isDayOff) return "اليوم إجازة";
   if (!state.activePeriod) return "خارج فترة العمل";
