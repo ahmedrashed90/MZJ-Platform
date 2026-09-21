@@ -53,7 +53,7 @@ check("report result renders delay minutes", report.includes("attendance-delay-r
 check("late delay styling is red", styles.includes(".attendance-delay-result.late strong") && styles.includes("#b22d22"));
 check("on-time styling is green", styles.includes(".attendance-delay-result.on-time strong") && styles.includes("#2f7540"));
 check("excel export refetches current filters", report.includes("fetchReportPayload(from, to, employeeIds, branchId)") && report.includes("buildExcelDocument(payload)") && !report.includes("content.outerHTML"));
-check("excel export includes grouped day data", report.includes("const groups = groupReportRows(payload.rows)") && report.includes("payload.periodHeaders") && report.includes("attendance-report-${payload.from || \"all\"}-${payload.to || \"all\"}.xls"));
+check("excel export includes grouped day data", (report.includes("const groups = groupReportRows(payload.rows)") || report.includes("attendanceSummary(payload)")) && report.includes("attendance-report-${payload.from || \"all\"}-${payload.to || \"all\"}.xls"));
 check("no location columns were reintroduced", !report.includes("اللوكيشن") && !report.includes("مكان الحضور") && !report.includes("locationResult"));
 
 check("attendance report has branch filter", report.includes("branchId") && report.includes("كل الفروع") && attendanceEndpoint.includes('request.query.branchId') && attendanceEndpoint.includes('effectiveBranchId'));

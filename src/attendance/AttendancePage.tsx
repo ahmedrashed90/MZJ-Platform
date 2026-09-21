@@ -49,6 +49,8 @@ type ReportPayload = {
   ok: true;
   from: string;
   to: string;
+  today: string;
+  officialDayEnd: string;
   rows: ReportRow[];
   periodHeaders: string[];
 };
@@ -70,56 +72,179 @@ function groupReportRows(rows: ReportRow[]) {
   return Array.from(groups.entries()).map(([date, grouped]) => ({ date, rows: grouped }));
 }
 
-function escapeHtml(value: unknown) {
+function excelXmlEscape(value: unknown) {
   return String(value ?? "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+    .replaceAll("'", "&apos;");
+}
+
+function minutesBetweenTimes(startTime: string, endTime: string) {
+  const parse = (value: string) => {
+    const [hours, minutes] = String(value || "").slice(0, 5).split(":").map(Number);
+    return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 0;
+  };
+  const start = parse(startTime);
+  const end = parse(endTime);
+  return Math.max(0, end - start);
+}
+
+function minutesAsHours(minutes: number) {
+  const safe = Math.max(0, Math.floor(Number(minutes) || 0));
+  const hours = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${hours}:${String(rest).padStart(2, "0")}`;
+}
+
+function attendanceSummary(payload: ReportPayload) {
+  const map = new Map<string, {
+    userId: string; name: string; branch: string; requiredDays: number; attendanceDays: number;
+    absenceDays: number; partialDays: number; offDays: number; requiredPeriods: number;
+    attendedPeriods: number; missedPeriods: number; requiredMinutes: number; workMinutes: number; delayMinutes: number;
+  }>();
+
+  for (const row of payload.rows) {
+    if (row.date > payload.today || !row.scheduleName) continue;
+    const periods = row.periods.filter((period): period is ReportPeriod => Boolean(period));
+    if (!periods.length) continue;
+    const current = map.get(row.userId) || {
+      userId: row.userId, name: row.name, branch: row.branch, requiredDays: 0, attendanceDays: 0,
+      absenceDays: 0, partialDays: 0, offDays: 0, requiredPeriods: 0, attendedPeriods: 0,
+      missedPeriods: 0, requiredMinutes: 0, workMinutes: 0, delayMinutes: 0,
+    };
+    current.name = row.name;
+    current.branch = row.branch;
+
+    const offPeriods = periods.filter((period) => String(period.result || "").includes("إجازة"));
+    if (offPeriods.length === periods.length) {
+      current.offDays += 1;
+      map.set(row.userId, current);
+      continue;
+    }
+
+    const required = periods.filter((period) => !String(period.result || "").includes("إجازة"));
+    const present = required.filter((period) => Boolean(period.checkIn));
+    const missed = required.filter((period) => !period.checkIn && String(period.result || "").includes("غائب"));
+    current.requiredDays += 1;
+    current.requiredPeriods += required.length;
+    current.attendedPeriods += present.length;
+    current.missedPeriods += missed.length;
+    current.requiredMinutes += required.reduce((sum, period) => sum + minutesBetweenTimes(period.startTime, period.endTime), 0);
+    current.workMinutes += required.reduce((sum, period) => sum + Math.max(0, Number(period.workMinutes || 0)), 0);
+    current.delayMinutes += present.reduce((sum, period) => sum + Math.max(0, Number(period.delayMinutes || 0)), 0);
+    if (present.length) current.attendanceDays += 1;
+    if (!present.length && missed.length === required.length && required.length) current.absenceDays += 1;
+    if (present.length && missed.length) current.partialDays += 1;
+    map.set(row.userId, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "ar"));
 }
 
 function buildExcelDocument(payload: ReportPayload) {
-  const groups = groupReportRows(payload.rows);
-  const headers = payload.periodHeaders || [];
-  const dayTables = groups.map((group) => {
-    const topHeaders = headers.map((header) => `<th colspan="3">${escapeHtml(header)}</th>`).join("");
-    const subHeaders = headers.map(() => "<th>الحضور</th><th>الانصراف</th><th>النتيجة</th>").join("");
-    const rows = group.rows.map((row, rowIndex) => {
-      const periodCells = headers.map((_, periodIndex) => {
-        const period = row.periods[periodIndex];
-        const delay = Math.max(0, Number(period?.delayMinutes || 0));
-        const hasCheckIn = Boolean(period?.checkIn);
-        const result = hasCheckIn ? `${delay} دقيقة` : missingResultLabel(period?.result);
-        const resultClass = hasCheckIn ? (delay > 0 ? "late" : "ontime") : "status";
-        const checkIn = period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—";
-        const checkOut = period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—";
-        return `<td>${escapeHtml(checkIn)}</td><td>${escapeHtml(checkOut)}</td><td class="${resultClass}">${escapeHtml(result)}</td>`;
-      }).join("");
-      return `<tr><td>${rowIndex + 1}</td><td>${escapeHtml(row.branch)}</td><td>${escapeHtml(row.name)}</td>${periodCells}</tr>`;
-    }).join("");
+  const summary = attendanceSummary(payload);
+  const totalColumns = 15;
+  const cell = (value: unknown, style = "Cell", type: "String" | "Number" = "String") =>
+    `<Cell ss:StyleID="${style}"><Data ss:Type="${type}">${excelXmlEscape(value)}</Data></Cell>`;
+  const blank = (style = "Cell") => cell("", style);
+  const mergeTitle = (value: string, style: string) =>
+    `<Row ss:Height="30"><Cell ss:StyleID="${style}" ss:MergeAcross="${totalColumns - 1}"><Data ss:Type="String">${excelXmlEscape(value)}</Data></Cell></Row>`;
 
-    return `<section class="day"><h3>${escapeHtml(formatAttendanceDay(group.date))} ${escapeHtml(formatAttendanceDate(group.date))}</h3><table><thead><tr><th rowspan="2">م</th><th rowspan="2">الفرع</th><th rowspan="2">الاسم</th>${topHeaders}</tr><tr>${subHeaders}</tr></thead><tbody>${rows}</tbody></table></section>`;
+  const summaryHeaders = [
+    "م", "اسم الموظف", "الفرع", "أيام الدوام", "أيام الحضور", "أيام الغياب", "أيام الحضور الجزئي",
+    "أيام الإجازة", "الفترات المطلوبة", "الفترات المسجلة", "الفترات الغائبة", "الساعات المطلوبة",
+    "ساعات العمل الفعلية", "دقائق التأخير", "نسبة الحضور",
+  ];
+  const summaryRows = summary.map((row, index) => {
+    const rate = row.requiredPeriods ? Math.round((row.attendedPeriods / row.requiredPeriods) * 1000) / 10 : 0;
+    const statusStyle = row.absenceDays > 0 ? "Absent" : row.delayMinutes > 0 || row.partialDays > 0 ? "Warning" : "Present";
+    return `<Row>${[
+      cell(index + 1, "Cell", "Number"), cell(row.name), cell(row.branch),
+      cell(row.requiredDays, "Cell", "Number"), cell(row.attendanceDays, "Present", "Number"),
+      cell(row.absenceDays, row.absenceDays ? "Absent" : "Cell", "Number"),
+      cell(row.partialDays, row.partialDays ? "Warning" : "Cell", "Number"), cell(row.offDays, "Off", "Number"),
+      cell(row.requiredPeriods, "Cell", "Number"), cell(row.attendedPeriods, "Present", "Number"),
+      cell(row.missedPeriods, row.missedPeriods ? "Absent" : "Cell", "Number"), cell(minutesAsHours(row.requiredMinutes)),
+      cell(minutesAsHours(row.workMinutes), statusStyle), cell(row.delayMinutes, row.delayMinutes ? "Late" : "Present", "Number"),
+      cell(`${rate}%`, statusStyle),
+    ].join("")}</Row>`;
   }).join("");
+  const totals = summary.reduce((acc, row) => ({
+    requiredDays: acc.requiredDays + row.requiredDays, attendanceDays: acc.attendanceDays + row.attendanceDays,
+    absenceDays: acc.absenceDays + row.absenceDays, partialDays: acc.partialDays + row.partialDays, offDays: acc.offDays + row.offDays,
+    requiredPeriods: acc.requiredPeriods + row.requiredPeriods, attendedPeriods: acc.attendedPeriods + row.attendedPeriods,
+    missedPeriods: acc.missedPeriods + row.missedPeriods, requiredMinutes: acc.requiredMinutes + row.requiredMinutes,
+    workMinutes: acc.workMinutes + row.workMinutes, delayMinutes: acc.delayMinutes + row.delayMinutes,
+  }), { requiredDays: 0, attendanceDays: 0, absenceDays: 0, partialDays: 0, offDays: 0, requiredPeriods: 0, attendedPeriods: 0, missedPeriods: 0, requiredMinutes: 0, workMinutes: 0, delayMinutes: 0 });
+  const totalRate = totals.requiredPeriods ? Math.round((totals.attendedPeriods / totals.requiredPeriods) * 1000) / 10 : 0;
+  const totalRow = `<Row>${[
+    blank("Total"), cell("الإجمالي", "Total"), blank("Total"), cell(totals.requiredDays, "Total", "Number"),
+    cell(totals.attendanceDays, "Total", "Number"), cell(totals.absenceDays, "Total", "Number"),
+    cell(totals.partialDays, "Total", "Number"), cell(totals.offDays, "Total", "Number"),
+    cell(totals.requiredPeriods, "Total", "Number"), cell(totals.attendedPeriods, "Total", "Number"),
+    cell(totals.missedPeriods, "Total", "Number"), cell(minutesAsHours(totals.requiredMinutes), "Total"),
+    cell(minutesAsHours(totals.workMinutes), "Total"), cell(totals.delayMinutes, "Total", "Number"), cell(`${totalRate}%`, "Total"),
+  ].join("")}</Row>`;
 
-  return `<!doctype html>
-<html dir="rtl">
-<head>
-<meta charset="utf-8">
-<style>
-body{font-family:Arial,sans-serif;direction:rtl;color:#3e2c26}
-.day{margin:0 0 18px}
-h3{margin:0 0 8px;font-size:15px}
-table{width:100%;border-collapse:collapse;margin-bottom:16px}
-th,td{border:1px solid #d9cbc4;padding:7px;text-align:center;font-size:11px}
-th{background:#f3e8e2;font-weight:700}
-.late{background:#fff0ed;color:#b22d22;font-weight:700}
-.ontime{background:#eff8f0;color:#2f7540;font-weight:700}
-.status{background:#f8f5f3;color:#7b675f;font-weight:700}
-</style>
-</head>
-<body>${dayTables}</body>
-</html>`;
+  const detailHeaders = ["التاريخ", "اليوم", "الفرع", "اسم الموظف", "الفترة", "من", "إلى", "الحضور", "الانصراف", "ساعات العمل", "دقائق التأخير", "الحالة"];
+  const detailRows = payload.rows.flatMap((row) => row.periods.filter((period): period is ReportPeriod => Boolean(period)).map((period) => {
+    const delay = Math.max(0, Number(period.delayMinutes || 0));
+    const hasCheckIn = Boolean(period.checkIn);
+    const status = hasCheckIn ? (delay > 0 ? "متأخر" : "حاضر") : missingResultLabel(period.result);
+    const statusStyle = status === "حاضر" ? "Present" : status === "متأخر" ? "Late" : status === "غائب" ? "Absent" : status === "إجازة" ? "Off" : "Cell";
+    return `<Row>${[
+      cell(formatAttendanceDate(row.date)), cell(formatAttendanceDay(row.date)), cell(row.branch), cell(row.name), cell(period.name),
+      cell(period.startTime), cell(period.endTime), cell(period.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"),
+      cell(period.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"), cell(minutesAsHours(period.workMinutes)),
+      cell(delay, delay > 0 ? "Late" : "Cell", "Number"), cell(status, statusStyle),
+    ].join("")}</Row>`;
+  })).join("");
+
+  const summaryCols = [45, 180, 130, 80, 85, 80, 105, 80, 95, 95, 90, 100, 115, 90, 90]
+    .map((width) => `<Column ss:Width="${width}"/>`).join("");
+  const detailCols = [95, 90, 130, 180, 120, 70, 70, 90, 90, 95, 90, 90]
+    .map((width) => `<Column ss:Width="${width}"/>`).join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center" ss:Horizontal="Center"/><Font ss:FontName="Arial" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/></Borders></Style>
+  <Style ss:ID="Cell" ss:Parent="Default"><Interior ss:Color="#FFFDFC" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Title" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="17" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#6D3427" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="SubTitle" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1" ss:Color="#6D3427"/><Interior ss:Color="#F7EEE9" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Header" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#4A2B22"/><Interior ss:Color="#EAD8CC" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Present" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#24663A"/><Interior ss:Color="#EAF6ED" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Late" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#A83227"/><Interior ss:Color="#FDECEA" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Absent" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#A83227"/><Interior ss:Color="#F9D9D5" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Warning" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#8A5A12"/><Interior ss:Color="#FFF1CF" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Off" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#56606B"/><Interior ss:Color="#ECEFF2" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Total" ss:Parent="Default"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#6D3427" ss:Pattern="Solid"/></Style>
+ </Styles>
+ <Worksheet ss:Name="ملخص الفترة">
+  <Table>${summaryCols}
+   ${mergeTitle("تقرير الحضور والانصراف", "Title")}
+   ${mergeTitle(`من ${formatAttendanceDate(payload.from)} إلى ${formatAttendanceDate(payload.to)}`, "SubTitle")}
+   <Row ss:Height="26">${summaryHeaders.map((header) => cell(header, "Header")).join("")}</Row>
+   ${summaryRows}${totalRow}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions>
+ </Worksheet>
+ <Worksheet ss:Name="التفاصيل اليومية">
+  <Table>${detailCols}
+   <Row ss:Height="30"><Cell ss:StyleID="Title" ss:MergeAcross="11"><Data ss:Type="String">التفاصيل اليومية للحضور والانصراف</Data></Cell></Row>
+   <Row ss:Height="26">${detailHeaders.map((header) => cell(header, "Header")).join("")}</Row>
+   ${detailRows}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>2</SplitHorizontal><TopRowBottomPane>2</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions>
+ </Worksheet>
+</Workbook>`;
 }
 
 export function AttendancePage() {

@@ -1,16 +1,18 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20260919-global-attendance-v6-no-location";
+export const ATTENDANCE_SCHEMA_VERSION = "20260921-global-attendance-v7-official-day-end";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
   id smallint primary key default 1 check (id = 1),
   enforcement_enabled boolean not null default false,
+  official_day_end time not null default '21:00',
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
-insert into core.attendance_settings(id,enforcement_enabled) values(1,false)
+alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
+insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
 on conflict(id) do nothing;
 
 create table if not exists core.attendance_schedules (
@@ -150,6 +152,10 @@ async function attendanceSchemaReady() {
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_records' and column_name='period_id'
       )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_settings' and column_name='official_day_end'
+      )
     ) as ready
   `;
   return Boolean(state?.ready);
@@ -203,10 +209,12 @@ export function ensureAttendanceSchema() {
           create table if not exists core.attendance_settings (
             id smallint primary key default 1 check (id = 1),
             enforcement_enabled boolean not null default false,
+            official_day_end time not null default '21:00',
             updated_by uuid references core.users(id) on delete set null,
             updated_at timestamptz not null default now()
           );
-          insert into core.attendance_settings(id,enforcement_enabled) values(1,false)
+          alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
+          insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
           on conflict(id) do nothing;
           insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
           ('core','attendance','الحضور والانصراف','/attendance',15,true)

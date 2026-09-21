@@ -66,7 +66,7 @@ type BranchRow = { id: string; code: string; name: string };
 
 type AdminPayload = {
   ok: true;
-  settings: { enforcementEnabled: boolean };
+  settings: { enforcementEnabled: boolean; officialDayEnd: string };
   schedules: ScheduleRow[];
   users: UserRow[];
   branches: BranchRow[];
@@ -109,12 +109,15 @@ export function AttendanceSettingsPanel() {
   const [editingUserId, setEditingUserId] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [deviceUserId, setDeviceUserId] = useState("");
+  const [officialDayEnd, setOfficialDayEnd] = useState("21:00");
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      setData(await attendanceFetch<AdminPayload>("/api/attendance?view=admin"));
+      const payload = await attendanceFetch<AdminPayload>("/api/attendance?view=admin");
+      setData(payload);
+      setOfficialDayEnd(payload.settings?.officialDayEnd || "21:00");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل إعدادات الحضور والانصراف");
     } finally {
@@ -168,6 +171,25 @@ export function AttendanceSettingsPanel() {
     }
   }
 
+  async function saveOfficialDayEnd() {
+    resetMessages();
+    if (!/^\d{2}:\d{2}$/.test(officialDayEnd)) return;
+    setBusy("official-day-end");
+    try {
+      const result = await attendanceFetch<{ ok: true; officialDayEnd: string }>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "save_settings", officialDayEnd }),
+      });
+      setOfficialDayEnd(result.officialDayEnd || officialDayEnd);
+      setMessage("تم حفظ نهاية الدوام الرسمية");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ نهاية الدوام الرسمية");
+    } finally {
+      setBusy("");
+    }
+  }
+
   function updatePeriod(index: number, field: keyof PeriodRow, value: string | number) {
     setScheduleForm((current) => ({
       ...current,
@@ -212,6 +234,10 @@ export function AttendanceSettingsPanel() {
     resetMessages();
     setBusy("schedule");
     try {
+      await attendanceFetch("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "save_settings", officialDayEnd }),
+      });
       await attendanceFetch("/api/attendance", {
         method: "POST",
         body: JSON.stringify({ action: "save_schedule", ...scheduleForm }),
@@ -410,6 +436,7 @@ export function AttendanceSettingsPanel() {
         <header><div><Clock size={22} weight="duotone" /><span><h2>جداول وفترات العمل</h2><p>يمكن أن يحتوي الجدول على فترات بديلة ومتداخلة مثل «متواصل». عند تعيين الموظف تختار فقط الفترة أو الفترات الخاصة به.</p></span></div></header>
         <div className="attendance-settings-two-columns schedules">
           <form className="attendance-schedule-form" onSubmit={saveSchedule}>
+            <label className="attendance-wide-field"><span>نهاية الدوام الرسمية</span><input required type="time" value={officialDayEnd} onChange={(event) => setOfficialDayEnd(event.target.value)} onBlur={() => void saveOfficialDayEnd()} disabled={busy === "official-day-end"} /></label>
             <label className="attendance-wide-field"><span>اسم جدول العمل</span><input required value={scheduleForm.name} onChange={(event) => setScheduleForm((current) => ({ ...current, name: event.target.value }))} placeholder="مثال: المعارض" /></label>
             <div className="attendance-period-editor">
               {scheduleForm.periods.map((period, index) => (

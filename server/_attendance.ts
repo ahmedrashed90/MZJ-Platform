@@ -58,6 +58,22 @@ export async function isAttendanceEnforcementEnabled() {
   return Boolean(row?.enforcement_enabled);
 }
 
+async function officialAttendanceDayState() {
+  const sql = getSql();
+  const [row] = await sql<{ official_day_end: string; after_official_day_end: boolean }[]>`
+    select
+      official_day_end::text as official_day_end,
+      ((now() at time zone ${ATTENDANCE_TIME_ZONE})::time >= official_day_end) as after_official_day_end
+    from core.attendance_settings
+    where id=1
+    limit 1
+  `;
+  return {
+    officialDayEnd: String(row?.official_day_end || "21:00").slice(0, 5),
+    afterOfficialDayEnd: Boolean(row?.after_official_day_end),
+  };
+}
+
 async function currentAssignment(userId: string) {
   const sql = getSql();
   const [row] = await sql<any[]>`
@@ -85,12 +101,16 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
+    settings as (
+      select official_day_end from core.attendance_settings where id=1
+    ),
     candidates as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
         a.weekly_off_day,a.period_ids,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
         p.start_time::text as start_time,p.end_time::text as end_time,p.grace_minutes,
+        st.official_day_end,
         a.effective_from,a.effective_to,
         case
           when p.end_time <= p.start_time and c.local_time < p.end_time then c.local_date - 1
@@ -98,6 +118,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         end as work_date,
         c.current_at
       from clock c
+      cross join settings st
       join core.attendance_user_schedules a
         on a.user_id=${userId}::uuid
        and a.effective_from <= c.local_date
@@ -109,7 +130,10 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
     timed as (
       select *,
         ((work_date + start_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
-        (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+        least(
+          (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}),
+          ((work_date + official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})
+        ) as scheduled_end_at
       from candidates
       where effective_from <= work_date and (effective_to is null or effective_to >= work_date)
         and (weekly_off_day is null or extract(dow from work_date)::int <> weekly_off_day)
@@ -156,18 +180,20 @@ async function recordForPeriod(userId: string, period: ActiveAttendancePeriod) {
 async function closeExpiredAttendanceForUser(userId: string) {
   const sql = getSql();
   const closed = await sql<{ id: string }[]>`
-    update core.attendance_records
+    update core.attendance_records r
     set
-      check_out=scheduled_end_at,
+      check_out=least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
       checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (scheduled_end_at-check_in))/60))::int,
+      work_minutes=greatest(0,floor(extract(epoch from (least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
       updated_at=now()
-    where user_id=${userId}::uuid
-      and check_in is not null
-      and check_out is null
-      and scheduled_end_at is not null
-      and scheduled_end_at <= now()
-    returning id::text
+    from core.attendance_settings st
+    where st.id=1
+      and r.user_id=${userId}::uuid
+      and r.check_in is not null
+      and r.check_out is null
+      and r.scheduled_end_at is not null
+      and least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})) <= now()
+    returning r.id::text
   `;
   return closed.length;
 }
@@ -175,7 +201,10 @@ async function closeExpiredAttendanceForUser(userId: string) {
 export async function getLoginAttendanceState(userId: string) {
   await ensureAttendanceSchema();
   await closeExpiredAttendanceForUser(userId);
-  const activePeriod = await getActiveAttendancePeriod(userId);
+  const [activePeriod, officialDay] = await Promise.all([
+    getActiveAttendancePeriod(userId),
+    officialAttendanceDayState(),
+  ]);
   const assignment = activePeriod ? null : await currentAssignment(userId);
   if (!activePeriod) {
     return {
@@ -185,10 +214,15 @@ export async function getLoginAttendanceState(userId: string) {
       scheduleName: assignment?.schedule_name || null,
       isDayOff: Boolean(assignment?.is_day_off),
       weeklyOffDay: assignment?.weekly_off_day === null || assignment?.weekly_off_day === undefined ? null : Number(assignment.weekly_off_day),
+      officialDayEnd: officialDay.officialDayEnd,
+      afterOfficialDayEnd: officialDay.afterOfficialDayEnd,
     };
   }
   const record = await recordForPeriod(userId, activePeriod);
-  return { assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name, isDayOff: false, weeklyOffDay: null };
+  return {
+    assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name, isDayOff: false, weeklyOffDay: null,
+    officialDayEnd: officialDay.officialDayEnd, afterOfficialDayEnd: officialDay.afterOfficialDayEnd,
+  };
 }
 
 function isoOrNull(value: unknown) {
@@ -213,6 +247,8 @@ export async function getSelfAttendanceState(userId: string) {
     scheduleName: state.scheduleName || null,
     isDayOff: Boolean(state.isDayOff),
     weeklyOffDay: state.weeklyOffDay,
+    officialDayEnd: state.officialDayEnd,
+    afterOfficialDayEnd: Boolean(state.afterOfficialDayEnd),
     activePeriod: period ? {
       id: period.period_id,
       name: period.period_name,
@@ -265,7 +301,7 @@ export async function requireAttendanceForLogin(
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
 
   if (!state.activePeriod) {
-    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
+    if (!enforcementEnabled || state.afterOfficialDayEnd) return { enforced: false, checkedIn: false, state };
     if (state.isDayOff) {
       throw new AttendanceError(
         "WEEKLY_DAY_OFF",
@@ -365,6 +401,7 @@ export async function isAttendanceSessionAllowed(userId: string) {
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
+    settings as (select official_day_end from core.attendance_settings where id=1),
     current_assignment as (
       select a.id
       from clock c
@@ -408,6 +445,7 @@ export async function isAttendanceSessionAllowed(userId: string) {
       limit 1
     )
     select case
+      when (select local_time from clock) >= (select official_day_end from settings) then true
       when not exists(select 1 from current_assignment) and not exists(select 1 from active_period) then true
       else exists(
         select 1
@@ -432,20 +470,21 @@ export async function checkoutCurrentAttendance(
   return withDatabaseAdvisoryLock(`mzj:attendance-check-out:${userId}`, async () => {
     const sql = getSql();
     const [row] = await sql<any[]>`
-      update core.attendance_records
+      update core.attendance_records r
       set
-        check_out=now(),
+        check_out=least(now(),r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
         checkout_source='manual',
-        work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60))::int,
+        work_minutes=greatest(0,floor(extract(epoch from (least(now(),r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
         updated_at=now()
-      where id=(
+      from core.attendance_settings st
+      where st.id=1 and r.id=(
         select id
         from core.attendance_records
         where user_id=${userId}::uuid and check_in is not null and check_out is null
         order by check_in desc
         limit 1
       )
-      returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
+      returning r.*,r.id::text,r.user_id::text,r.assignment_id::text,r.schedule_id::text,r.period_id::text,r.work_date::text as work_date
     `;
     if (!row) {
       if (options.allowMissing) return null;
@@ -463,17 +502,19 @@ export async function runAttendanceTick() {
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
   const sql = getSql();
   const closed = await sql<{ user_id: string }[]>`
-    update core.attendance_records
+    update core.attendance_records r
     set
-      check_out=scheduled_end_at,
+      check_out=least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
       checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (scheduled_end_at-check_in))/60))::int,
+      work_minutes=greatest(0,floor(extract(epoch from (least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
       updated_at=now()
-    where check_in is not null
-      and check_out is null
-      and scheduled_end_at is not null
-      and scheduled_end_at <= now()
-    returning user_id::text
+    from core.attendance_settings st
+    where st.id=1
+      and r.check_in is not null
+      and r.check_out is null
+      and r.scheduled_end_at is not null
+      and least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})) <= now()
+    returning r.user_id::text
   `;
   const closedUserIds = [...new Set(closed.map((row) => String(row.user_id)).filter(Boolean))];
 

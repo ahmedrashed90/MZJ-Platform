@@ -44,13 +44,20 @@ function timeMinutes(value: string) {
   return hours * 60 + minutes;
 }
 
-function validatePeriods(periods: any[]) {
+function validatePeriods(periods: any[], officialDayEnd = "21:00") {
   if (!periods.length) throw new AttendanceError("SCHEDULE_PERIODS_REQUIRED", "أضف فترة عمل واحدة على الأقل");
   return periods.map((period, index) => {
     const startTime = clean(period.startTime).slice(0, 5);
     const endTime = clean(period.endTime).slice(0, 5);
     if (!validTime(startTime) || !validTime(endTime)) throw new AttendanceError("INVALID_PERIOD_TIME", "تأكد من وقت بداية ونهاية كل فترة");
     if (startTime === endTime) throw new AttendanceError("INVALID_PERIOD_TIME", "وقت بداية الفترة لا يمكن أن يساوي وقت نهايتها");
+    const startMinutes = timeMinutes(startTime);
+    const endMinutes = timeMinutes(endTime);
+    const officialEndMinutes = timeMinutes(officialDayEnd);
+    if (endMinutes <= startMinutes) throw new AttendanceError("INVALID_PERIOD_TIME", "فترات الدوام يجب أن تبدأ وتنتهي في نفس يوم العمل");
+    if (startMinutes >= officialEndMinutes || endMinutes > officialEndMinutes) {
+      throw new AttendanceError("PERIOD_AFTER_OFFICIAL_END", `نهاية الدوام الرسمية ${officialDayEnd}. عدّل الفترة لتكون داخل وقت الدوام الرسمي`);
+    }
     const graceMinutes = Math.max(0, Math.min(360, Math.floor(Number(period.graceMinutes) || 0)));
     return {
       id: validUuid(clean(period.id)) ? clean(period.id) : "",
@@ -116,6 +123,24 @@ function currentRiyadhDate() {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+function currentRiyadhTimeMinutes() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value || 0);
+  return part("hour") * 60 + part("minute");
+}
+
+function liveWorkMinutes(record: any) {
+  if (!record?.check_in) return 0;
+  if (record?.check_out) return Math.max(0, Number(record.work_minutes || 0));
+  const checkInMs = new Date(record.check_in).getTime();
+  const scheduledEndMs = record.scheduled_end_at ? new Date(record.scheduled_end_at).getTime() : Date.now();
+  if (!Number.isFinite(checkInMs)) return Math.max(0, Number(record.work_minutes || 0));
+  const endMs = Math.min(Date.now(), Number.isFinite(scheduledEndMs) ? scheduledEndMs : Date.now());
+  return Math.max(0, Math.floor((endMs - checkInMs) / 60000));
+}
+
 function reportClock(value: unknown) {
   if (!value) return "";
   const date = new Date(String(value));
@@ -145,8 +170,8 @@ function reportDateFromTimestamp(value: unknown) {
 
 async function adminBootstrap() {
   const sql = getSql();
-  const [settings] = await sql<{ enforcement_enabled: boolean }[]>`
-    select enforcement_enabled from core.attendance_settings where id=1 limit 1
+  const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
+    select enforcement_enabled,official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
   `;
   const [schedules, periods, users, branches] = await Promise.all([
     sql<any[]>`
@@ -219,7 +244,10 @@ async function adminBootstrap() {
   const deviceSnapshot = await adminDeviceSnapshot();
   return {
     ok: true,
-    settings: { enforcementEnabled: Boolean(settings?.enforcement_enabled) },
+    settings: {
+      enforcementEnabled: Boolean(settings?.enforcement_enabled),
+      officialDayEnd: String(settings?.official_day_end || "21:00").slice(0, 5),
+    },
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
     users: users.map((user) => ({
       ...user,
@@ -232,15 +260,21 @@ async function adminBootstrap() {
 
 async function saveSettings(body: Record<string, any>, adminId: string) {
   const sql = getSql();
-  const enforcementEnabled = body.enforcementEnabled === true;
-  const [current] = await sql<{ enforcement_enabled: boolean }[]>`
-    select enforcement_enabled from core.attendance_settings where id=1 limit 1
+  const [current] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
+    select enforcement_enabled,official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
   `;
+  const enforcementEnabled = typeof body.enforcementEnabled === "boolean"
+    ? body.enforcementEnabled
+    : Boolean(current?.enforcement_enabled);
+  const requestedOfficialDayEnd = clean(body.officialDayEnd).slice(0, 5);
+  const officialDayEnd = validTime(requestedOfficialDayEnd)
+    ? requestedOfficialDayEnd
+    : String(current?.official_day_end || "21:00").slice(0, 5);
   await sql`
-    insert into core.attendance_settings(id,enforcement_enabled,updated_by,updated_at)
-    values(1,${enforcementEnabled},${adminId}::uuid,now())
+    insert into core.attendance_settings(id,enforcement_enabled,official_day_end,updated_by,updated_at)
+    values(1,${enforcementEnabled},${officialDayEnd}::time,${adminId}::uuid,now())
     on conflict(id) do update
-    set enforcement_enabled=excluded.enforcement_enabled,updated_by=excluded.updated_by,updated_at=now()
+    set enforcement_enabled=excluded.enforcement_enabled,official_day_end=excluded.official_day_end,updated_by=excluded.updated_by,updated_at=now()
   `;
 
   let forcedLogoutUsers = 0;
@@ -256,7 +290,7 @@ async function saveSettings(body: Record<string, any>, adminId: string) {
     forcedLogoutUsers = new Set(expired.map((row) => row.user_id)).size;
   }
 
-  return { ok: true, enforcementEnabled, forcedLogoutUsers };
+  return { ok: true, enforcementEnabled, officialDayEnd, forcedLogoutUsers };
 }
 
 async function saveSchedule(body: Record<string, any>, adminId: string) {
@@ -264,7 +298,11 @@ async function saveSchedule(body: Record<string, any>, adminId: string) {
   const id = clean(body.id);
   const name = clean(body.name);
   if (!name) throw new AttendanceError("SCHEDULE_NAME_REQUIRED", "اكتب اسم جدول العمل");
-  const periods = validatePeriods(Array.isArray(body.periods) ? body.periods : []);
+  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`
+    select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
+  `;
+  const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
+  const periods = validatePeriods(Array.isArray(body.periods) ? body.periods : [], officialDayEnd);
 
   return sql.begin(async (tx) => {
     let scheduleId = id;
@@ -456,6 +494,12 @@ function weekdayForDate(value: string) {
 async function reportData(request: VercelRequest) {
   const sql = getSql();
   const today = currentRiyadhDate();
+  const nowMinutes = currentRiyadhTimeMinutes();
+  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`
+    select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
+  `;
+  const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
+  const officialDayEndMinutes = timeMinutes(officialDayEnd);
   const rawFrom = clean(request.query.from);
   const rawTo = clean(request.query.to);
   let from = validDate(rawFrom) ? rawFrom : "";
@@ -561,7 +605,7 @@ async function reportData(request: VercelRequest) {
         order by u.full_name
       `;
   const userIds = users.map((user) => String(user.id));
-  if (!userIds.length) return { ok: true, from, to, rows: [], periodHeaders: [] };
+  if (!userIds.length) return { ok: true, from, to, today, officialDayEnd, rows: [], periodHeaders: [] };
 
   const [assignments, periods, records] = await Promise.all([
     sql<any[]>`
@@ -672,7 +716,7 @@ async function reportData(request: VercelRequest) {
           id: period.id,
           name: clean(period.name) || "فترة العمل",
           startTime: clean(period.start_time).slice(0, 5),
-          endTime: clean(period.end_time).slice(0, 5),
+          endTime: timeMinutes(clean(period.end_time).slice(0, 5)) > officialDayEndMinutes ? officialDayEnd : clean(period.end_time).slice(0, 5),
           graceMinutes: Number(period.grace_minutes || 0),
           sortOrder: Number(period.sort_order || 0),
           record,
@@ -685,7 +729,12 @@ async function reportData(request: VercelRequest) {
           id: record.period_id || `record:${record.id}`,
           name: clean(record.period_name) || `فترة العمل ${slots.length + 1}`,
           startTime: record.scheduled_start_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_start_at)) : "",
-          endTime: record.scheduled_end_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at)) : "",
+          endTime: record.scheduled_end_at
+            ? (() => {
+                const storedEnd = new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at));
+                return timeMinutes(storedEnd) > officialDayEndMinutes ? officialDayEnd : storedEnd;
+              })()
+            : "",
           graceMinutes: Number(record.grace_minutes || 0),
           sortOrder: Number(record.period_sort_order || slots.length + 1),
           record,
@@ -707,7 +756,8 @@ async function reportData(request: VercelRequest) {
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {
-          result = "لم يسجل";
+          const effectiveEnd = Math.min(timeMinutes(slot.endTime || officialDayEnd), officialDayEndMinutes);
+          result = nowMinutes >= effectiveEnd ? "غائب" : "لم يسجل";
         }
         const key = periodKey(slot.name);
         if (!headerMeta.has(key)) {
@@ -727,7 +777,7 @@ async function reportData(request: VercelRequest) {
           checkoutSource: record?.checkout_source || null,
           result,
           delayMinutes: Number(record?.delay_minutes || 0),
-          workMinutes: Number(record?.work_minutes || 0),
+          workMinutes: liveWorkMinutes(record),
         });
       }
 
@@ -751,7 +801,10 @@ async function reportData(request: VercelRequest) {
     periodsByKey: undefined,
   }));
 
-  return { ok: true, from, to, branchId: branchId || null, rows, periodHeaders, users: users.map((user) => ({ id: user.id, fullName: user.full_name })) };
+  return {
+    ok: true, from, to, today, officialDayEnd, branchId: branchId || null, rows, periodHeaders,
+    users: users.map((user) => ({ id: user.id, fullName: user.full_name })),
+  };
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
