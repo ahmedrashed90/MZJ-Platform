@@ -70,6 +70,14 @@ function monthDateRange(value: string) {
   return { from: `${value}-01`, to: `${value}-${String(lastDay).padStart(2, "0")}` };
 }
 
+function currentReportMonth() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+  }).format(new Date());
+}
+
 function summaryMetricPercentage(key: SummaryCardKey, value: number, total: number) {
   if (key === "marketing" || key === "sales") return Math.max(0, Math.min(100, value));
   if (key === "total") return total > 0 ? 100 : 0;
@@ -159,9 +167,11 @@ function reportExportRows(section: ReportSection) {
 }
 
 export function CrmReportsPage() {
+  const initialReportMonth = currentReportMonth();
+  const initialReportRange = monthDateRange(initialReportMonth) || { from: "", to: "" };
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [filters, setFilters] = useState(emptyFilters);
-  const [selectedMonth, setSelectedMonth] = useState("");
+  const [filters, setFilters] = useState({ ...emptyFilters, from: initialReportRange.from, to: initialReportRange.to });
+  const [selectedMonth, setSelectedMonth] = useState(initialReportMonth);
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
@@ -267,8 +277,10 @@ export function CrmReportsPage() {
   }
 
   function clearReportFilters() {
-    setSelectedMonth("");
-    setFilters(emptyFilters);
+    const month = currentReportMonth();
+    const range = monthDateRange(month) || { from: "", to: "" };
+    setSelectedMonth(month);
+    setFilters({ ...emptyFilters, from: range.from, to: range.to });
   }
 
   function exportAll() {

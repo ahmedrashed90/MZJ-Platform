@@ -341,13 +341,24 @@ export function CrmKpiPage() {
 
     const resultHtml = `<section class="box result-box"><h2>النتيجة النهائية</h2><div class="metrics result-metrics">${metric("السرعة", percent(result.speedRate), rateClass(result.speedRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}${metric("القيمة", percent(result.valueRate), rateClass(result.valueRate))}${metric("نسبة KPI", percent(result.finalRate), rateClass(result.finalRate))}${metric("إجمالي النقاط", Math.round(result.totalPoints))}${metric("التقييم", result.rating)}${metric("أيام العمل", result.workDays)}</div>${notes ? `<div class="notes"><strong>ملاحظات التقييم</strong><p>${safe(notes)}</p></div>` : ""}</section>`;
     const sections: Record<ModalTab, string> = { speed: speedHtml, efficiency: efficiencyHtml, discipline: disciplineHtml, value: valueHtml, result: resultHtml };
-    const body = target === "all" ? `${speedHtml}${efficiencyHtml}${disciplineHtml}${valueHtml}${resultHtml}` : sections[target];
+    const fullReportPages = [
+      { html: resultHtml, className: "pdf-page-first" },
+      { html: speedHtml, className: "pdf-page" },
+      { html: efficiencyHtml, className: "pdf-page" },
+      { html: disciplineHtml, className: "pdf-page" },
+      { html: valueHtml, className: "pdf-page" },
+    ];
+    const body = target === "all"
+      ? fullReportPages.map((page) => `<div class="${page.className}">${page.html}</div>`).join("")
+      : sections[target];
 
     const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>
 @page{size:A4 landscape;margin:7mm}
 *{box-sizing:border-box}
+.pdf-page{break-before:page;page-break-before:always}
+.pdf-page-first{break-before:auto;page-break-before:auto}
 html,body{margin:0;padding:0;background:#fff}
 body{font-family:Tajawal,Arial,sans-serif;color:#35221c;font-size:10px;font-weight:700;line-height:1.45}
 .report-head{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff;border-radius:11px;padding:10px 12px;margin:0 0 8px;break-inside:avoid;page-break-after:avoid}

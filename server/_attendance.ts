@@ -107,9 +107,11 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
     candidates as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
-        a.weekly_off_day,a.period_ids,
+        a.weekly_off_day,a.period_ids,a.period_overrides,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
-        p.start_time::text as start_time,p.end_time::text as end_time,p.grace_minutes,
+        coalesce(nullif(a.period_overrides -> (p.id::text) ->> 'startTime','')::time,p.start_time)::text as start_time,
+        coalesce(nullif(a.period_overrides -> (p.id::text) ->> 'endTime','')::time,p.end_time)::text as end_time,
+        coalesce(nullif(a.period_overrides -> (p.id::text) ->> 'graceMinutes','')::integer,p.grace_minutes) as grace_minutes,
         st.official_day_end,
         a.effective_from,a.effective_to,
         case
@@ -177,6 +179,21 @@ async function recordForPeriod(userId: string, period: ActiveAttendancePeriod) {
   return row || null;
 }
 
+async function latestAttendanceRecordForToday(userId: string) {
+  const sql = getSql();
+  const today = (new Intl.DateTimeFormat("en-CA", { timeZone: ATTENDANCE_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" })).format(new Date());
+  const [row] = await sql<any[]>`
+    select *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
+    from core.attendance_records
+    where user_id=${userId}::uuid
+      and work_date=${today}::date
+      and check_in is not null
+    order by check_in desc,updated_at desc
+    limit 1
+  `;
+  return row || null;
+}
+
 async function closeExpiredAttendanceForUser(userId: string) {
   const sql = getSql();
   const closed = await sql<{ id: string }[]>`
@@ -210,7 +227,7 @@ export async function getLoginAttendanceState(userId: string) {
     return {
       assigned: Boolean(assignment),
       activePeriod: null,
-      record: null,
+      record: await latestAttendanceRecordForToday(userId),
       scheduleName: assignment?.schedule_name || null,
       isDayOff: Boolean(assignment?.is_day_off),
       weeklyOffDay: assignment?.weekly_off_day === null || assignment?.weekly_off_day === undefined ? null : Number(assignment.weekly_off_day),
@@ -429,7 +446,9 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
     ),
     period_candidates as (
       select
-        a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,p.start_time,p.end_time,
+        a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
+        coalesce(nullif(a.period_overrides -> (p.id::text) ->> 'startTime','')::time,p.start_time) as start_time,
+        coalesce(nullif(a.period_overrides -> (p.id::text) ->> 'endTime','')::time,p.end_time) as end_time,
         case
           when p.end_time <= p.start_time and c.local_time < p.end_time then c.local_date - 1
           else c.local_date

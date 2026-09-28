@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CaretDown, Export, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, Export, FilePdf, WarningCircle } from "@phosphor-icons/react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
@@ -247,6 +247,56 @@ function buildExcelDocument(payload: ReportPayload) {
 </Workbook>`;
 }
 
+function printHtmlEscape(value: unknown) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function buildAttendancePdfDocument(payload: ReportPayload) {
+  const summary = attendanceSummary(payload);
+  const totals = summary.reduce((acc, row) => ({
+    requiredDays: acc.requiredDays + row.requiredDays,
+    attendanceDays: acc.attendanceDays + row.attendanceDays,
+    absenceDays: acc.absenceDays + row.absenceDays,
+    partialDays: acc.partialDays + row.partialDays,
+    offDays: acc.offDays + row.offDays,
+    requiredPeriods: acc.requiredPeriods + row.requiredPeriods,
+    attendedPeriods: acc.attendedPeriods + row.attendedPeriods,
+    missedPeriods: acc.missedPeriods + row.missedPeriods,
+    requiredMinutes: acc.requiredMinutes + row.requiredMinutes,
+    workMinutes: acc.workMinutes + row.workMinutes,
+    delayMinutes: acc.delayMinutes + row.delayMinutes,
+  }), { requiredDays: 0, attendanceDays: 0, absenceDays: 0, partialDays: 0, offDays: 0, requiredPeriods: 0, attendedPeriods: 0, missedPeriods: 0, requiredMinutes: 0, workMinutes: 0, delayMinutes: 0 });
+  const totalRate = totals.requiredPeriods ? Math.round((totals.attendedPeriods / totals.requiredPeriods) * 1000) / 10 : 0;
+  const card = (label: string, value: string | number) => `<div class="summary-card"><small>${printHtmlEscape(label)}</small><strong>${printHtmlEscape(value)}</strong></div>`;
+  const summaryRows = summary.map((row, index) => {
+    const rate = row.requiredPeriods ? Math.round((row.attendedPeriods / row.requiredPeriods) * 1000) / 10 : 0;
+    return `<tr><td>${index + 1}</td><td>${printHtmlEscape(row.name)}</td><td>${printHtmlEscape(row.branch)}</td><td>${row.requiredDays}</td><td>${row.attendanceDays}</td><td>${row.absenceDays}</td><td>${row.partialDays}</td><td>${row.offDays}</td><td>${row.requiredPeriods}</td><td>${row.attendedPeriods}</td><td>${row.missedPeriods}</td><td>${printHtmlEscape(minutesAsHours(row.requiredMinutes))}</td><td>${printHtmlEscape(minutesAsHours(row.workMinutes))}</td><td>${row.delayMinutes}</td><td>${rate}%</td></tr>`;
+  }).join("");
+  const detailRows = payload.rows.flatMap((row) => row.periods.filter((period): period is ReportPeriod => Boolean(period)).map((period) => {
+    const delay = Math.max(0, Number(period.delayMinutes || 0));
+    const status = period.checkIn ? (delay > 0 ? "متأخر" : "حاضر") : missingResultLabel(period.result);
+    const statusClass = status === "حاضر" ? "present" : status === "متأخر" ? "late" : status === "غائب" ? "absent" : "other";
+    return `<tr><td>${printHtmlEscape(formatAttendanceDate(row.date))}</td><td>${printHtmlEscape(formatAttendanceDay(row.date))}</td><td>${printHtmlEscape(row.branch)}</td><td>${printHtmlEscape(row.name)}</td><td>${printHtmlEscape(period.name)}</td><td>${printHtmlEscape(period.startTime || "—")}</td><td>${printHtmlEscape(period.endTime || "—")}</td><td>${printHtmlEscape(period.checkInText || (period.checkIn ? formatAttendanceTime(period.checkIn) : "—"))}</td><td>${printHtmlEscape(period.checkOutText || (period.checkOut ? formatAttendanceTime(period.checkOut) : "—"))}</td><td>${printHtmlEscape(minutesAsHours(period.workMinutes))}</td><td>${delay}</td><td class="status-${statusClass}">${printHtmlEscape(status)}</td></tr>`;
+  })).join("");
+
+  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الحضور والانصراف</title><style>
+@page{size:A4 landscape;margin:8mm}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#fff}
+body{font-family:Tajawal,Arial,sans-serif;color:#2d2724;font-size:9px;line-height:1.45}
+h1{margin:0;font-size:18px}.title{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;margin-bottom:12px}.muted{color:#796e68}.summary-cards{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:10px}.summary-card{border:1px solid #e7ddd7;border-radius:9px;padding:7px;background:#fffaf7;min-height:50px}.summary-card small{display:block;color:#7b6d65;font-size:8px}.summary-card strong{display:block;font-size:14px;margin-top:3px}.section{margin-top:10px}.section h2{font-size:12px;margin:0 0 6px}.page-break{break-before:page;page-break-before:always}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #ddd3cd;padding:4px;text-align:center;vertical-align:middle;word-break:break-word}th{background:#efe5df;font-weight:700}tbody tr:nth-child(even){background:#fbf8f6}.status-present,.status-late,.status-absent,.status-other{font-weight:700}.totals td{font-weight:700;background:#eadfd8}.meta{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:9px}</style></head><body>
+<div class="title"><div><h1>تقرير الحضور والانصراف</h1><div class="muted">الفترة: ${printHtmlEscape(formatAttendanceDate(payload.from))} إلى ${printHtmlEscape(formatAttendanceDate(payload.to))}</div></div><div class="muted">نهاية الدوام الرسمية: ${printHtmlEscape(payload.officialDayEnd)}</div></div>
+<div class="summary-cards">${card("الموظفون", summary.length)}${card("أيام الدوام", totals.requiredDays)}${card("أيام الحضور", totals.attendanceDays)}${card("أيام الغياب", totals.absenceDays)}${card("حضور جزئي", totals.partialDays)}${card("دقائق التأخير", totals.delayMinutes)}${card("نسبة التسجيل", `${totalRate}%`)}</div>
+<section class="section"><h2>ملخص الفترة</h2><table><thead><tr><th>م</th><th>الموظف</th><th>الفرع</th><th>أيام الدوام</th><th>الحضور</th><th>الغياب</th><th>جزئي</th><th>إجازة</th><th>الفترات المطلوبة</th><th>المسجلة</th><th>الغائبة</th><th>الساعات المطلوبة</th><th>ساعات العمل</th><th>التأخير/د</th><th>النسبة</th></tr></thead><tbody>${summaryRows || `<tr><td colspan="15">لا توجد بيانات</td></tr>`}</tbody><tfoot><tr class="totals"><td colspan="3">الإجمالي</td><td>${totals.requiredDays}</td><td>${totals.attendanceDays}</td><td>${totals.absenceDays}</td><td>${totals.partialDays}</td><td>${totals.offDays}</td><td>${totals.requiredPeriods}</td><td>${totals.attendedPeriods}</td><td>${totals.missedPeriods}</td><td>${printHtmlEscape(minutesAsHours(totals.requiredMinutes))}</td><td>${printHtmlEscape(minutesAsHours(totals.workMinutes))}</td><td>${totals.delayMinutes}</td><td>${totalRate}%</td></tr></tfoot></table></section>
+<section class="section page-break"><div class="meta"><strong>التفاصيل اليومية</strong><span>الحضور والانصراف لكل فترة عمل</span></div><table><thead><tr><th>التاريخ</th><th>اليوم</th><th>الفرع</th><th>الموظف</th><th>الفترة</th><th>من</th><th>إلى</th><th>الحضور</th><th>الانصراف</th><th>ساعات العمل</th><th>التأخير/د</th><th>الحالة</th></tr></thead><tbody>${detailRows || `<tr><td colspan="12">لا توجد تفاصيل يومية</td></tr>`}</tbody></table></section>
+</body></html>`;
+}
+
 export function AttendancePage() {
   const { user } = useAuth();
   const isAdmin = hasPermission(user, "platform.superadmin");
@@ -260,6 +310,7 @@ export function AttendancePage() {
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
+  const [reportPdfExporting, setReportPdfExporting] = useState(false);
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
 
@@ -344,6 +395,42 @@ export function AttendancePage() {
     }
   }
 
+  async function exportPdf() {
+    if (!isAdmin || reportPdfExporting) return;
+    setReportPdfExporting(true);
+    setError("");
+    try {
+      const payload = await fetchReportPayload(from, to, employeeIds, branchId);
+      setReport(payload);
+      setCollapsedDays(new Set());
+      if (!payload.rows.length) {
+        setError("لا توجد نتائج مطابقة للفلاتر.");
+        return;
+      }
+      const win = window.open("", "_blank", "width=1400,height=900");
+      if (!win) {
+        setError("تعذر فتح صفحة PDF. اسمح بالنوافذ المنبثقة للموقع.");
+        return;
+      }
+      win.document.open();
+      win.document.write(buildAttendancePdfDocument(payload));
+      win.document.close();
+      let printed = false;
+      const printOnce = () => {
+        if (printed) return;
+        printed = true;
+        win.focus();
+        win.print();
+      };
+      win.onload = () => window.setTimeout(printOnce, 150);
+      window.setTimeout(printOnce, 800);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "تعذر تصدير PDF");
+    } finally {
+      setReportPdfExporting(false);
+    }
+  }
+
   function toggleEmployee(employeeId: string) {
     setEmployeeIds((current) => current.includes(employeeId)
       ? current.filter((id) => id !== employeeId)
@@ -380,7 +467,10 @@ export function AttendancePage() {
 
       <section className="panel attendance-report-card attendance-report-card-v91">
         <div className="attendance-report-toolbar">
-          <button className="secondary-button" type="button" onClick={() => void exportExcel()} disabled={reportExporting || reportLoading}>
+          <button className="secondary-button" type="button" onClick={() => void exportPdf()} disabled={reportPdfExporting || reportExporting || reportLoading}>
+            <FilePdf size={18} /> {reportPdfExporting ? "جاري تجهيز PDF..." : "تصدير PDF"}
+          </button>
+          <button className="secondary-button" type="button" onClick={() => void exportExcel()} disabled={reportExporting || reportPdfExporting || reportLoading}>
             <Export size={18} /> {reportExporting ? "جاري التصدير..." : "تصدير Excel"}
           </button>
         </div>

@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20260921-global-attendance-v7-official-day-end";
+export const ATTENDANCE_SCHEMA_VERSION = "20260928-global-attendance-v8-assignment-period-times";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -48,6 +48,7 @@ create table if not exists core.attendance_user_schedules (
   schedule_id uuid not null references core.attendance_schedules(id) on delete restrict,
   branch_id uuid references core.branches(id) on delete set null,
   period_ids uuid[],
+  period_overrides jsonb not null default '{}'::jsonb,
   weekly_off_day smallint,
   effective_from date not null,
   effective_to date,
@@ -58,6 +59,7 @@ create table if not exists core.attendance_user_schedules (
 );
 alter table core.attendance_user_schedules add column if not exists branch_id uuid references core.branches(id) on delete set null;
 alter table core.attendance_user_schedules add column if not exists period_ids uuid[];
+alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
 alter table core.attendance_user_schedules add column if not exists weekly_off_day smallint;
 update core.attendance_user_schedules a
 set period_ids=(
@@ -147,6 +149,10 @@ async function attendanceSchemaReady() {
       and exists (
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_user_schedules' and column_name='period_ids'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_user_schedules' and column_name='period_overrides'
       )
       and exists (
         select 1 from information_schema.columns
