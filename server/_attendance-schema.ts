@@ -220,6 +220,7 @@ export function ensureAttendanceSchema() {
             updated_at timestamptz not null default now()
           );
           alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
+          alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
           insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
           on conflict(id) do nothing;
           insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values

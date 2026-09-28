@@ -14,7 +14,7 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { attendanceFetch, formatAttendanceMinutes } from "./api";
+import { attendanceFetch } from "./api";
 
 type PeriodRow = {
   id?: string;
@@ -31,11 +31,6 @@ type ScheduleRow = {
   periods: PeriodRow[];
 };
 
-type AssignmentPeriodOverride = {
-  startTime: string;
-  endTime: string;
-  graceMinutes: number;
-};
 
 type DeviceRow = {
   id: string;
@@ -51,6 +46,8 @@ type DeviceRow = {
   createdAt: string;
 };
 
+type PeriodOverride = { startTime: string; endTime: string };
+
 type UserRow = {
   id: string;
   employee_no: string | null;
@@ -62,7 +59,7 @@ type UserRow = {
   assignment_id: string | null;
   schedule_id: string | null;
   period_ids: string[];
-  period_overrides: Record<string, AssignmentPeriodOverride>;
+  period_overrides: Record<string, PeriodOverride>;
   weekly_off_day: number | null;
   schedule_name: string | null;
   device_verification_required: boolean;
@@ -89,14 +86,6 @@ const WEEKLY_OFF_DAYS = [
   { value: "6", label: "السبت" },
 ] as const;
 
-function minutesBetweenTimesLocal(startTime: string, endTime: string) {
-  const parse = (value: string) => {
-    const [hours, minutes] = String(value || "").slice(0, 5).split(":").map(Number);
-    return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 0;
-  };
-  return Math.max(0, parse(endTime) - parse(startTime));
-}
-
 function weeklyOffDayLabel(value: number | null | undefined) {
   if (value === null || value === undefined) return "بدون إجازة أسبوعية";
   const option = WEEKLY_OFF_DAYS.find((day) => Number(day.value) === Number(value));
@@ -119,7 +108,7 @@ export function AttendanceSettingsPanel() {
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [assignmentScheduleId, setAssignmentScheduleId] = useState("");
   const [assignmentPeriodIds, setAssignmentPeriodIds] = useState<string[]>([]);
-  const [assignmentPeriodOverrides, setAssignmentPeriodOverrides] = useState<Record<string, AssignmentPeriodOverride>>({});
+  const [assignmentPeriodOverrides, setAssignmentPeriodOverrides] = useState<Record<string, PeriodOverride>>({});
   const [assignmentBranchId, setAssignmentBranchId] = useState("");
   const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
@@ -296,56 +285,33 @@ export function AttendanceSettingsPanel() {
     setSelectedUsers((current) => allSelected ? current.filter((id) => !visible.includes(id)) : Array.from(new Set([...current, ...visible])));
   }
 
-  function defaultPeriodOverride(period: PeriodRow): AssignmentPeriodOverride {
-    return {
-      startTime: String(period.startTime || "").slice(0, 5),
-      endTime: String(period.endTime || "").slice(0, 5),
-      graceMinutes: Math.max(0, Number(period.graceMinutes || 0)),
-    };
-  }
-
-  function selectedPeriodOverrides(schedule: ScheduleRow | null, selectedIds: string[], existing: Record<string, AssignmentPeriodOverride> = {}): Record<string, AssignmentPeriodOverride> {
-    if (!schedule) return {};
-    const next: Record<string, AssignmentPeriodOverride> = {};
-    for (const periodId of selectedIds) {
-      const period = schedule.periods.find((item) => item.id === periodId);
-      if (!period) continue;
-      next[periodId] = { ...defaultPeriodOverride(period), ...(existing[periodId] || {}) };
-    }
-    return next;
-  }
-
   function changeAssignmentSchedule(scheduleId: string) {
     setAssignmentScheduleId(scheduleId);
-    const schedule = (data?.schedules || []).find((item) => item.id === scheduleId) || null;
-    const selectedIds = schedule?.periods.length === 1 && schedule.periods[0]?.id ? [schedule.periods[0].id] : [];
-    setAssignmentPeriodIds(selectedIds);
-    setAssignmentPeriodOverrides(selectedPeriodOverrides(schedule, selectedIds));
+    const schedule = (data?.schedules || []).find((item) => item.id === scheduleId);
+    const availablePeriods = schedule?.periods.filter((period) => Boolean(period.id)) || [];
+    const selected = availablePeriods.length === 1 ? [availablePeriods[0].id!] : [];
+    setAssignmentPeriodIds(selected);
+    setAssignmentPeriodOverrides(Object.fromEntries(availablePeriods.map((period) => [period.id!, { startTime: period.startTime, endTime: period.endTime }])));
   }
 
   function toggleAssignmentPeriod(periodId: string) {
-    const period = assignmentSchedule?.periods.find((item) => item.id === periodId);
     setAssignmentPeriodIds((current) => {
       const next = current.includes(periodId) ? current.filter((id) => id !== periodId) : [...current, periodId];
-      setAssignmentPeriodOverrides((overrides) => {
-        if (!next.includes(periodId)) {
+      if (!next.includes(periodId)) {
+        setAssignmentPeriodOverrides((overrides) => {
           const copy = { ...overrides };
           delete copy[periodId];
           return copy;
-        }
-        return { ...overrides, [periodId]: overrides[periodId] || (period ? defaultPeriodOverride(period) : { startTime: "", endTime: "", graceMinutes: 0 }) };
-      });
+        });
+      }
       return next;
     });
   }
 
-  function updateAssignmentPeriodOverride(periodId: string, field: keyof AssignmentPeriodOverride, value: string | number) {
+  function updateAssignmentPeriodTime(periodId: string, field: keyof PeriodOverride, value: string) {
     setAssignmentPeriodOverrides((current) => ({
       ...current,
-      [periodId]: {
-        ...(current[periodId] || { startTime: "", endTime: "", graceMinutes: 0 }),
-        [field]: value,
-      },
+      [periodId]: { ...(current[periodId] || { startTime: "", endTime: "" }), [field]: value },
     }));
   }
 
@@ -353,12 +319,12 @@ export function AttendanceSettingsPanel() {
     const schedule = (data?.schedules || []).find((item) => item.id === user.schedule_id);
     if (!schedule) return "—";
     const selected = Array.isArray(user.period_ids) && user.period_ids.length ? user.period_ids : schedule.periods.map((period) => period.id).filter(Boolean) as string[];
-    const names = schedule.periods
-      .filter((period) => period.id && selected.includes(period.id))
-      .map((period) => {
-        const override = user.period_overrides?.[String(period.id)] || defaultPeriodOverride(period);
-        return `${period.name} (${override.startTime} - ${override.endTime})`;
-      });
+    const names = schedule.periods.filter((period) => period.id && selected.includes(period.id)).map((period) => {
+      const override = user.period_overrides?.[period.id!];
+      const start = override?.startTime || period.startTime;
+      const end = override?.endTime || period.endTime;
+      return `${period.name} (${start} - ${end})`;
+    });
     return names.length ? names.join("، ") : "—";
   }
 
@@ -369,9 +335,11 @@ export function AttendanceSettingsPanel() {
     setAssignmentScheduleId(user.schedule_id || "");
     const schedule = (data?.schedules || []).find((item) => item.id === user.schedule_id);
     const fallbackPeriods = schedule?.periods.map((period) => period.id).filter(Boolean) as string[] | undefined;
-    const selectedIds = user.period_ids?.length ? user.period_ids : fallbackPeriods || [];
-    setAssignmentPeriodIds(selectedIds);
-    setAssignmentPeriodOverrides(selectedPeriodOverrides(schedule || null, selectedIds, user.period_overrides || {}));
+    const selectedPeriodIds = user.period_ids?.length ? user.period_ids : fallbackPeriods || [];
+    setAssignmentPeriodIds(selectedPeriodIds);
+    setAssignmentPeriodOverrides(Object.fromEntries((schedule?.periods || [])
+      .filter((period) => period.id && selectedPeriodIds.includes(period.id))
+      .map((period) => [period.id!, user.period_overrides?.[period.id!] || { startTime: period.startTime, endTime: period.endTime }])));
     setAssignmentBranchId(user.branch_id || "");
     setAssignmentWeeklyOffDay(user.weekly_off_day === null || user.weekly_off_day === undefined ? "" : String(user.weekly_off_day));
     window.setTimeout(() => document.getElementById("attendance-assignment-editor")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
@@ -568,28 +536,21 @@ export function AttendanceSettingsPanel() {
             <div className="attendance-period-selector">
               <span>فترات العمل لهذا التعيين</span>
               <div>
-                {assignmentSchedule.periods.map((period) => {
-                  const selected = Boolean(period.id && assignmentPeriodIds.includes(period.id));
-                  const override = period.id ? assignmentPeriodOverrides[period.id] || defaultPeriodOverride(period) : defaultPeriodOverride(period);
-                  const duration = minutesBetweenTimesLocal(override.startTime, override.endTime);
-                  return (
-                    <article key={period.id || period.name} className={`attendance-assignment-period-option${selected ? " selected" : ""}`}>
-                      <label className="attendance-period-check">
-                        <input type="checkbox" checked={selected} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
-                        <span><strong>{period.name}</strong><small>الافتراضي {period.startTime} - {period.endTime}</small></span>
-                      </label>
-                      {selected && period.id ? (
-                        <div className="attendance-period-time-edit">
-                          <label><span>من</span><input type="time" value={override.startTime} onChange={(event) => updateAssignmentPeriodOverride(period.id!, "startTime", event.target.value)} /></label>
-                          <label><span>إلى</span><input type="time" value={override.endTime} onChange={(event) => updateAssignmentPeriodOverride(period.id!, "endTime", event.target.value)} /></label>
-                          <span className="attendance-period-duration">المدة {formatAttendanceMinutes(duration)}</span>
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                {assignmentSchedule.periods.map((period) => (
+                  <label key={period.id || period.name} className={period.id && assignmentPeriodIds.includes(period.id) ? "selected" : ""}>
+                    <input type="checkbox" checked={Boolean(period.id && assignmentPeriodIds.includes(period.id))} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
+                    <strong>{period.name}</strong>
+                    <small>{period.startTime} - {period.endTime}</small>
+                    {period.id && assignmentPeriodIds.includes(period.id) ? (
+                      <span className="attendance-assignment-period-times">
+                        <label><span>من</span><input type="time" value={assignmentPeriodOverrides[period.id]?.startTime || period.startTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "startTime", event.target.value)} /></label>
+                        <label><span>إلى</span><input type="time" value={assignmentPeriodOverrides[period.id]?.endTime || period.endTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "endTime", event.target.value)} /></label>
+                      </span>
+                    ) : null}
+                  </label>
+                ))}
               </div>
-              <small>يمكنك تحديد مدة مختلفة لكل فترة لهذا اليوزر، بشرط أن تظل داخل نهاية الدوام الرسمية وألا تتداخل الفترات المختارة.</small>
+              <small>الفترات المتداخلة مسموحة داخل الجدول، لكن لا يمكن تعيين فترتين متداخلتين لنفس اليوزر.</small>
             </div>
           ) : null}
         </div>

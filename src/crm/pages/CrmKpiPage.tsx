@@ -341,26 +341,27 @@ export function CrmKpiPage() {
 
     const resultHtml = `<section class="box result-box"><h2>النتيجة النهائية</h2><div class="metrics result-metrics">${metric("السرعة", percent(result.speedRate), rateClass(result.speedRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}${metric("القيمة", percent(result.valueRate), rateClass(result.valueRate))}${metric("نسبة KPI", percent(result.finalRate), rateClass(result.finalRate))}${metric("إجمالي النقاط", Math.round(result.totalPoints))}${metric("التقييم", result.rating)}${metric("أيام العمل", result.workDays)}</div>${notes ? `<div class="notes"><strong>ملاحظات التقييم</strong><p>${safe(notes)}</p></div>` : ""}</section>`;
     const sections: Record<ModalTab, string> = { speed: speedHtml, efficiency: efficiencyHtml, discipline: disciplineHtml, value: valueHtml, result: resultHtml };
-    const fullReportPages = [
-      { html: resultHtml, className: "pdf-page-first" },
-      { html: speedHtml, className: "pdf-page" },
-      { html: efficiencyHtml, className: "pdf-page" },
-      { html: disciplineHtml, className: "pdf-page" },
-      { html: valueHtml, className: "pdf-page" },
-    ];
+    const reportHeader = `<header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(labels[target])}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header>`;
+    const page = (content: string, extraClass = "") => `<section class="pdf-page ${extraClass}">${reportHeader}<main>${content}</main></section>`;
     const body = target === "all"
-      ? fullReportPages.map((page) => `<div class="${page.className}">${page.html}</div>`).join("")
-      : sections[target];
+      ? [
+          page(resultHtml, "first-page"),
+          page(speedHtml),
+          page(efficiencyHtml),
+          page(disciplineHtml),
+          page(valueHtml),
+        ].join("")
+      : page(sections[target], "first-page");
 
     const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>
 @page{size:A4 landscape;margin:7mm}
 *{box-sizing:border-box}
-.pdf-page{break-before:page;page-break-before:always}
-.pdf-page-first{break-before:auto;page-break-before:auto}
 html,body{margin:0;padding:0;background:#fff}
 body{font-family:Tajawal,Arial,sans-serif;color:#35221c;font-size:10px;font-weight:700;line-height:1.45}
+.pdf-page{page-break-after:always;break-after:page;min-height:1px}
+.pdf-page:last-child{page-break-after:auto;break-after:auto}
 .report-head{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff;border-radius:11px;padding:10px 12px;margin:0 0 8px;break-inside:avoid;page-break-after:avoid}
 .report-title{display:flex;align-items:center;justify-content:space-between;gap:14px}
 .report-title h1{margin:0;font-size:17px}
@@ -386,7 +387,7 @@ th{background:#f8ece5;font-weight:900}
 .notes{margin-top:8px;padding:8px;border:1px solid #ead5ca;border-radius:8px;background:#fffaf7;break-inside:avoid}
 .notes p{white-space:pre-wrap;margin:4px 0 0}
 @media print{.report-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}.box{break-inside:auto;page-break-inside:auto}.metric,.notes,.two>table{break-inside:avoid;page-break-inside:avoid}}
-</style></head><body><header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(labels[target])}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header><main>${body}</main><script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
+</style></head><body>${body}<script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
     win.document.close();
   }
 

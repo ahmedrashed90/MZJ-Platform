@@ -33,6 +33,58 @@ function validTime(value: string) {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
+function normalizePeriodOverrides(value: unknown): Record<string, { startTime: string; endTime: string }> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, { startTime: string; endTime: string }> = {};
+  for (const [periodId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!validUuid(periodId) || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const startTime = clean(item.startTime).slice(0, 5);
+    const endTime = clean(item.endTime).slice(0, 5);
+    if (validTime(startTime) && validTime(endTime)) result[periodId] = { startTime, endTime };
+  }
+  return result;
+}
+
+function periodOverridesEqual(left: unknown, right: unknown) {
+  const normalize = (value: unknown) => Object.fromEntries(
+    Object.entries(normalizePeriodOverrides(value)).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
+function buildSelectedPeriodOverrides(periods: any[], requested: unknown, officialDayEnd: string) {
+  const input = normalizePeriodOverrides(requested);
+  const overrides: Record<string, { startTime: string; endTime: string }> = {};
+  const officialEndMinutes = timeMinutes(officialDayEnd);
+  for (const period of periods) {
+    const periodId = clean(period.id);
+    const custom = input[periodId];
+    const startTime = custom?.startTime || clean(period.start_time).slice(0, 5);
+    const endTime = custom?.endTime || clean(period.end_time).slice(0, 5);
+    if (!validTime(startTime) || !validTime(endTime)) throw new AttendanceError("INVALID_PERIOD_TIME", `تأكد من مدة الفترة: ${clean(period.name) || "فترة العمل"}`);
+    const startMinutes = timeMinutes(startTime);
+    const endMinutes = timeMinutes(endTime);
+    if (startMinutes >= endMinutes || startMinutes >= officialEndMinutes || endMinutes > officialEndMinutes) {
+      throw new AttendanceError("INVALID_ASSIGNMENT_PERIOD_TIME", `مدة ${clean(period.name) || "فترة العمل"} يجب أن تكون داخل الدوام الرسمي وتنتهي بعد بدايتها`);
+    }
+    overrides[periodId] = { startTime, endTime };
+  }
+  const intervals = Object.entries(overrides).map(([periodId, value]) => ({
+    periodId, start: timeMinutes(value.startTime), end: timeMinutes(value.endTime),
+  }));
+  for (let i = 0; i < intervals.length; i += 1) {
+    for (let j = i + 1; j < intervals.length; j += 1) {
+      if (Math.max(intervals[i].start, intervals[j].start) < Math.min(intervals[i].end, intervals[j].end)) {
+        const left = periods.find((item) => clean(item.id) === intervals[i].periodId);
+        const right = periods.find((item) => clean(item.id) === intervals[j].periodId);
+        throw new AttendanceError("OVERLAPPING_USER_PERIODS", `لا يمكن تعيين ${clean(left?.name) || "الفترة الأولى"} و ${clean(right?.name) || "الفترة الثانية"} لهذا اليوزر لأن المدد متداخلة`);
+      }
+    }
+  }
+  return overrides;
+}
+
 function parseWeeklyOffDay(value: unknown) {
   if (value === null || value === undefined || value === "") return null;
   const day = Number(value);
@@ -80,52 +132,10 @@ function sameIdList(a: unknown, b: unknown) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-type PeriodOverride = { startTime: string; endTime: string; graceMinutes: number };
-
-function normalizePeriodOverrides(value: unknown, periods: any[], officialDayEnd: string) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
-  const officialEndMinutes = timeMinutes(officialDayEnd);
-  const result: Record<string, PeriodOverride> = {};
-  for (const period of periods) {
-    const periodId = clean(period.id);
-    if (!validUuid(periodId)) continue;
-    const raw = source[periodId] && typeof source[periodId] === "object" ? source[periodId] : {};
-    const startTime = clean(raw.startTime || period.start_time).slice(0, 5);
-    const endTime = clean(raw.endTime || period.end_time).slice(0, 5);
-    if (!validTime(startTime) || !validTime(endTime)) {
-      throw new AttendanceError("INVALID_PERIOD_TIME", "تأكد من وقت بداية ونهاية كل فترة للتعيين");
-    }
-    const startMinutes = timeMinutes(startTime);
-    const endMinutes = timeMinutes(endTime);
-    if (endMinutes <= startMinutes) {
-      throw new AttendanceError("INVALID_PERIOD_TIME", "فترات التعيين يجب أن تبدأ وتنتهي في نفس يوم العمل");
-    }
-    if (startMinutes >= officialEndMinutes || endMinutes > officialEndMinutes) {
-      throw new AttendanceError("PERIOD_AFTER_OFFICIAL_END", `نهاية الدوام الرسمية ${officialDayEnd}. عدّل الفترة لتكون داخل وقت الدوام الرسمي`);
-    }
-    const graceMinutes = Math.max(0, Math.min(360, Math.floor(Number(raw.graceMinutes ?? period.grace_minutes) || 0)));
-    result[periodId] = { startTime, endTime, graceMinutes };
-  }
-  return result;
-}
-
-function samePeriodOverrides(a: unknown, b: Record<string, PeriodOverride>) {
-  const left = a && typeof a === "object" && !Array.isArray(a) ? a as Record<string, any> : {};
-  const keys = Array.from(new Set([...Object.keys(left), ...Object.keys(b)])).sort();
-  return keys.every((key) => {
-    const l = left[key] || {};
-    const r = b[key] || {};
-    return clean(l.startTime).slice(0, 5) === clean(r.startTime).slice(0, 5)
-      && clean(l.endTime).slice(0, 5) === clean(r.endTime).slice(0, 5)
-      && Number(l.graceMinutes || 0) === Number(r.graceMinutes || 0);
-  });
-}
-
-function assertSelectedPeriodsDoNotOverlap(periods: any[], overrides: Record<string, PeriodOverride> = {}) {
+function assertSelectedPeriodsDoNotOverlap(periods: any[]) {
   const intervals = periods.map((period) => {
-    const override = overrides[clean(period.id)] || {};
-    const startTime = clean(override.startTime || period.start_time).slice(0, 5);
-    const endTime = clean(override.endTime || period.end_time).slice(0, 5);
+    const startTime = clean(period.start_time).slice(0, 5);
+    const endTime = clean(period.end_time).slice(0, 5);
     const start = timeMinutes(startTime);
     let end = timeMinutes(endTime);
     if (end <= start) end += 1440;
@@ -234,8 +244,8 @@ async function adminBootstrap() {
         coalesce(ab.id::text,crm_branch.id,global_branch.id) as branch_id,
         coalesce(ab.name,crm_branch.name,global_branch.name,'—') as branch_name,
         a.id::text as assignment_id,a.schedule_id::text,a.weekly_off_day,
-        coalesce(a.period_ids,'{}'::uuid[]) as period_ids,
         coalesce(a.period_overrides,'{}'::jsonb) as period_overrides,
+        coalesce(a.period_ids,'{}'::uuid[]) as period_ids,
         s.name as schedule_name
       from core.users u
       left join lateral (
@@ -420,8 +430,10 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const periodIds = normalizedIdList(body.periodIds);
   const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
+  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1`;
+  const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
+  const requestedPeriodOverrides = normalizePeriodOverrides(body.periodOverrides);
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
-  let periodOverrides: Record<string, PeriodOverride> = {};
   if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
 
   if (scheduleId) {
@@ -432,17 +444,15 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
     if (!schedule) throw new AttendanceError("INVALID_SCHEDULE", "جدول العمل غير متاح");
     if (!periodIds.length) throw new AttendanceError("PERIODS_REQUIRED", "اختر فترة عمل واحدة على الأقل للموظف");
     const selectedPeriods = await sql<any[]>`
-      select id::text,name,start_time::text,end_time::text,grace_minutes,sort_order
+      select id::text,name,start_time::text,end_time::text,sort_order
       from core.attendance_periods
       where schedule_id=${scheduleId}::uuid and is_active=true and id::text in ${sql(periodIds)}
       order by sort_order,start_time
     `;
     if (selectedPeriods.length !== periodIds.length) throw new AttendanceError("INVALID_PERIOD_SELECTION", "بعض فترات العمل المختارة لا تتبع جدول العمل الحالي");
-    const [attendanceSettings] = await sql<{ official_day_end: string }[]>`
-      select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
-    `;
-    periodOverrides = normalizePeriodOverrides(body.periodOverrides, selectedPeriods, String(attendanceSettings?.official_day_end || "21:00").slice(0, 5));
-    assertSelectedPeriodsDoNotOverlap(selectedPeriods, periodOverrides);
+    assertSelectedPeriodsDoNotOverlap(selectedPeriods);
+    const assignmentPeriodOverrides = buildSelectedPeriodOverrides(selectedPeriods, requestedPeriodOverrides, officialDayEnd);
+    body.__assignmentPeriodOverrides = assignmentPeriodOverrides;
   }
   if (requestedBranchId) {
     const [branch] = await sql<any[]>`select id::text from core.branches where id=${requestedBranchId}::uuid and is_active=true`;
@@ -502,7 +512,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         && clean(current.schedule_id) === scheduleId
         && clean(current.branch_id) === clean(effectiveBranchId)
         && sameIdList(current.period_ids, periodIds)
-        && samePeriodOverrides(current.period_overrides, periodOverrides)
+        && periodOverridesEqual(current.period_overrides, body.__assignmentPeriodOverrides)
         && parseWeeklyOffDay(current.weekly_off_day) === weeklyOffDay;
       if (same) continue;
 
@@ -510,7 +520,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         await tx`
           update core.attendance_user_schedules
           set schedule_id=${scheduleId}::uuid,branch_id=${effectiveBranchId}::uuid,
-              period_ids=${periodIds}::uuid[],period_overrides=${JSON.stringify(periodOverrides)}::jsonb,weekly_off_day=${weeklyOffDay}
+              period_ids=${periodIds}::uuid[],period_overrides=${JSON.stringify(body.__assignmentPeriodOverrides || {})}::jsonb,weekly_off_day=${weeklyOffDay}
           where id=${current.id}::uuid
         `;
       } else {
@@ -523,7 +533,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         }
         await tx`
           insert into core.attendance_user_schedules(user_id,schedule_id,branch_id,period_ids,period_overrides,weekly_off_day,effective_from,created_by)
-          values(${userId}::uuid,${scheduleId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${JSON.stringify(periodOverrides)}::jsonb,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
+          values(${userId}::uuid,${scheduleId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${JSON.stringify(body.__assignmentPeriodOverrides || {})}::jsonb,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
       if (enforcementEnabled) await tx`delete from core.sessions where user_id=${userId}::uuid`;
@@ -752,6 +762,7 @@ async function reportData(request: VercelRequest) {
         return !legacySourceKey.startsWith("marketing:") && periodName !== "سجل التسويق السابق";
       });
       const assignedPeriodIds = normalizedIdList(assignment?.period_ids);
+      const assignmentOverrides = normalizePeriodOverrides(assignment?.period_overrides);
       const schedulePeriods = assignment
         ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active) && (!assignedPeriodIds.length || assignedPeriodIds.includes(clean(period.id))))
         : [];
@@ -759,18 +770,17 @@ async function reportData(request: VercelRequest) {
         && parseWeeklyOffDay(assignment.weekly_off_day) !== null
         && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
 
-      const assignmentOverrides = assignment?.period_overrides && typeof assignment.period_overrides === "object" ? assignment.period_overrides as Record<string, any> : {};
       const slots: any[] = schedulePeriods.map((period) => {
         const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
-        const override = assignmentOverrides[clean(period.id)] || {};
-        const startTime = clean(override.startTime || period.start_time).slice(0, 5);
-        const endTime = clean(override.endTime || period.end_time).slice(0, 5);
+        const override = assignmentOverrides[clean(period.id)];
+        const startTime = override?.startTime || clean(period.start_time).slice(0, 5);
+        const configuredEndTime = override?.endTime || clean(period.end_time).slice(0, 5);
         return {
           id: period.id,
           name: clean(period.name) || "فترة العمل",
           startTime,
-          endTime: timeMinutes(endTime) > officialDayEndMinutes ? officialDayEnd : endTime,
-          graceMinutes: Number(override.graceMinutes ?? period.grace_minutes ?? 0),
+          endTime: timeMinutes(configuredEndTime) > officialDayEndMinutes ? officialDayEnd : configuredEndTime,
+          graceMinutes: Number(period.grace_minutes || 0),
           sortOrder: Number(period.sort_order || 0),
           record,
         };

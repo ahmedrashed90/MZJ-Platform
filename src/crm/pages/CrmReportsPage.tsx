@@ -45,6 +45,11 @@ type ReportColumn = {
 };
 
 const emptyFilters = { from: "", to: "", department: "", branch: "", agent: "", callCenter: "", source: "", q: "" };
+
+function currentReportMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
 const summaryCards = {
   marketing: { label: "جودة التسويق", field: "marketingQuality", suffix: "%" },
   total: { label: "إجمالي العملاء", field: "total", suffix: "" },
@@ -68,14 +73,6 @@ function monthDateRange(value: string) {
   if (!Number.isInteger(year) || month < 1 || month > 12) return null;
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return { from: `${value}-01`, to: `${value}-${String(lastDay).padStart(2, "0")}` };
-}
-
-function currentReportMonth() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Riyadh",
-    year: "numeric",
-    month: "2-digit",
-  }).format(new Date());
 }
 
 function summaryMetricPercentage(key: SummaryCardKey, value: number, total: number) {
@@ -167,11 +164,11 @@ function reportExportRows(section: ReportSection) {
 }
 
 export function CrmReportsPage() {
-  const initialReportMonth = currentReportMonth();
-  const initialReportRange = monthDateRange(initialReportMonth) || { from: "", to: "" };
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [filters, setFilters] = useState({ ...emptyFilters, from: initialReportRange.from, to: initialReportRange.to });
-  const [selectedMonth, setSelectedMonth] = useState(initialReportMonth);
+  const defaultMonth = currentReportMonth();
+  const defaultMonthRange = monthDateRange(defaultMonth)!;
+  const [filters, setFilters] = useState({ ...emptyFilters, from: defaultMonthRange.from, to: defaultMonthRange.to });
+  const [selectedMonth, setSelectedMonth] = useState(defaultMonth);
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
@@ -278,7 +275,7 @@ export function CrmReportsPage() {
 
   function clearReportFilters() {
     const month = currentReportMonth();
-    const range = monthDateRange(month) || { from: "", to: "" };
+    const range = monthDateRange(month)!;
     setSelectedMonth(month);
     setFilters({ ...emptyFilters, from: range.from, to: range.to });
   }
