@@ -117,9 +117,6 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
-    settings as (
-      select official_day_end from core.attendance_settings where id=1
-    ),
     candidates as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
@@ -128,7 +125,6 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         coalesce(nullif(a.period_overrides -> p.id::text ->> 'startTime',''), p.start_time::text) as start_time,
         coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text) as end_time,
         p.grace_minutes,
-        st.official_day_end,
         a.effective_from,a.effective_to,
         case
           when coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time
@@ -138,7 +134,6 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         end as work_date,
         c.current_at
       from clock c
-      cross join settings st
       join core.attendance_user_schedules a
         on a.user_id=${userId}::uuid
        and a.effective_from <= c.local_date
@@ -150,10 +145,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
     timed as (
       select *,
         ((work_date + start_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
-        least(
-          (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}),
-          ((work_date + official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})
-        ) as scheduled_end_at
+        (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
       from candidates
       where effective_from <= work_date and (effective_to is null or effective_to >= work_date)
         and (weekly_off_day is null or extract(dow from work_date)::int <> weekly_off_day)
@@ -202,17 +194,15 @@ async function closeExpiredAttendanceForUser(userId: string) {
   const closed = await sql<{ id: string }[]>`
     update core.attendance_records r
     set
-      check_out=least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
+      check_out=r.scheduled_end_at,
       checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
+      work_minutes=greatest(0,floor(extract(epoch from (r.scheduled_end_at-r.check_in))/60))::int,
       updated_at=now()
-    from core.attendance_settings st
-    where st.id=1
-      and r.user_id=${userId}::uuid
+    where r.user_id=${userId}::uuid
       and r.check_in is not null
       and r.check_out is null
       and r.scheduled_end_at is not null
-      and least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})) <= now()
+      and r.scheduled_end_at <= now()
     returning r.id::text
   `;
   return closed.length;
@@ -322,21 +312,7 @@ export async function requireAttendanceForLogin(
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
 
   if (!state.activePeriod) {
-    if (!enforcementEnabled || state.afterOfficialDayEnd) return { enforced: false, checkedIn: false, state };
-    if (state.isDayOff) {
-      throw new AttendanceError(
-        "WEEKLY_DAY_OFF",
-        "اليوم هو يوم الإجازة الأسبوعية المحدد لك",
-        403,
-        { scheduleName: state.scheduleName, weeklyOffDay: state.weeklyOffDay },
-      );
-    }
-    throw new AttendanceError(
-      "OUTSIDE_WORK_PERIOD",
-      state.scheduleName ? `لا توجد فترة عمل فعالة الآن ضمن جدول ${state.scheduleName}` : "لا توجد فترة عمل فعالة الآن",
-      403,
-      { scheduleName: state.scheduleName },
-    );
+    return { enforced: false, checkedIn: false, state };
   }
 
   const attendanceDetails = {
@@ -437,17 +413,6 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
-    settings as (select official_day_end from core.attendance_settings where id=1),
-    current_assignment as (
-      select a.id
-      from clock c
-      join core.attendance_user_schedules a
-        on a.user_id=${userId}::uuid
-       and a.effective_from <= c.local_date
-       and (a.effective_to is null or a.effective_to >= c.local_date)
-      join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
-      limit 1
-    ),
     period_candidates as (
       select
         a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
@@ -482,11 +447,11 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
         and (pc.weekly_off_day is null or extract(dow from pc.work_date)::int <> pc.weekly_off_day)
         and pc.current_at >= ((pc.work_date + pc.start_time) at time zone ${ATTENDANCE_TIME_ZONE})
         and pc.current_at < (((pc.work_date + case when pc.end_time <= pc.start_time then 1 else 0 end) + pc.end_time) at time zone ${ATTENDANCE_TIME_ZONE})
+      order by pc.period_id
       limit 1
     )
     select case
-      when (select local_time from clock) >= (select official_day_end from settings) then true
-      when not exists(select 1 from current_assignment) and not exists(select 1 from active_period) then true
+      when not exists(select 1 from active_period) then true
       else exists(
         select 1
         from active_period ap
@@ -512,12 +477,11 @@ export async function checkoutCurrentAttendance(
     const [row] = await sql<any[]>`
       update core.attendance_records r
       set
-        check_out=least(now(),r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
+        check_out=least(now(),r.scheduled_end_at),
         checkout_source='manual',
-        work_minutes=greatest(0,floor(extract(epoch from (least(now(),r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
+        work_minutes=greatest(0,floor(extract(epoch from (least(now(),r.scheduled_end_at)-r.check_in))/60))::int,
         updated_at=now()
-      from core.attendance_settings st
-      where st.id=1 and r.id=(
+      where r.id=(
         select id
         from core.attendance_records
         where user_id=${userId}::uuid and check_in is not null and check_out is null
@@ -544,28 +508,21 @@ export async function runAttendanceTick() {
   const closed = await sql<{ user_id: string }[]>`
     update core.attendance_records r
     set
-      check_out=least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})),
+      check_out=r.scheduled_end_at,
       checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE}))-r.check_in))/60))::int,
+      work_minutes=greatest(0,floor(extract(epoch from (r.scheduled_end_at-r.check_in))/60))::int,
       updated_at=now()
-    from core.attendance_settings st
-    where st.id=1
-      and r.check_in is not null
+    where r.check_in is not null
       and r.check_out is null
       and r.scheduled_end_at is not null
-      and least(r.scheduled_end_at,((r.work_date + st.official_day_end) at time zone ${ATTENDANCE_TIME_ZONE})) <= now()
+      and r.scheduled_end_at <= now()
     returning r.user_id::text
   `;
-  const closedUserIds = [...new Set(closed.map((row) => String(row.user_id)).filter(Boolean))];
-
-  if (enforcementEnabled && closedUserIds.length) {
-    await sql`delete from core.sessions where user_id::text in ${sql(closedUserIds)}`;
-  }
 
   return {
     ok: true,
     enforcementEnabled,
     closedRecords: closed.length,
-    forcedLogoutUsers: enforcementEnabled ? closedUserIds.length : 0,
+    forcedLogoutUsers: 0,
   };
 }

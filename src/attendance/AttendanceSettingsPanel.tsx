@@ -471,7 +471,7 @@ export function AttendanceSettingsPanel() {
           <div>
             <strong>{data?.settings?.enforcementEnabled ? "الإلزام مفعل" : "الوضع الآمن مفعل"}</strong>
             <span>{data?.settings?.enforcementEnabled
-              ? "اليوزر المعيّن له جدول يجب أن يسجل الحضور داخل فترته، والانصراف والخروج التلقائي يعملان عند نهاية الفترة."
+              ? "اليوزر المعيّن له جدول يجب أن يسجل الحضور داخل فترته، ويُسجل الانصراف تلقائيًا عند نهاية الفترة بينما يظل استخدام المنصة متاحًا خارج فترات الدوام."
               : "كل اليوزرات يستطيعون تسجيل الدخول حتى لو لم تكتمل الجداول. لا يتم منع الدخول أو إنهاء الجلسات تلقائيًا بسبب الحضور."}</span>
           </div>
           <button
@@ -536,19 +536,24 @@ export function AttendanceSettingsPanel() {
             <div className="attendance-period-selector">
               <span>فترات العمل لهذا التعيين</span>
               <div>
-                {assignmentSchedule.periods.map((period) => (
-                  <label key={period.id || period.name} className={period.id && assignmentPeriodIds.includes(period.id) ? "selected" : ""}>
-                    <input type="checkbox" checked={Boolean(period.id && assignmentPeriodIds.includes(period.id))} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
-                    <strong>{period.name}</strong>
-                    <small>{period.startTime} - {period.endTime}</small>
-                    {period.id && assignmentPeriodIds.includes(period.id) ? (
-                      <span className="attendance-assignment-period-times">
-                        <label><span>من</span><input type="time" value={assignmentPeriodOverrides[period.id]?.startTime || period.startTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "startTime", event.target.value)} /></label>
-                        <label><span>إلى</span><input type="time" value={assignmentPeriodOverrides[period.id]?.endTime || period.endTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "endTime", event.target.value)} /></label>
-                      </span>
-                    ) : null}
-                  </label>
-                ))}
+                {assignmentSchedule.periods.map((period) => {
+                  const selected = Boolean(period.id && assignmentPeriodIds.includes(period.id));
+                  return (
+                    <div key={period.id || period.name} className={`attendance-period-option ${selected ? "selected" : ""}`}>
+                      <label className="attendance-period-choice">
+                        <input type="checkbox" checked={selected} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
+                        <strong>{period.name}</strong>
+                        <small>{period.startTime} - {period.endTime}</small>
+                      </label>
+                      {period.id && selected ? (
+                        <span className="attendance-assignment-period-times">
+                          <label><span>من</span><input type="time" value={assignmentPeriodOverrides[period.id]?.startTime || period.startTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "startTime", event.target.value)} /></label>
+                          <label><span>إلى</span><input type="time" value={assignmentPeriodOverrides[period.id]?.endTime || period.endTime} onChange={(event) => updateAssignmentPeriodTime(period.id!, "endTime", event.target.value)} /></label>
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
               <small>الفترات المتداخلة مسموحة داخل الجدول، لكن لا يمكن تعيين فترتين متداخلتين لنفس اليوزر.</small>
             </div>

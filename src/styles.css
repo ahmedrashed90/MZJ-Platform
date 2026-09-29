@@ -8660,32 +8660,37 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   flex-wrap: wrap;
   gap: 8px;
 }
-.attendance-period-selector label {
+.attendance-period-option {
   min-width: 170px;
   display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 7px;
-  row-gap: 2px;
+  gap: 0;
   align-items: center;
   padding: 9px 10px;
   border: 1px solid #dfd2cc;
   border-radius: 10px;
   background: #fff;
-  cursor: pointer;
 }
-.attendance-period-selector label.selected {
+.attendance-period-option.selected {
   border-color: #a96d58;
   background: #fff4ef;
   box-shadow: inset 0 0 0 1px rgba(108,51,41,.08);
 }
-.attendance-period-selector label input {
+.attendance-period-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 7px;
+  row-gap: 2px;
+  align-items: center;
+  cursor: pointer;
+}
+.attendance-period-choice input {
   grid-row: 1 / span 2;
 }
-.attendance-period-selector label strong {
+.attendance-period-choice strong {
   color: #54372f;
   font-size: 11px;
 }
-.attendance-period-selector label small,
+.attendance-period-choice small,
 .attendance-period-selector > small {
   color: #92776d;
   font-size: 9px;

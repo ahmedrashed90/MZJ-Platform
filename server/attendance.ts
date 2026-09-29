@@ -53,10 +53,9 @@ function periodOverridesEqual(left: unknown, right: unknown) {
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
-function buildSelectedPeriodOverrides(periods: any[], requested: unknown, officialDayEnd: string) {
+function buildSelectedPeriodOverrides(periods: any[], requested: unknown) {
   const input = normalizePeriodOverrides(requested);
   const overrides: Record<string, { startTime: string; endTime: string }> = {};
-  const officialEndMinutes = timeMinutes(officialDayEnd);
   for (const period of periods) {
     const periodId = clean(period.id);
     const custom = input[periodId];
@@ -65,8 +64,8 @@ function buildSelectedPeriodOverrides(periods: any[], requested: unknown, offici
     if (!validTime(startTime) || !validTime(endTime)) throw new AttendanceError("INVALID_PERIOD_TIME", `تأكد من مدة الفترة: ${clean(period.name) || "فترة العمل"}`);
     const startMinutes = timeMinutes(startTime);
     const endMinutes = timeMinutes(endTime);
-    if (startMinutes >= endMinutes || startMinutes >= officialEndMinutes || endMinutes > officialEndMinutes) {
-      throw new AttendanceError("INVALID_ASSIGNMENT_PERIOD_TIME", `مدة ${clean(period.name) || "فترة العمل"} يجب أن تكون داخل الدوام الرسمي وتنتهي بعد بدايتها`);
+    if (startMinutes >= endMinutes) {
+      throw new AttendanceError("INVALID_ASSIGNMENT_PERIOD_TIME", `مدة ${clean(period.name) || "فترة العمل"} يجب أن تنتهي بعد بدايتها`);
     }
     overrides[periodId] = { startTime, endTime };
   }
@@ -96,7 +95,7 @@ function timeMinutes(value: string) {
   return hours * 60 + minutes;
 }
 
-function validatePeriods(periods: any[], officialDayEnd = "21:00") {
+function validatePeriods(periods: any[]) {
   if (!periods.length) throw new AttendanceError("SCHEDULE_PERIODS_REQUIRED", "أضف فترة عمل واحدة على الأقل");
   return periods.map((period, index) => {
     const startTime = clean(period.startTime).slice(0, 5);
@@ -105,11 +104,7 @@ function validatePeriods(periods: any[], officialDayEnd = "21:00") {
     if (startTime === endTime) throw new AttendanceError("INVALID_PERIOD_TIME", "وقت بداية الفترة لا يمكن أن يساوي وقت نهايتها");
     const startMinutes = timeMinutes(startTime);
     const endMinutes = timeMinutes(endTime);
-    const officialEndMinutes = timeMinutes(officialDayEnd);
     if (endMinutes <= startMinutes) throw new AttendanceError("INVALID_PERIOD_TIME", "فترات الدوام يجب أن تبدأ وتنتهي في نفس يوم العمل");
-    if (startMinutes >= officialEndMinutes || endMinutes > officialEndMinutes) {
-      throw new AttendanceError("PERIOD_AFTER_OFFICIAL_END", `نهاية الدوام الرسمية ${officialDayEnd}. عدّل الفترة لتكون داخل وقت الدوام الرسمي`);
-    }
     const graceMinutes = Math.max(0, Math.min(360, Math.floor(Number(period.graceMinutes) || 0)));
     return {
       id: validUuid(clean(period.id)) ? clean(period.id) : "",
@@ -378,11 +373,7 @@ async function saveSchedule(body: Record<string, any>, adminId: string) {
   const id = clean(body.id);
   const name = clean(body.name);
   if (!name) throw new AttendanceError("SCHEDULE_NAME_REQUIRED", "اكتب اسم جدول العمل");
-  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`
-    select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
-  `;
-  const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
-  const periods = validatePeriods(Array.isArray(body.periods) ? body.periods : [], officialDayEnd);
+  const periods = validatePeriods(Array.isArray(body.periods) ? body.periods : []);
 
   return sql.begin(async (tx) => {
     let scheduleId = id;
@@ -457,8 +448,6 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const periodIds = normalizedIdList(body.periodIds);
   const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
-  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1`;
-  const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
   const requestedPeriodOverrides = normalizePeriodOverrides(body.periodOverrides);
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
   if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
@@ -477,8 +466,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       order by sort_order,start_time
     `;
     if (selectedPeriods.length !== periodIds.length) throw new AttendanceError("INVALID_PERIOD_SELECTION", "بعض فترات العمل المختارة لا تتبع جدول العمل الحالي");
-    assertSelectedPeriodsDoNotOverlap(selectedPeriods);
-    const assignmentPeriodOverrides = buildSelectedPeriodOverrides(selectedPeriods, requestedPeriodOverrides, officialDayEnd);
+    const assignmentPeriodOverrides = buildSelectedPeriodOverrides(selectedPeriods, requestedPeriodOverrides);
     body.__assignmentPeriodOverrides = assignmentPeriodOverrides;
   }
   if (requestedBranchId) {
