@@ -57,14 +57,40 @@ function periodOverridesEqual(left: unknown, right: unknown) {
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
+function resolveAssignedPeriodTimes(period: any, custom?: { startTime: string; endTime: string } | null) {
+  const baseStartTime = clean(period?.start_time ?? period?.startTime).slice(0, 5);
+  const baseEndTime = clean(period?.end_time ?? period?.endTime).slice(0, 5);
+  if (!validTime(baseStartTime) || !validTime(baseEndTime)) {
+    return { startTime: baseStartTime, endTime: baseEndTime };
+  }
+
+  // الصباحية والمسائية مواعيدهما ثابتة من جدول العمل.
+  if (baseEndTime === "12:00" || baseEndTime === "21:00") {
+    return { startTime: baseStartTime, endTime: baseEndTime };
+  }
+
+  const requestedStart = validTime(clean(custom?.startTime).slice(0, 5)) ? clean(custom?.startTime).slice(0, 5) : baseStartTime;
+  const requestedEnd = validTime(clean(custom?.endTime).slice(0, 5)) ? clean(custom?.endTime).slice(0, 5) : baseEndTime;
+
+  // الفترة الواحدة أساسها حتى 22:00، ويمكن تخصيص اليوزر لينتهي 21:00 أو 22:00 فقط.
+  if (baseEndTime === "22:00") {
+    return {
+      startTime: requestedStart,
+      endTime: requestedEnd === "21:00" ? "21:00" : "22:00",
+    };
+  }
+
+  return { startTime: requestedStart, endTime: requestedEnd };
+}
+
 function buildSelectedPeriodOverrides(periods: any[], requested: unknown) {
   const input = normalizePeriodOverrides(requested);
   const overrides: Record<string, { startTime: string; endTime: string }> = {};
   for (const period of periods) {
     const periodId = clean(period.id);
-    const custom = input[periodId];
-    const startTime = custom?.startTime || clean(period.start_time).slice(0, 5);
-    const endTime = custom?.endTime || clean(period.end_time).slice(0, 5);
+    const resolved = resolveAssignedPeriodTimes(period, input[periodId]);
+    const startTime = resolved.startTime;
+    const endTime = resolved.endTime;
     if (!validTime(startTime) || !validTime(endTime)) throw new AttendanceError("INVALID_PERIOD_TIME", `تأكد من مدة الفترة: ${clean(period.name) || "فترة العمل"}`);
     const startMinutes = timeMinutes(startTime);
     const endMinutes = timeMinutes(endTime);
@@ -334,12 +360,22 @@ async function adminBootstrap() {
       officialDayEnd: String(settings?.official_day_end || "21:00").slice(0, 5),
     },
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
-    users: users.map((user) => ({
-      ...user,
-      period_overrides: normalizePeriodOverrides(user.period_overrides),
-      device_verification_required: deviceSnapshot.policyMap.get(String(user.id)) === true,
-      devices: deviceSnapshot.deviceMap.get(String(user.id)) || [],
-    })),
+    users: users.map((user) => {
+      const rawOverrides = normalizePeriodOverrides(user.period_overrides);
+      const selectedIds = normalizedIdList(user.period_ids);
+      const assignedPeriods = (periodMap.get(String(user.schedule_id)) || [])
+        .filter((period) => !selectedIds.length || selectedIds.includes(clean(period.id)));
+      const periodOverrides = Object.fromEntries(assignedPeriods.map((period) => [
+        clean(period.id),
+        resolveAssignedPeriodTimes(period, rawOverrides[clean(period.id)]),
+      ]));
+      return {
+        ...user,
+        period_overrides: periodOverrides,
+        device_verification_required: deviceSnapshot.policyMap.get(String(user.id)) === true,
+        devices: deviceSnapshot.deviceMap.get(String(user.id)) || [],
+      };
+    }),
     branches,
   };
 }
@@ -809,10 +845,11 @@ async function reportData(request: VercelRequest) {
       const slots: any[] = schedulePeriods.map((period) => {
         const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
         const override = assignmentOverrides[clean(period.id)];
+        const resolvedTimes = resolveAssignedPeriodTimes(period, override);
         const recordStartTime = report24HourTime(record?.scheduled_start_at);
         const recordEndTime = report24HourTime(record?.scheduled_end_at);
-        const startTime = override?.startTime || recordStartTime || clean(period.start_time).slice(0, 5);
-        const configuredEndTime = override?.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
+        const startTime = resolvedTimes.startTime || recordStartTime || clean(period.start_time).slice(0, 5);
+        const configuredEndTime = resolvedTimes.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
         return {
           id: period.id,
           name: clean(period.name) || "فترة العمل",

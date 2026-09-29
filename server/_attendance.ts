@@ -117,22 +117,38 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
-    candidates as (
+    candidates_base as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
         a.weekly_off_day,a.period_ids,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
-        coalesce(nullif(a.period_overrides -> p.id::text ->> 'startTime',''), p.start_time::text) as start_time,
-        coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text) as end_time,
-        p.grace_minutes,
-        a.effective_from,a.effective_to,
         case
-          when coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time
-             <= coalesce(nullif(a.period_overrides -> p.id::text ->> 'startTime',''), p.start_time::text)::time
-             and c.local_time < coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time then c.local_date - 1
-          else c.local_date
-        end as work_date,
-        c.current_at
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::text
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )
+        end as start_time,
+        case
+          when p.end_time::time='12:00'::time then '12:00'
+          when p.end_time::time='21:00'::time then '21:00'
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'
+            else '22:00'
+          end
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )
+        end as end_time,
+        p.grace_minutes,
+        a.effective_from,a.effective_to,c.local_date,c.local_time,c.current_at
       from clock c
       join core.attendance_user_schedules a
         on a.user_id=${userId}::uuid
@@ -141,6 +157,14 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
        and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
+    ),
+    candidates as (
+      select *,
+        case
+          when end_time::time <= start_time::time and local_time < end_time::time then local_date - 1
+          else local_date
+        end as work_date
+      from candidates_base
     ),
     timed as (
       select *,
@@ -189,28 +213,65 @@ async function recordForPeriod(userId: string, period: ActiveAttendancePeriod) {
   return row || null;
 }
 
-async function closeExpiredAttendanceForUser(userId: string) {
+async function reconcileAttendanceForUser(userId: string) {
   const sql = getSql();
-  const closed = await sql<{ id: string }[]>`
+  const reconciled = await sql<{ id: string }[]>`
+    with targets as (
+      select
+        r.id,r.check_in,
+        coalesce(
+          ((r.work_date + (case
+            when p.end_time::time='12:00'::time then '12:00'::time
+            when p.end_time::time='21:00'::time then '21:00'::time
+            when p.end_time::time='22:00'::time then case
+              when coalesce(
+                nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+                nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+                p.end_time::text
+              )::time='21:00'::time then '21:00'::time
+              else '22:00'::time
+            end
+            else coalesce(
+              nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time
+          end)) at time zone ${ATTENDANCE_TIME_ZONE}),
+          r.scheduled_end_at
+        ) as expected_end_at
+      from core.attendance_records r
+      left join core.attendance_user_schedules a on a.id=r.assignment_id
+      left join core.attendance_periods p on p.id=r.period_id
+      where r.user_id=${userId}::uuid
+        and r.check_in is not null
+        and (r.check_out is null or (r.checkout_source='auto' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date))
+    )
     update core.attendance_records r
     set
-      check_out=r.scheduled_end_at,
-      checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (r.scheduled_end_at-r.check_in))/60))::int,
+      scheduled_end_at=t.expected_end_at,
+      check_out=case when t.expected_end_at <= now() then t.expected_end_at else null end,
+      checkout_source=case when t.expected_end_at <= now() then 'auto' else null end,
+      work_minutes=case
+        when t.expected_end_at <= now() then greatest(0,floor(extract(epoch from (t.expected_end_at-r.check_in))/60))::int
+        else 0
+      end,
       updated_at=now()
-    where r.user_id=${userId}::uuid
-      and r.check_in is not null
-      and r.check_out is null
-      and r.scheduled_end_at is not null
-      and r.scheduled_end_at <= now()
+    from targets t
+    where r.id=t.id
+      and t.expected_end_at is not null
+      and (
+        r.scheduled_end_at is distinct from t.expected_end_at
+        or (t.expected_end_at <= now() and r.check_out is null)
+        or (t.expected_end_at > now() and r.checkout_source='auto' and r.check_out is not null)
+      )
     returning r.id::text
   `;
-  return closed.length;
+  return reconciled.length;
 }
 
 export async function getLoginAttendanceState(userId: string) {
   await ensureAttendanceSchema();
-  await closeExpiredAttendanceForUser(userId);
+  await reconcileAttendanceForUser(userId);
   const [activePeriod, officialDay] = await Promise.all([
     getActiveAttendancePeriod(userId),
     officialAttendanceDayState(),
@@ -413,18 +474,35 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
         (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
     ),
-    period_candidates as (
+    period_candidates_base as (
       select
         a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
-        coalesce(nullif(a.period_overrides -> p.id::text ->> 'startTime',''), p.start_time::text)::time as start_time,
-        coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time as end_time,
         case
-          when coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time
-             <= coalesce(nullif(a.period_overrides -> p.id::text ->> 'startTime',''), p.start_time::text)::time
-             and c.local_time < coalesce(nullif(a.period_overrides -> p.id::text ->> 'endTime',''), p.end_time::text)::time then c.local_date - 1
-          else c.local_date
-        end as work_date,
-        c.current_at
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
+        end as start_time,
+        case
+          when p.end_time::time='12:00'::time then '12:00'::time
+          when p.end_time::time='21:00'::time then '21:00'::time
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'::time
+            else '22:00'::time
+          end
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
+        end as end_time,
+        c.local_date,c.local_time,c.current_at
       from clock c
       join core.attendance_user_schedules a
         on a.user_id=${userId}::uuid
@@ -433,6 +511,14 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
        and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
+    ),
+    period_candidates as (
+      select *,
+        case
+          when end_time <= start_time and local_time < end_time then local_date - 1
+          else local_date
+        end as work_date
+      from period_candidates_base
     ),
     active_period as (
       select pc.*
@@ -505,24 +591,61 @@ export async function runAttendanceTick() {
   await ensureAttendanceSchema();
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
   const sql = getSql();
-  const closed = await sql<{ user_id: string }[]>`
+  const reconciled = await sql<{ user_id: string }[]>`
+    with targets as (
+      select
+        r.id,r.check_in,
+        coalesce(
+          ((r.work_date + (case
+            when p.end_time::time='12:00'::time then '12:00'::time
+            when p.end_time::time='21:00'::time then '21:00'::time
+            when p.end_time::time='22:00'::time then case
+              when coalesce(
+                nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+                nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+                p.end_time::text
+              )::time='21:00'::time then '21:00'::time
+              else '22:00'::time
+            end
+            else coalesce(
+              nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time
+          end)) at time zone ${ATTENDANCE_TIME_ZONE}),
+          r.scheduled_end_at
+        ) as expected_end_at
+      from core.attendance_records r
+      left join core.attendance_user_schedules a on a.id=r.assignment_id
+      left join core.attendance_periods p on p.id=r.period_id
+      where r.check_in is not null
+        and (r.check_out is null or (r.checkout_source='auto' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date))
+    )
     update core.attendance_records r
     set
-      check_out=r.scheduled_end_at,
-      checkout_source='auto',
-      work_minutes=greatest(0,floor(extract(epoch from (r.scheduled_end_at-r.check_in))/60))::int,
+      scheduled_end_at=t.expected_end_at,
+      check_out=case when t.expected_end_at <= now() then t.expected_end_at else null end,
+      checkout_source=case when t.expected_end_at <= now() then 'auto' else null end,
+      work_minutes=case
+        when t.expected_end_at <= now() then greatest(0,floor(extract(epoch from (t.expected_end_at-r.check_in))/60))::int
+        else 0
+      end,
       updated_at=now()
-    where r.check_in is not null
-      and r.check_out is null
-      and r.scheduled_end_at is not null
-      and r.scheduled_end_at <= now()
+    from targets t
+    where r.id=t.id
+      and t.expected_end_at is not null
+      and (
+        r.scheduled_end_at is distinct from t.expected_end_at
+        or (t.expected_end_at <= now() and r.check_out is null)
+        or (t.expected_end_at > now() and r.checkout_source='auto' and r.check_out is not null)
+      )
     returning r.user_id::text
   `;
 
   return {
     ok: true,
     enforcementEnabled,
-    closedRecords: closed.length,
+    closedRecords: reconciled.length,
     forcedLogoutUsers: 0,
   };
 }
