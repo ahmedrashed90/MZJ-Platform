@@ -34,13 +34,17 @@ function validTime(value: string) {
 }
 
 function normalizePeriodOverrides(value: unknown): Record<string, { startTime: string; endTime: string }> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  let source = value;
+  if (typeof source === "string") {
+    try { source = JSON.parse(source); } catch { return {}; }
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
   const result: Record<string, { startTime: string; endTime: string }> = {};
-  for (const [periodId, raw] of Object.entries(value as Record<string, unknown>)) {
+  for (const [periodId, raw] of Object.entries(source as Record<string, unknown>)) {
     if (!validUuid(periodId) || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const item = raw as Record<string, unknown>;
-    const startTime = clean(item.startTime).slice(0, 5);
-    const endTime = clean(item.endTime).slice(0, 5);
+    const startTime = clean(item.startTime ?? item.start_time).slice(0, 5);
+    const endTime = clean(item.endTime ?? item.end_time).slice(0, 5);
     if (validTime(startTime) && validTime(endTime)) result[periodId] = { startTime, endTime };
   }
   return result;
@@ -229,6 +233,12 @@ function reportTimeMinutesFromTimestamp(value: unknown) {
   return part("hour") * 60 + part("minute");
 }
 
+function report24HourTime(value: unknown) {
+  const minutes = reportTimeMinutesFromTimestamp(value);
+  if (minutes === null) return "";
+  return `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
 function reportDelayMinutes(checkIn: unknown, workDate: string, periodStartTime: string, graceMinutes: number, fallback = 0) {
   if (!checkIn || !validDate(workDate) || !validTime(periodStartTime)) return Math.max(0, Math.floor(Number(fallback) || 0));
   const checkInDate = reportDateFromTimestamp(checkIn);
@@ -326,6 +336,7 @@ async function adminBootstrap() {
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
     users: users.map((user) => ({
       ...user,
+      period_overrides: normalizePeriodOverrides(user.period_overrides),
       device_verification_required: deviceSnapshot.policyMap.get(String(user.id)) === true,
       devices: deviceSnapshot.deviceMap.get(String(user.id)) || [],
     })),
@@ -686,14 +697,14 @@ async function reportData(request: VercelRequest) {
       select
         a.id::text,a.user_id::text,a.schedule_id::text,a.branch_id::text,
         coalesce(a.period_ids,'{}'::uuid[]) as period_ids,coalesce(a.period_overrides,'{}'::jsonb) as period_overrides,a.weekly_off_day,
-        a.effective_from::text,a.effective_to::text,s.name as schedule_name,b.name as branch_name
+        a.effective_from::text,a.effective_to::text,a.created_at::text,s.name as schedule_name,b.name as branch_name
       from core.attendance_user_schedules a
       join core.attendance_schedules s on s.id=a.schedule_id
       left join core.branches b on b.id=a.branch_id
       where a.user_id::text in ${sql(userIds)}
         and a.effective_from <= ${to}::date
         and (a.effective_to is null or a.effective_to >= ${from}::date)
-      order by a.user_id,a.effective_from desc
+      order by a.user_id,a.effective_from desc,a.created_at desc
     `,
     sql<any[]>`
       select id::text,schedule_id::text,name,start_time::text,end_time::text,grace_minutes,sort_order,is_active
@@ -721,7 +732,17 @@ async function reportData(request: VercelRequest) {
   for (const assignment of assignments) {
     const key = String(assignment.user_id);
     if (!assignmentMap.has(key)) assignmentMap.set(key, []);
-    assignmentMap.get(key)!.push(assignment);
+    assignmentMap.get(key)!.push({
+      ...assignment,
+      period_overrides: normalizePeriodOverrides(assignment.period_overrides),
+    });
+  }
+  for (const userAssignments of assignmentMap.values()) {
+    userAssignments.sort((left, right) => {
+      const effectiveFromDiff = dateOnlyValue(right.effective_from).localeCompare(dateOnlyValue(left.effective_from));
+      if (effectiveFromDiff) return effectiveFromDiff;
+      return clean(right.created_at).localeCompare(clean(left.created_at));
+    });
   }
 
   const periodMap = new Map<string, any[]>();
@@ -788,8 +809,10 @@ async function reportData(request: VercelRequest) {
       const slots: any[] = schedulePeriods.map((period) => {
         const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
         const override = assignmentOverrides[clean(period.id)];
-        const startTime = override?.startTime || clean(period.start_time).slice(0, 5);
-        const configuredEndTime = override?.endTime || clean(period.end_time).slice(0, 5);
+        const recordStartTime = report24HourTime(record?.scheduled_start_at);
+        const recordEndTime = report24HourTime(record?.scheduled_end_at);
+        const startTime = override?.startTime || recordStartTime || clean(period.start_time).slice(0, 5);
+        const configuredEndTime = override?.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
         return {
           id: period.id,
           name: clean(period.name) || "فترة العمل",
@@ -806,10 +829,8 @@ async function reportData(request: VercelRequest) {
         slots.push({
           id: record.period_id || `record:${record.id}`,
           name: clean(record.period_name) || `فترة العمل ${slots.length + 1}`,
-          startTime: record.scheduled_start_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_start_at)) : "",
-          endTime: record.scheduled_end_at
-            ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at))
-            : "",
+          startTime: report24HourTime(record.scheduled_start_at),
+          endTime: report24HourTime(record.scheduled_end_at),
           graceMinutes: Number(record.grace_minutes || 0),
           sortOrder: Number(record.period_sort_order || slots.length + 1),
           record,
