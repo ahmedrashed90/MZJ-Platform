@@ -27,7 +27,7 @@ const checks = [
   ['Customer report popup exports all filtered rows to PDF', reports.includes('exportPopupPdf') && reports.includes('detailPageSize: 200') && reports.includes('جاري تجهيز PDF')],
   ['KPI PDF actions are centered', styles.includes('justify-content:center') && styles.includes('.kpi-pdf-actions')],
   ['Each KPI PDF target has dedicated content', kpi.includes('const sections: Record<ModalTab, string>') && kpi.includes('target === "all"') && kpi.includes('تفاصيل السرعة') && kpi.includes('تفاصيل الكفاءة') && kpi.includes('تفاصيل الانضباط') && kpi.includes('تفاصيل القيمة')],
-  ['KPI print layout starts content on the first page', kpi.includes('class="report-head"') && kpi.includes('break-inside:auto;page-break-inside:auto') && !kpi.includes('class="cover"')],
+  ['KPI print layout starts content on the first page and keeps each full-report section on its own page', kpi.includes('class="report-head"') && kpi.includes('page-result first-page') && kpi.includes('page-speed') && kpi.includes('page-efficiency') && kpi.includes('page-discipline') && kpi.includes('page-value') && kpi.includes('break-inside:avoid;page-break-inside:avoid') && !kpi.includes('class="cover"')],
   ['Attachment action is compact and writing area is larger', styles.includes('width:96px') && styles.includes('min-height:210px') && drawer.includes('accept="image/*,video/*,.pdf,application/pdf"')],
   ['Readable bold typography is integrated in canonical styles', styles.includes('font-size: 15px;') && styles.includes('font-weight: 700;') && styles.includes('.crm-table { width: 100%;')],
   ['Finance history layout remains unchanged', finance.includes('crm-finance-history-head-clean') && finance.includes('crm-finance-history-filter-row')],

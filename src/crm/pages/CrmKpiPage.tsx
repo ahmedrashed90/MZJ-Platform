@@ -341,52 +341,56 @@ export function CrmKpiPage() {
 
     const resultHtml = `<section class="box result-box"><h2>النتيجة النهائية</h2><div class="metrics result-metrics">${metric("السرعة", percent(result.speedRate), rateClass(result.speedRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}${metric("القيمة", percent(result.valueRate), rateClass(result.valueRate))}${metric("نسبة KPI", percent(result.finalRate), rateClass(result.finalRate))}${metric("إجمالي النقاط", Math.round(result.totalPoints))}${metric("التقييم", result.rating)}${metric("أيام العمل", result.workDays)}</div>${notes ? `<div class="notes"><strong>ملاحظات التقييم</strong><p>${safe(notes)}</p></div>` : ""}</section>`;
     const sections: Record<ModalTab, string> = { speed: speedHtml, efficiency: efficiencyHtml, discipline: disciplineHtml, value: valueHtml, result: resultHtml };
-    const reportHeader = `<header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(labels[target])}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header>`;
-    const page = (content: string, extraClass = "") => `<section class="pdf-page ${extraClass}">${reportHeader}<main>${content}</main></section>`;
+    const pageTitles: Record<ModalTab, string> = { speed: "تفاصيل السرعة", efficiency: "تفاصيل الكفاءة", discipline: "تفاصيل الانضباط", value: "تفاصيل القيمة", result: "النتيجة النهائية" };
+    const reportHeader = (pageTitle: string) => `<header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(pageTitle)}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header>`;
+    const page = (content: string, pageTitle: string, extraClass = "") => `<section class="pdf-page ${extraClass}">${reportHeader(pageTitle)}<main>${content}</main></section>`;
     const body = target === "all"
       ? [
-          page(resultHtml, "first-page"),
-          page(speedHtml),
-          page(efficiencyHtml),
-          page(disciplineHtml),
-          page(valueHtml),
+          page(resultHtml, pageTitles.result, "page-result first-page"),
+          page(speedHtml, pageTitles.speed, "page-speed"),
+          page(efficiencyHtml, pageTitles.efficiency, "page-efficiency"),
+          page(disciplineHtml, pageTitles.discipline, "page-discipline"),
+          page(valueHtml, pageTitles.value, "page-value"),
         ].join("")
-      : page(sections[target], "first-page");
+      : page(sections[target], pageTitles[target], `page-${target} first-page`);
 
     const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>
-@page{size:A4 landscape;margin:7mm}
+@page{size:A4 landscape;margin:4mm}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#fff}
-body{font-family:Tajawal,Arial,sans-serif;color:#35221c;font-size:10px;font-weight:700;line-height:1.45}
-.pdf-page{page-break-after:always;break-after:page;min-height:1px}
+body{font-family:Tajawal,Arial,sans-serif;color:#35221c;font-size:9px;font-weight:700;line-height:1.28}
+.pdf-page{width:100%;page-break-after:always;break-after:page;min-height:1px}
 .pdf-page:last-child{page-break-after:auto;break-after:auto}
-.report-head{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff;border-radius:11px;padding:10px 12px;margin:0 0 8px;break-inside:avoid;page-break-after:avoid}
-.report-title{display:flex;align-items:center;justify-content:space-between;gap:14px}
-.report-title h1{margin:0;font-size:17px}
-.report-title h2{margin:0;font-size:20px}
-.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:7px}
-.meta span{padding:5px 7px;border:1px solid rgba(255,255,255,.28);border-radius:7px;font-size:9px}
-.box{background:#fff;border:1px solid #e5cdbf;border-radius:10px;padding:9px;margin:0 0 8px;break-inside:auto;page-break-inside:auto}
-.box h2{margin:0 0 8px;font-size:15px}
-.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px}
-.metric{border:1px solid #ead5ca;border-radius:8px;padding:6px 8px;background:#fffaf7;break-inside:avoid}
-.metric span{display:block;color:#765e55;font-size:9px}
-.metric b{display:block;font-size:15px;margin-top:2px}
+.pdf-page main{margin:0;padding:0}
+.report-head{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff;border-radius:9px;padding:8px 10px;margin:0 0 6px;break-inside:avoid;page-break-after:avoid}
+.report-title{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.report-title h1{margin:0;font-size:14px;line-height:1.15}
+.report-title h2{margin:0;font-size:17px;line-height:1.15}
+.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin-top:4px}
+.meta span{padding:3.5px 6px;border:1px solid rgba(255,255,255,.28);border-radius:5px;font-size:7.5px;line-height:1.15}
+.box{background:#fff;border:1px solid #e5cdbf;border-radius:8px;padding:7px;margin:0;break-inside:avoid;page-break-inside:avoid}
+.box h2{margin:0 0 6px;font-size:13px;line-height:1.15}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin-bottom:5px}
+.metric{border:1px solid #ead5ca;border-radius:6px;padding:5px 6px;background:#fffaf7;break-inside:avoid;min-height:38px}
+.metric span{display:block;color:#765e55;font-size:8px;line-height:1.1}
+.metric b{display:block;font-size:12px;line-height:1.1;margin-top:1px}
 .metric.good{background:#edf8ef;border-color:#b8dfc1}
 .metric.mid{background:#fff8df;border-color:#ead88d}
 .metric.bad{background:#fff0f0;border-color:#efb7b7}
 .result-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-table{width:100%;border-collapse:collapse;margin:0;font-size:9px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+table{width:100%;border-collapse:collapse;margin:0;font-size:8.2px;line-height:1.15;table-layout:fixed}
 thead{display:table-header-group}
 tr{break-inside:avoid;page-break-inside:avoid}
-th,td{border:1px solid #ead5ca;padding:4px 6px;text-align:right;vertical-align:middle}
+th,td{border:1px solid #ead5ca;padding:3px 5px;text-align:right;vertical-align:middle;overflow-wrap:anywhere}
 th{background:#f8ece5;font-weight:900}
-.notes{margin-top:8px;padding:8px;border:1px solid #ead5ca;border-radius:8px;background:#fffaf7;break-inside:avoid}
-.notes p{white-space:pre-wrap;margin:4px 0 0}
-@media print{.report-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}.box{break-inside:auto;page-break-inside:auto}.metric,.notes,.two>table{break-inside:avoid;page-break-inside:avoid}}
+.notes{margin-top:5px;padding:6px;border:1px solid #ead5ca;border-radius:6px;background:#fffaf7;break-inside:avoid}
+.notes p{white-space:pre-wrap;margin:3px 0 0;line-height:1.25}
+.page-result .box{padding:9px}.page-result .metrics{gap:6px}.page-result .metric{min-height:46px;padding:7px}.page-result .metric span{font-size:9px}.page-result .metric b{font-size:14px}
+.page-efficiency .box{padding:9px}.page-efficiency table{font-size:9px;line-height:1.2}.page-efficiency th,.page-efficiency td{padding:5px 6px}
+@media print{.report-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}.pdf-page,.box,.metric,.notes,.two>table{break-inside:avoid;page-break-inside:avoid}}
 </style></head><body>${body}<script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
     win.document.close();
   }

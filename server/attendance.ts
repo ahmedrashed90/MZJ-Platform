@@ -220,6 +220,33 @@ function reportDateFromTimestamp(value: unknown) {
   return validDate(result) ? result : "";
 }
 
+function reportTimeMinutesFromTimestamp(value: unknown) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: ATTENDANCE_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value || 0);
+  return part("hour") * 60 + part("minute");
+}
+
+function reportDelayMinutes(checkIn: unknown, workDate: string, periodStartTime: string, graceMinutes: number, fallback = 0) {
+  if (!checkIn || !validDate(workDate) || !validTime(periodStartTime)) return Math.max(0, Math.floor(Number(fallback) || 0));
+  const checkInDate = reportDateFromTimestamp(checkIn);
+  const checkInMinutes = reportTimeMinutesFromTimestamp(checkIn);
+  if (!checkInDate || checkInMinutes === null) return Math.max(0, Math.floor(Number(fallback) || 0));
+  const workDay = new Date(`${workDate}T00:00:00Z`).getTime();
+  const checkInDay = new Date(`${checkInDate}T00:00:00Z`).getTime();
+  if (!Number.isFinite(workDay) || !Number.isFinite(checkInDay)) return Math.max(0, Math.floor(Number(fallback) || 0));
+  const dayOffsetMinutes = Math.round((checkInDay - workDay) / 86400000) * 1440;
+  const scheduledMinutes = timeMinutes(periodStartTime) + Math.max(0, Math.floor(Number(graceMinutes) || 0));
+  return Math.max(0, dayOffsetMinutes + checkInMinutes - scheduledMinutes);
+}
+
 async function adminBootstrap() {
   const sql = getSql();
   const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
@@ -779,7 +806,7 @@ async function reportData(request: VercelRequest) {
           id: period.id,
           name: clean(period.name) || "فترة العمل",
           startTime,
-          endTime: timeMinutes(configuredEndTime) > officialDayEndMinutes ? officialDayEnd : configuredEndTime,
+          endTime: configuredEndTime,
           graceMinutes: Number(period.grace_minutes || 0),
           sortOrder: Number(period.sort_order || 0),
           record,
@@ -793,10 +820,7 @@ async function reportData(request: VercelRequest) {
           name: clean(record.period_name) || `فترة العمل ${slots.length + 1}`,
           startTime: record.scheduled_start_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_start_at)) : "",
           endTime: record.scheduled_end_at
-            ? (() => {
-                const storedEnd = new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at));
-                return timeMinutes(storedEnd) > officialDayEndMinutes ? officialDayEnd : storedEnd;
-              })()
+            ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at))
             : "",
           graceMinutes: Number(record.grace_minutes || 0),
           sortOrder: Number(record.period_sort_order || slots.length + 1),
@@ -808,18 +832,19 @@ async function reportData(request: VercelRequest) {
       const periodsByKey = new Map<string, any>();
       for (const slot of slots) {
         const record = slot.record;
+        const delayMinutes = reportDelayMinutes(record?.check_in, day, slot.startTime, slot.graceMinutes, Number(record?.delay_minutes || 0));
         let result = "—";
         if (record?.check_in) {
-          const statusText = Number(record.delay_minutes || 0) > 0 ? "متأخر" : "حاضر";
+          const statusText = delayMinutes > 0 ? "متأخر" : "حاضر";
           const workText = record.check_out ? `العمل ${formatMinutes(Number(record.work_minutes || 0))}` : "الفترة مفتوحة";
-          const delayText = Number(record.delay_minutes || 0) > 0 ? `تأخير ${Number(record.delay_minutes)} د` : "بدون تأخير";
+          const delayText = delayMinutes > 0 ? `تأخير ${delayMinutes} د` : "بدون تأخير";
           result = `${statusText} • ${workText} • ${delayText}`;
         } else if (isDayOff) {
           result = "إجازة";
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {
-          const effectiveEnd = Math.min(timeMinutes(slot.endTime || officialDayEnd), officialDayEndMinutes);
+          const effectiveEnd = validTime(slot.endTime) ? timeMinutes(slot.endTime) : officialDayEndMinutes;
           result = nowMinutes >= effectiveEnd ? "غائب" : "لم يسجل";
         }
         const key = periodKey(slot.name);
@@ -839,7 +864,7 @@ async function reportData(request: VercelRequest) {
           checkOutText: reportClock(record?.check_out),
           checkoutSource: record?.checkout_source || null,
           result,
-          delayMinutes: Number(record?.delay_minutes || 0),
+          delayMinutes,
           workMinutes: liveWorkMinutes(record),
         });
       }
