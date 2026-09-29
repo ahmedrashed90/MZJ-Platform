@@ -57,7 +57,7 @@ function periodOverridesEqual(left: unknown, right: unknown) {
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
-function resolveAssignedPeriodTimes(period: any, custom?: { startTime: string; endTime: string } | null) {
+function resolveAssignedPeriodTimes(period: any, override?: { startTime: string; endTime: string } | null) {
   const baseStartTime = clean(period?.start_time ?? period?.startTime).slice(0, 5);
   const baseEndTime = clean(period?.end_time ?? period?.endTime).slice(0, 5);
   if (!validTime(baseStartTime) || !validTime(baseEndTime)) {
@@ -69,8 +69,8 @@ function resolveAssignedPeriodTimes(period: any, custom?: { startTime: string; e
     return { startTime: baseStartTime, endTime: baseEndTime };
   }
 
-  const requestedStart = validTime(clean(custom?.startTime).slice(0, 5)) ? clean(custom?.startTime).slice(0, 5) : baseStartTime;
-  const requestedEnd = validTime(clean(custom?.endTime).slice(0, 5)) ? clean(custom?.endTime).slice(0, 5) : baseEndTime;
+  const requestedStart = validTime(clean(override?.startTime).slice(0, 5)) ? clean(override?.startTime).slice(0, 5) : baseStartTime;
+  const requestedEnd = validTime(clean(override?.endTime).slice(0, 5)) ? clean(override?.endTime).slice(0, 5) : baseEndTime;
 
   // الفترة الواحدة أساسها حتى 22:00، ويمكن تخصيص اليوزر لينتهي 21:00 أو 22:00 فقط.
   if (baseEndTime === "22:00") {
