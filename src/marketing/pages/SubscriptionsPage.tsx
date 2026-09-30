@@ -231,7 +231,7 @@ export function SubscriptionsPage() {
         </article>
         <article className="marketing-subscription-kpi kpi-value">
           <span className="marketing-subscription-kpi-icon"><CurrencyCircleDollar size={28} weight="duotone" /></span>
-          <div><small>إجمالي القيم الحالية</small><strong>{formatSubscriptionMoney(stats.totalCurrentCost)}</strong><p>منها {formatSubscriptionMoney(stats.usageBasedCost)} حسب الاستخدام</p></div>
+          <div><small>إجمالي القيم الحالية شهريًا</small><strong>{formatSubscriptionMoney(stats.totalCurrentCost)}</strong><p>منها {formatSubscriptionMoney(stats.usageBasedCost)} حسب الاستخدام · السنوي محسوب ÷ 12</p></div>
         </article>
       </section>
 

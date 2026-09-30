@@ -4451,8 +4451,12 @@ async function subscriptionsData(sql: ReturnType<typeof getSql>, user: SessionUs
   const activeCount = rows.filter((row) => !row.is_expired).length;
   const expiringSoonCount = rows.filter((row) => Number(row.days_remaining) >= 0 && Number(row.days_remaining) <= 30).length;
   const expiredCount = rows.filter((row) => Boolean(row.is_expired)).length;
-  const totalCurrentCost = rows.reduce((total, row) => total + Number(row.effective_amount || 0), 0);
-  const usageBasedCost = rows.filter((row) => row.pricing_model === "usage").reduce((total, row) => total + Number(row.effective_amount || 0), 0);
+  const monthlyEquivalentCost = (row: any) => {
+    const amount = Number(row.effective_amount || 0);
+    return row.billing_cycle === "annual" ? amount / 12 : amount;
+  };
+  const totalCurrentCost = rows.reduce((total, row) => total + monthlyEquivalentCost(row), 0);
+  const usageBasedCost = rows.filter((row) => row.pricing_model === "usage").reduce((total, row) => total + monthlyEquivalentCost(row), 0);
   return {
     ok: true,
     rows,
