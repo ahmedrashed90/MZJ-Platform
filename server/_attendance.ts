@@ -122,16 +122,31 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
         a.weekly_off_day,a.period_ids,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
-        coalesce(
-          nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
-          nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
-          p.start_time::text
-        ) as start_time,
-        coalesce(
-          nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
-          nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
-          p.end_time::text
-        ) as end_time,
+        case
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::text
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )
+        end as start_time,
+        case
+          when p.end_time::time='12:00'::time then '12:00'
+          when p.end_time::time='21:00'::time then '21:00'
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'
+            else '22:00'
+          end
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )
+        end as end_time,
         p.grace_minutes,
         a.effective_from,a.effective_to,c.local_date,c.local_time,c.current_at
       from clock c
@@ -201,28 +216,34 @@ async function recordForPeriod(userId: string, period: ActiveAttendancePeriod) {
 async function syncCurrentAttendanceSchedules(userId: string | null = null) {
   const sql = getSql();
   const updated = await sql<{ id: string }[]>`
-    with resolved as (
+    with resolved_times as (
       select
-        r.id,
-        ((r.work_date + coalesce(
-          nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
-          nullif(a.period_overrides -> r.period_id::text ->> 'start_time',''),
-          p.start_time::text
-        )::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
-        (((r.work_date + case
-          when coalesce(
-            nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
-            nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
-            p.end_time::text
-          )::time <= coalesce(
+        r.id,r.work_date,
+        case
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
+          else coalesce(
             nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
             nullif(a.period_overrides -> r.period_id::text ->> 'start_time',''),
             p.start_time::text
-          )::time then 1 else 0 end) + coalesce(
+          )::time
+        end as start_time,
+        case
+          when p.end_time::time='12:00'::time then '12:00'::time
+          when p.end_time::time='21:00'::time then '21:00'::time
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'::time
+            else '22:00'::time
+          end
+          else coalesce(
             nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
             nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
             p.end_time::text
-          )::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+          )::time
+        end as end_time
       from core.attendance_records r
       join core.attendance_user_schedules a on a.id=r.assignment_id
       join core.attendance_periods p on p.id=r.period_id
@@ -230,6 +251,13 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
         and (${userId}::uuid is null or r.user_id=${userId}::uuid)
         and r.work_date >= ((now() at time zone ${ATTENDANCE_TIME_ZONE})::date - 1)
         and (r.check_out is null or r.checkout_source='auto')
+    ),
+    resolved as (
+      select
+        id,
+        ((work_date + start_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
+        (((work_date + case when end_time <= start_time then 1 else 0 end) + end_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+      from resolved_times
     )
     update core.attendance_records r
     set
@@ -449,8 +477,18 @@ export async function registerAttendanceCheckIn(
       )
       on conflict(user_id,period_id,work_date) where period_id is not null
       do update set
+        assignment_id=excluded.assignment_id,
+        schedule_id=excluded.schedule_id,
+        period_name=excluded.period_name,
+        period_sort_order=excluded.period_sort_order,
+        scheduled_start_at=excluded.scheduled_start_at,
+        scheduled_end_at=excluded.scheduled_end_at,
+        grace_minutes=excluded.grace_minutes,
         check_in=coalesce(core.attendance_records.check_in,excluded.check_in),
+        check_out=case when core.attendance_records.check_in is null then null else core.attendance_records.check_out end,
+        checkout_source=case when core.attendance_records.check_in is null then null else core.attendance_records.checkout_source end,
         delay_minutes=case when core.attendance_records.check_in is null then excluded.delay_minutes else core.attendance_records.delay_minutes end,
+        work_minutes=case when core.attendance_records.check_in is null then 0 else core.attendance_records.work_minutes end,
         status=case when core.attendance_records.check_in is null then excluded.status else core.attendance_records.status end,
         updated_at=now()
       returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
