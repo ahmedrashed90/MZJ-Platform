@@ -4345,6 +4345,215 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 
 
 
+type SubscriptionBillingCycle = "monthly" | "annual";
+type SubscriptionPricingModel = "fixed" | "per_unit" | "usage";
+
+function subscriptionBillingCycle(value: unknown): SubscriptionBillingCycle {
+  const cycle = clean(value);
+  if (cycle === "monthly" || cycle === "annual") return cycle;
+  throw new Error("نوع الاشتراك يجب أن يكون شهري أو سنوي");
+}
+
+function subscriptionPricingModel(value: unknown): SubscriptionPricingModel {
+  const model = clean(value);
+  if (model === "fixed" || model === "per_unit" || model === "usage") return model;
+  throw new Error("طريقة احتساب الاشتراك غير صحيحة");
+}
+
+function subscriptionDate(value: unknown, label: string) {
+  const date = clean(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${label} غير صحيح`);
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw new Error(`${label} غير صحيح`);
+  return date;
+}
+
+function optionalSubscriptionNumber(value: unknown) {
+  if (value === null || value === undefined || clean(value) === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error("القيمة الرقمية غير صحيحة");
+  return parsed;
+}
+
+function requiredSubscriptionAmount(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error("قيمة الاشتراك غير صحيحة");
+  return parsed;
+}
+
+function normalizeSubscriptionPayload(body: Record<string, any>) {
+  const serviceName = clean(body.serviceName).replace(/\s+/g, " ");
+  if (!serviceName) throw new Error("اكتب اسم الخدمة");
+  if (serviceName.length > 160) throw new Error("اسم الخدمة طويل جدًا");
+  const billingCycle = subscriptionBillingCycle(body.billingCycle);
+  const pricingModel = subscriptionPricingModel(body.pricingModel);
+  const amount = requiredSubscriptionAmount(body.amount);
+  const unitPrice = optionalSubscriptionNumber(body.unitPrice);
+  const usageQuantity = optionalSubscriptionNumber(body.usageQuantity);
+  const usageLimit = optionalSubscriptionNumber(body.usageLimit);
+  const usageUnit = clean(body.usageUnit).slice(0, 80) || null;
+  const startDate = subscriptionDate(body.startDate, "تاريخ بداية الاشتراك");
+  const renewalDate = subscriptionDate(body.renewalDate, "تاريخ التجديد");
+  if (renewalDate <= startDate) throw new Error("تاريخ التجديد يجب أن يكون بعد تاريخ بداية الاشتراك");
+  if (pricingModel === "per_unit" && unitPrice === null) throw new Error("اكتب سعر وحدة الاستخدام");
+  if (pricingModel !== "fixed" && !usageUnit) throw new Error("اختر أو اكتب وحدة الاستخدام");
+  return {
+    serviceName,
+    billingCycle,
+    pricingModel,
+    amount,
+    unitPrice,
+    usageQuantity,
+    usageLimit,
+    usageUnit,
+    startDate,
+    renewalDate,
+    currency: "SAR",
+    notes: clean(body.notes).slice(0, 1000) || null,
+  };
+}
+
+async function subscriptionsData(sql: ReturnType<typeof getSql>, user: SessionUser, requireManage = false) {
+  if (requireManage) {
+    if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  } else if (!hasPermission(user, "marketing.subscriptions.view") && !hasPermission(user, "marketing.subscriptions.manage")) {
+    throw new Error("لا توجد صلاحية لمشاهدة الاشتراكات");
+  }
+  const rows = await sql<any[]>`
+    select
+      s.id::text,
+      s.service_name,
+      s.billing_cycle,
+      s.pricing_model,
+      s.amount::float,
+      s.unit_price::float,
+      s.usage_quantity::float,
+      s.usage_limit::float,
+      s.usage_unit,
+      s.currency,
+      s.start_date::text,
+      s.renewal_date::text,
+      s.notes,
+      s.created_at,
+      s.updated_at,
+      case
+        when s.pricing_model='per_unit' and s.unit_price is not null and s.usage_quantity is not null
+          then round((s.unit_price*s.usage_quantity)::numeric,2)
+        else s.amount
+      end::float as effective_amount,
+      (s.renewal_date-current_date)::int as days_remaining,
+      (s.renewal_date<current_date) as is_expired,
+      coalesce((select count(*)::int from marketing.subscription_renewals r where r.subscription_id=s.id),0) as renewal_count
+    from marketing.subscriptions s
+    where s.is_active=true
+    order by s.renewal_date asc,s.service_name asc,s.created_at asc
+  `;
+  const activeCount = rows.filter((row) => !row.is_expired).length;
+  const expiringSoonCount = rows.filter((row) => Number(row.days_remaining) >= 0 && Number(row.days_remaining) <= 30).length;
+  const expiredCount = rows.filter((row) => Boolean(row.is_expired)).length;
+  const totalCurrentCost = rows.reduce((total, row) => total + Number(row.effective_amount || 0), 0);
+  const usageBasedCost = rows.filter((row) => row.pricing_model === "usage").reduce((total, row) => total + Number(row.effective_amount || 0), 0);
+  return {
+    ok: true,
+    rows,
+    stats: { activeCount, expiringSoonCount, expiredCount, totalCurrentCost, usageBasedCost },
+    permissions: {
+      canRenew: hasPermission(user, "marketing.subscriptions.renew"),
+      canManage: hasPermission(user, "marketing.subscriptions.manage"),
+    },
+  };
+}
+
+async function subscriptionHistory(sql: ReturnType<typeof getSql>, id: string, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.view") && !hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لمشاهدة الاشتراكات");
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const [subscription] = await sql<any[]>`select id::text,service_name from marketing.subscriptions where id=${id}::uuid`;
+  if (!subscription) throw new Error("الاشتراك غير موجود");
+  const rows = await sql<any[]>`
+    select r.id::text,r.previous_start_date::text,r.previous_renewal_date::text,r.actual_renewal_date::text,r.next_renewal_date::text,
+      r.billing_cycle,r.pricing_model,r.amount::float,r.unit_price::float,r.usage_quantity::float,r.usage_limit::float,r.usage_unit,r.currency,r.note,
+      r.created_at,u.full_name as renewed_by_name
+    from marketing.subscription_renewals r
+    left join core.users u on u.id=r.renewed_by
+    where r.subscription_id=${id}::uuid
+    order by r.created_at desc
+  `;
+  return { ok: true, subscription, rows };
+}
+
+async function saveSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  const input = normalizeSubscriptionPayload(body);
+  const id = clean(body.id);
+  if (id) {
+    const [row] = await sql<any[]>`
+      update marketing.subscriptions
+      set service_name=${input.serviceName},billing_cycle=${input.billingCycle},pricing_model=${input.pricingModel},amount=${input.amount},
+        unit_price=${input.unitPrice},usage_quantity=${input.usageQuantity},usage_limit=${input.usageLimit},usage_unit=${input.usageUnit},currency=${input.currency},
+        start_date=${input.startDate}::date,renewal_date=${input.renewalDate}::date,notes=${input.notes},updated_by=${user.id}::uuid,updated_at=now()
+      where id=${id}::uuid and is_active=true
+      returning id::text,service_name
+    `;
+    if (!row) throw new Error("الاشتراك غير موجود");
+    return { ok: true, id: row.id, message: "تم حفظ تعديل الاشتراك" };
+  }
+  const [row] = await sql<any[]>`
+    insert into marketing.subscriptions(service_name,billing_cycle,pricing_model,amount,unit_price,usage_quantity,usage_limit,usage_unit,currency,start_date,renewal_date,notes,created_by,updated_by)
+    values(${input.serviceName},${input.billingCycle},${input.pricingModel},${input.amount},${input.unitPrice},${input.usageQuantity},${input.usageLimit},${input.usageUnit},${input.currency},${input.startDate}::date,${input.renewalDate}::date,${input.notes},${user.id}::uuid,${user.id}::uuid)
+    returning id::text,service_name
+  `;
+  return { ok: true, id: row.id, message: "تمت إضافة الاشتراك بنجاح" };
+}
+
+async function deleteSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  const id = clean(body.id);
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const [row] = await sql<any[]>`
+    update marketing.subscriptions set is_active=false,updated_by=${user.id}::uuid,updated_at=now()
+    where id=${id}::uuid and is_active=true
+    returning id::text,service_name
+  `;
+  if (!row) throw new Error("الاشتراك غير موجود");
+  return { ok: true, id: row.id, message: "تم إيقاف الاشتراك" };
+}
+
+async function renewSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.renew")) throw new Error("لا توجد صلاحية لتجديد الاشتراكات");
+  const id = clean(body.id);
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const actualRenewalDate = subscriptionDate(body.actualRenewalDate, "تاريخ التجديد الفعلي");
+  const nextRenewalDate = subscriptionDate(body.nextRenewalDate, "تاريخ التجديد القادم");
+  if (nextRenewalDate <= actualRenewalDate) throw new Error("تاريخ التجديد القادم يجب أن يكون بعد تاريخ التجديد الفعلي");
+  return sql.begin(async (tx) => {
+    const [current] = await tx<any[]>`
+      select id::text,service_name,billing_cycle,pricing_model,amount::float,unit_price::float,usage_quantity::float,usage_limit::float,usage_unit,currency,start_date::text,renewal_date::text
+      from marketing.subscriptions
+      where id=${id}::uuid and is_active=true
+      for update
+    `;
+    if (!current) throw new Error("الاشتراك غير موجود");
+    const amount = body.amount === undefined || body.amount === null || clean(body.amount) === "" ? Number(current.amount || 0) : requiredSubscriptionAmount(body.amount);
+    const unitPrice = body.unitPrice === undefined ? (current.unit_price ?? null) : optionalSubscriptionNumber(body.unitPrice);
+    const usageQuantity = body.usageQuantity === undefined ? (current.usage_quantity ?? null) : optionalSubscriptionNumber(body.usageQuantity);
+    const usageLimit = body.usageLimit === undefined ? (current.usage_limit ?? null) : optionalSubscriptionNumber(body.usageLimit);
+    const usageUnit = body.usageUnit === undefined ? (clean(current.usage_unit) || null) : (clean(body.usageUnit).slice(0,80) || null);
+    if (current.pricing_model === "per_unit" && unitPrice === null) throw new Error("اكتب سعر وحدة الاستخدام");
+    if (current.pricing_model !== "fixed" && !usageUnit) throw new Error("وحدة الاستخدام مطلوبة");
+    await tx`
+      insert into marketing.subscription_renewals(subscription_id,previous_start_date,previous_renewal_date,actual_renewal_date,next_renewal_date,billing_cycle,pricing_model,amount,unit_price,usage_quantity,usage_limit,usage_unit,currency,note,renewed_by)
+      values(${id}::uuid,${current.start_date}::date,${current.renewal_date}::date,${actualRenewalDate}::date,${nextRenewalDate}::date,${current.billing_cycle},${current.pricing_model},${amount},${unitPrice},${usageQuantity},${usageLimit},${usageUnit},${current.currency || 'SAR'},${clean(body.note).slice(0,1000)||null},${user.id}::uuid)
+    `;
+    await tx`
+      update marketing.subscriptions
+      set start_date=${actualRenewalDate}::date,renewal_date=${nextRenewalDate}::date,amount=${amount},unit_price=${unitPrice},usage_quantity=${usageQuantity},usage_limit=${usageLimit},usage_unit=${usageUnit},updated_by=${user.id}::uuid,updated_at=now()
+      where id=${id}::uuid
+    `;
+    return { ok: true, id, message: "تم تجديد الاشتراك وتحديث تاريخ التجديد" };
+  });
+}
+
+
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
@@ -4452,6 +4661,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
+      if(resource==='subscriptions')return response.status(200).json(await subscriptionsData(sql,user));
+      if(resource==='subscription_settings')return response.status(200).json(await subscriptionsData(sql,user,true));
+      if(resource==='subscription_history')return response.status(200).json(await subscriptionHistory(sql,clean(request.query.id),user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
       if(resource==='task_folder')return response.status(200).json(await taskFolderData(sql,request,user));
       if(resource==='task_folder_file')return streamTaskFolderFile(sql,request,user,response);
@@ -4516,6 +4728,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_photo_request')result=await deleteMarketingPhotoRequest(sql,clean(body.id),user);
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
     else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
+    else if(action==='save_subscription')result=await saveSubscription(sql,body,user);
+    else if(action==='delete_subscription')result=await deleteSubscription(sql,body,user);
+    else if(action==='renew_subscription')result=await renewSubscription(sql,body,user);
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='migrate_r2_storage_names')result=await migrateMarketingR2StorageNames(sql,body,user);
     else if(action==='create_raw_folders')result=await createRawFolders(sql,body,user);

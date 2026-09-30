@@ -106,6 +106,7 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "marketing", code: "calendar", name: "التقويم", route: "/marketing/calendar", sortOrder: 90 },
   { system: "marketing", code: "receipt_calendar", name: "تقويم الاستلام", route: "/marketing/receipt-calendar", sortOrder: 100 },
   { system: "marketing", code: "stock", name: "الاستوك", route: "/marketing/stock", sortOrder: 110 },
+  { system: "marketing", code: "subscriptions", name: "الاشتراكات", route: "/marketing/subscriptions", sortOrder: 120 },
 
   { system: "operations", code: "inventory", name: "مخزون السيارات", route: "/operations", sortOrder: 10 },
   { system: "operations", code: "manage", name: "إدارة السيارات", route: "/operations/manage", sortOrder: 20 },
@@ -314,6 +315,9 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.calendar.view", "مشاهدة تقويم التسويق", "marketing", "calendar", "view", "page"),
   p("marketing.receipt_calendar.view", "مشاهدة تقويم الاستلام", "marketing", "receipt_calendar", "view", "page"),
   p("marketing.stock.view", "مشاهدة استوك التسويق", "marketing", "stock", "view", "page"),
+  p("marketing.subscriptions.view", "مشاهدة الاشتراكات", "marketing", "subscriptions", "view", "page", "فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق", true),
+  p("marketing.subscriptions.renew", "تجديد الاشتراكات", "marketing", "subscriptions", "renew", "action", "تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام", true),
+  p("marketing.subscriptions.manage", "إدارة الاشتراكات", "marketing", "subscriptions", "manage", "settings", "إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق", true),
   p("marketing.campaign.create", "إنشاء حملة", "marketing", "create_campaign", "create", "action", "إنشاء حملة جديدة", true),
   p("marketing.campaign.edit", "تعديل حملة", "marketing", "database", "edit", "action", "تعديل بيانات حملة", true),
   p("marketing.campaign.delete", "حذف حملة", "marketing", "database", "delete", "action", "حذف حملة", true),
@@ -368,7 +372,10 @@ export function canAccessSystem(user: AccessUserShape | null | undefined, system
 }
 
 export function canOpenSettings(user: AccessUserShape | null | undefined) {
-  return PERMISSION_CATALOG.some((permission) => permission.system === "core" && permission.page === "settings" && hasPermission(user, permission.code));
+  return PERMISSION_CATALOG.some((permission) =>
+    ((permission.system === "core" && permission.page === "settings") || permission.code === "marketing.subscriptions.manage")
+    && hasPermission(user, permission.code),
+  );
 }
 
 export function isPlatformAdmin(user: AccessUserShape | null | undefined) {

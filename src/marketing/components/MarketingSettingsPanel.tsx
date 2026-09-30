@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { FloppyDisk, LinkSimple, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { CreditCard, FloppyDisk, LinkSimple, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
 import { marketingFetch } from "../api";
 import { DepartmentsPage } from "../pages/DepartmentsPage";
 import { PlatformConnectionsPage } from "../pages/PlatformConnectionsPage";
+import { SubscriptionSettings } from "./SubscriptionSettings";
 import "../marketing.css";
 
-type MarketingSettingsTab = "departments" | "colors" | "packages" | "platforms";
+type MarketingSettingsTab = "departments" | "colors" | "packages" | "platforms" | "subscriptions";
 type UserColorRow = { id: string; full_name: string; email?: string | null; color: string };
 type LookupRow = { id: string; name: string; sort_order: number };
 
@@ -17,10 +18,13 @@ type PackageSettingsPayload = {
   salesTypes: LookupRow[];
 };
 
-function resolveMarketingSettingsTab(value: string | null, canViewSettings: boolean, canViewConnections: boolean): MarketingSettingsTab {
+function resolveMarketingSettingsTab(value: string | null, canViewSettings: boolean, canViewConnections: boolean, canManageSubscriptions: boolean): MarketingSettingsTab {
   if (canViewSettings && (value === "departments" || value === "colors" || value === "packages")) return value;
   if (value === "platforms" && canViewConnections) return "platforms";
-  return canViewSettings ? "departments" : "platforms";
+  if (value === "subscriptions" && canManageSubscriptions) return "subscriptions";
+  if (canViewSettings) return "departments";
+  if (canViewConnections) return "platforms";
+  return "subscriptions";
 }
 
 function LookupManager({
@@ -117,7 +121,8 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
   const requestedTab = searchParams.get("tab");
   const canViewMarketingSettings = hasPermission(user, "settings.marketing.view") || hasPermission(user, "settings.marketing.manage");
   const canViewConnections = hasPermission(user, "marketing.platforms.view");
-  const [tab, setTab] = useState<MarketingSettingsTab>(() => resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections));
+  const canManageSubscriptions = hasPermission(user, "marketing.subscriptions.manage");
+  const [tab, setTab] = useState<MarketingSettingsTab>(() => resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections, canManageSubscriptions));
   const [rows, setRows] = useState<UserColorRow[]>([]);
   const [packageSettings, setPackageSettings] = useState<PackageSettingsPayload>({ categories: [], salesTypes: [] });
   const [error, setError] = useState("");
@@ -125,8 +130,8 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setTab(resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections));
-  }, [requestedTab, canViewMarketingSettings, canViewConnections]);
+    setTab(resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections, canManageSubscriptions));
+  }, [requestedTab, canViewMarketingSettings, canViewConnections, canManageSubscriptions]);
 
   async function loadColors() {
     setError("");
@@ -186,16 +191,18 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
           {canViewMarketingSettings ? <button type="button" className={tab === "colors" ? "active" : ""} onClick={() => chooseTab("colors")}><Palette size={18} weight="duotone" />تعيين لون لكل مسؤول</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "packages" ? "active" : ""} onClick={() => chooseTab("packages")}><Package size={18} weight="duotone" />إعدادات الباقات</button> : null}
           {canViewConnections ? <button type="button" className={tab === "platforms" ? "active" : ""} onClick={() => chooseTab("platforms")}><LinkSimple size={18} weight="duotone" />ربط المنصات</button> : null}
+          {canManageSubscriptions ? <button type="button" className={tab === "subscriptions" ? "active" : ""} onClick={() => chooseTab("subscriptions")}><CreditCard size={18} weight="duotone" />الاشتراكات</button> : null}
         </nav>
       </section>
 
-      {tab !== "platforms" && readOnly ? <div className="connection-banner"><WarningCircle size={18} /><span>صلاحية مشاهدة فقط؛ تعديل إعدادات التسويق يحتاج صلاحية الإدارة.</span></div> : null}
-      {tab !== "platforms" && error ? <div className="connection-banner"><WarningCircle size={18} />{error}</div> : null}
-      {tab !== "platforms" && message ? <div className="success-banner">{message}</div> : null}
+      {tab !== "platforms" && tab !== "subscriptions" && readOnly ? <div className="connection-banner"><WarningCircle size={18} /><span>صلاحية مشاهدة فقط؛ تعديل إعدادات التسويق يحتاج صلاحية الإدارة.</span></div> : null}
+      {tab !== "platforms" && tab !== "subscriptions" && error ? <div className="connection-banner"><WarningCircle size={18} />{error}</div> : null}
+      {tab !== "platforms" && tab !== "subscriptions" && message ? <div className="success-banner">{message}</div> : null}
 
       {tab === "platforms" ? <PlatformConnectionsPage embedded /> : null}
+      {tab === "subscriptions" ? <SubscriptionSettings readOnly={!canManageSubscriptions} /> : null}
 
-      {tab !== "platforms" ? <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
+      {tab !== "platforms" && tab !== "subscriptions" ? <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
         {tab === "departments" ? <DepartmentsPage embedded /> : null}
 
         {tab === "colors" ? (

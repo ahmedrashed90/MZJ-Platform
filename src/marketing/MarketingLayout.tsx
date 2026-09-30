@@ -4,6 +4,7 @@ import {
   CalendarCheck,
   Car,
   ChartLineUp,
+  CreditCard,
   ChatCircleDots,
   CirclesFour,
   Database,
@@ -28,6 +29,7 @@ const links = [
   { to: "/marketing/calendar", label: "التقويم", icon: CalendarBlank, permission: "marketing.calendar.view" },
   { to: "/marketing/receipt-calendar", label: "تقويم الاستلام", icon: CalendarCheck, permission: "marketing.receipt_calendar.view" },
   { to: "/marketing/stock", label: "الاستوك", icon: Car, permission: "marketing.stock.view" },
+  { to: "/marketing/subscriptions", label: "الاشتراكات", icon: CreditCard, permission: "marketing.subscriptions.view" },
 ];
 
 export function MarketingLayout() {

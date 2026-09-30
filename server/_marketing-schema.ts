@@ -158,6 +158,52 @@ select seed.name,seed.sort_order
 from (values ('مبيعات الكاش',10),('مبيعات القسط',20)) as seed(name,sort_order)
 where not exists(select 1 from marketing.package_sales_types current where lower(btrim(current.name))=lower(btrim(seed.name)));
 
+create table if not exists marketing.subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  service_name text not null,
+  billing_cycle text not null check(billing_cycle in ('monthly','annual')),
+  pricing_model text not null default 'fixed' check(pricing_model in ('fixed','per_unit','usage')),
+  amount numeric(14,2) not null default 0 check(amount >= 0),
+  unit_price numeric(14,4) check(unit_price is null or unit_price >= 0),
+  usage_quantity numeric(18,4) check(usage_quantity is null or usage_quantity >= 0),
+  usage_limit numeric(18,4) check(usage_limit is null or usage_limit >= 0),
+  usage_unit text,
+  currency text not null default 'SAR',
+  start_date date not null,
+  renewal_date date not null,
+  notes text,
+  is_active boolean not null default true,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint marketing_subscriptions_dates_check check(renewal_date > start_date)
+);
+create index if not exists marketing_subscriptions_active_renewal_idx on marketing.subscriptions(is_active,renewal_date);
+create index if not exists marketing_subscriptions_service_idx on marketing.subscriptions(lower(service_name));
+
+create table if not exists marketing.subscription_renewals (
+  id uuid primary key default gen_random_uuid(),
+  subscription_id uuid not null references marketing.subscriptions(id) on delete cascade,
+  previous_start_date date not null,
+  previous_renewal_date date not null,
+  actual_renewal_date date not null,
+  next_renewal_date date not null,
+  billing_cycle text not null check(billing_cycle in ('monthly','annual')),
+  pricing_model text not null check(pricing_model in ('fixed','per_unit','usage')),
+  amount numeric(14,2) not null default 0 check(amount >= 0),
+  unit_price numeric(14,4),
+  usage_quantity numeric(18,4),
+  usage_limit numeric(18,4),
+  usage_unit text,
+  currency text not null default 'SAR',
+  note text,
+  renewed_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  constraint marketing_subscription_renewals_dates_check check(next_renewal_date > actual_renewal_date)
+);
+create index if not exists marketing_subscription_renewals_subscription_idx on marketing.subscription_renewals(subscription_id,created_at desc);
+
 create table if not exists marketing.packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,

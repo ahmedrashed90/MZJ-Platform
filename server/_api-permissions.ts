@@ -109,7 +109,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
       task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", monitoring: "marketing.monitoring.view",
-      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view",
+      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view", subscriptions: "marketing.subscriptions.view", subscription_settings: "marketing.subscriptions.manage", subscription_history: "marketing.subscriptions.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
     };
     return req(map[resource] || "system.marketing.access", "marketing", resource, "view");
@@ -124,6 +124,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     create_photo_request: "marketing.photo_request.create", delete_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
+    save_subscription: "marketing.subscriptions.manage", delete_subscription: "marketing.subscriptions.manage", renew_subscription: "marketing.subscriptions.renew",
     save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin",
   };
   if (action === "prepare_upload" || action === "mark_file_ready") {
