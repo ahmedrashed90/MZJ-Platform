@@ -250,7 +250,11 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
       where r.check_in is not null
         and (${userId}::uuid is null or r.user_id=${userId}::uuid)
         and r.work_date >= ((now() at time zone ${ATTENDANCE_TIME_ZONE})::date - 1)
-        and (r.check_out is null or r.checkout_source='auto')
+        and (
+          r.check_out is null
+          or r.checkout_source='auto'
+          or (r.checkout_source='manual' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+        )
     ),
     resolved as (
       select
@@ -264,18 +268,19 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
       scheduled_start_at=x.scheduled_start_at,
       scheduled_end_at=x.scheduled_end_at,
       check_out=case
-        when r.checkout_source='auto' and x.scheduled_end_at <= now() then x.scheduled_end_at
-        when r.checkout_source='auto' and x.scheduled_end_at > now() then null
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now() then x.scheduled_end_at
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then null
         else r.check_out
       end,
       checkout_source=case
-        when r.checkout_source='auto' and x.scheduled_end_at > now() then null
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now() then 'auto'
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then null
         else r.checkout_source
       end,
       work_minutes=case
-        when r.checkout_source='auto' and x.scheduled_end_at <= now()
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now()
           then greatest(0,floor(extract(epoch from (x.scheduled_end_at-r.check_in))/60))::int
-        when r.checkout_source='auto' and x.scheduled_end_at > now() then 0
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then 0
         else r.work_minutes
       end,
       updated_at=now()
@@ -284,7 +289,8 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
       and (
         r.scheduled_start_at is distinct from x.scheduled_start_at
         or r.scheduled_end_at is distinct from x.scheduled_end_at
-        or (r.checkout_source='auto' and r.check_out is distinct from case when x.scheduled_end_at <= now() then x.scheduled_end_at else null end)
+        or (r.checkout_source in ('auto','manual') and r.check_out is distinct from case when x.scheduled_end_at <= now() then x.scheduled_end_at else null end)
+        or (r.checkout_source='manual' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
       )
     returning r.id::text
   `;
@@ -382,7 +388,7 @@ export async function getSelfAttendanceState(userId: string) {
       status: String(record.status || ""),
     } : null,
     canCheckIn: Boolean(period && !checkedIn),
-    canCheckOut: Boolean(checkedIn && !checkedOut),
+    hasOpenAttendance: Boolean(checkedIn && !checkedOut),
   };
 }
 
@@ -602,40 +608,6 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
     end as allowed
   `;
   return Boolean(row?.allowed);
-}
-
-export async function checkoutCurrentAttendance(
-  userId: string,
-  options: { allowMissing?: boolean; revokeSessions?: boolean } = {},
-) {
-  await ensureAttendanceSchema();
-  return withDatabaseAdvisoryLock(`mzj:attendance-check-out:${userId}`, async () => {
-    const sql = getSql();
-    const [row] = await sql<any[]>`
-      update core.attendance_records r
-      set
-        check_out=least(now(),r.scheduled_end_at),
-        checkout_source='manual',
-        work_minutes=greatest(0,floor(extract(epoch from (least(now(),r.scheduled_end_at)-r.check_in))/60))::int,
-        updated_at=now()
-      where r.id=(
-        select id
-        from core.attendance_records
-        where user_id=${userId}::uuid and check_in is not null and check_out is null
-        order by check_in desc
-        limit 1
-      )
-      returning r.*,r.id::text,r.user_id::text,r.assignment_id::text,r.schedule_id::text,r.period_id::text,r.work_date::text as work_date
-    `;
-    if (!row) {
-      if (options.allowMissing) return null;
-      throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة لتسجيل الانصراف", 400);
-    }
-    if (options.revokeSessions !== false) {
-      await sql`delete from core.sessions where user_id=${userId}::uuid`;
-    }
-    return row;
-  });
 }
 
 export async function runAttendanceTick() {

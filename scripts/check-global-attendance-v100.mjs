@@ -16,7 +16,7 @@ check("custom period time controls are separated from the period checkbox label"
 check("per-user custom end can extend beyond official day end", !api.includes("INVALID_ASSIGNMENT_PERIOD_TIME\", `مدة ${clean(period.name) || \"فترة العمل\"} يجب أن تكون داخل الدوام الرسمي"));
 check("active attendance ends at assigned period end", core.includes("as scheduled_end_at") && !core.slice(core.indexOf("export async function getActiveAttendancePeriod"), core.indexOf("async function recordForPeriod")).includes("official_day_end"));
 check("expired records close exactly at scheduled period end", core.includes("check_out=r.scheduled_end_at") && core.includes("r.scheduled_end_at <= now()"));
-check("manual checkout never counts beyond scheduled period end", core.includes("check_out=least(now(),r.scheduled_end_at)") && core.includes("least(now(),r.scheduled_end_at)-r.check_in"));
+check("manual checkout is disabled and checkout is automatic only", !core.includes("export async function checkoutCurrentAttendance") && api.includes("AUTO_CHECKOUT_ONLY") && !read("src/components/Sidebar.tsx").includes("handleCheckOut"));
 check("automatic checkout does not terminate user sessions", core.includes("forcedLogoutUsers: 0") && !core.slice(core.indexOf("export async function runAttendanceTick"), core.length).includes("delete from core.sessions"));
 check("login outside assigned work periods remains available", core.includes("if (!state.activePeriod) {") && core.includes("return { enforced: false, checkedIn: false, state }"));
 check("existing sessions remain allowed outside an active period", core.includes("when not exists(select 1 from active_period) then true"));

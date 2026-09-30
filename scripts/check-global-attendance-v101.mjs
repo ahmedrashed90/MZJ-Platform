@@ -22,7 +22,7 @@ check("secondary login skips attendance check-in", login.includes("verifiedDevic
 check("session keeps verified device id", auth.includes("verified_device_id") && auth.includes("user.verifiedDeviceId"));
 check("secondary session is not blocked by attendance enforcement", attendance.includes('deviceState.status !== "approved"') && attendance.includes("deviceState.is_primary === false") && attendance.includes("return true"));
 check("secondary cannot manually check in", api.includes("تسجيل الحضور متاح من الجهاز الأساسي فقط"));
-check("secondary cannot manually check out", api.includes("تسجيل الانصراف متاح من الجهاز الأساسي فقط"));
+check("manual checkout is disabled for every device", api.includes('action === "self_check_out"') && api.includes("AUTO_CHECKOUT_ONLY"));
 check("secondary sidebar explains attendance source", sidebar.includes("جهاز ثانوي • الحضور من الجهاز الأساسي"));
 check("settings show primary marker", settings.includes("attendance-device-primary-label") && settings.includes("• أساسي"));
 check("settings allow setting approved device primary", settings.includes("تعيين أساسي") && settings.includes("setPrimaryDevice"));

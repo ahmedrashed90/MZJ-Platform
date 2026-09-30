@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
-import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, checkoutCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
+import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
 import { adminDeviceSnapshot, approveUserDevice, getUserDeviceAttendanceRole, revokeUserDevice, setPrimaryUserDevice, setUserDevicePolicy } from "./_device-agent.js";
 
 function clean(value: unknown) {
@@ -947,7 +947,6 @@ async function selfAttendanceStateForSession(user: { id: string; verifiedDeviceI
   state.deviceAttendanceRole = deviceAttendanceRole;
   if (deviceAttendanceRole === "secondary" || deviceAttendanceRole === "unverified") {
     state.canCheckIn = false;
-    state.canCheckOut = false;
   }
   return state;
 }
@@ -987,10 +986,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, state: await selfAttendanceStateForSession(user) });
     }
     if (action === "self_check_out") {
-      const deviceRole = await getUserDeviceAttendanceRole(user.id, user.verifiedDeviceId || null);
-      if (deviceRole === "secondary" || deviceRole === "unverified") throw new AttendanceError("PRIMARY_DEVICE_REQUIRED", "تسجيل الانصراف متاح من الجهاز الأساسي فقط", 403);
-      await checkoutCurrentAttendance(user.id, { allowMissing: false, revokeSessions: false });
-      return response.status(200).json({ ok: true, state: await selfAttendanceStateForSession(user) });
+      throw new AttendanceError("AUTO_CHECKOUT_ONLY", "تسجيل الانصراف يتم تلقائيًا حسب نهاية الدوام المحددة لليوزر", 400);
     }
 
     const admin = await requireAdmin(request, response);
