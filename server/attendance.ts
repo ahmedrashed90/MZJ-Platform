@@ -908,7 +908,7 @@ async function reportData(request: VercelRequest) {
           checkOut: record?.check_out || null,
           checkInText: reportClock(record?.check_in),
           checkOutText: reportClock(record?.check_out),
-          checkoutSource: record?.checkout_source || null,
+          checkoutSource: record?.check_out ? "auto" : null,
           result,
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
