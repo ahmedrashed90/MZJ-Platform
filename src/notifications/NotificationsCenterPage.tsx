@@ -31,7 +31,16 @@ export function NotificationsCenterPage() {
     catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل الإشعارات"); }
     finally { setLoading(false); }
   }, [system, unreadOnly]);
-  useEffect(() => { void load(); const interval = window.setInterval(() => void load(), 15000); return () => window.clearInterval(interval); }, [load]);
+  useEffect(() => {
+    void load();
+    const refresh = () => { if (document.visibilityState === "visible") void load(); };
+    const interval = window.setInterval(refresh, 15000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [load]);
 
   async function markAll() { await updateNotifications({ system, read: true }); await load(); }
 

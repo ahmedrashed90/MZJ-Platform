@@ -8,6 +8,9 @@ import { notificationResponsibleName } from "./presentation";
 
 const systemLabels: Record<NotificationSystem, string> = { crm: "CRM", marketing: "التسويق", operations: "العمليات", tracking: "التراكينج" };
 const systemIcons = { crm: UsersThree, marketing: Megaphone, operations: SuitcaseSimple, tracking: MapPin };
+const NOTIFICATION_POLL_INTERVAL_MS = 30_000;
+const AUTO_REFRESH_DEDUPE_MS = 1_500;
+
 const defaultPreferences: NotificationPreferences = {
   soundEnabled: true,
   toastEnabled: true,
@@ -63,9 +66,12 @@ export function NotificationBell() {
   const initializedScopeRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const openRef = useRef(open);
+  const preferencesRef = useRef(preferences);
+  const lastRequestStartedAtRef = useRef(0);
 
   const playNotificationSound = useCallback(async () => {
-    if (!preferences.soundEnabled) return;
+    if (!preferencesRef.current.soundEnabled) return;
     const context = audioContextRef.current || createAudioContext();
     if (!context) return;
     audioContextRef.current = context;
@@ -88,17 +94,19 @@ export function NotificationBell() {
     } catch {
       // Browsers can block sound until the first user interaction.
     }
-  }, [preferences.soundEnabled]);
+  }, []);
 
   const showLiveAlert = useCallback((items: PlatformNotification[]) => {
-    const eligible = items.filter((item) => preferences.systemAlerts[item.system_code]);
+    const currentPreferences = preferencesRef.current;
+    const eligible = items.filter((item) => currentPreferences.systemAlerts[item.system_code]);
     if (!eligible.length) return;
     void playNotificationSound();
-    if (preferences.toastEnabled && !open) setToastItem(eligible[0]);
-  }, [open, playNotificationSound, preferences.systemAlerts, preferences.toastEnabled]);
+    if (currentPreferences.toastEnabled && !openRef.current) setToastItem(eligible[0]);
+  }, [playNotificationSound]);
 
   const load = useCallback(async (silent = false) => {
-    if (!user) return;
+    if (!user?.id) return;
+    lastRequestStartedAtRef.current = Date.now();
     if (!silent) setLoading(true);
     try {
       const result = await fetchNotifications(scope, 12);
@@ -117,10 +125,18 @@ export function NotificationBell() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [scope, showLiveAlert, user]);
+  }, [scope, showLiveAlert, user?.id]);
 
   useEffect(() => {
-    if (!user) return;
+    openRef.current = open;
+  }, [open]);
+
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
+
+  useEffect(() => {
+    if (!user?.id) return;
     void fetchNotificationPreferences().then(setPreferences).catch(() => setPreferences(defaultPreferences));
     const onPreferencesUpdated = (event: Event) => {
       const detail = (event as CustomEvent<NotificationPreferences>).detail;
@@ -128,7 +144,7 @@ export function NotificationBell() {
     };
     window.addEventListener("mzj:notification-preferences", onPreferencesUpdated);
     return () => window.removeEventListener("mzj:notification-preferences", onPreferencesUpdated);
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -148,9 +164,15 @@ export function NotificationBell() {
   }, [scope, user?.id]);
 
   useEffect(() => {
-    void load(true);
-    const interval = window.setInterval(() => void load(true), 5000);
-    const refresh = () => { if (document.visibilityState === "visible") void load(true); };
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastRequestStartedAtRef.current < AUTO_REFRESH_DEDUPE_MS) return;
+      void load(true);
+    };
+
+    refresh();
+    const interval = window.setInterval(refresh, NOTIFICATION_POLL_INTERVAL_MS);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
