@@ -280,8 +280,10 @@ function reportDelayMinutes(checkIn: unknown, workDate: string, periodStartTime:
 
 async function adminBootstrap() {
   const sql = getSql();
-  const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
-    select enforcement_enabled,official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
+  const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string; friday_start_time: string | null; friday_end_time: string | null }[]>`
+    select enforcement_enabled,official_day_end::text as official_day_end,
+      friday_start_time::text as friday_start_time,friday_end_time::text as friday_end_time
+    from core.attendance_settings where id=1 limit 1
   `;
   const [schedules, periods, users, branches, attendanceBranchRows] = await Promise.all([
     sql<any[]>`
@@ -367,6 +369,8 @@ async function adminBootstrap() {
     settings: {
       enforcementEnabled: Boolean(settings?.enforcement_enabled),
       officialDayEnd: String(settings?.official_day_end || "21:00").slice(0, 5),
+      fridayStartTime: settings?.friday_start_time ? String(settings.friday_start_time).slice(0, 5) : null,
+      fridayEndTime: settings?.friday_end_time ? String(settings.friday_end_time).slice(0, 5) : null,
     },
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
     users: users.map((user) => {
@@ -394,8 +398,10 @@ async function adminBootstrap() {
 
 async function saveSettings(body: Record<string, any>, adminId: string) {
   const sql = getSql();
-  const [current] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
-    select enforcement_enabled,official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
+  const [current] = await sql<{ enforcement_enabled: boolean; official_day_end: string; friday_start_time: string | null; friday_end_time: string | null }[]>`
+    select enforcement_enabled,official_day_end::text as official_day_end,
+      friday_start_time::text as friday_start_time,friday_end_time::text as friday_end_time
+    from core.attendance_settings where id=1 limit 1
   `;
   const enforcementEnabled = typeof body.enforcementEnabled === "boolean"
     ? body.enforcementEnabled
@@ -404,11 +410,36 @@ async function saveSettings(body: Record<string, any>, adminId: string) {
   const officialDayEnd = validTime(requestedOfficialDayEnd)
     ? requestedOfficialDayEnd
     : String(current?.official_day_end || "21:00").slice(0, 5);
+
+  const hasFridayFields = Object.prototype.hasOwnProperty.call(body, "fridayStartTime")
+    || Object.prototype.hasOwnProperty.call(body, "fridayEndTime");
+  let fridayStartTime = current?.friday_start_time ? String(current.friday_start_time).slice(0, 5) : null;
+  let fridayEndTime = current?.friday_end_time ? String(current.friday_end_time).slice(0, 5) : null;
+  if (hasFridayFields) {
+    const requestedFridayStart = clean(body.fridayStartTime).slice(0, 5);
+    const requestedFridayEnd = clean(body.fridayEndTime).slice(0, 5);
+    if (!requestedFridayStart && !requestedFridayEnd) {
+      fridayStartTime = null;
+      fridayEndTime = null;
+    } else {
+      if (!validTime(requestedFridayStart) || !validTime(requestedFridayEnd)) {
+        throw new AttendanceError("INVALID_FRIDAY_HOURS", "حدد بداية ونهاية دوام الجمعة بشكل صحيح");
+      }
+      if (requestedFridayStart === requestedFridayEnd) {
+        throw new AttendanceError("INVALID_FRIDAY_HOURS", "بداية ونهاية دوام الجمعة لا يمكن أن تكونا نفس الوقت");
+      }
+      fridayStartTime = requestedFridayStart;
+      fridayEndTime = requestedFridayEnd;
+    }
+  }
+
   await sql`
-    insert into core.attendance_settings(id,enforcement_enabled,official_day_end,updated_by,updated_at)
-    values(1,${enforcementEnabled},${officialDayEnd}::time,${adminId}::uuid,now())
+    insert into core.attendance_settings(id,enforcement_enabled,official_day_end,friday_start_time,friday_end_time,updated_by,updated_at)
+    values(1,${enforcementEnabled},${officialDayEnd}::time,${fridayStartTime}::time,${fridayEndTime}::time,${adminId}::uuid,now())
     on conflict(id) do update
-    set enforcement_enabled=excluded.enforcement_enabled,official_day_end=excluded.official_day_end,updated_by=excluded.updated_by,updated_at=now()
+    set enforcement_enabled=excluded.enforcement_enabled,official_day_end=excluded.official_day_end,
+        friday_start_time=excluded.friday_start_time,friday_end_time=excluded.friday_end_time,
+        updated_by=excluded.updated_by,updated_at=now()
   `;
 
   let forcedLogoutUsers = 0;
@@ -424,7 +455,7 @@ async function saveSettings(body: Record<string, any>, adminId: string) {
     forcedLogoutUsers = new Set(expired.map((row) => row.user_id)).size;
   }
 
-  return { ok: true, enforcementEnabled, officialDayEnd, forcedLogoutUsers };
+  return { ok: true, enforcementEnabled, officialDayEnd, fridayStartTime, fridayEndTime, forcedLogoutUsers };
 }
 
 async function saveSchedule(body: Record<string, any>, adminId: string) {
@@ -646,11 +677,16 @@ async function reportData(request: VercelRequest) {
   const sql = getSql();
   const today = currentRiyadhDate();
   const nowMinutes = currentRiyadhTimeMinutes();
-  const [attendanceSettings] = await sql<{ official_day_end: string }[]>`
-    select official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
+  const [attendanceSettings] = await sql<{ official_day_end: string; friday_start_time: string | null; friday_end_time: string | null }[]>`
+    select official_day_end::text as official_day_end,
+      friday_start_time::text as friday_start_time,friday_end_time::text as friday_end_time
+    from core.attendance_settings where id=1 limit 1
   `;
   const officialDayEnd = String(attendanceSettings?.official_day_end || "21:00").slice(0, 5);
   const officialDayEndMinutes = timeMinutes(officialDayEnd);
+  const fridayStartTime = attendanceSettings?.friday_start_time ? String(attendanceSettings.friday_start_time).slice(0, 5) : "";
+  const fridayEndTime = attendanceSettings?.friday_end_time ? String(attendanceSettings.friday_end_time).slice(0, 5) : "";
+  const fridayScheduleEnabled = validTime(fridayStartTime) && validTime(fridayEndTime) && fridayStartTime !== fridayEndTime;
   const rawFrom = clean(request.query.from);
   const rawTo = clean(request.query.to);
   let from = validDate(rawFrom) ? rawFrom : "";
@@ -871,9 +907,11 @@ async function reportData(request: VercelRequest) {
       });
       const assignedPeriodIds = normalizedIdList(assignment?.period_ids);
       const assignmentOverrides = normalizePeriodOverrides(assignment?.period_overrides);
-      const schedulePeriods = assignment
+      let schedulePeriods = assignment
         ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active) && (!assignedPeriodIds.length || assignedPeriodIds.includes(clean(period.id))))
         : [];
+      const isFriday = weekdayForDate(day) === 5;
+      if (isFriday && fridayScheduleEnabled && schedulePeriods.length > 1) schedulePeriods = [schedulePeriods[0]];
       const isDayOff = Boolean(assignment)
         && parseWeeklyOffDay(assignment.weekly_off_day) !== null
         && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
@@ -884,8 +922,12 @@ async function reportData(request: VercelRequest) {
         const resolvedTimes = resolveAssignedPeriodTimes(period, override);
         const recordStartTime = report24HourTime(record?.scheduled_start_at);
         const recordEndTime = report24HourTime(record?.scheduled_end_at);
-        const startTime = resolvedTimes.startTime || recordStartTime || clean(period.start_time).slice(0, 5);
-        const configuredEndTime = resolvedTimes.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
+        const startTime = isFriday && fridayScheduleEnabled
+          ? fridayStartTime
+          : resolvedTimes.startTime || recordStartTime || clean(period.start_time).slice(0, 5);
+        const configuredEndTime = isFriday && fridayScheduleEnabled
+          ? fridayEndTime
+          : resolvedTimes.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
         return {
           id: period.id,
           name: clean(period.name) || "فترة العمل",

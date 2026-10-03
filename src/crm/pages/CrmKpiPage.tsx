@@ -262,14 +262,17 @@ export function CrmKpiPage() {
     }
   }
 
-  const eligibleAgents = useMemo(() => agents.filter((agent) => hasKpiResult(resultForAgent(agent).calc)), [agents, rows, period.from, period.to]);
-
-  const visibleAgents = useMemo(() => eligibleAgents.filter((agent) => {
+  const visibleAgents = useMemo(() => agents.filter((agent) => {
     if (filters.branch && !(agent.branch_codes || []).includes(filters.branch)) return false;
     if (filters.agent && agent.id !== filters.agent) return false;
     const search = [agent.full_name, agent.employee_no, agent.department_name, agent.branch_name, ...(agent.departments || []), ...(agent.branches || [])].join(" ").toLowerCase();
     return !filters.q || search.includes(filters.q.toLowerCase());
-  }), [eligibleAgents, filters.branch, filters.agent, filters.q]);
+  }), [agents, filters.branch, filters.agent, filters.q]);
+
+  const reportAgents = useMemo(
+    () => visibleAgents.filter((agent) => hasKpiResult(resultForAgent(agent).calc)),
+    [visibleAgents, rows, period.from, period.to],
+  );
 
   function rowForAgent(agent: any) {
     return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code))
@@ -454,20 +457,20 @@ th{background:#f8ece5;font-weight:900}
   }
 
   function exportVisiblePdf(target: "result" | "all") {
-    if (!visibleAgents.length) {
-      setNotice("لا يوجد مناديب مطابقون للفلاتر الحالية للتصدير");
+    if (!reportAgents.length) {
+      setNotice("لا يوجد مناديب لديهم نتيجة KPI ضمن الفلاتر الحالية للتصدير");
       return;
     }
-    const body = visibleAgents.map((agent) => buildPrintReport(reportFormForAgent(agent), target).body).join("");
+    const body = reportAgents.map((agent) => buildPrintReport(reportFormForAgent(agent), target).body).join("");
     openPrintDocument(body, `KPI - ${target === "result" ? "النتيجة" : "التقييم الكامل"} - ${period.from} إلى ${period.to}`);
   }
 
   function exportVisibleExcel(full: boolean) {
-    if (!visibleAgents.length) {
-      setNotice("لا يوجد مناديب مطابقون للفلاتر الحالية للتصدير");
+    if (!reportAgents.length) {
+      setNotice("لا يوجد مناديب لديهم نتيجة KPI ضمن الفلاتر الحالية للتصدير");
       return;
     }
-    const entries = visibleAgents.map((agent) => {
+    const entries = reportAgents.map((agent) => {
       const input = reportFormForAgent(agent);
       return { agent, input, details: input.details, calc: calculate(input.details) };
     });
@@ -517,23 +520,23 @@ th{background:#f8ece5;font-weight:900}
   }
 
   const reportSummary = useMemo(() => {
-    const calculatedRows = visibleAgents.map((agent) => resultForAgent(agent).calc);
+    const calculatedRows = reportAgents.map((agent) => resultForAgent(agent).calc);
     const average = (key: keyof ReturnType<typeof calculate>) => calculatedRows.length
       ? calculatedRows.reduce((sum, item) => sum + number(item[key]), 0) / calculatedRows.length
       : 0;
     return {
-      count: visibleAgents.length,
+      count: reportAgents.length,
       speed: average("speedRate"),
       efficiency: average("efficiencyRate"),
       discipline: average("disciplineRate"),
       value: average("valueRate"),
       total: average("finalRate"),
     };
-  }, [visibleAgents, rows, period.from, period.to]);
+  }, [reportAgents, rows, period.from, period.to]);
 
   const branchReports = useMemo(() => {
     const grouped = new Map<string, any[]>();
-    visibleAgents.forEach((agent) => {
+    reportAgents.forEach((agent) => {
       const key = agent.branch_name || agent.branch_code || "بدون فرع";
       grouped.set(key, [...(grouped.get(key) || []), agent]);
     });
@@ -561,7 +564,7 @@ th{background:#f8ece5;font-weight:900}
       )[0];
       return { branchName, rows: details, total, discipline, excellence, value, managerRate, managerRating: branchManagerRating(managerRate), best };
     });
-  }, [visibleAgents, rows, period.from, period.to]);
+  }, [reportAgents, rows, period.from, period.to]);
 
   const addTotalSales = visibleAgents.reduce((sum, agent) => {
     const { calc } = resultForAgent(agent);
@@ -572,10 +575,10 @@ th{background:#f8ece5;font-weight:900}
     <div className="crm-page kpi-page kpi-page-v3">
       <div className="page-top-actions">
         <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button>
-        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisiblePdf("result")}><FilePdf size={18} />PDF النتيجة</button>
-        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisiblePdf("all")}><FilePdf size={18} />PDF كامل</button>
-        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisibleExcel(false)}><FileXls size={18} />Excel النتيجة</button>
-        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisibleExcel(true)}><FileXls size={18} />Excel كامل</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !reportAgents.length} onClick={() => exportVisiblePdf("result")}><FilePdf size={18} />PDF النتيجة</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !reportAgents.length} onClick={() => exportVisiblePdf("all")}><FilePdf size={18} />PDF كامل</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !reportAgents.length} onClick={() => exportVisibleExcel(false)}><FileXls size={18} />Excel النتيجة</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !reportAgents.length} onClick={() => exportVisibleExcel(true)}><FileXls size={18} />Excel كامل</button>
       </div>
 
       <div className="crm-department-tabs kpi-main-tabs centered">
@@ -591,7 +594,7 @@ th{background:#f8ece5;font-weight:900}
         </div>
         <div className="kpi-filter-group kpi-filter-people">
           <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilters((current) => ({ ...current, branch: event.target.value }))}><option value="">كل الفروع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{eligibleAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
+          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
           <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="بحث باسم المندوب أو الفرع أو القسم" /></label>
           <button type="button" className="crm-secondary-button" onClick={() => setFilters({ month: defaultMonth, from: defaultPeriod.from, to: defaultPeriod.to, branch: "", agent: "", q: "" })}>مسح الفلاتر</button>
         </div>
@@ -669,7 +672,7 @@ th{background:#f8ece5;font-weight:900}
             </div>
           </section>;
         })}
-        {!visibleAgents.length ? <div className="crm-empty-state panel">لا يوجد مناديب مبيعات ضمن الفترة والفلاتر المحددة</div> : null}
+        {!reportAgents.length ? <div className="crm-empty-state panel">لا يوجد مناديب لديهم نتيجة KPI ضمن الفترة والفلاتر المحددة</div> : null}
       </div> : null}
 
       {modal ? <div className="crm-modal-backdrop kpi-fullscreen-backdrop" onMouseDown={() => setModal(false)}>

@@ -1,17 +1,21 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v9-user-hours-branch-labels";
+export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v10-friday-hours";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
   id smallint primary key default 1 check (id = 1),
   enforcement_enabled boolean not null default false,
   official_day_end time not null default '21:00',
+  friday_start_time time,
+  friday_end_time time,
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
 alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
+alter table core.attendance_settings add column if not exists friday_start_time time;
+alter table core.attendance_settings add column if not exists friday_end_time time;
 insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
 on conflict(id) do nothing;
 
@@ -186,6 +190,14 @@ async function attendanceSchemaReady() {
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_settings' and column_name='official_day_end'
       )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_settings' and column_name='friday_start_time'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_settings' and column_name='friday_end_time'
+      )
     ) as ready
   `;
   return Boolean(state?.ready);
@@ -240,10 +252,14 @@ export function ensureAttendanceSchema() {
             id smallint primary key default 1 check (id = 1),
             enforcement_enabled boolean not null default false,
             official_day_end time not null default '21:00',
+            friday_start_time time,
+            friday_end_time time,
             updated_by uuid references core.users(id) on delete set null,
             updated_at timestamptz not null default now()
           );
           alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
+          alter table core.attendance_settings add column if not exists friday_start_time time;
+          alter table core.attendance_settings add column if not exists friday_end_time time;
           alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
           alter table core.attendance_user_schedules add column if not exists attendance_branch_name text;
           alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);

@@ -72,7 +72,7 @@ type BranchRow = { id: string; code: string; name: string };
 
 type AdminPayload = {
   ok: true;
-  settings: { enforcementEnabled: boolean; officialDayEnd: string };
+  settings: { enforcementEnabled: boolean; officialDayEnd: string; fridayStartTime: string | null; fridayEndTime: string | null };
   schedules: ScheduleRow[];
   users: UserRow[];
   branches: BranchRow[];
@@ -119,6 +119,8 @@ export function AttendanceSettingsPanel() {
   const [userSearch, setUserSearch] = useState("");
   const [deviceUserId, setDeviceUserId] = useState("");
   const [officialDayEnd, setOfficialDayEnd] = useState("21:00");
+  const [fridayStartTime, setFridayStartTime] = useState("");
+  const [fridayEndTime, setFridayEndTime] = useState("");
 
   async function load() {
     setLoading(true);
@@ -127,6 +129,8 @@ export function AttendanceSettingsPanel() {
       const payload = await attendanceFetch<AdminPayload>("/api/attendance?view=admin");
       setData(payload);
       setOfficialDayEnd(payload.settings?.officialDayEnd || "21:00");
+      setFridayStartTime(payload.settings?.fridayStartTime || "");
+      setFridayEndTime(payload.settings?.fridayEndTime || "");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل إعدادات الحضور والانصراف");
     } finally {
@@ -197,6 +201,35 @@ export function AttendanceSettingsPanel() {
       await load();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "تعذر حفظ نهاية الدوام الرسمية");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveFridayHours() {
+    resetMessages();
+    const hasStart = /^\d{2}:\d{2}$/.test(fridayStartTime);
+    const hasEnd = /^\d{2}:\d{2}$/.test(fridayEndTime);
+    if ((fridayStartTime || fridayEndTime) && (!hasStart || !hasEnd)) {
+      setError("حدد بداية ونهاية دوام الجمعة");
+      return;
+    }
+    if (hasStart && hasEnd && fridayStartTime === fridayEndTime) {
+      setError("بداية ونهاية دوام الجمعة لا يمكن أن تكونا نفس الوقت");
+      return;
+    }
+    setBusy("friday-hours");
+    try {
+      const result = await attendanceFetch<{ ok: true; fridayStartTime: string | null; fridayEndTime: string | null }>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "save_settings", fridayStartTime, fridayEndTime }),
+      });
+      setFridayStartTime(result.fridayStartTime || "");
+      setFridayEndTime(result.fridayEndTime || "");
+      setMessage(result.fridayStartTime && result.fridayEndTime ? "تم حفظ دوام الجمعة الخاص" : "تم إلغاء دوام الجمعة الخاص واستخدام الجدول المعتاد");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ دوام الجمعة");
     } finally {
       setBusy("");
     }
@@ -513,6 +546,12 @@ export function AttendanceSettingsPanel() {
         <div className="attendance-settings-two-columns schedules">
           <form className="attendance-schedule-form" onSubmit={saveSchedule}>
             <label className="attendance-wide-field"><span>نهاية الدوام الرسمية</span><input required type="time" value={officialDayEnd} onChange={(event) => setOfficialDayEnd(event.target.value)} onBlur={() => void saveOfficialDayEnd()} disabled={busy === "official-day-end"} /></label>
+            <div className="attendance-period-row">
+              <div className="attendance-period-title"><strong>دوام يوم الجمعة</strong><small>اختياري — عند تحديده يصبح للجمعة دوام واحد مستقل عن الفترات المعتادة.</small></div>
+              <label><span>بداية دوام الجمعة</span><input type="time" value={fridayStartTime} onChange={(event) => setFridayStartTime(event.target.value)} disabled={busy === "friday-hours"} /></label>
+              <label><span>نهاية دوام الجمعة</span><input type="time" value={fridayEndTime} onChange={(event) => setFridayEndTime(event.target.value)} disabled={busy === "friday-hours"} /></label>
+              <button className="attendance-save-button" type="button" onClick={() => void saveFridayHours()} disabled={busy === "friday-hours"}><FloppyDisk size={17} /> {busy === "friday-hours" ? "جاري الحفظ..." : "حفظ دوام الجمعة"}</button>
+            </div>
             <label className="attendance-wide-field"><span>اسم جدول العمل</span><input required value={scheduleForm.name} onChange={(event) => setScheduleForm((current) => ({ ...current, name: event.target.value }))} placeholder="مثال: المعارض" /></label>
             <div className="attendance-period-editor">
               {scheduleForm.periods.map((period, index) => (

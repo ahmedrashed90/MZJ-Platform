@@ -122,31 +122,33 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
         a.weekly_off_day,a.period_ids,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
+        row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
         case
-          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::text
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
             nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
             nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
             p.start_time::text
-          )
-        end as start_time,
+          )::time
+        end as regular_start_time,
         case
-          when p.end_time::time='12:00'::time then '12:00'
-          when p.end_time::time='21:00'::time then '21:00'
+          when p.end_time::time='12:00'::time then '12:00'::time
+          when p.end_time::time='21:00'::time then '21:00'::time
           when p.end_time::time='22:00'::time then case
             when coalesce(
               nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
               nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
               p.end_time::text
-            )::time='21:00'::time then '21:00'
-            else '22:00'
+            )::time='21:00'::time then '21:00'::time
+            else '22:00'::time
           end
           else coalesce(
             nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
             nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
             p.end_time::text
-          )
-        end as end_time,
+          )::time
+        end as regular_end_time,
+        st.friday_start_time,st.friday_end_time,
         p.grace_minutes,
         a.effective_from,a.effective_to,c.local_date,c.local_time,c.current_at
       from clock c
@@ -157,20 +159,33 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
        and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
+      join core.attendance_settings st on st.id=1
     ),
     candidates as (
       select *,
         case
-          when end_time::time <= start_time::time and local_time < end_time::time then local_date - 1
+          when friday_start_time is not null and friday_end_time is not null
+            and extract(dow from local_date)::int=6
+            and friday_end_time <= friday_start_time and local_time < friday_end_time then local_date - 1
+          when regular_end_time <= regular_start_time and local_time < regular_end_time then local_date - 1
           else local_date
         end as work_date
       from candidates_base
     ),
+    effective as (
+      select *,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_start_time else regular_start_time end as start_time,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_end_time else regular_end_time end as end_time
+      from candidates
+      where not (extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null and assigned_period_rank <> 1)
+    ),
     timed as (
       select *,
-        ((work_date + start_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
-        (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
-      from candidates
+        ((work_date + start_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
+        (((work_date + case when end_time <= start_time then 1 else 0 end) + end_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+      from effective
       where effective_from <= work_date and (effective_to is null or effective_to >= work_date)
         and (weekly_off_day is null or extract(dow from work_date)::int <> weekly_off_day)
     )
@@ -220,6 +235,8 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
       select
         r.id,r.work_date,
         case
+          when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
+            then st.friday_start_time
           when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
             nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
@@ -228,6 +245,8 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
           )::time
         end as start_time,
         case
+          when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
+            then st.friday_end_time
           when p.end_time::time='12:00'::time then '12:00'::time
           when p.end_time::time='21:00'::time then '21:00'::time
           when p.end_time::time='22:00'::time then case
@@ -247,6 +266,15 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
       from core.attendance_records r
       join core.attendance_user_schedules a on a.id=r.assignment_id
       join core.attendance_periods p on p.id=r.period_id
+      join core.attendance_settings st on st.id=1
+      left join lateral (
+        select fp.id
+        from core.attendance_periods fp
+        where fp.schedule_id=a.schedule_id and fp.is_active=true
+          and (a.period_ids is null or cardinality(a.period_ids)=0 or fp.id=any(a.period_ids))
+        order by fp.sort_order,fp.start_time,fp.id
+        limit 1
+      ) first_period on true
       where r.check_in is not null
         and (${userId}::uuid is null or r.user_id=${userId}::uuid)
         and r.work_date >= ((now() at time zone ${ATTENDANCE_TIME_ZONE})::date - 1)
@@ -534,6 +562,7 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
     period_candidates_base as (
       select
         a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
+        row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
         case
           when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
@@ -541,7 +570,7 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
             nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
             p.start_time::text
           )::time
-        end as start_time,
+        end as regular_start_time,
         case
           when p.end_time::time='12:00'::time then '12:00'::time
           when p.end_time::time='21:00'::time then '21:00'::time
@@ -558,7 +587,8 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
             nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
             p.end_time::text
           )::time
-        end as end_time,
+        end as regular_end_time,
+        st.friday_start_time,st.friday_end_time,
         c.local_date,c.local_time,c.current_at
       from clock c
       join core.attendance_user_schedules a
@@ -568,14 +598,27 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
        and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
+      join core.attendance_settings st on st.id=1
     ),
-    period_candidates as (
+    period_candidates_with_date as (
       select *,
         case
-          when end_time <= start_time and local_time < end_time then local_date - 1
+          when friday_start_time is not null and friday_end_time is not null
+            and extract(dow from local_date)::int=6
+            and friday_end_time <= friday_start_time and local_time < friday_end_time then local_date - 1
+          when regular_end_time <= regular_start_time and local_time < regular_end_time then local_date - 1
           else local_date
         end as work_date
       from period_candidates_base
+    ),
+    period_candidates as (
+      select *,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_start_time else regular_start_time end as start_time,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_end_time else regular_end_time end as end_time
+      from period_candidates_with_date
+      where not (extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null and assigned_period_rank <> 1)
     ),
     active_period as (
       select pc.*
