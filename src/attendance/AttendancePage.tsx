@@ -82,15 +82,6 @@ function excelXmlEscape(value: unknown) {
     .replaceAll("'", "&apos;");
 }
 
-const ATTENDANCE_EXPORT_HEADERS = [
-  "اليوم",
-  "التاريخ",
-  "حضور الفترة الأولى",
-  "انصراف الفترة الأولى",
-  "حضور الفترة الثانية",
-  "انصراف الفترة الثانية",
-] as const;
-
 function htmlEscape(value: unknown) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -130,9 +121,19 @@ function exportRowsByEmployee(payload: ReportPayload) {
     .sort((a, b) => a.name.localeCompare(b.name, "ar"));
 }
 
+function exportDelay(period: ReportPeriod | undefined) {
+  if (!period?.checkIn) return "—";
+  return `${Math.max(0, Number(period.delayMinutes || 0))} دقيقة`;
+}
+
+function exportAbsence(period: ReportPeriod | undefined) {
+  if (!period) return "—";
+  return missingResultLabel(period.result) === "غائب" ? "غائب" : "—";
+}
+
 function exportResult(period: ReportPeriod | undefined) {
   if (!period) return "—";
-  if (period.checkIn) return `${Math.max(0, Number(period.delayMinutes || 0))} دقيقة`;
+  if (period.checkIn) return exportDelay(period);
   return missingResultLabel(period.result);
 }
 
@@ -144,7 +145,16 @@ const ATTENDANCE_SUMMARY_HEADERS = [
   "م",
   "الفرع",
   "الموظف",
-  ...ATTENDANCE_EXPORT_HEADERS,
+  "اليوم",
+  "التاريخ",
+  "حضور الفترة الأولى",
+  "انصراف الفترة الأولى",
+  "تأخير الفترة الأولى",
+  "غياب الفترة الأولى",
+  "حضور الفترة الثانية",
+  "انصراف الفترة الثانية",
+  "تأخير الفترة الثانية",
+  "غياب الفترة الثانية",
 ] as const;
 
 const ATTENDANCE_DETAILS_HEADERS = [
@@ -155,9 +165,13 @@ const ATTENDANCE_DETAILS_HEADERS = [
   "التاريخ",
   "حضور الفترة الأولى",
   "انصراف الفترة الأولى",
+  "تأخير الفترة الأولى",
+  "غياب الفترة الأولى",
   "نتيجة الفترة الأولى",
   "حضور الفترة الثانية",
   "انصراف الفترة الثانية",
+  "تأخير الفترة الثانية",
+  "غياب الفترة الثانية",
   "نتيجة الفترة الثانية",
 ] as const;
 
@@ -165,11 +179,11 @@ function buildAttendancePdf(payload: ReportPayload) {
   const flatRows = exportFlatRows(payload);
   const summaryRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td></tr>`;
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td></tr>`;
   }).join("");
   const detailRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportResult(second))}</td></tr>`;
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td></tr>`;
   }).join("");
   const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
   const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
@@ -210,8 +224,12 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(formatAttendanceDate(row.date)),
       cell(exportCheckIn(first)),
       cell(exportCheckOut(first)),
+      cell(exportDelay(first)),
+      cell(exportAbsence(first)),
       cell(exportCheckIn(second)),
       cell(exportCheckOut(second)),
+      cell(exportDelay(second)),
+      cell(exportAbsence(second)),
     ].join("")}</Row>`;
   }).join("");
 
@@ -225,9 +243,13 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(formatAttendanceDate(row.date)),
       cell(exportCheckIn(first)),
       cell(exportCheckOut(first)),
+      cell(exportDelay(first)),
+      cell(exportAbsence(first)),
       cell(exportResult(first)),
       cell(exportCheckIn(second)),
       cell(exportCheckOut(second)),
+      cell(exportDelay(second)),
+      cell(exportAbsence(second)),
       cell(exportResult(second)),
     ].join("")}</Row>`;
   }).join("");
