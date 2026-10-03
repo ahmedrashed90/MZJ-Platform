@@ -412,6 +412,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
       from core.users u
       where u.is_active=true
+        and coalesce(u.is_archived,false)=false
         and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
       order by u.full_name
     `,
@@ -427,7 +428,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       from marketing.departments d
       join core.departments cd on cd.id=d.id and cd.system_code='marketing'
       left join core.user_system_departments usd on usd.department_id=d.id and usd.system_code='marketing'
-      left join core.users u on u.id=usd.user_id and u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
+      left join core.users u on u.id=usd.user_id and u.is_active=true and coalesce(u.is_archived,false)=false and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
       where d.is_active=true and cd.is_active=true
       group by d.id,cd.name,cd.is_active
       order by d.is_content desc,cd.name

@@ -2,12 +2,13 @@ import { readFile, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
-const [app, layout, api, kpi, reports, finance, drawer, styles, pkg] = await Promise.all([
+const [app, layout, api, kpi, reports, reportApi, finance, drawer, styles, pkg] = await Promise.all([
   read('src/App.tsx'),
   read('src/crm/CrmLayout.tsx'),
   read('api/index.ts'),
   read('src/crm/pages/CrmKpiPage.tsx'),
   read('src/crm/pages/CrmReportsPage.tsx'),
+  read('server/crm/reports.ts'),
   read('src/crm/pages/CrmFinanceHistoryPage.tsx'),
   read('src/crm/components/LeadDrawer.tsx'),
   read('src/styles.css'),
@@ -28,6 +29,9 @@ const checks = [
   ['KPI PDF actions are centered', styles.includes('justify-content:center') && styles.includes('.kpi-pdf-actions')],
   ['Each KPI PDF target has dedicated content', kpi.includes('const sections: Record<ModalTab, string>') && kpi.includes('target === "all"') && kpi.includes('تفاصيل السرعة') && kpi.includes('تفاصيل الكفاءة') && kpi.includes('تفاصيل الانضباط') && kpi.includes('تفاصيل القيمة')],
   ['KPI print layout starts content on the first page and keeps each full-report section on its own page', kpi.includes('class="report-head"') && kpi.includes('page-result first-page') && kpi.includes('page-speed') && kpi.includes('page-efficiency') && kpi.includes('page-discipline') && kpi.includes('page-value') && kpi.includes('break-inside:avoid;page-break-inside:avoid') && !kpi.includes('class="cover"')],
+  ['KPI exports include result and full PDF and Excel for the active filters', kpi.includes('PDF النتيجة') && kpi.includes('PDF كامل') && kpi.includes('Excel النتيجة') && kpi.includes('Excel كامل') && kpi.includes('exportVisiblePdf') && kpi.includes('exportVisibleExcel') && kpi.includes('visibleAgents.map')],
+  ['KPI full Excel contains all evaluation detail sheets', kpi.includes('worksheet("النتيجة"') && kpi.includes('worksheet("السرعة"') && kpi.includes('worksheet("الكفاءة"') && kpi.includes('worksheet("الانضباط"') && kpi.includes('worksheet("القيمة"')],
+  ['Representative report hides agents with zero customers in the selected period', reportApi.includes('.filter((row) => Number(row.total || 0) >= 1)')],
   ['Attachment action is compact and writing area is larger', styles.includes('width:96px') && styles.includes('min-height:210px') && drawer.includes('accept="image/*,video/*,.pdf,application/pdf"')],
   ['Readable bold typography is integrated in canonical styles', styles.includes('font-size: 15px;') && styles.includes('font-weight: 700;') && styles.includes('.crm-table { width: 100%;')],
   ['Finance history layout remains unchanged', finance.includes('crm-finance-history-head-clean') && finance.includes('crm-finance-history-filter-row')],

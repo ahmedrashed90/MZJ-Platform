@@ -980,9 +980,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
    * This prevents old transactions or cross-system access from adding extra
    * departments/branches to the representative row.
    */
-  // Report representatives are a configured CRM dimension, so active sales
-  // representatives must appear even when they have zero customers in the
-  // selected period (or have never received a customer yet).
+  // Report representatives are a configured CRM dimension, but the final
+  // representative table only keeps rows that own at least one customer in
+  // the currently selected report period and filters.
   const eligibleAgentRows = await sql<any[]>`
     select
       u.id::text as user_id,
@@ -1033,7 +1033,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         coalesce(crm_branch.name,global_branch.name) as name,
         coalesce(crm_branch.sort_order,global_branch.sort_order,9999) as sort_order
     ) effective_branch on true
-    where u.is_active=true
+    where u.is_active=true and coalesce(u.is_archived,false)=false
       and effective_department.code in ('cash_sales','finance_sales','wholesale','wholesale_sales')
       and (
         u.can_receive_leads=true
@@ -1072,6 +1072,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const agentIdentityRows = agentIds.length ? await sql<any[]>`
     select
       u.id::text as user_id,
+      coalesce(u.is_archived,false) as is_archived,
       primary_department.code as department_code,
       primary_department.name as department_name,
       primary_branch.code as branch_code,
@@ -1096,8 +1097,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     where u.id=any(${agentIds}::uuid[])
   ` : [];
 
+  const archivedAgentIds = new Set(agentIdentityRows.filter((item) => Boolean(item.is_archived)).map((item) => String(item.user_id)));
   const agentIdentity = new Map<string, { department: string; branch: string; departmentCode: string; branchCode: string }>();
   for (const item of agentIdentityRows) {
+    if (Boolean(item.is_archived)) continue;
     agentIdentity.set(String(item.user_id), {
       department: String(item.department_name || item.department_code || "").trim(),
       branch: String(item.branch_name || item.branch_code || "").trim(),
@@ -1115,7 +1118,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   const agentIdentityMatchesActiveFilters = (userId: unknown) => {
-    const identity = agentIdentity.get(String(userId || ""));
+    const userKey = String(userId || "");
+    if (archivedAgentIds.has(userKey)) return false;
+    const identity = agentIdentity.get(userKey);
     if (!identity) return !branch && !department;
     if (branch && identity.branchCode !== branch) return false;
     return agentDepartmentMatchesFilter(identity.departmentCode, department);
@@ -1161,6 +1166,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     })
     .filter((row) => !branch || row.reportIdentityBranchCode === branch)
     .filter((row) => agentDepartmentMatchesFilter(row.reportIdentityDepartmentCode, department))
+    .filter((row) => Number(row.total || 0) >= 1)
     .map(({ reportIdentityDepartmentCode: _departmentCode, reportIdentityBranchCode: _branchCode, ...row }) => row)
     .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));
 

@@ -62,7 +62,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           where us.user_id=u.id and us.system_code='crm' and us.is_enabled=true
         ) roles
       ) user_roles on true
-      where u.is_active = true
+      where u.is_active = true and coalesce(u.is_archived,false)=false
       order by u.full_name
     `,
     sql`select code,name,sort_order,system_codes,delivery_route,allow_free_text,report_group from core.sources where is_active=true order by sort_order,name`,

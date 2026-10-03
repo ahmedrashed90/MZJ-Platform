@@ -4,6 +4,7 @@ import {
   CalendarBlank,
   ChartBar,
   FilePdf,
+  FileXls,
   FloppyDisk,
   MagnifyingGlass,
   Minus,
@@ -177,6 +178,26 @@ function calculate(detailsInput: KpiDetails) {
 const basePersonality = { customerFitHonesty: 0, carNotesHonesty: 0 };
 const baseTechnical = { currentPrices: 0, oldPrices: 0, carSpecs: 0, competitorsComparison: 0, salesChannels: 0 };
 
+function escapeHtml(input: unknown) {
+  return String(input ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function escapeXml(input: unknown) {
+  return String(input ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+function downloadBrowserFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob(["\ufeff", content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function percent(value: unknown) { return `${Math.round(number(value))}%`; }
 function rateClass(value: unknown) { const n = number(value); return n >= 80 ? "good" : n >= 50 ? "mid" : "bad"; }
 function representativeRatingClass(value: unknown) {
@@ -302,7 +323,23 @@ export function CrmKpiPage() {
     }
   }
 
-  function printReport(rowOrForm: any, target: ModalTab | "all" = "all") {
+  function reportFormForAgent(agent: any): FormState {
+    const row = rowForAgent(agent);
+    const details = normalizeDetails(row?.details, businessDates(period.from, period.to).length);
+    return {
+      userId: agent.id,
+      periodStart: period.from,
+      periodEnd: period.to,
+      branchCode: row?.branch_code || agent.branch_code || details.branchCode || "",
+      branchName: row?.branch_name || agent.branch_name || details.branchName || (agent.branches || []).join("، ") || "",
+      departmentCode: row?.department_code || agent.department_code || details.departmentCode || "",
+      departmentName: row?.department_name || agent.department_name || details.departmentName || (agent.departments || []).join("، ") || "",
+      notes: row?.notes || "",
+      details,
+    };
+  }
+
+  function buildPrintReport(rowOrForm: any, target: ModalTab | "all" = "all") {
     const isForm = Boolean(rowOrForm?.userId);
     const details = normalizeDetails(rowOrForm?.details, number(rowOrForm?.details?.workDays, 1));
     const result = calculate(details);
@@ -313,36 +350,35 @@ export function CrmKpiPage() {
     const department = isForm ? rowOrForm.departmentName : rowOrForm.department_name;
     const notes = String(rowOrForm?.notes || "").trim();
     const labels: Record<ModalTab | "all", string> = { speed: "السرعة", efficiency: "الكفاءة", discipline: "الانضباط", value: "القيمة", result: "النتيجة", all: "التقييم الكامل" };
-    const safe = (input: unknown) => String(input ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#039;");
-    const metric = (label: string, value: unknown, tone = "") => `<div class="metric ${tone}"><span>${safe(label)}</span><b>${safe(value)}</b></div>`;
+    const metric = (label: string, value: unknown, tone = "") => `<div class="metric ${tone}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`;
     const dailyDates = [...new Set([...businessDates(from, to), ...Object.keys(details.dailyPerformance || {}), ...Object.keys(details.speed?.dailyDelaySales || {})])].sort();
 
     const speedRows = dailyDates.map((date) => {
       const delays = (details.speed?.dailyDelaySales?.[date] || []).filter((entry) => String(entry ?? "").trim() !== "");
-      return `<tr><td>${safe(arabicDate(date))}</td><td>${safe(delays.length ? delays.join("، ") : "—")}</td><td>${delays.length}</td></tr>`;
+      return `<tr><td>${escapeHtml(arabicDate(date))}</td><td>${escapeHtml(delays.length ? delays.join("، ") : "—")}</td><td>${delays.length}</td></tr>`;
     }).join("");
     const speedHtml = `<section class="box"><h2>تفاصيل السرعة</h2><div class="metrics">${metric("الحد المسموح", `${details.speed.maxAllowedMinutes} دقيقة`)}${metric("إجمالي التأخير", `${result.totalDelay.toFixed(2)} دقيقة`)}${metric("متوسط التأخير", `${result.averageDelay.toFixed(2)} دقيقة`)}${metric("نسبة السرعة", percent(result.speedRate), rateClass(result.speedRate))}</div><table><thead><tr><th>اليوم</th><th>دقائق التأخير المسجلة</th><th>عدد العمليات</th></tr></thead><tbody>${speedRows || '<tr><td colspan="3">لا توجد تأخيرات مسجلة</td></tr>'}</tbody></table></section>`;
 
     const personality = details.efficiency.personality;
     const technical = details.efficiency.technical;
-    const efficiencyHtml = `<section class="box"><h2>تفاصيل الكفاءة</h2><div class="metrics">${metric("الشخصية", percent(result.personalityRate), rateClass(result.personalityRate))}${metric("الفنية", percent(result.technicalRate), rateClass(result.technicalRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("نقاط التميز", result.efficiencyPoints)}</div><div class="two"><table><thead><tr><th colspan="2">الشخصية</th></tr></thead><tbody><tr><th>اختيار السيارة المناسبة للعميل</th><td>${safe(personality.customerFitHonesty)}%</td></tr><tr><th>توضيح ملاحظات السيارة</th><td>${safe(personality.carNotesHonesty)}%</td></tr><tr><th>نتيجة السرعة</th><td>${safe(percent(result.speedRate))}</td></tr></tbody></table><table><thead><tr><th colspan="2">الفنية</th></tr></thead><tbody><tr><th>حفظ الأسعار الحالية</th><td>${safe(technical.currentPrices)}%</td></tr><tr><th>حفظ الأسعار السابقة</th><td>${safe(technical.oldPrices)}%</td></tr><tr><th>المعرفة التفصيلية بمواصفات السيارة</th><td>${safe(technical.carSpecs)}%</td></tr><tr><th>معرفة فروق السيارة مع البراندات الأخرى</th><td>${safe(technical.competitorsComparison)}%</td></tr><tr><th>معرفة طرق وقنوات البيع كاش أو أقساط</th><td>${safe(technical.salesChannels)}%</td></tr></tbody></table></div></section>`;
+    const efficiencyHtml = `<section class="box"><h2>تفاصيل الكفاءة</h2><div class="metrics">${metric("الشخصية", percent(result.personalityRate), rateClass(result.personalityRate))}${metric("الفنية", percent(result.technicalRate), rateClass(result.technicalRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("نقاط التميز", result.efficiencyPoints)}</div><div class="two"><table><thead><tr><th colspan="2">الشخصية</th></tr></thead><tbody><tr><th>اختيار السيارة المناسبة للعميل</th><td>${escapeHtml(personality.customerFitHonesty)}%</td></tr><tr><th>توضيح ملاحظات السيارة</th><td>${escapeHtml(personality.carNotesHonesty)}%</td></tr><tr><th>نتيجة السرعة</th><td>${escapeHtml(percent(result.speedRate))}</td></tr></tbody></table><table><thead><tr><th colspan="2">الفنية</th></tr></thead><tbody><tr><th>حفظ الأسعار الحالية</th><td>${escapeHtml(technical.currentPrices)}%</td></tr><tr><th>حفظ الأسعار السابقة</th><td>${escapeHtml(technical.oldPrices)}%</td></tr><tr><th>المعرفة التفصيلية بمواصفات السيارة</th><td>${escapeHtml(technical.carSpecs)}%</td></tr><tr><th>معرفة فروق السيارة مع البراندات الأخرى</th><td>${escapeHtml(technical.competitorsComparison)}%</td></tr><tr><th>معرفة طرق وقنوات البيع كاش أو أقساط</th><td>${escapeHtml(technical.salesChannels)}%</td></tr></tbody></table></div></section>`;
 
     const disciplineRows = dailyDates.map((date) => {
       const row = details.dailyPerformance?.[date] || { attendance: 0, appearance: 0, behavior: 0, customerRating: 0, salesCount: 0 };
-      return `<tr><td>${safe(arabicDate(date))}</td><td>${safe(row.attendance)}</td><td>${safe(row.appearance)}</td><td>${safe(row.behavior)}</td></tr>`;
+      return `<tr><td>${escapeHtml(arabicDate(date))}</td><td>${escapeHtml(row.attendance)}</td><td>${escapeHtml(row.appearance)}</td><td>${escapeHtml(row.behavior)}</td></tr>`;
     }).join("");
     const disciplineHtml = `<section class="box"><h2>تفاصيل الانضباط</h2><div class="metrics">${metric("الحضور", result.attendancePoints)}${metric("الهيئة", result.appearancePoints)}${metric("السلوك", result.behaviorPoints)}${metric("نسبة الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}</div><table><thead><tr><th>اليوم</th><th>الحضور / 3</th><th>الهيئة / 3</th><th>السلوك / 3</th></tr></thead><tbody>${disciplineRows || '<tr><td colspan="4">لا توجد بيانات يومية</td></tr>'}</tbody></table></section>`;
 
     const valueRows = dailyDates.map((date) => {
       const row = details.dailyPerformance?.[date] || { attendance: 0, appearance: 0, behavior: 0, customerRating: 0, salesCount: 0 };
-      return `<tr><td>${safe(arabicDate(date))}</td><td>${safe(row.customerRating)}</td><td>${safe(row.salesCount)}</td></tr>`;
+      return `<tr><td>${escapeHtml(arabicDate(date))}</td><td>${escapeHtml(row.customerRating)}</td><td>${escapeHtml(row.salesCount)}</td></tr>`;
     }).join("");
     const valueHtml = `<section class="box"><h2>تفاصيل القيمة</h2><div class="metrics">${metric("تقييم العملاء", result.customerPoints)}${metric("إجمالي المبيعات", result.salesCount)}${metric("نسبة القيمة", percent(result.valueRate), rateClass(result.valueRate))}</div><table><thead><tr><th>اليوم</th><th>تقييم العملاء / 3</th><th>عدد المبيعات</th></tr></thead><tbody>${valueRows || '<tr><td colspan="3">لا توجد بيانات يومية</td></tr>'}</tbody></table></section>`;
 
-    const resultHtml = `<section class="box result-box"><h2>النتيجة النهائية</h2><div class="metrics result-metrics">${metric("السرعة", percent(result.speedRate), rateClass(result.speedRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}${metric("القيمة", percent(result.valueRate), rateClass(result.valueRate))}${metric("نسبة KPI", percent(result.finalRate), rateClass(result.finalRate))}${metric("إجمالي النقاط", Math.round(result.totalPoints))}${metric("التقييم", result.rating)}${metric("أيام العمل", result.workDays)}</div>${notes ? `<div class="notes"><strong>ملاحظات التقييم</strong><p>${safe(notes)}</p></div>` : ""}</section>`;
+    const resultHtml = `<section class="box result-box"><h2>النتيجة النهائية</h2><div class="metrics result-metrics">${metric("السرعة", percent(result.speedRate), rateClass(result.speedRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("الانضباط", percent(result.disciplineRate), rateClass(result.disciplineRate))}${metric("القيمة", percent(result.valueRate), rateClass(result.valueRate))}${metric("نسبة KPI", percent(result.finalRate), rateClass(result.finalRate))}${metric("إجمالي النقاط", Math.round(result.totalPoints))}${metric("التقييم", result.rating)}${metric("أيام العمل", result.workDays)}</div>${notes ? `<div class="notes"><strong>ملاحظات التقييم</strong><p>${escapeHtml(notes)}</p></div>` : ""}</section>`;
     const sections: Record<ModalTab, string> = { speed: speedHtml, efficiency: efficiencyHtml, discipline: disciplineHtml, value: valueHtml, result: resultHtml };
     const pageTitles: Record<ModalTab, string> = { speed: "تفاصيل السرعة", efficiency: "تفاصيل الكفاءة", discipline: "تفاصيل الانضباط", value: "تفاصيل القيمة", result: "النتيجة النهائية" };
-    const reportHeader = (pageTitle: string) => `<header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(pageTitle)}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header>`;
+    const reportHeader = (pageTitle: string) => `<header class="report-head"><div class="report-title"><h1>تقييم KPI — ${escapeHtml(pageTitle)}</h1><h2>${escapeHtml(agentName)}</h2></div><div class="meta"><span>الفرع: ${escapeHtml(branch || "—")}</span><span>القسم: ${escapeHtml(department || "—")}</span><span>الفترة: ${escapeHtml(from)} إلى ${escapeHtml(to)}</span><span>أيام العمل: ${escapeHtml(result.workDays)}</span></div></header>`;
     const page = (content: string, pageTitle: string, extraClass = "") => `<section class="pdf-page ${extraClass}">${reportHeader(pageTitle)}<main>${content}</main></section>`;
     const body = target === "all"
       ? [
@@ -353,10 +389,13 @@ export function CrmKpiPage() {
           page(valueHtml, pageTitles.value, "page-value"),
         ].join("")
       : page(sections[target], pageTitles[target], `page-${target} first-page`);
+    return { body, title: `KPI - ${agentName} - ${labels[target]}` };
+  }
 
+  function openPrintDocument(body: string, title: string) {
     const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
-    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
 @page{size:A4 landscape;margin:4mm}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:#fff}
@@ -393,6 +432,74 @@ th{background:#f8ece5;font-weight:900}
 @media print{.report-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}.pdf-page,.box,.metric,.notes,.two>table{break-inside:avoid;page-break-inside:avoid}}
 </style></head><body>${body}<script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
     win.document.close();
+  }
+
+  function printReport(rowOrForm: any, target: ModalTab | "all" = "all") {
+    const report = buildPrintReport(rowOrForm, target);
+    openPrintDocument(report.body, report.title);
+  }
+
+  function exportVisiblePdf(target: "result" | "all") {
+    if (!visibleAgents.length) {
+      setNotice("لا يوجد مناديب مطابقون للفلاتر الحالية للتصدير");
+      return;
+    }
+    const body = visibleAgents.map((agent) => buildPrintReport(reportFormForAgent(agent), target).body).join("");
+    openPrintDocument(body, `KPI - ${target === "result" ? "النتيجة" : "التقييم الكامل"} - ${period.from} إلى ${period.to}`);
+  }
+
+  function exportVisibleExcel(full: boolean) {
+    if (!visibleAgents.length) {
+      setNotice("لا يوجد مناديب مطابقون للفلاتر الحالية للتصدير");
+      return;
+    }
+    const entries = visibleAgents.map((agent) => {
+      const input = reportFormForAgent(agent);
+      return { agent, input, details: input.details, calc: calculate(input.details) };
+    });
+    const cell = (value: unknown, header = false) => {
+      const numeric = typeof value === "number" && Number.isFinite(value);
+      return `<Cell${header ? ' ss:StyleID="Header"' : ""}><Data ss:Type="${numeric ? "Number" : "String"}">${escapeXml(numeric ? value : String(value ?? ""))}</Data></Cell>`;
+    };
+    const row = (values: unknown[], header = false) => `<Row>${values.map((value) => cell(value, header)).join("")}</Row>`;
+    const worksheet = (name: string, tableRows: unknown[][]) => `<Worksheet ss:Name="${escapeXml(name)}"><Table>${tableRows.map((values, index) => row(values, index === 0)).join("")}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/></WorksheetOptions></Worksheet>`;
+
+    const resultRows: unknown[][] = [["الفرع", "المندوب", "القسم", "من تاريخ", "إلى تاريخ", "عدد المبيعات", "إجمالي النقاط", "السرعة %", "الكفاءة %", "الانضباط %", "القيمة %", "KPI %", "التقييم"]];
+    entries.forEach(({ agent, input, calc }) => resultRows.push([
+      input.branchName || "—", agent.full_name || "—", input.departmentName || "—", input.periodStart, input.periodEnd,
+      Math.round(calc.salesCount), Math.round(calc.totalPoints), Math.round(calc.speedRate), Math.round(calc.efficiencyRate), Math.round(calc.disciplineRate), Math.round(calc.valueRate), Math.round(calc.finalRate), calc.rating,
+    ]));
+
+    const sheets = [worksheet("النتيجة", resultRows)];
+    if (full) {
+      const speedRows: unknown[][] = [["الفرع", "المندوب", "التاريخ", "دقائق التأخير", "عدد العمليات", "ملاحظات التأخير", "أقصى دقائق مسموح بها", "نسبة السرعة %"]];
+      const efficiencyRows: unknown[][] = [["الفرع", "المندوب", "المصداقية %", "المعرفة بالمخزون %", "نتيجة السرعة %", "الأسعار الحالية %", "الأسعار السابقة %", "مواصفات السيارة %", "مقارنة المنافسين %", "قنوات البيع %", "الشخصية %", "الفنية %", "الكفاءة %", "نقاط التميز"]];
+      const disciplineRows: unknown[][] = [["الفرع", "المندوب", "التاريخ", "الحضور / 3", "الهيئة / 3", "السلوك / 3", "نسبة الانضباط %"]];
+      const valueRows: unknown[][] = [["الفرع", "المندوب", "التاريخ", "تقييم العملاء / 3", "عدد المبيعات", "نسبة القيمة %"]];
+
+      entries.forEach(({ agent, input, details, calc }) => {
+        const dates = [...new Set([...businessDates(input.periodStart, input.periodEnd), ...Object.keys(details.dailyPerformance || {}), ...Object.keys(details.speed?.dailyDelaySales || {})])].sort();
+        dates.forEach((date) => {
+          const delays = (details.speed?.dailyDelaySales?.[date] || []).filter((entry) => String(entry ?? "").trim() !== "");
+          const notes = (details.speed?.dailyDelayNotes?.[date] || []).filter((entry) => String(entry ?? "").trim() !== "");
+          const daily = details.dailyPerformance?.[date] || { attendance: 0, appearance: 0, behavior: 0, customerRating: 0, salesCount: 0 };
+          speedRows.push([input.branchName || "—", agent.full_name || "—", date, delays.join("، ") || "—", delays.length, notes.join(" | ") || "—", number(details.speed.maxAllowedMinutes, 3), Math.round(calc.speedRate)]);
+          disciplineRows.push([input.branchName || "—", agent.full_name || "—", date, daily.attendance, daily.appearance, daily.behavior, Math.round(calc.disciplineRate)]);
+          valueRows.push([input.branchName || "—", agent.full_name || "—", date, daily.customerRating, daily.salesCount, Math.round(calc.valueRate)]);
+        });
+        efficiencyRows.push([
+          input.branchName || "—", agent.full_name || "—",
+          details.efficiency.personality.customerFitHonesty, details.efficiency.personality.carNotesHonesty, Math.round(calc.speedRate),
+          details.efficiency.technical.currentPrices, details.efficiency.technical.oldPrices, details.efficiency.technical.carSpecs,
+          details.efficiency.technical.competitorsComparison, details.efficiency.technical.salesChannels,
+          Math.round(calc.personalityRate), Math.round(calc.technicalRate), Math.round(calc.efficiencyRate), Math.round(calc.efficiencyPoints),
+        ]);
+      });
+      sheets.push(worksheet("السرعة", speedRows), worksheet("الكفاءة", efficiencyRows), worksheet("الانضباط", disciplineRows), worksheet("القيمة", valueRows));
+    }
+
+    const workbook = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/></Style><Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#F8ECE5" ss:Pattern="Solid"/><Alignment ss:Horizontal="Right" ss:Vertical="Center"/></Style></Styles>${sheets.join("")}</Workbook>`;
+    downloadBrowserFile(`KPI-${full ? "FULL" : "RESULT"}-${period.from || "from"}-${period.to || "to"}.xls`, workbook, "application/vnd.ms-excel;charset=utf-8");
   }
 
   const reportSummary = useMemo(() => {
@@ -449,7 +556,13 @@ th{background:#f8ece5;font-weight:900}
 
   return (
     <div className="crm-page kpi-page kpi-page-v3">
-      <div className="page-top-actions"><button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button></div>
+      <div className="page-top-actions">
+        <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisiblePdf("result")}><FilePdf size={18} />PDF النتيجة</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisiblePdf("all")}><FilePdf size={18} />PDF كامل</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisibleExcel(false)}><FileXls size={18} />Excel النتيجة</button>
+        <button type="button" className="crm-secondary-button" disabled={loading || !visibleAgents.length} onClick={() => exportVisibleExcel(true)}><FileXls size={18} />Excel كامل</button>
+      </div>
 
       <div className="crm-department-tabs kpi-main-tabs centered">
         <button type="button" className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><UsersThree size={18} />إضافة التقييم</button>

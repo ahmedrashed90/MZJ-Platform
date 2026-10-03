@@ -283,7 +283,7 @@ async function adminBootstrap() {
   const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string }[]>`
     select enforcement_enabled,official_day_end::text as official_day_end from core.attendance_settings where id=1 limit 1
   `;
-  const [schedules, periods, users, branches] = await Promise.all([
+  const [schedules, periods, users, branches, attendanceBranchRows] = await Promise.all([
     sql<any[]>`
       select id::text,name,is_active
       from core.attendance_schedules
@@ -299,9 +299,10 @@ async function adminBootstrap() {
     sql<any[]>`
       select
         u.id::text,u.employee_no,u.full_name,u.email,u.mobile,
-        coalesce(ab.id::text,crm_branch.id,global_branch.id) as branch_id,
-        coalesce(ab.name,crm_branch.name,global_branch.name,'—') as branch_name,
-        a.id::text as assignment_id,a.schedule_id::text,a.weekly_off_day,
+        case when a.id is not null then a.branch_id::text else coalesce(crm_branch.id,global_branch.id) end as branch_id,
+        a.attendance_branch_name,
+        coalesce(nullif(btrim(a.attendance_branch_name),''),ab.name,crm_branch.name,global_branch.name,'—') as branch_name,
+        a.id::text as assignment_id,a.schedule_id::text,a.weekly_off_day,a.daily_work_hours,
         coalesce(a.period_overrides,'{}'::jsonb) as period_overrides,
         coalesce(a.period_ids,'{}'::uuid[]) as period_ids,
         s.name as schedule_name
@@ -332,10 +333,18 @@ async function adminBootstrap() {
         order by ub.is_primary desc,b.sort_order,b.name
         limit 1
       ) global_branch on true
-      where u.is_active=true
+      where u.is_active=true and coalesce(u.is_archived,false)=false
       order by u.full_name
     `,
     sql<any[]>`select id::text,code,name from core.branches where is_active=true order by sort_order,name`,
+    sql<any[]>`
+      select distinct btrim(attendance_branch_name) as name
+      from core.attendance_user_schedules
+      where nullif(btrim(attendance_branch_name),'') is not null
+        and effective_from <= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date
+        and (effective_to is null or effective_to >= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+      order by name
+    `,
   ]);
 
   const periodMap = new Map<string, any[]>();
@@ -376,7 +385,10 @@ async function adminBootstrap() {
         devices: deviceSnapshot.deviceMap.get(String(user.id)) || [],
       };
     }),
-    branches,
+    branches: [
+      ...branches,
+      ...attendanceBranchRows.map((row) => ({ id: `attendance:${encodeURIComponent(clean(row.name))}`, code: "attendance_custom", name: clean(row.name) })),
+    ],
   };
 }
 
@@ -494,6 +506,12 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const scheduleId = validUuid(clean(body.scheduleId)) ? clean(body.scheduleId) : "";
   const periodIds = normalizedIdList(body.periodIds);
   const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
+  const requestedBranchName = clean(body.branchName).slice(0, 120) || null;
+  const dailyWorkHoursRaw = clean(body.dailyWorkHours);
+  const dailyWorkHours = dailyWorkHoursRaw ? Number(dailyWorkHoursRaw) : null;
+  if (dailyWorkHours !== null && (!Number.isFinite(dailyWorkHours) || dailyWorkHours <= 0 || dailyWorkHours > 24)) {
+    throw new AttendanceError("INVALID_DAILY_WORK_HOURS", "إجمالي ساعات العمل اليومية يجب أن يكون أكبر من صفر وحتى 24 ساعة");
+  }
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
   const requestedPeriodOverrides = normalizePeriodOverrides(body.periodOverrides);
   const enforcementEnabled = await isAttendanceEnforcementEnabled();
@@ -523,10 +541,10 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
 
   await sql.begin(async (tx) => {
     for (const userId of userIds) {
-      const [user] = await tx<any[]>`select id::text from core.users where id=${userId}::uuid and is_active=true`;
+      const [user] = await tx<any[]>`select id::text from core.users where id=${userId}::uuid and is_active=true and coalesce(is_archived,false)=false`;
       if (!user) continue;
       const [current] = await tx<any[]>`
-        select id::text,schedule_id::text,branch_id::text,period_ids,period_overrides,weekly_off_day,effective_from::text
+        select id::text,schedule_id::text,branch_id::text,attendance_branch_name,daily_work_hours,period_ids,period_overrides,weekly_off_day,effective_from::text
         from core.attendance_user_schedules
         where user_id=${userId}::uuid and effective_to is null
         order by effective_from desc,created_at desc limit 1
@@ -547,8 +565,17 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         continue;
       }
 
-      let effectiveBranchId = requestedBranchId || (validUuid(clean(current?.branch_id)) ? clean(current.branch_id) : null);
-      if (!effectiveBranchId) {
+      let effectiveBranchId: string | null = null;
+      let effectiveBranchName: string | null = null;
+      if (requestedBranchName) {
+        effectiveBranchName = requestedBranchName;
+      } else if (requestedBranchId) {
+        effectiveBranchId = requestedBranchId;
+      } else if (clean(current?.attendance_branch_name)) {
+        effectiveBranchName = clean(current.attendance_branch_name).slice(0, 120);
+      } else if (validUuid(clean(current?.branch_id))) {
+        effectiveBranchId = clean(current.branch_id);
+      } else {
         const [preferredBranch] = await tx<any[]>`
           select coalesce(
             (
@@ -570,9 +597,12 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         effectiveBranchId = validUuid(clean(preferredBranch?.branch_id)) ? clean(preferredBranch.branch_id) : null;
       }
 
+      const currentDailyHours = current?.daily_work_hours === null || current?.daily_work_hours === undefined ? null : Number(current.daily_work_hours);
       const same = current
         && clean(current.schedule_id) === scheduleId
         && clean(current.branch_id) === clean(effectiveBranchId)
+        && clean(current.attendance_branch_name) === clean(effectiveBranchName)
+        && (currentDailyHours === null ? dailyWorkHours === null : dailyWorkHours !== null && Math.abs(currentDailyHours - dailyWorkHours) < 0.001)
         && sameIdList(current.period_ids, periodIds)
         && periodOverridesEqual(current.period_overrides, body.__assignmentPeriodOverrides)
         && parseWeeklyOffDay(current.weekly_off_day) === weeklyOffDay;
@@ -581,7 +611,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       if (current && dateOnlyValue(current.effective_from) === currentRiyadhDate()) {
         await tx`
           update core.attendance_user_schedules
-          set schedule_id=${scheduleId}::uuid,branch_id=${effectiveBranchId}::uuid,
+          set schedule_id=${scheduleId}::uuid,branch_id=${effectiveBranchId}::uuid,attendance_branch_name=${effectiveBranchName},daily_work_hours=${dailyWorkHours},
               period_ids=${periodIds}::uuid[],period_overrides=${JSON.stringify(body.__assignmentPeriodOverrides || {})}::jsonb,weekly_off_day=${weeklyOffDay}
           where id=${current.id}::uuid
         `;
@@ -594,8 +624,8 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
           `;
         }
         await tx`
-          insert into core.attendance_user_schedules(user_id,schedule_id,branch_id,period_ids,period_overrides,weekly_off_day,effective_from,created_by)
-          values(${userId}::uuid,${scheduleId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${JSON.stringify(body.__assignmentPeriodOverrides || {})}::jsonb,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
+          insert into core.attendance_user_schedules(user_id,schedule_id,branch_id,attendance_branch_name,daily_work_hours,period_ids,period_overrides,weekly_off_day,effective_from,created_by)
+          values(${userId}::uuid,${scheduleId}::uuid,${effectiveBranchId}::uuid,${effectiveBranchName},${dailyWorkHours},${periodIds}::uuid[],${JSON.stringify(body.__assignmentPeriodOverrides || {})}::jsonb,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
       if (enforcementEnabled) await tx`delete from core.sessions where user_id=${userId}::uuid`;
@@ -641,7 +671,11 @@ async function reportData(request: VercelRequest) {
   ));
   const legacyEmployeeId = validUuid(clean(request.query.employeeId)) ? clean(request.query.employeeId) : "";
   if (!employeeIds.length && legacyEmployeeId) employeeIds.push(legacyEmployeeId);
-  const branchId = validUuid(clean(request.query.branchId)) ? clean(request.query.branchId) : "";
+  const rawBranchKey = clean(request.query.branchId);
+  const branchId = validUuid(rawBranchKey) ? rawBranchKey : "";
+  const attendanceBranchName = rawBranchKey.startsWith("attendance:")
+    ? decodeURIComponent(rawBranchKey.slice("attendance:".length)).trim()
+    : "";
 
   const users = employeeIds.length
     ? await sql<any[]>`
@@ -681,7 +715,7 @@ async function reportData(request: VercelRequest) {
             )
           ) as branch_id
         from core.users u
-        where u.is_active=true
+        where u.is_active=true and coalesce(u.is_archived,false)=false
           and u.id::text in ${sql(employeeIds)}
         order by u.full_name
       `
@@ -722,7 +756,7 @@ async function reportData(request: VercelRequest) {
             )
           ) as branch_id
         from core.users u
-        where u.is_active=true
+        where u.is_active=true and coalesce(u.is_archived,false)=false
         order by u.full_name
       `;
   const userIds = users.map((user) => String(user.id));
@@ -731,9 +765,9 @@ async function reportData(request: VercelRequest) {
   const [assignments, periods, records] = await Promise.all([
     sql<any[]>`
       select
-        a.id::text,a.user_id::text,a.schedule_id::text,a.branch_id::text,
+        a.id::text,a.user_id::text,a.schedule_id::text,a.branch_id::text,a.attendance_branch_name,a.daily_work_hours,
         coalesce(a.period_ids,'{}'::uuid[]) as period_ids,coalesce(a.period_overrides,'{}'::jsonb) as period_overrides,a.weekly_off_day,
-        a.effective_from::text,a.effective_to::text,a.created_at::text,s.name as schedule_name,b.name as branch_name
+        a.effective_from::text,a.effective_to::text,a.created_at::text,s.name as schedule_name,coalesce(nullif(btrim(a.attendance_branch_name),''),b.name) as branch_name
       from core.attendance_user_schedules a
       join core.attendance_schedules s on s.id=a.schedule_id
       left join core.branches b on b.id=a.branch_id
@@ -825,8 +859,10 @@ async function reportData(request: VercelRequest) {
     for (const user of users) {
       const userAssignments = assignmentMap.get(String(user.id)) || [];
       const assignment = userAssignments.find((item) => dateOnlyValue(item.effective_from) <= day && (!item.effective_to || dateOnlyValue(item.effective_to) >= day)) || null;
-      const effectiveBranchId = clean(assignment?.branch_id || user.branch_id);
+      const assignmentBranchName = clean(assignment?.attendance_branch_name);
+      const effectiveBranchId = assignmentBranchName ? "" : clean(assignment?.branch_id || user.branch_id);
       if (branchId && effectiveBranchId !== branchId) continue;
+      if (attendanceBranchName && assignmentBranchName !== attendanceBranchName) continue;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
       const visibleDayRecords = dayRecords.filter((record) => {
         const legacySourceKey = clean(record.legacy_source_key);
@@ -917,7 +953,7 @@ async function reportData(request: VercelRequest) {
 
       rawRows.push({
         date: day,
-        branch: assignment?.branch_name || user.branch_name || "—",
+        branch: assignmentBranchName || assignment?.branch_name || user.branch_name || "—",
         userId: user.id,
         employeeNo: user.employee_no,
         name: user.full_name,
@@ -936,7 +972,7 @@ async function reportData(request: VercelRequest) {
   }));
 
   return {
-    ok: true, from, to, today, officialDayEnd, branchId: branchId || null, rows, periodHeaders,
+    ok: true, from, to, today, officialDayEnd, branchId: rawBranchKey || null, rows, periodHeaders,
     users: users.map((user) => ({ id: user.id, fullName: user.full_name })),
   };
 }

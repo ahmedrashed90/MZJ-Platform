@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20260928-global-attendance-v8-assignment-period-times";
+export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v9-user-hours-branch-labels";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -47,6 +47,8 @@ create table if not exists core.attendance_user_schedules (
   user_id uuid not null references core.users(id) on delete cascade,
   schedule_id uuid not null references core.attendance_schedules(id) on delete restrict,
   branch_id uuid references core.branches(id) on delete set null,
+  attendance_branch_name text,
+  daily_work_hours numeric(5,2),
   period_ids uuid[],
   period_overrides jsonb not null default '{}'::jsonb,
   weekly_off_day smallint,
@@ -58,9 +60,23 @@ create table if not exists core.attendance_user_schedules (
   check (effective_to is null or effective_to >= effective_from)
 );
 alter table core.attendance_user_schedules add column if not exists branch_id uuid references core.branches(id) on delete set null;
+alter table core.attendance_user_schedules add column if not exists attendance_branch_name text;
+alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);
 alter table core.attendance_user_schedules add column if not exists period_ids uuid[];
 alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
 alter table core.attendance_user_schedules add column if not exists weekly_off_day smallint;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='attendance_user_schedules_daily_work_hours_check'
+      and conrelid='core.attendance_user_schedules'::regclass
+  ) then
+    alter table core.attendance_user_schedules
+      add constraint attendance_user_schedules_daily_work_hours_check
+      check (daily_work_hours is null or (daily_work_hours > 0 and daily_work_hours <= 24));
+  end if;
+end $$;
 update core.attendance_user_schedules a
 set period_ids=(
   select array_agg(p.id order by p.sort_order,p.start_time,p.id)
@@ -148,6 +164,14 @@ async function attendanceSchemaReady() {
       )
       and exists (
         select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_user_schedules' and column_name='attendance_branch_name'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_user_schedules' and column_name='daily_work_hours'
+      )
+      and exists (
+        select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_user_schedules' and column_name='period_ids'
       )
       and exists (
@@ -221,6 +245,20 @@ export function ensureAttendanceSchema() {
           );
           alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
           alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
+          alter table core.attendance_user_schedules add column if not exists attendance_branch_name text;
+          alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);
+          do $$
+          begin
+            if not exists (
+              select 1 from pg_constraint
+              where conname='attendance_user_schedules_daily_work_hours_check'
+                and conrelid='core.attendance_user_schedules'::regclass
+            ) then
+              alter table core.attendance_user_schedules
+                add constraint attendance_user_schedules_daily_work_hours_check
+                check (daily_work_hours is null or (daily_work_hours > 0 and daily_work_hours <= 24));
+            end if;
+          end $$;
           insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
           on conflict(id) do nothing;
           insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values

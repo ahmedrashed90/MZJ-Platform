@@ -56,6 +56,8 @@ type UserRow = {
   mobile: string | null;
   branch_id: string | null;
   branch_name: string;
+  attendance_branch_name: string | null;
+  daily_work_hours: number | null;
   assignment_id: string | null;
   schedule_id: string | null;
   period_ids: string[];
@@ -110,6 +112,8 @@ export function AttendanceSettingsPanel() {
   const [assignmentPeriodIds, setAssignmentPeriodIds] = useState<string[]>([]);
   const [assignmentPeriodOverrides, setAssignmentPeriodOverrides] = useState<Record<string, PeriodOverride>>({});
   const [assignmentBranchId, setAssignmentBranchId] = useState("");
+  const [assignmentCustomBranchName, setAssignmentCustomBranchName] = useState("");
+  const [assignmentDailyWorkHours, setAssignmentDailyWorkHours] = useState("");
   const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
   const [userSearch, setUserSearch] = useState("");
@@ -153,6 +157,8 @@ export function AttendanceSettingsPanel() {
     setAssignmentPeriodIds([]);
     setAssignmentPeriodOverrides({});
     setAssignmentBranchId("");
+    setAssignmentCustomBranchName("");
+    setAssignmentDailyWorkHours("");
     setAssignmentWeeklyOffDay("");
     setEditingUserId("");
   }
@@ -340,7 +346,14 @@ export function AttendanceSettingsPanel() {
     setAssignmentPeriodOverrides(Object.fromEntries((schedule?.periods || [])
       .filter((period) => period.id && selectedPeriodIds.includes(period.id))
       .map((period) => [period.id!, user.period_overrides?.[period.id!] || { startTime: period.startTime, endTime: period.endTime }])));
-    setAssignmentBranchId(user.branch_id || "");
+    if (user.attendance_branch_name) {
+      setAssignmentBranchId(`attendance:${encodeURIComponent(user.attendance_branch_name)}`);
+      setAssignmentCustomBranchName(user.attendance_branch_name);
+    } else {
+      setAssignmentBranchId(user.branch_id || "");
+      setAssignmentCustomBranchName("");
+    }
+    setAssignmentDailyWorkHours(user.daily_work_hours === null || user.daily_work_hours === undefined ? "" : String(user.daily_work_hours));
     setAssignmentWeeklyOffDay(user.weekly_off_day === null || user.weekly_off_day === undefined ? "" : String(user.weekly_off_day));
     window.setTimeout(() => document.getElementById("attendance-assignment-editor")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
   }
@@ -361,6 +374,14 @@ export function AttendanceSettingsPanel() {
     }
     setBusy("assignment");
     try {
+      const attendanceBranchKey = assignmentBranchId.startsWith("attendance:") ? assignmentBranchId.slice("attendance:".length) : "";
+      const branchName = assignmentBranchId === "attendance:__custom__"
+        ? assignmentCustomBranchName.trim()
+        : attendanceBranchKey ? decodeURIComponent(attendanceBranchKey) : "";
+      if (!unassign && assignmentBranchId === "attendance:__custom__" && !branchName) {
+        setError("اكتب اسم الفرع الخاص بالحضور والانصراف");
+        return;
+      }
       await attendanceFetch("/api/attendance", {
         method: "POST",
         body: JSON.stringify({
@@ -369,11 +390,13 @@ export function AttendanceSettingsPanel() {
           scheduleId: unassign ? "" : assignmentScheduleId,
           periodIds: unassign ? [] : assignmentPeriodIds,
           periodOverrides: unassign ? {} : assignmentPeriodOverrides,
-          branchId: unassign ? "" : assignmentBranchId,
+          branchId: unassign || attendanceBranchKey ? "" : assignmentBranchId,
+          branchName: unassign ? "" : branchName,
+          dailyWorkHours: unassign ? "" : assignmentDailyWorkHours,
           weeklyOffDay: unassign ? "" : assignmentWeeklyOffDay,
         }),
       });
-      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : editingUserId ? "تم تعديل بيانات دوام الموظف" : "تم تطبيق جدول العمل والفترات والفرع ويوم الإجازة على اليوزرات المحددين");
+      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : editingUserId ? "تم تعديل بيانات دوام الموظف" : "تم تطبيق جدول العمل والفترات والفرع وساعات العمل ويوم الإجازة على اليوزرات المحددين");
       resetAssignmentEditor();
       await load();
     } catch (assignError) {
@@ -522,10 +545,12 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>جداول العمل والفترات والفرع ويوم الإجازة والتحقق من جهاز العمل لكل يوزر.</p></span></div></header>
+        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>جداول العمل والفترات والفرع وإجمالي ساعات العمل اليومية ويوم الإجازة والتحقق من جهاز العمل لكل يوزر.</p></span></div></header>
         <div className="attendance-assignment-toolbar" id="attendance-assignment-editor">
           <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => changeAssignmentSchedule(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
-          <label><span>الفرع</span><select value={assignmentBranchId} onChange={(event) => setAssignmentBranchId(event.target.value)}><option value="">استخدام الفرع الحالي للموظف</option>{(data?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
+          <label><span>الفرع</span><select value={assignmentBranchId} onChange={(event) => { setAssignmentBranchId(event.target.value); if (event.target.value !== "attendance:__custom__") setAssignmentCustomBranchName(""); }}><option value="">استخدام الفرع الحالي للموظف</option>{(data?.branches || []).filter((branch, index, rows) => rows.findIndex((item) => item.id === branch.id) === index).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}{!(data?.branches || []).some((branch) => branch.name === "الإدارة") ? <option value={`attendance:${encodeURIComponent("الإدارة")}`}>الإدارة</option> : null}{!(data?.branches || []).some((branch) => branch.name === "الأرشيف") ? <option value={`attendance:${encodeURIComponent("الأرشيف")}`}>الأرشيف</option> : null}<option value="attendance:__custom__">فرع حضور آخر...</option></select></label>
+          {assignmentBranchId === "attendance:__custom__" ? <label><span>اسم الفرع</span><input value={assignmentCustomBranchName} onChange={(event) => setAssignmentCustomBranchName(event.target.value)} placeholder="مثال: الإدارة أو الأرشيف" maxLength={120} /></label> : null}
+          <label><span>إجمالي ساعات العمل في اليوم</span><input type="number" min={0.25} max={24} step={0.25} value={assignmentDailyWorkHours} onChange={(event) => setAssignmentDailyWorkHours(event.target.value)} placeholder="مثال: 8" /></label>
           <label><span>يوم الإجازة</span><select value={assignmentWeeklyOffDay} onChange={(event) => setAssignmentWeeklyOffDay(event.target.value)}><option value="">بدون إجازة أسبوعية</option>{WEEKLY_OFF_DAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label>
           <div className="attendance-assignment-actions">
             <button className="attendance-save-button" type="button" onClick={() => void applyAssignment(false)} disabled={busy === "assignment" || !selectedUsers.length}><FloppyDisk size={18} /> {editingUserId ? "حفظ تعديل اليوزر" : `تطبيق على المحدد (${selectedUsers.length})`}</button>
@@ -603,7 +628,7 @@ export function AttendanceSettingsPanel() {
 
         <div className="unified-table-wrap attendance-users-table-wrap">
           <table>
-            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>يوم الإجازة</th><th>التحقق من الجهاز</th><th>أجهزة العمل</th><th>تعديل</th></tr></thead>
+            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>ساعات العمل/اليوم</th><th>يوم الإجازة</th><th>التحقق من الجهاز</th><th>أجهزة العمل</th><th>تعديل</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => {
                 const approvedDevices = (user.devices || []).filter((device) => device.status === "approved");
@@ -615,6 +640,7 @@ export function AttendanceSettingsPanel() {
                     <td>{user.branch_name || "—"}</td>
                     <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
                     <td>{user.schedule_id ? userPeriodNames(user) : <span className="attendance-muted">غير محدد</span>}</td>
+                    <td>{user.daily_work_hours === null || user.daily_work_hours === undefined ? <span className="attendance-muted">—</span> : `${Number(user.daily_work_hours).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })} س`}</td>
                     <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون إجازة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
                     <td>
                       <select
@@ -637,7 +663,7 @@ export function AttendanceSettingsPanel() {
                   </tr>
                 );
               })}
-              {!filteredUsers.length ? <tr><td colSpan={9}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
+              {!filteredUsers.length ? <tr><td colSpan={10}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
             </tbody>
           </table>
         </div>

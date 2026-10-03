@@ -177,7 +177,7 @@ async function resolveKpiAccess(sql: ReturnType<typeof getSql>, user: any) {
   const rows = await sql<{ section_code: string; configured_count: number; current_user_allowed: boolean }[]>`
     select section_code,count(*)::int as configured_count,bool_or(user_id=${user.id}::uuid) as current_user_allowed
     from crm.kpi_section_permissions p
-    join core.users allowed_user on allowed_user.id=p.user_id and allowed_user.is_active=true
+    join core.users allowed_user on allowed_user.id=p.user_id and allowed_user.is_active=true and coalesce(allowed_user.is_archived,false)=false
     where p.section_code in ('speed','efficiency')
     group by p.section_code
   `;
@@ -224,7 +224,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         primary_department.code as department_code,
         primary_department.name as department_name
       from crm.kpi_evaluations e
-      join core.users u on u.id=e.user_id and u.is_active=true
+      join core.users u on u.id=e.user_id and u.is_active=true and coalesce(u.is_archived,false)=false
       join lateral (
         select d.code,d.name
         from core.user_system_departments usd
@@ -292,7 +292,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by usb.is_primary desc,b.sort_order,b.name
         limit 1
       ) primary_branch on true
-      where u.is_active=true
+      where u.is_active=true and coalesce(u.is_archived,false)=false
         and (
           u.can_receive_leads=true
           or exists (
@@ -343,7 +343,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by usb.is_primary desc,b.sort_order,b.name
         limit 1
       ) primary_branch on true
-      where u.id=${userId}::uuid and u.is_active=true
+      where u.id=${userId}::uuid and u.is_active=true and coalesce(u.is_archived,false)=false
         and (
           u.can_receive_leads=true
           or exists (

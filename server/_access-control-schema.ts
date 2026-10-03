@@ -50,6 +50,9 @@ alter table core.users add column if not exists permission_version bigint not nu
 alter table core.users add column if not exists disabled_at timestamptz;
 alter table core.users add column if not exists disabled_by uuid references core.users(id);
 alter table core.users add column if not exists disabled_reason text;
+alter table core.users add column if not exists is_archived boolean not null default false;
+alter table core.users add column if not exists archived_at timestamptz;
+alter table core.users add column if not exists archived_by uuid references core.users(id);
 alter table core.sessions add column if not exists permission_version bigint not null default 1;
 update core.sessions s set permission_version=u.permission_version from core.users u where u.id=s.user_id;
 
@@ -551,7 +554,7 @@ create table if not exists core.access_control_schema_state (
   updated_at timestamptz not null default now()
 );
 insert into core.access_control_schema_state(id,version,updated_at)
-values(1,1192,now())
+values(1,1193,now())
 on conflict(id) do update set version=greatest(core.access_control_schema_state.version,excluded.version),updated_at=now();
 
 `;
@@ -659,7 +662,7 @@ create index if not exists core_mersal_users_email_idx on core.mersal_users(lowe
 commit;
 `;
 
-const ACCESS_CONTROL_SCHEMA_VERSION = 1192;
+const ACCESS_CONTROL_SCHEMA_VERSION = 1193;
 let accessControlSchemaPromise: Promise<void> | null = null;
 
 async function accessControlSchemaReady() {
@@ -670,6 +673,7 @@ async function accessControlSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_systems')
       and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_permission_overrides')
       and exists(select 1 from information_schema.columns where table_schema='core' and table_name='users' and column_name='permission_version')
+      and exists(select 1 from information_schema.columns where table_schema='core' and table_name='users' and column_name='is_archived')
       and exists(select 1 from information_schema.columns where table_schema='core' and table_name='sessions' and column_name='permission_version')
       and exists(select 1 from information_schema.columns where table_schema='audit' and table_name='activity_log' and column_name='permission_code')
       as ready

@@ -23,12 +23,14 @@ check("existing sessions remain allowed outside an active period", core.includes
 check("active periods still require an open attendance record", core.includes("r.check_in is not null") && core.includes("r.check_out is null"));
 check("morning and evening periods can close independently", core.includes("period_id=ap.period_id") && core.includes("scheduled_end_at"));
 check("report uses assignment period overrides", api.includes("const assignmentOverrides = normalizePeriodOverrides(assignment?.period_overrides)") && api.includes("override?.startTime") && api.includes("override?.endTime"));
+check("attendance assignments store per-user daily hours and custom attendance branch", schema.includes("daily_work_hours numeric(5,2)") && schema.includes("attendance_branch_name text") && api.includes("dailyWorkHours") && api.includes("requestedBranchName"));
+check("attendance settings expose flexible attendance-only branches", settings.includes("إجمالي ساعات العمل في اليوم") && settings.includes("الإدارة") && settings.includes("الأرشيف") && settings.includes("فرع حضور آخر"));
 check("same-day ended missing period becomes absent using that period end", api.includes('result = nowMinutes >= effectiveEnd ? "غائب" : "لم يسجل"'));
 check("open attendance contributes live worked minutes capped by scheduled end", api.includes("liveWorkMinutes(record)") && api.includes("Math.min(Date.now(), Number.isFinite(scheduledEndMs) ? scheduledEndMs : Date.now())"));
-check("excel has professional summary sheet", report.includes('ss:Name="ملخص الفترة"') && report.includes("ساعات العمل الفعلية") && report.includes("دقائق التأخير") && report.includes("أيام الغياب"));
-check("excel has daily details sheet", report.includes('ss:Name="التفاصيل اليومية"') && report.includes("التفاصيل اليومية للحضور والانصراف"));
-check("excel is styled and colored", report.includes('ss:ID="Present"') && report.includes('ss:ID="Late"') && report.includes('ss:ID="Absent"') && report.includes('ss:ID="Header"'));
-check("excel summarizes day or month by employee", report.includes("attendanceSummary(payload)") && report.includes("requiredDays") && report.includes("workMinutes") && report.includes("absenceDays"));
+check("excel uses the requested single summary sheet", report.includes('ss:Name="ملخص الفترة"') && !report.includes('ss:Name="التفاصيل اليومية"'));
+check("excel uses the requested six daily columns", report.includes('"اليوم"') && report.includes('"التاريخ"') && report.includes('"حضور الفترة الأولى"') && report.includes('"انصراف الفترة الأولى"') && report.includes('"حضور الفترة الثانية"') && report.includes('"انصراف الفترة الثانية"'));
+check("excel is styled for title employee and header rows", report.includes('ss:ID="Title"') && report.includes('ss:ID="Employee"') && report.includes('ss:ID="Header"'));
+check("pdf and excel keep both work periods on one daily row", report.includes("const [first, second] = exportPeriods(row)") && report.includes("exportCheckIn(first)") && report.includes("exportCheckOut(first)") && report.includes("exportCheckIn(second)") && report.includes("exportCheckOut(second)"));
 check("report UI layout classes remain present", report.includes("attendance-report-toolbar") && report.includes("attendance-report-filters") && report.includes("attendance-day-groups") && styles.includes(".attendance-report-card"));
 check("device agent flow remains present", read("server/auth/login.ts").includes("DEVICE_AGENT_REQUIRED") && settings.includes("approveDevice"));
 check("attendance cron remains scheduled every minute", read("vercel.json").includes("internal/attendance-tick") && read("vercel.json").includes("* * * * *"));

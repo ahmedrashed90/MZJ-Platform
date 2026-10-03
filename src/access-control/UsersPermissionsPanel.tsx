@@ -10,7 +10,7 @@ import type { AccessSystemCode, DataScope, PlatformSystem } from "../../shared/a
 type Tab = "users" | "roles" | "org" | "catalog" | "permission-log" | "security-log";
 type UserSystemForm = { systemCode: PlatformSystem; isEnabled: boolean; roleId: string; dataScope: DataScope; branchIds: string[]; departmentIds: string[]; vehicleStatusCodes: string[]; primaryBranchId: string; primaryDepartmentId: string };
 type OverrideEffect = "inherit" | "allow" | "deny";
-type UserForm = { id: string; employeeNo: string; fullName: string; email: string; mobile: string; nextErpUserId: string; mersalUserId: string; password: string; isActive: boolean; canReceiveLeads: boolean; canReceiveTasks: boolean; roleIds: string[]; systems: UserSystemForm[]; overrides: Record<string, OverrideEffect>; reason: string };
+type UserForm = { id: string; employeeNo: string; fullName: string; email: string; mobile: string; nextErpUserId: string; mersalUserId: string; password: string; isActive: boolean; isArchived: boolean; canReceiveLeads: boolean; canReceiveTasks: boolean; roleIds: string[]; systems: UserSystemForm[]; overrides: Record<string, OverrideEffect>; reason: string };
 type RoleGroup = { key: string; name: string; canonical: RoleItem; roleIds: string[] };
 
 const systemOrder: PlatformSystem[] = ["operations", "tracking", "marketing", "crm", "website"];
@@ -26,7 +26,7 @@ const tabLabels: Record<Tab, string> = {
 function cleanArray(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : []; }
 function emptyForm(bootstrap: BootstrapResponse | null): UserForm {
   return {
-    id: "", employeeNo: "", fullName: "", email: "", mobile: "", nextErpUserId: "", mersalUserId: "", password: "", isActive: true,
+    id: "", employeeNo: "", fullName: "", email: "", mobile: "", nextErpUserId: "", mersalUserId: "", password: "", isActive: true, isArchived: false,
     canReceiveLeads: false, canReceiveTasks: false, roleIds: [], reason: "",
     systems: systemOrder.map((systemCode) => ({ systemCode, isEnabled: false, roleId: "", dataScope: systemCode === "marketing" ? "workflow_assigned" : "assigned", branchIds: [], departmentIds: [], vehicleStatusCodes: [], primaryBranchId: "", primaryDepartmentId: "" })),
     overrides: Object.fromEntries((bootstrap?.permissions || []).map((permission) => [permission.code, "inherit"])),
@@ -213,7 +213,7 @@ export function UsersPermissionsPanel() {
         const row = detail.systems.find((item) => item.system_code === systemCode);
         return { systemCode, isEnabled: Boolean(row?.is_enabled), roleId: row?.role_id || "", dataScope: row?.data_scope || "assigned", branchIds: cleanArray(row?.branch_ids), departmentIds: cleanArray(row?.department_ids), vehicleStatusCodes: cleanArray(row?.vehicle_status_codes), primaryBranchId: row?.primary_branch_id || cleanArray(row?.branch_ids)[0] || "", primaryDepartmentId: row?.primary_department_id || cleanArray(row?.department_ids)[0] || "" } as UserSystemForm;
       });
-      setForm({ id: detail.user.id || id, employeeNo: detail.user.employee_no || "", fullName: detail.user.full_name || "", email: detail.user.email || "", mobile: detail.user.mobile || "", nextErpUserId: detail.user.next_erp_user_id || "", mersalUserId: detail.user.mersal_user_id || "", password: "", isActive: Boolean(detail.user.is_active), canReceiveLeads: Boolean(detail.user.can_receive_leads), canReceiveTasks: Boolean(detail.user.can_receive_tasks), roleIds: detail.roleIds || [], systems, overrides, reason: "" });
+      setForm({ id: detail.user.id || id, employeeNo: detail.user.employee_no || "", fullName: detail.user.full_name || "", email: detail.user.email || "", mobile: detail.user.mobile || "", nextErpUserId: detail.user.next_erp_user_id || "", mersalUserId: detail.user.mersal_user_id || "", password: "", isActive: Boolean(detail.user.is_active), isArchived: Boolean(detail.user.is_archived), canReceiveLeads: Boolean(detail.user.can_receive_leads), canReceiveTasks: Boolean(detail.user.can_receive_tasks), roleIds: detail.roleIds || [], systems, overrides, reason: "" });
       setSystemTab("operations"); setCopySourceId("");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر فتح المستخدم"); }
     finally { setLoading(false); }
@@ -258,11 +258,45 @@ export function UsersPermissionsPanel() {
       return next;
     });
   }
+  function toggleSystemBranch(branchId: string) {
+    setForm((current) => {
+      const system = current.systems.find((item) => item.systemCode === systemTab)!;
+      const branchIds = toggle(system.branchIds, branchId);
+      return {
+        ...current,
+        isArchived: branchIds.length ? false : current.isArchived,
+        systems: current.systems.map((item) => item.systemCode === systemTab ? {
+          ...item,
+          branchIds,
+          primaryBranchId: branchIds.includes(item.primaryBranchId) ? item.primaryBranchId : branchIds[0] || "",
+        } : item),
+      };
+    });
+  }
+
+  function setPrimaryBranch(value: string) {
+    if (value === "__archive__") {
+      setForm((current) => ({
+        ...current,
+        isArchived: true,
+        canReceiveLeads: false,
+        canReceiveTasks: false,
+        systems: current.systems.map((item) => ({ ...item, branchIds: [], primaryBranchId: "" })),
+      }));
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      isArchived: false,
+      systems: current.systems.map((item) => item.systemCode === systemTab ? { ...item, primaryBranchId: value } : item),
+    }));
+  }
+
   async function saveUser() {
     setSaving(true); setError(""); setMessage("");
     try {
       const overrides = Object.entries(form.overrides).filter(([, effect]) => effect !== "inherit").map(([permissionCode, effect]) => ({ permissionCode, effect }));
-      const payload = await accessAction<{ ok: true; message: string }>({ action: "save_user", user: { id: form.id || undefined, employeeNo: form.employeeNo, fullName: form.fullName, email: form.email, mobile: form.mobile, nextErpUserId: form.nextErpUserId, mersalUserId: form.mersalUserId, password: form.password, isActive: form.isActive, canReceiveLeads: form.canReceiveLeads, canReceiveTasks: form.canReceiveTasks }, roleIds: form.roleIds, systems: form.systems, overrides, reason: form.reason });
+      const payload = await accessAction<{ ok: true; message: string }>({ action: "save_user", user: { id: form.id || undefined, employeeNo: form.employeeNo, fullName: form.fullName, email: form.email, mobile: form.mobile, nextErpUserId: form.nextErpUserId, mersalUserId: form.mersalUserId, password: form.password, isActive: form.isActive, isArchived: form.isArchived, canReceiveLeads: form.canReceiveLeads, canReceiveTasks: form.canReceiveTasks }, roleIds: form.roleIds, systems: form.systems, overrides, reason: form.reason });
       setMessage(payload.message); setForm(emptyForm(bootstrap)); setCopySourceId(""); await loadBase(); await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر حفظ المستخدم"); }
     finally { setSaving(false); }
@@ -326,10 +360,10 @@ export function UsersPermissionsPanel() {
           <div className="settings-card-title"><div><UserCircle size={22} /><h2>المستخدمون <span className="access-count-badge">{filteredUsers.length}</span></h2></div>{canCreateUsers ? <button type="button" className="secondary-button" onClick={() => { setForm(emptyForm(bootstrap)); setCopySourceId(""); setSystemTab("operations"); setError(""); setMessage(""); }}><Plus size={17} /> مستخدم جديد</button> : null}</div>
           <label className="access-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالاسم أو البريد أو الفرع أو القسم" /></label>
           <div className="access-user-filter-grid"><select value={filterRoleId} onChange={(event) => setFilterRoleId(event.target.value)}><option value="">كل الأدوار</option>{roleGroups.map((group) => <option key={group.key} value={group.canonical.id}>{group.name}</option>)}</select><select value={filterSystemCode} onChange={(event) => setFilterSystemCode(event.target.value as "" | PlatformSystem)}><option value="">كل الأنظمة</option>{systemOrder.map((code) => <option key={code} value={code}>{systemLabel(bootstrap, code)}</option>)}</select><select value={filterBranchId} onChange={(event) => setFilterBranchId(event.target.value)}><option value="">كل الفروع</option>{(bootstrap?.branches || []).filter((item) => item.is_active).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><select value={filterDepartmentId} onChange={(event) => setFilterDepartmentId(event.target.value)}><option value="">كل الأقسام</option>{(bootstrap?.departments || []).filter((item) => item.is_active).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></div>
-          <div className="access-user-cards">{filteredUsers.map((item) => <button key={item.id} type="button" className={form.id === item.id ? "selected" : ""} aria-current={form.id === item.id ? "true" : undefined} onClick={() => void editUser(item.id)}><span className="access-user-card-head"><strong>{item.full_name}</strong><em className={item.is_active ? "active" : "inactive"}>{item.is_active ? "فعال" : "موقوف"}</em></span><small>{item.email || item.mobile || "—"}</small><span className="access-user-role">{item.roles || "بدون دور"}{item.id === user?.id ? <b>حسابك الحالي</b> : null}</span>{item.last_access_change_at ? <small className="access-last-change">آخر تعديل: {item.last_access_changed_by || "النظام"} · {new Date(item.last_access_change_at).toLocaleString("ar-SA-u-nu-latn")}</small> : null}</button>)}{!filteredUsers.length ? <div className="access-empty-users"><UserCircle size={30} /><strong>لا توجد نتائج مطابقة</strong><span>غيّر كلمة البحث أو الفلاتر لعرض المستخدمين.</span></div> : null}</div>
+          <div className="access-user-cards">{filteredUsers.map((item) => <button key={item.id} type="button" className={form.id === item.id ? "selected" : ""} aria-current={form.id === item.id ? "true" : undefined} onClick={() => void editUser(item.id)}><span className="access-user-card-head"><strong>{item.full_name}</strong><em className={item.is_archived ? "inactive" : item.is_active ? "active" : "inactive"}>{item.is_archived ? "مؤرشف" : item.is_active ? "فعال" : "موقوف"}</em></span><small>{item.email || item.mobile || "—"}</small><span className="access-user-role">{item.roles || "بدون دور"}{item.id === user?.id ? <b>حسابك الحالي</b> : null}</span>{item.last_access_change_at ? <small className="access-last-change">آخر تعديل: {item.last_access_changed_by || "النظام"} · {new Date(item.last_access_change_at).toLocaleString("ar-SA-u-nu-latn")}</small> : null}</button>)}{!filteredUsers.length ? <div className="access-empty-users"><UserCircle size={30} /><strong>لا توجد نتائج مطابقة</strong><span>غيّر كلمة البحث أو الفلاتر لعرض المستخدمين.</span></div> : null}</div>
         </section>
         <section className="panel access-user-editor">
-          <div className="settings-card-title access-editor-title"><div><span className="access-title-icon"><ShieldCheck size={22} /></span><span><h2>{form.id ? "تعديل المستخدم" : "إضافة مستخدم"}</h2><p>{form.id ? `تحديث بيانات وصلاحيات ${selectedUser?.full_name || form.fullName}` : "إنشاء حساب جديد وتحديد الأدوار ونطاقات الوصول"}</p></span></div><div className="access-editor-head-actions">{form.id ? <span className={`access-editor-status ${form.isActive ? "active" : "inactive"}`}>{form.isActive ? "حساب فعال" : "حساب موقوف"}</span> : <span className="access-editor-status new">حساب جديد</span>}{form.id && canDeleteUsers && !isEditingCurrentUser ? <button type="button" className="access-delete-user" onClick={openDeleteDialog}><Trash size={17} /> حذف الحساب</button> : null}</div></div>
+          <div className="settings-card-title access-editor-title"><div><span className="access-title-icon"><ShieldCheck size={22} /></span><span><h2>{form.id ? "تعديل المستخدم" : "إضافة مستخدم"}</h2><p>{form.id ? `تحديث بيانات وصلاحيات ${selectedUser?.full_name || form.fullName}` : "إنشاء حساب جديد وتحديد الأدوار ونطاقات الوصول"}</p></span></div><div className="access-editor-head-actions">{form.id ? <span className={`access-editor-status ${form.isArchived ? "inactive" : form.isActive ? "active" : "inactive"}`}>{form.isArchived ? "مؤرشف" : form.isActive ? "حساب فعال" : "حساب موقوف"}</span> : <span className="access-editor-status new">حساب جديد</span>}{form.id && canDeleteUsers && !isEditingCurrentUser ? <button type="button" className="access-delete-user" onClick={openDeleteDialog}><Trash size={17} /> حذف الحساب</button> : null}</div></div>
           {isEditingCurrentUser ? <div className="access-inline-note"><WarningCircle size={18} /><span>هذا هو حسابك الحالي. للحماية، لا يمكن تعديل صلاحياته من نفس الجلسة.</span></div> : null}
           {canManagePermissions ? <div className="access-copy-tools"><label><span>نسخ صلاحيات مستخدم</span><select value={copySourceId} onChange={(event) => setCopySourceId(event.target.value)}><option value="">اختر المستخدم المصدر</option>{users.filter((item) => item.id !== form.id).map((item) => <option key={item.id} value={item.id}>{item.full_name} — {item.email || item.mobile || "بدون بريد"}</option>)}</select></label><button type="button" className="secondary-button" disabled={!copySourceId || loading} onClick={() => void copyAccessFromUser()}><Copy size={17} /> نسخ إلى النموذج</button><button type="button" className="secondary-button" onClick={resetToRoleTemplates}><ArrowCounterClockwise size={17} /> إعادة ضبط لقوالب الأدوار</button></div> : null}
           <details className="access-editor-section access-account-section access-collapsible" open={isSectionOpen("account", true)} onToggle={(event) => setSectionOpen("account", event.currentTarget.open)}>
@@ -361,7 +395,7 @@ export function UsersPermissionsPanel() {
               <div className="access-basic-grid"><label><span>الدور داخل النظام</span><select disabled={!canManagePermissions} value={currentSystem.roleId} onChange={(event) => updateSystem({ roleId: event.target.value })}><option value="">بدون قالب إضافي</option>{roleGroups.map((group) => <option key={group.key} value={group.roleIds.includes(currentSystem.roleId) ? currentSystem.roleId : group.canonical.id}>{group.name}</option>)}</select></label><label><span>نطاق البيانات</span><select disabled={!canManagePermissions} value={currentSystem.dataScope} onChange={(event) => updateSystem({ dataScope: event.target.value as DataScope })}>{(bootstrap?.dataScopes || []).map((scope) => <option key={scope.code} value={scope.code}>{scope.name}</option>)}</select></label></div>
               <details className="access-fieldset access-collapsible access-system-subsection" open={isSectionOpen(`system-branches:${systemTab}`)} onToggle={(event) => setSectionOpen(`system-branches:${systemTab}`, event.currentTarget.open)}>
                 <summary className="access-collapsible-summary"><span>الفروع المسموحة</span><CaretDown size={17} /></summary>
-                <fieldset className="access-details-fieldset" disabled={!canManagePermissions}><div className="access-check-grid">{(bootstrap?.branches || []).filter((item) => item.is_active).map((branch) => <label key={branch.id}><input type="checkbox" checked={currentSystem.branchIds.includes(branch.id)} onChange={() => { const branchIds=toggle(currentSystem.branchIds, branch.id); updateSystem({ branchIds, primaryBranchId: branchIds.includes(currentSystem.primaryBranchId) ? currentSystem.primaryBranchId : branchIds[0] || "" }); }} />{branch.name}</label>)}</div>{currentSystem.branchIds.length ? <label className="access-primary-select"><span>الفرع الأساسي</span><select value={currentSystem.primaryBranchId || currentSystem.branchIds[0]} onChange={(event) => updateSystem({ primaryBranchId: event.target.value })}>{(bootstrap?.branches || []).filter((item) => currentSystem.branchIds.includes(item.id)).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label> : null}</fieldset>
+                <fieldset className="access-details-fieldset" disabled={!canManagePermissions}><div className="access-check-grid">{(bootstrap?.branches || []).filter((item) => item.is_active).map((branch) => <label key={branch.id}><input type="checkbox" checked={currentSystem.branchIds.includes(branch.id)} onChange={() => toggleSystemBranch(branch.id)} />{branch.name}</label>)}</div>{currentSystem.branchIds.length || systemTab === "operations" || systemTab === "crm" ? <label className="access-primary-select"><span>الفرع الأساسي</span><select value={form.isArchived && (systemTab === "operations" || systemTab === "crm") ? "__archive__" : currentSystem.primaryBranchId || currentSystem.branchIds[0] || ""} onChange={(event) => setPrimaryBranch(event.target.value)}>{(systemTab === "operations" || systemTab === "crm") ? <option value="__archive__">الأرشيف</option> : null}{(bootstrap?.branches || []).filter((item) => currentSystem.branchIds.includes(item.id)).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select>{form.isArchived && (systemTab === "operations" || systemTab === "crm") ? <small className="access-scope-note">المستخدم المؤرشف لا يظهر ضمن الفروع أو التقارير التشغيلية، وتظل بياناته التاريخية محفوظة.</small> : null}</label> : null}</fieldset>
               </details>
               <details className="access-fieldset access-collapsible access-system-subsection" open={isSectionOpen(`system-departments:${systemTab}`)} onToggle={(event) => setSectionOpen(`system-departments:${systemTab}`, event.currentTarget.open)}>
                 <summary className="access-collapsible-summary"><span>الأقسام المسموحة</span><CaretDown size={17} /></summary>
