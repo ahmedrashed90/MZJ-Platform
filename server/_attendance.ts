@@ -124,6 +124,11 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
         row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
         case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
           when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
             nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
@@ -132,6 +137,11 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
           )::time
         end as regular_start_time,
         case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
           when p.end_time::time='12:00'::time then '12:00'::time
           when p.end_time::time='21:00'::time then '21:00'::time
           when p.end_time::time='22:00'::time then case
@@ -237,6 +247,11 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
         case
           when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
             then st.friday_start_time
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
           when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
             nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
@@ -247,6 +262,11 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
         case
           when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
             then st.friday_end_time
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
           when p.end_time::time='12:00'::time then '12:00'::time
           when p.end_time::time='21:00'::time then '21:00'::time
           when p.end_time::time='22:00'::time then case
@@ -564,6 +584,11 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
         a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
         row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
         case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
           when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
           else coalesce(
             nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
@@ -572,6 +597,11 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
           )::time
         end as regular_start_time,
         case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
           when p.end_time::time='12:00'::time then '12:00'::time
           when p.end_time::time='21:00'::time then '21:00'::time
           when p.end_time::time='22:00'::time then case

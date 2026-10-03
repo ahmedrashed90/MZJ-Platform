@@ -607,7 +607,7 @@ export function AttendanceSettingsPanel() {
                       <label className="attendance-period-choice">
                         <input type="checkbox" checked={selected} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
                         <strong>{period.name}</strong>
-                        <small>{period.startTime} - {period.endTime}</small>
+                        <small>{selected && period.id ? `${assignmentPeriodOverrides[period.id]?.startTime || period.startTime} - ${assignmentPeriodOverrides[period.id]?.endTime || period.endTime}` : `${period.startTime} - ${period.endTime}`}</small>
                       </label>
                       {period.id && selected ? (
                         <span className="attendance-assignment-period-times">

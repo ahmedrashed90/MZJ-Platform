@@ -64,20 +64,18 @@ function resolveAssignedPeriodTimes(period: any, override?: { startTime: string;
     return { startTime: baseStartTime, endTime: baseEndTime };
   }
 
-  // الصباحية والمسائية مواعيدهما ثابتة من جدول العمل.
-  if (baseEndTime === "12:00" || baseEndTime === "21:00") {
-    return { startTime: baseStartTime, endTime: baseEndTime };
-  }
-
   const requestedStart = validTime(clean(override?.startTime).slice(0, 5)) ? clean(override?.startTime).slice(0, 5) : baseStartTime;
   const requestedEnd = validTime(clean(override?.endTime).slice(0, 5)) ? clean(override?.endTime).slice(0, 5) : baseEndTime;
+  const periodName = clean(period?.name);
 
-  // الفترة الواحدة أساسها حتى 22:00، ويمكن تخصيص اليوزر لينتهي 21:00 أو 22:00 فقط.
-  if (baseEndTime === "22:00") {
-    return {
-      startTime: requestedStart,
-      endTime: requestedEnd === "21:00" ? "21:00" : "22:00",
-    };
+  // "فترة واحدة" هي فترة مرنة لكل يوزر؛ الوقت المحفوظ في التعيين هو المصدر الفعلي للدوام.
+  if (periodName.includes("فترة واحدة")) {
+    return { startTime: requestedStart, endTime: requestedEnd };
+  }
+
+  // الصباحية والمسائية الرسمية تظلان على مواعيد جدول العمل الأساسية.
+  if (baseEndTime === "12:00" || baseEndTime === "21:00") {
+    return { startTime: baseStartTime, endTime: baseEndTime };
   }
 
   return { startTime: requestedStart, endTime: requestedEnd };
