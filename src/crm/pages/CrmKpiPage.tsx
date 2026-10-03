@@ -209,6 +209,18 @@ function branchManagerRatingClass(value: unknown) {
   return label === "غير مناسب" ? "branch-rating-red" : label === "ضعيف" || label === "مقبول" ? "branch-rating-yellow" : "branch-rating-green";
 }
 
+function hasKpiResult(calc: ReturnType<typeof calculate>) {
+  return [
+    calc.salesCount,
+    calc.totalPoints,
+    calc.speedRate,
+    calc.efficiencyRate,
+    calc.disciplineRate,
+    calc.valueRate,
+    calc.finalRate,
+  ].some((value) => Math.abs(number(value)) > 0.0001);
+}
+
 export function CrmKpiPage() {
   const defaultMonth = currentMonth();
   const defaultPeriod = monthPeriod(defaultMonth);
@@ -250,12 +262,14 @@ export function CrmKpiPage() {
     }
   }
 
-  const visibleAgents = useMemo(() => agents.filter((agent) => {
+  const eligibleAgents = useMemo(() => agents.filter((agent) => hasKpiResult(resultForAgent(agent).calc)), [agents, rows, period.from, period.to]);
+
+  const visibleAgents = useMemo(() => eligibleAgents.filter((agent) => {
     if (filters.branch && !(agent.branch_codes || []).includes(filters.branch)) return false;
     if (filters.agent && agent.id !== filters.agent) return false;
     const search = [agent.full_name, agent.employee_no, agent.department_name, agent.branch_name, ...(agent.departments || []), ...(agent.branches || [])].join(" ").toLowerCase();
     return !filters.q || search.includes(filters.q.toLowerCase());
-  }), [agents, filters.branch, filters.agent, filters.q]);
+  }), [eligibleAgents, filters.branch, filters.agent, filters.q]);
 
   function rowForAgent(agent: any) {
     return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code))
@@ -577,7 +591,7 @@ th{background:#f8ece5;font-weight:900}
         </div>
         <div className="kpi-filter-group kpi-filter-people">
           <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilters((current) => ({ ...current, branch: event.target.value }))}><option value="">كل الفروع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
+          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{eligibleAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
           <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="بحث باسم المندوب أو الفرع أو القسم" /></label>
           <button type="button" className="crm-secondary-button" onClick={() => setFilters({ month: defaultMonth, from: defaultPeriod.from, to: defaultPeriod.to, branch: "", agent: "", q: "" })}>مسح الفلاتر</button>
         </div>

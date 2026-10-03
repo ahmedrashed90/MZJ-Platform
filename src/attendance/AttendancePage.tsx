@@ -130,44 +130,106 @@ function exportRowsByEmployee(payload: ReportPayload) {
     .sort((a, b) => a.name.localeCompare(b.name, "ar"));
 }
 
+function exportResult(period: ReportPeriod | undefined) {
+  if (!period) return "—";
+  if (period.checkIn) return `${Math.max(0, Number(period.delayMinutes || 0))} دقيقة`;
+  return missingResultLabel(period.result);
+}
+
+function exportFlatRows(payload: ReportPayload) {
+  return exportRowsByEmployee(payload).flatMap((employee) => employee.rows.map((row) => ({ employee, row })));
+}
+
+const ATTENDANCE_SUMMARY_HEADERS = [
+  "م",
+  "الفرع",
+  "الموظف",
+  ...ATTENDANCE_EXPORT_HEADERS,
+] as const;
+
+const ATTENDANCE_DETAILS_HEADERS = [
+  "م",
+  "الفرع",
+  "الموظف",
+  "اليوم",
+  "التاريخ",
+  "حضور الفترة الأولى",
+  "انصراف الفترة الأولى",
+  "نتيجة الفترة الأولى",
+  "حضور الفترة الثانية",
+  "انصراف الفترة الثانية",
+  "نتيجة الفترة الثانية",
+] as const;
+
 function buildAttendancePdf(payload: ReportPayload) {
-  const employees = exportRowsByEmployee(payload);
-  const employeePages = employees.map((employee) => {
-    const rows = employee.rows.map((row) => {
-      const [first, second] = exportPeriods(row);
-      return `<tr><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td></tr>`;
-    }).join("");
-    return `<section class="employee-page"><div class="head"><h1>ملخص الفترة - ${htmlEscape(employee.name)}</h1><p>${employee.employeeNo ? `رقم الموظف: ${htmlEscape(employee.employeeNo)} · ` : ""}الفرع: ${htmlEscape(employee.branch || "—")} · من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}</p></div><table><thead><tr>${ATTENDANCE_EXPORT_HEADERS.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || '<tr><td colspan="6">لا توجد بيانات</td></tr>'}</tbody></table></section>`;
+  const flatRows = exportFlatRows(payload);
+  const summaryRows = flatRows.map(({ employee, row }, index) => {
+    const [first, second] = exportPeriods(row);
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td></tr>`;
   }).join("");
+  const detailRows = flatRows.map(({ employee, row }, index) => {
+    const [first, second] = exportPeriods(row);
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportResult(second))}</td></tr>`;
+  }).join("");
+  const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
+  const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
 
   return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الحضور والانصراف</title><style>
-@page{size:A4 landscape;margin:10mm}
-*{box-sizing:border-box}body{margin:0;color:#38231d;background:#fff;font-family:Tajawal,Arial,sans-serif;font-size:10px;line-height:1.5}
-.employee-page{page-break-after:always;break-after:page}.employee-page:last-child{page-break-after:auto;break-after:auto}
-.head{padding:12px 15px;border-radius:10px;background:#6d3427;color:#fff;margin-bottom:10px}.head h1{margin:0 0 4px;font-size:18px}.head p{margin:0;opacity:.9}
-table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}th,td{border:1px solid #dfd0c8;padding:7px 6px;text-align:center;vertical-align:middle}th{background:#f4e8e1;font-weight:900}tbody tr:nth-child(even) td{background:#fdf9f7}
+@page{size:A4 landscape;margin:9mm}
+*{box-sizing:border-box}body{margin:0;color:#38231d;background:#fff;font-family:Tajawal,Arial,sans-serif;font-size:9px;line-height:1.45}
+.report-section{page-break-after:always;break-after:page}.report-section:last-child{page-break-after:auto;break-after:auto}
+.head{padding:11px 14px;border-radius:10px;background:#6d3427;color:#fff;margin-bottom:9px}.head h1{margin:0 0 3px;font-size:17px}.head p{margin:0;opacity:.9}
+table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}th,td{border:1px solid #dfd0c8;padding:5px 4px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f4e8e1;font-weight:900}tbody tr:nth-child(even) td{background:#fdf9f7}
 @media print{.head,th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-</style></head><body>${employeePages || '<section class="employee-page"><div class="head"><h1>تقرير الحضور والانصراف</h1></div><p>لا توجد بيانات</p></section>'}<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`;
+</style></head><body>
+<section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_SUMMARY_HEADERS, summaryRows)}</section>
+<section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - تقرير تفصيلي</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_DETAILS_HEADERS, detailRows)}</section>
+<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`;
 }
 
 function buildExcelDocument(payload: ReportPayload) {
-  const employees = exportRowsByEmployee(payload);
+  const flatRows = exportFlatRows(payload);
   const cell = (value: unknown, style = "Cell") => `<Cell ss:StyleID="${style}"><Data ss:Type="String">${excelXmlEscape(value)}</Data></Cell>`;
-  const merged = (value: string, style: string) => `<Row ss:Height="28"><Cell ss:StyleID="${style}" ss:MergeAcross="5"><Data ss:Type="String">${excelXmlEscape(value)}</Data></Cell></Row>`;
-  const employeeBlocks = employees.map((employee) => {
-    const rows = employee.rows.map((row) => {
-      const [first, second] = exportPeriods(row);
-      return `<Row>${[
-        cell(formatAttendanceDay(row.date)),
-        cell(formatAttendanceDate(row.date)),
-        cell(exportCheckIn(first)),
-        cell(exportCheckOut(first)),
-        cell(exportCheckIn(second)),
-        cell(exportCheckOut(second)),
-      ].join("")}</Row>`;
-    }).join("");
-    const meta = `${employee.name}${employee.employeeNo ? ` - ${employee.employeeNo}` : ""} - ${employee.branch || "—"}`;
-    return `${merged(meta, "Employee")}<Row ss:Height="26">${ATTENDANCE_EXPORT_HEADERS.map((header) => cell(header, "Header")).join("")}</Row>${rows}<Row ss:Height="10"></Row>`;
+  const merged = (value: string, style: string, columns: number) => `<Row ss:Height="28"><Cell ss:StyleID="${style}" ss:MergeAcross="${Math.max(0, columns - 1)}"><Data ss:Type="String">${excelXmlEscape(value)}</Data></Cell></Row>`;
+  const worksheet = (name: string, headers: readonly string[], rows: string) => `
+ <Worksheet ss:Name="${excelXmlEscape(name)}"><Table>
+  ${Array.from({ length: headers.length }, (_, index) => `<Column ss:Width="${index === 2 ? 145 : index === 1 ? 105 : 95}"/>`).join("")}
+  ${merged(`تقرير الحضور والانصراف - ${name}`, "Title", headers.length)}
+  ${merged(`من ${formatAttendanceDate(payload.from)} إلى ${formatAttendanceDate(payload.to)}`, "SubTitle", headers.length)}
+  <Row ss:Height="26">${headers.map((header) => cell(header, "Header")).join("")}</Row>
+  ${rows || `<Row>${cell("لا توجد بيانات")}</Row>`}
+ </Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`;
+
+  const summaryRows = flatRows.map(({ employee, row }, index) => {
+    const [first, second] = exportPeriods(row);
+    return `<Row>${[
+      cell(index + 1),
+      cell(employee.branch || "—"),
+      cell(employee.name),
+      cell(formatAttendanceDay(row.date)),
+      cell(formatAttendanceDate(row.date)),
+      cell(exportCheckIn(first)),
+      cell(exportCheckOut(first)),
+      cell(exportCheckIn(second)),
+      cell(exportCheckOut(second)),
+    ].join("")}</Row>`;
+  }).join("");
+
+  const detailRows = flatRows.map(({ employee, row }, index) => {
+    const [first, second] = exportPeriods(row);
+    return `<Row>${[
+      cell(index + 1),
+      cell(employee.branch || "—"),
+      cell(employee.name),
+      cell(formatAttendanceDay(row.date)),
+      cell(formatAttendanceDate(row.date)),
+      cell(exportCheckIn(first)),
+      cell(exportCheckOut(first)),
+      cell(exportResult(first)),
+      cell(exportCheckIn(second)),
+      cell(exportCheckOut(second)),
+      cell(exportResult(second)),
+    ].join("")}</Row>`;
   }).join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -178,15 +240,10 @@ function buildExcelDocument(payload: ReportPayload) {
   <Style ss:ID="Cell" ss:Parent="Default"><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E4D6CE"/></Borders></Style>
   <Style ss:ID="Title" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="16" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#6D3427" ss:Pattern="Solid"/></Style>
   <Style ss:ID="SubTitle" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1" ss:Color="#6D3427"/><Interior ss:Color="#F7EEE9" ss:Pattern="Solid"/></Style>
-  <Style ss:ID="Employee" ss:Parent="Default"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#8A5446" ss:Pattern="Solid"/></Style>
   <Style ss:ID="Header" ss:Parent="Cell"><Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#4A2B22"/><Interior ss:Color="#EAD8CC" ss:Pattern="Solid"/></Style>
  </Styles>
- <Worksheet ss:Name="ملخص الفترة"><Table>
-  <Column ss:Width="90"/><Column ss:Width="100"/><Column ss:Width="115"/><Column ss:Width="125"/><Column ss:Width="115"/><Column ss:Width="125"/>
-  ${merged("تقرير الحضور والانصراف - ملخص الفترة", "Title")}
-  ${merged(`من ${formatAttendanceDate(payload.from)} إلى ${formatAttendanceDate(payload.to)}`, "SubTitle")}
-  ${employeeBlocks || merged("لا توجد بيانات", "Employee")}
- </Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>
+ ${worksheet("ملخص الفترة", ATTENDANCE_SUMMARY_HEADERS, summaryRows)}
+ ${worksheet("تقرير تفصيلي", ATTENDANCE_DETAILS_HEADERS, detailRows)}
 </Workbook>`;
 }
 
