@@ -236,7 +236,17 @@ export function CrmReportsPage() {
     setPopupTotal(0);
   }
 
-  const salesUsers = useMemo(() => (meta?.users || []).filter((user) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(user.primary_department_code || "") || (!user.primary_department_code && user.department_codes.some((code) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(code)))), [meta]);
+  const salesUsers = useMemo(() => {
+    const byId = new Map<string, { id: string; full_name: string }>();
+    for (const user of (meta?.users || []).filter((item) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(item.primary_department_code || "") || (!item.primary_department_code && item.department_codes.some((code) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(code))))) {
+      byId.set(user.id, { id: user.id, full_name: user.full_name });
+    }
+    for (const row of data?.agents || []) {
+      const id = String(row.detailValue || "").trim();
+      if (id && !byId.has(id)) byId.set(id, { id, full_name: String(row.name || "مندوب") });
+    }
+    return [...byId.values()].sort((left, right) => left.full_name.localeCompare(right.full_name, "ar"));
+  }, [meta, data?.agents]);
   const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.primary_department_code === "call_center" || (!user.primary_department_code && user.department_codes.includes("call_center"))), [meta]);
   const selectedAgentIds = useMemo(() => filters.agent.split(",").map((value) => value.trim()).filter(Boolean), [filters.agent]);
   const selectedAgentNames = useMemo(() => salesUsers.filter((user) => selectedAgentIds.includes(user.id)).map((user) => user.full_name), [salesUsers, selectedAgentIds]);

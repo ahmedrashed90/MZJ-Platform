@@ -264,12 +264,24 @@ export function UsersPermissionsPanel() {
       const branchIds = toggle(system.branchIds, branchId);
       return {
         ...current,
-        isArchived: branchIds.length ? false : current.isArchived,
         systems: current.systems.map((item) => item.systemCode === systemTab ? {
           ...item,
           branchIds,
           primaryBranchId: branchIds.includes(item.primaryBranchId) ? item.primaryBranchId : branchIds[0] || "",
         } : item),
+      };
+    });
+  }
+
+  function toggleArchiveBranch() {
+    if (systemTab !== "operations" && systemTab !== "crm") return;
+    setForm((current) => {
+      const isArchived = !current.isArchived;
+      return {
+        ...current,
+        isArchived,
+        canReceiveLeads: isArchived ? false : current.canReceiveLeads,
+        canReceiveTasks: isArchived ? false : current.canReceiveTasks,
       };
     });
   }
@@ -281,14 +293,17 @@ export function UsersPermissionsPanel() {
         isArchived: true,
         canReceiveLeads: false,
         canReceiveTasks: false,
-        systems: current.systems.map((item) => ({ ...item, branchIds: [], primaryBranchId: "" })),
       }));
       return;
     }
     setForm((current) => ({
       ...current,
       isArchived: false,
-      systems: current.systems.map((item) => item.systemCode === systemTab ? { ...item, primaryBranchId: value } : item),
+      systems: current.systems.map((item) => item.systemCode === systemTab ? {
+        ...item,
+        branchIds: value && !item.branchIds.includes(value) ? [...item.branchIds, value] : item.branchIds,
+        primaryBranchId: value,
+      } : item),
     }));
   }
 
@@ -395,7 +410,13 @@ export function UsersPermissionsPanel() {
               <div className="access-basic-grid"><label><span>الدور داخل النظام</span><select disabled={!canManagePermissions} value={currentSystem.roleId} onChange={(event) => updateSystem({ roleId: event.target.value })}><option value="">بدون قالب إضافي</option>{roleGroups.map((group) => <option key={group.key} value={group.roleIds.includes(currentSystem.roleId) ? currentSystem.roleId : group.canonical.id}>{group.name}</option>)}</select></label><label><span>نطاق البيانات</span><select disabled={!canManagePermissions} value={currentSystem.dataScope} onChange={(event) => updateSystem({ dataScope: event.target.value as DataScope })}>{(bootstrap?.dataScopes || []).map((scope) => <option key={scope.code} value={scope.code}>{scope.name}</option>)}</select></label></div>
               <details className="access-fieldset access-collapsible access-system-subsection" open={isSectionOpen(`system-branches:${systemTab}`)} onToggle={(event) => setSectionOpen(`system-branches:${systemTab}`, event.currentTarget.open)}>
                 <summary className="access-collapsible-summary"><span>الفروع المسموحة</span><CaretDown size={17} /></summary>
-                <fieldset className="access-details-fieldset" disabled={!canManagePermissions}><div className="access-check-grid">{(bootstrap?.branches || []).filter((item) => item.is_active).map((branch) => <label key={branch.id}><input type="checkbox" checked={currentSystem.branchIds.includes(branch.id)} onChange={() => toggleSystemBranch(branch.id)} />{branch.name}</label>)}</div>{currentSystem.branchIds.length || systemTab === "operations" || systemTab === "crm" ? <label className="access-primary-select"><span>الفرع الأساسي</span><select value={form.isArchived && (systemTab === "operations" || systemTab === "crm") ? "__archive__" : currentSystem.primaryBranchId || currentSystem.branchIds[0] || ""} onChange={(event) => setPrimaryBranch(event.target.value)}>{(systemTab === "operations" || systemTab === "crm") ? <option value="__archive__">الأرشيف</option> : null}{(bootstrap?.branches || []).filter((item) => currentSystem.branchIds.includes(item.id)).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select>{form.isArchived && (systemTab === "operations" || systemTab === "crm") ? <small className="access-scope-note">المستخدم المؤرشف لا يظهر ضمن الفروع أو التقارير التشغيلية، وتظل بياناته التاريخية محفوظة.</small> : null}</label> : null}</fieldset>
+                <fieldset className="access-details-fieldset" disabled={!canManagePermissions}>
+                  <div className="access-check-grid">
+                    {(bootstrap?.branches || []).filter((item) => item.is_active).map((branch) => <label key={branch.id}><input type="checkbox" checked={currentSystem.branchIds.includes(branch.id)} onChange={() => toggleSystemBranch(branch.id)} />{branch.name}</label>)}
+                    {(systemTab === "operations" || systemTab === "crm") ? <label key="__archive__"><input type="checkbox" checked={form.isArchived} onChange={toggleArchiveBranch} />الأرشيف</label> : null}
+                  </div>
+                  {currentSystem.branchIds.length || systemTab === "operations" || systemTab === "crm" ? <label className="access-primary-select"><span>الفرع الأساسي</span><select value={form.isArchived && (systemTab === "operations" || systemTab === "crm") ? "__archive__" : currentSystem.primaryBranchId || currentSystem.branchIds[0] || ""} onChange={(event) => setPrimaryBranch(event.target.value)}>{(systemTab === "operations" || systemTab === "crm") ? <option value="__archive__">الأرشيف</option> : null}{(bootstrap?.branches || []).filter((item) => currentSystem.branchIds.includes(item.id)).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select>{form.isArchived && (systemTab === "operations" || systemTab === "crm") ? <small className="access-scope-note">الأرشيف يوقف الاستخدام التشغيلي للحساب مع الاحتفاظ بالفروع الحقيقية حتى تظل المبيعات والبيانات التاريخية ظاهرة في تقاريرها الأصلية.</small> : null}</label> : null}
+                </fieldset>
               </details>
               <details className="access-fieldset access-collapsible access-system-subsection" open={isSectionOpen(`system-departments:${systemTab}`)} onToggle={(event) => setSectionOpen(`system-departments:${systemTab}`, event.currentTarget.open)}>
                 <summary className="access-collapsible-summary"><span>الأقسام المسموحة</span><CaretDown size={17} /></summary>

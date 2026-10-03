@@ -960,7 +960,8 @@ async function reportData(request: VercelRequest) {
           const statusText = delayMinutes > 0 ? "متأخر" : "حاضر";
           const workText = record.check_out ? `العمل ${formatMinutes(Number(record.work_minutes || 0))}` : "الفترة مفتوحة";
           const delayText = delayMinutes > 0 ? `تأخير ${delayMinutes} د` : "بدون تأخير";
-          result = `${statusText} • ${workText} • ${delayText}`;
+          const departureText = record.checkout_source === "authorized" ? " • إذن انصراف مبكر" : "";
+          result = `${statusText} • ${workText} • ${delayText}${departureText}`;
         } else if (isDayOff) {
           result = "إجازة";
         } else if (day < today) {
@@ -984,7 +985,7 @@ async function reportData(request: VercelRequest) {
           checkOut: record?.check_out || null,
           checkInText: reportClock(record?.check_in),
           checkOutText: reportClock(record?.check_out),
-          checkoutSource: record?.check_out ? "auto" : null,
+          checkoutSource: record?.check_out ? (record.checkout_source === "authorized" ? "authorized" : "auto") : null,
           result,
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
@@ -1015,6 +1016,67 @@ async function reportData(request: VercelRequest) {
     ok: true, from, to, today, officialDayEnd, branchId: rawBranchKey || null, rows, periodHeaders,
     users: users.map((user) => ({ id: user.id, fullName: user.full_name })),
   };
+}
+
+async function authorizeEarlyDeparture(body: Record<string, any>, adminId: string) {
+  const userId = clean(body.userId);
+  const workDate = clean(body.workDate);
+  if (!validUuid(userId)) throw new AttendanceError("USER_REQUIRED", "المستخدم غير موجود", 404);
+  if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ الحضور غير صحيح");
+
+  const sql = getSql();
+  return sql.begin(async (tx) => {
+    const [user] = await tx<any[]>`
+      select id::text,full_name
+      from core.users
+      where id=${userId}::uuid
+      limit 1
+    `;
+    if (!user) throw new AttendanceError("USER_NOT_FOUND", "المستخدم غير موجود", 404);
+
+    const [record] = await tx<any[]>`
+      select id::text,check_in,scheduled_start_at,scheduled_end_at,checkout_source
+      from core.attendance_records
+      where user_id=${userId}::uuid
+        and work_date=${workDate}::date
+        and check_in is not null
+        and check_out is null
+        and scheduled_start_at is not null
+        and scheduled_end_at is not null
+        and now() >= scheduled_start_at
+        and now() < scheduled_end_at
+      order by scheduled_start_at desc,period_sort_order desc nulls last
+      limit 1
+      for update
+    `;
+
+    if (!record) {
+      const [authorized] = await tx<any[]>`
+        select id::text
+        from core.attendance_records
+        where user_id=${userId}::uuid
+          and work_date=${workDate}::date
+          and checkout_source='authorized'
+        order by check_out desc nulls last
+        limit 1
+      `;
+      if (authorized) return { ok: true, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name} بالفعل` };
+      throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة الآن لهذا المستخدم", 400);
+    }
+
+    const [updated] = await tx<any[]>`
+      update core.attendance_records
+      set check_out=now(),
+          checkout_source='authorized',
+          early_departure_authorized_at=now(),
+          early_departure_authorized_by=${adminId}::uuid,
+          work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60)::int),
+          updated_at=now()
+      where id=${record.id}::uuid
+      returning id::text,check_out
+    `;
+    return { ok: true, recordId: updated.id, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name}` };
+  });
 }
 
 async function selfAttendanceStateForSession(user: { id: string; verifiedDeviceId?: string | null }) {
@@ -1068,7 +1130,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const admin = await requireAdmin(request, response);
     if (!admin) return;
     let result: any;
-    if (action === "save_settings") result = await saveSettings(body, admin.id);
+    if (action === "authorize_early_departure") result = await authorizeEarlyDeparture(body, admin.id);
+    else if (action === "save_settings") result = await saveSettings(body, admin.id);
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);
     else if (action === "delete_schedule") result = await deleteSchedule(body, admin.id);
     else if (action === "assign_users") result = await assignUsers(body, admin.id);

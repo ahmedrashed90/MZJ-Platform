@@ -351,7 +351,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       if (!config) continue;
       const dataScope = validScope(config.dataScope) ? clean(config.dataScope) : "assigned";
       const roleId = clean(config.roleId) || null;
-      const branchIds = isArchived ? [] : array(config.branchIds);
+      const branchIds = array(config.branchIds);
       const departmentIds = array(config.departmentIds);
       const vehicleStatusCodes = system.code === "operations" ? array(config.vehicleStatusCodes).sort() : [];
       const systemSettings = system.code === "operations" ? { vehicleStatusCodes } : {};

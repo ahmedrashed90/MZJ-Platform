@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v10-friday-hours";
+export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v11-authorized-early-departure";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -119,7 +119,9 @@ create table if not exists core.attendance_records (
   grace_minutes integer not null default 0,
   check_in timestamptz,
   check_out timestamptz,
-  checkout_source text check (checkout_source in ('manual','auto','legacy')),
+  checkout_source text,
+  early_departure_authorized_at timestamptz,
+  early_departure_authorized_by uuid references core.users(id) on delete set null,
   delay_minutes integer not null default 0,
   work_minutes integer not null default 0,
   status text not null default 'present',
@@ -129,6 +131,29 @@ create table if not exists core.attendance_records (
 );
 create unique index if not exists attendance_records_user_period_day_unique
   on core.attendance_records(user_id,period_id,work_date) where period_id is not null;
+alter table core.attendance_records add column if not exists early_departure_authorized_at timestamptz;
+alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conname='attendance_records_checkout_source_check'
+      and conrelid='core.attendance_records'::regclass
+      and position('authorized' in pg_get_constraintdef(oid))=0
+  ) then
+    alter table core.attendance_records drop constraint attendance_records_checkout_source_check;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname='attendance_records_checkout_source_check'
+      and conrelid='core.attendance_records'::regclass
+  ) then
+    alter table core.attendance_records
+      add constraint attendance_records_checkout_source_check
+      check (checkout_source in ('manual','auto','legacy','authorized'));
+  end if;
+end $$;
+
 create index if not exists attendance_records_user_date_idx
   on core.attendance_records(user_id,work_date desc,period_sort_order);
 create index if not exists attendance_records_open_end_idx
@@ -185,6 +210,20 @@ async function attendanceSchemaReady() {
       and exists (
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_records' and column_name='period_id'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='early_departure_authorized_at'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='early_departure_authorized_by'
+      )
+      and exists (
+        select 1 from pg_constraint
+        where conname='attendance_records_checkout_source_check'
+          and conrelid='core.attendance_records'::regclass
+          and position('authorized' in pg_get_constraintdef(oid))>0
       )
       and exists (
         select 1 from information_schema.columns
@@ -263,6 +302,28 @@ export function ensureAttendanceSchema() {
           alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
           alter table core.attendance_user_schedules add column if not exists attendance_branch_name text;
           alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);
+          alter table core.attendance_records add column if not exists early_departure_authorized_at timestamptz;
+          alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
+          do $$
+          begin
+            if exists (
+              select 1 from pg_constraint
+              where conname='attendance_records_checkout_source_check'
+                and conrelid='core.attendance_records'::regclass
+                and position('authorized' in pg_get_constraintdef(oid))=0
+            ) then
+              alter table core.attendance_records drop constraint attendance_records_checkout_source_check;
+            end if;
+            if not exists (
+              select 1 from pg_constraint
+              where conname='attendance_records_checkout_source_check'
+                and conrelid='core.attendance_records'::regclass
+            ) then
+              alter table core.attendance_records
+                add constraint attendance_records_checkout_source_check
+                check (checkout_source in ('manual','auto','legacy','authorized'));
+            end if;
+          end $$;
           do $$
           begin
             if not exists (

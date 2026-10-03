@@ -270,7 +270,7 @@ export function CrmKpiPage() {
   }), [agents, filters.branch, filters.agent, filters.q]);
 
   const reportAgents = useMemo(
-    () => visibleAgents.filter((agent) => hasKpiResult(resultForAgent(agent).calc)),
+    () => visibleAgents.filter((agent) => Boolean(rowForAgent(agent)) && hasKpiResult(resultForAgent(agent).calc)),
     [visibleAgents, rows, period.from, period.to],
   );
 

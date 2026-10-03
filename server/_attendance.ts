@@ -482,6 +482,9 @@ export async function requireAttendanceForLogin(
   if (state.record?.check_in && !state.record?.check_out) {
     return { enforced: enforcementEnabled, checkedIn: true, state };
   }
+  if (state.record?.check_out && state.record?.checkout_source === "authorized") {
+    return { enforced: enforcementEnabled, checkedIn: true, state };
+  }
   if (state.record?.check_out) {
     if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
     throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم إنهاء هذه الفترة بالفعل. انتظر فترة العمل التالية.", 403);
@@ -676,7 +679,7 @@ export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceI
          and r.period_id=ap.period_id
          and r.work_date=ap.work_date
          and r.check_in is not null
-         and r.check_out is null
+         and (r.check_out is null or r.checkout_source='authorized')
       )
     end as allowed
   `;

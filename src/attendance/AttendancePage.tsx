@@ -103,6 +103,7 @@ function exportCheckIn(period: ReportPeriod | undefined) {
 function exportCheckOut(period: ReportPeriod | undefined) {
   if (!period?.checkOut) return "—";
   const time = period.checkOutText || formatAttendanceTime(period.checkOut);
+  if (period.checkoutSource === "authorized") return `${time} - إذن مبكر`;
   return period.checkoutSource === "auto" ? `${time} - تلقائي` : time;
 }
 
@@ -282,8 +283,10 @@ export function AttendancePage() {
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
+  const [earlyDepartureUserId, setEarlyDepartureUserId] = useState("");
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   const filteredEmployees = useMemo(() => {
     const search = employeeSearch.trim().toLocaleLowerCase("ar-SA");
@@ -335,6 +338,25 @@ export function AttendancePage() {
     void loadAdminUsers();
     void loadReport("", "", []);
   }, [isAdmin]);
+
+  async function authorizeEarlyDeparture(row: ReportRow) {
+    if (!isAdmin || earlyDepartureUserId) return;
+    setEarlyDepartureUserId(row.userId);
+    setError("");
+    setMessage("");
+    try {
+      const result = await attendanceFetch<{ ok: true; message: string }>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "authorize_early_departure", userId: row.userId, workDate: row.date }),
+      });
+      setMessage(result.message || `تم تسجيل إذن الانصراف المبكر لـ ${row.name}`);
+      await loadReport();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تسجيل إذن الانصراف المبكر");
+    } finally {
+      setEarlyDepartureUserId("");
+    }
+  }
 
   async function exportExcel() {
     if (!isAdmin || reportExporting) return;
@@ -425,6 +447,7 @@ export function AttendancePage() {
       </div>
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
+      {message ? <div className="attendance-alert success"><span>{message}</span></div> : null}
 
       <section className="panel attendance-report-card attendance-report-card-v91">
         <div className="attendance-report-toolbar">
@@ -512,6 +535,7 @@ export function AttendancePage() {
                         <col className="attendance-col-index" />
                         <col className="attendance-col-branch" />
                         <col className="attendance-col-name" />
+                        <col className="attendance-col-action" />
                         {periodHeaders.flatMap((header) => [
                           <col key={`${group.date}-${header}-col-in`} className="attendance-col-period-time" />,
                           <col key={`${group.date}-${header}-col-out`} className="attendance-col-period-time" />,
@@ -523,6 +547,7 @@ export function AttendancePage() {
                           <th rowSpan={2}>م</th>
                           <th rowSpan={2}>الفرع</th>
                           <th rowSpan={2}>الاسم</th>
+                          <th rowSpan={2}>إذن الانصراف</th>
                           {periodHeaders.map((header) => <th key={`${group.date}-${header}-group`} colSpan={3}>{header}</th>)}
                         </tr>
                         <tr className="attendance-sub-head-row">
@@ -541,6 +566,15 @@ export function AttendancePage() {
                             <td className="attendance-name-cell">
                               <strong>{row.name}</strong>
                             </td>
+                            <td className="attendance-early-departure-cell">
+                              {row.periods.some((period) => period?.checkoutSource === "authorized") ? (
+                                <span className="attendance-early-departure-done">تم الإذن</span>
+                              ) : row.periods.some((period) => period?.checkIn && !period?.checkOut) ? (
+                                <button type="button" onClick={() => void authorizeEarlyDeparture(row)} disabled={Boolean(earlyDepartureUserId)}>
+                                  {earlyDepartureUserId === row.userId ? "جاري التسجيل..." : "إذن مبكر"}
+                                </button>
+                              ) : <span className="attendance-early-departure-empty">—</span>}
+                            </td>
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -551,7 +585,7 @@ export function AttendancePage() {
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
                                   {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}
-                                  {period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
+                                  {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
                                   {hasCheckIn ? <strong>{delay} دقيقة</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
