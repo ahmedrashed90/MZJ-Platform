@@ -3,6 +3,7 @@ import { FilePdf, FileXls, MagnifyingGlass, WarningCircle } from "@phosphor-icon
 import { MovementHistoryTable, type MovementHistoryRow } from "../components/MovementHistoryTable";
 import { exportExcel, formatOperationsDate, operationsFetch, queryString } from "../api";
 import { useOperations } from "../useOperations";
+import { loadLegacyMovementHistory, looksLikeLegacyVinSearch } from "../legacyMovementHistory";
 
 export function MovementHistoryPage() {
   const { meta } = useOperations();
@@ -15,16 +16,85 @@ export function MovementHistoryPage() {
   const [legacyWarning, setLegacyWarning] = useState("");
   const pageSize = 50;
 
+  async function fetchCurrentPage(targetPage: number, targetSize: number) {
+    return operationsFetch<{ rows: MovementHistoryRow[]; total: number }>(`/api/operations${queryString({ resource: "movements", ...filters, page: targetPage, pageSize: targetSize })}`);
+  }
+
+  async function fetchCurrentAllRows() {
+    const first = await fetchCurrentPage(1, 200);
+    const all = [...first.rows];
+    const pages = Math.max(1, Math.ceil(first.total / 200));
+    for (let current = 2; current <= pages; current += 1) all.push(...(await fetchCurrentPage(current, 200)).rows);
+    return all;
+  }
+
+  function legacyFilterValues() {
+    const fromItem = meta.locations.find((item) => item.code === filters.from);
+    const toItem = meta.locations.find((item) => item.code === filters.to);
+    const statusItem = meta.statuses.find((item) => item.code === filters.status);
+    return {
+      fromCode: filters.from,
+      fromName: fromItem?.name || "",
+      toCode: filters.to,
+      toName: toItem?.name || "",
+      statusCode: filters.status,
+      statusName: statusItem?.name || "",
+      user: filters.user,
+    };
+  }
+
+  function mergeHistory(currentRows: MovementHistoryRow[], legacyRows: MovementHistoryRow[]) {
+    const merged = [...currentRows, ...legacyRows].sort((left, right) => {
+      const dateDiff = new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+      return dateDiff || String(right.id || "").localeCompare(String(left.id || ""));
+    });
+    const seen = new Set<string>();
+    return merged.filter((row) => {
+      const key = String(row.id || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  async function readLegacyRows(vin: string) {
+    try {
+      const legacyRows = await loadLegacyMovementHistory(vin, legacyFilterValues());
+      setLegacyWarning("");
+      return legacyRows;
+    } catch (failure) {
+      setLegacyWarning(failure instanceof Error ? failure.message : "تعذر قراءة سجل النظام القديم");
+      return [] as MovementHistoryRow[];
+    }
+  }
+
   async function fetchPage(targetPage: number, targetSize: number) {
-    return operationsFetch<{ rows: MovementHistoryRow[]; total: number; legacyWarning?: string }>(`/api/operations${queryString({ resource: "movements", ...filters, page: targetPage, pageSize: targetSize })}`);
+    const vin = filters.search.trim();
+    if (!looksLikeLegacyVinSearch(vin)) {
+      setLegacyWarning("");
+      return fetchCurrentPage(targetPage, targetSize);
+    }
+
+    const [currentRows, legacyRows] = await Promise.all([
+      fetchCurrentAllRows(),
+      readLegacyRows(vin),
+    ]);
+    const all = mergeHistory(currentRows, legacyRows);
+    const start = (targetPage - 1) * targetSize;
+    return { rows: all.slice(start, start + targetSize), total: all.length };
   }
 
   async function fetchAllRows() {
-    const first = await fetchPage(1, 200);
-    const all = [...first.rows];
-    const pages = Math.max(1, Math.ceil(first.total / 200));
-    for (let current = 2; current <= pages; current += 1) all.push(...(await fetchPage(current, 200)).rows);
-    return all;
+    const vin = filters.search.trim();
+    if (looksLikeLegacyVinSearch(vin)) {
+      const [currentRows, legacyRows] = await Promise.all([
+        fetchCurrentAllRows(),
+        readLegacyRows(vin),
+      ]);
+      return mergeHistory(currentRows, legacyRows);
+    }
+    setLegacyWarning("");
+    return fetchCurrentAllRows();
   }
 
   async function load(targetPage = page) {
@@ -34,11 +104,9 @@ export function MovementHistoryPage() {
       const payload = await fetchPage(targetPage, pageSize);
       setRows(payload.rows);
       setTotal(payload.total);
-      setLegacyWarning(payload.legacyWarning || "");
     } catch (failure) {
       setRows([]);
       setTotal(0);
-      setLegacyWarning("");
       setError(failure instanceof Error ? failure.message : "تعذر تحميل سجل الحركات");
     } finally {
       setLoading(false);
@@ -258,7 +326,7 @@ export function MovementHistoryPage() {
     <div className="module-page operations-page operations-history-page">
       <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA-u-nu-latn")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
-      {legacyWarning ? <div className="operations-alert error"><WarningCircle size={18} />تعذر قراءة سجل النظام القديم: {legacyWarning}</div> : null}
+      {legacyWarning ? <div className="operations-alert error"><WarningCircle size={18} />{legacyWarning} — تم عرض سجل المنصة الجديدة المتاح بدون أي تعديل على النظام القديم.</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-history-filters">
           <label className="operations-search"><MagnifyingGlass size={18} /><input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") void applyFilters(); }} placeholder="VIN أو السيارة أو البيان أو الملاحظة" /></label>
