@@ -50,6 +50,7 @@ export type MovementHistoryRow = {
 
 const columns: ResizableOperationsColumn<MovementHistoryRow>[] = [
   { key: "date", label: "التاريخ والوقت", width: 190, min: 150, max: 280, value: (row) => formatOperationsDate(row.created_at), render: (row) => formatOperationsDate(row.created_at) },
+  { key: "movementType", label: "نوع الحركة", width: 190, min: 130, max: 340, value: (row) => row.movement_type, render: (row) => row.movement_type || "—" },
   { key: "vin", label: "VIN", width: 150, min: 110, max: 260, value: (row) => row.vin, render: (row) => <strong dir="ltr">{row.vin}</strong> },
   { key: "car", label: "السيارة", width: 150, min: 110, max: 300, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
   { key: "statement", label: "البيان", width: 190, min: 120, max: 380, value: (row) => row.statement, render: (row) => row.statement || "—" },
@@ -75,7 +76,7 @@ export function MovementHistoryTable({ rows }: { rows: MovementHistoryRow[] }) {
       rowKey={(row) => row.id}
       storageKey="mzj.operations.movementHistory.columnWidths.v2"
       emptyText="لا توجد حركات مطابقة"
-      minTableWidth={1760}
+      minTableWidth={1950}
       tableClassName="movements operations-movement-history-table"
     />
   );

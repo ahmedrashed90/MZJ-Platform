@@ -512,18 +512,18 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     `;
 
     if (vehicle) {
-      const [auditRows, requestEventRows, archiveRows] = await Promise.all([
+      const [auditRows, requestEventRows, archiveRows, checkHistoryRows, approvalEventRows, statusNoteRows, trackingEventRows] = await Promise.all([
         sql<any[]>`
           select a.id::text,a.action,a.before_data,a.after_data,a.created_at,
-            coalesce(u.full_name,nullif(a.after_data->>'updated_by_name',''),nullif(a.before_data->>'updated_by_name','')) as actor_name,
+            coalesce(u.full_name,nullif(a.after_data->>'updated_by_name',''),nullif(a.before_data->>'updated_by_name',''),a.user_email) as actor_name,
             coalesce(a.branch_code,nullif(a.after_data->>'branch_name',''),nullif(a.before_data->>'branch_name','')) as actor_branch
           from audit.activity_log a
           left join core.users u on u.id=a.user_id
           where a.system_code='operations'
             and a.entity_type='vehicle'
-            and a.action in ('vehicle_created','vehicle_updated','vehicle_deleted')
             and (
               a.entity_id=${vehicle.id}
+              or lower(btrim(a.entity_id))=lower(btrim(${search}))
               or lower(btrim(coalesce(a.after_data->>'vin',a.before_data->>'vin','')))=lower(btrim(${search}))
             )
           order by a.created_at desc,a.id desc
@@ -545,6 +545,40 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
           from operations.vehicle_archive_events
           where vehicle_id=${vehicle.id}::uuid
           order by created_at desc,id desc
+        `,
+        sql<any[]>`
+          select h.id::text,h.item_code,coalesce(d.name,h.item_code) as item_name,h.old_status,h.new_status,h.note,
+            h.movement_id::text,h.changed_by_name,h.created_at
+          from operations.vehicle_check_history h
+          left join operations.check_item_definitions d on d.code=h.item_code
+          where h.vehicle_id=${vehicle.id}::uuid
+          order by h.created_at desc,h.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.cycle_no,e.approval_type,e.action,e.note,e.actor_name,e.actor_role,
+            e.before_data,e.after_data,e.created_at
+          from operations.approval_events e
+          where e.vehicle_id=${vehicle.id}::uuid
+          order by e.created_at desc,e.id desc
+        `,
+        sql<any[]>`
+          select n.id::text,n.status_code,n.note,n.movement_id::text,n.created_by_name,n.created_at,
+            coalesce(s.name,n.status_code) as status_name
+          from operations.vehicle_status_notes n
+          left join operations.vehicle_statuses s on s.code=n.status_code
+          where n.vehicle_id=${vehicle.id}::uuid
+          order by n.created_at desc,n.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.action,e.actor_name,e.note,e.created_at,s.code as stage_code,s.name as stage_name,
+            o.id::text as tracking_order_id,o.sales_order_no
+          from tracking.stage_events e
+          join tracking.order_vehicles ov on ov.id=e.vehicle_id
+          join tracking.orders o on o.id=e.order_id
+          join tracking.stages s on s.id=e.stage_id
+          where ov.vehicle_id=${vehicle.id}::uuid
+             or (ov.vehicle_id is null and lower(btrim(coalesce(ov.vin,'')))=lower(btrim(${search})))
+          order by e.created_at desc,e.id desc
         `,
       ]);
 
@@ -591,11 +625,13 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
         const newStatus = jsonValue(after, ["status_name","status_label","status_code","status"]);
         const fromLocation = jsonValue(before, ["location_name","place_name","location"]);
         const toLocation = jsonValue(after, ["location_name","place_name","location"]);
-        const label = item.action === "vehicle_created"
-          ? "تسجيل السيارة في النظام"
-          : item.action === "vehicle_deleted"
-            ? "حذف السيارة من النظام"
-            : "تحديث بيانات السيارة";
+        const auditLabels: Record<string, string> = {
+          vehicle_created: "تسجيل السيارة في النظام",
+          vehicle_updated: "تحديث بيانات السيارة",
+          vehicle_deleted: "حذف السيارة من النظام",
+          erpnext_vehicle_status_synced: "مزامنة حالة السيارة من ERPNext",
+        };
+        const label = auditLabels[textValue(item.action)] || `إجراء على السيارة: ${textValue(item.action) || "غير محدد"}`;
         supplemental.push({
           ...base,
           id: `audit:${item.id}`,
@@ -668,6 +704,132 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
           new_status_name: null,
           note: textValue(item.reason) || (textValue(item.action) === "restored" ? "استعادة السيارة من الأرشيف" : "أرشفة السيارة"),
           state_note: textValue(item.action) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const checkStatusLabel = (value: unknown) => {
+        const key = textValue(value).toLowerCase();
+        if (key === "ok") return "نعم";
+        if (key === "missing") return "لا";
+        if (key === "unknown") return "غير محدد";
+        return textValue(value) || "غير محدد";
+      };
+      for (const item of checkHistoryRows) {
+        supplemental.push({
+          ...base,
+          id: `check:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: "vehicle_check",
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `تحديث التشييك — ${textValue(item.item_name) || textValue(item.item_code)}: ${checkStatusLabel(item.old_status)} ← ${checkStatusLabel(item.new_status)}`,
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.changed_by_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const approvalTypeLabel = (value: unknown) => textValue(value) === "financial" ? "الموافقة المالية" : textValue(value) === "administrative" ? "الموافقة الإدارية" : textValue(value) || "الموافقة";
+      const approvalActionLabel = (value: unknown) => {
+        const key = textValue(value);
+        if (key === "approve") return "اعتماد";
+        if (key === "revert") return "إلغاء الاعتماد";
+        if (key === "reset") return "إعادة ضبط";
+        if (key === "note") return "تحديث ملاحظة";
+        if (key === "cancelled") return "إلغاء";
+        return key || "إجراء";
+      };
+      for (const item of approvalEventRows) {
+        supplemental.push({
+          ...base,
+          id: `approval:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: `approval_${textValue(item.approval_type)}_${textValue(item.action)}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `${approvalTypeLabel(item.approval_type)} — ${approvalActionLabel(item.action)} (الدورة ${Number(item.cycle_no || 1)})`,
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: item.actor_role || null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      for (const item of statusNoteRows) {
+        supplemental.push({
+          ...base,
+          id: `status-note:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: "status_note",
+          old_status: null,
+          new_status: item.status_code || null,
+          old_status_name: null,
+          new_status_name: item.status_name || item.status_code || null,
+          note: "تحديث ملاحظة الحالة",
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.created_by_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      for (const item of trackingEventRows) {
+        const actionLabel = textValue(item.action) === "reverted" ? "تراجع عن المرحلة" : "إكمال المرحلة";
+        supplemental.push({
+          ...base,
+          id: `tracking-stage:${item.id}`,
+          batch_id: null,
+          transfer_request_id: item.tracking_order_id || null,
+          request_no: item.sales_order_no || null,
+          created_at: item.created_at,
+          movement_type: `tracking_stage_${textValue(item.action)}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `${actionLabel} — ${textValue(item.stage_name) || textValue(item.stage_code) || "مرحلة التتبع"}`,
+          state_note: textValue(item.note) || null,
           shortage_note: null,
           performed_by_name: item.actor_name || null,
           performed_by_role: null,

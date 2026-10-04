@@ -125,7 +125,7 @@ export function MovementHistoryPage() {
     setError("");
     try {
       const all = await fetchAllRows();
-      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","إداري العمليات","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,row.old_status_name || row.old_status,row.new_status_name || row.new_status,row.performed_by_name,row.operations_admin_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
+      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","نوع الحركة","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","إداري العمليات","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,row.movement_type,row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,row.old_status_name || row.old_status,row.new_status_name || row.new_status,row.performed_by_name,row.operations_admin_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تصدير سجل الحركات");
     } finally {
