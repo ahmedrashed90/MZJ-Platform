@@ -269,10 +269,49 @@ export function CrmKpiPage() {
     return !filters.q || search.includes(filters.q.toLowerCase());
   }), [agents, filters.branch, filters.agent, filters.q]);
 
-  const reportAgents = useMemo(
-    () => visibleAgents.filter((agent) => Boolean(rowForAgent(agent)) && hasKpiResult(resultForAgent(agent).calc)),
-    [visibleAgents, rows, period.from, period.to],
-  );
+  const historicalReportAgents = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const row of rows) {
+      const branchCode = String(row.branch_code || row.details?.branchCode || "");
+      const branchName = String(row.branch_name || row.details?.branchName || "");
+      const departmentCode = String(row.department_code || row.details?.departmentCode || "");
+      const departmentName = String(row.department_name || row.details?.departmentName || "");
+      const key = `${row.user_id}:${branchCode || "branch"}`;
+      if (!map.has(key)) map.set(key, {
+        id: row.user_id,
+        report_key: key,
+        full_name: row.full_name || "المندوب",
+        employee_no: row.employee_no || "",
+        branch_code: branchCode,
+        branch_name: branchName,
+        department_code: departmentCode,
+        department_name: departmentName,
+        branch_codes: branchCode ? [branchCode] : [],
+        branches: branchName ? [branchName] : [],
+        departments: departmentName ? [departmentName] : [],
+        is_archived: Boolean(row.is_archived),
+        is_active: row.is_active !== false,
+      });
+    }
+    return [...map.values()];
+  }, [rows]);
+
+  const visibleReportAgents = useMemo(() => historicalReportAgents.filter((agent) => {
+    if (filters.branch && !(agent.branch_codes || []).includes(filters.branch)) return false;
+    if (filters.agent && agent.id !== filters.agent) return false;
+    const search = [agent.full_name, agent.employee_no, agent.department_name, agent.branch_name, ...(agent.departments || []), ...(agent.branches || [])].join(" ").toLowerCase();
+    return !filters.q || search.includes(filters.q.toLowerCase());
+  }), [historicalReportAgents, filters.branch, filters.agent, filters.q]);
+
+  const reportAgents = useMemo(() => {
+    const activeResults = visibleAgents.filter((agent) => Boolean(rowForAgent(agent)) && hasKpiResult(resultForAgent(agent).calc));
+    const activeKeys = new Set(activeResults.map((agent) => `${agent.id}:${agent.branch_code || "branch"}`));
+    const historicalResults = visibleReportAgents.filter((agent) => {
+      const key = `${agent.id}:${agent.branch_code || "branch"}`;
+      return !activeKeys.has(key) && Boolean(rowForAgent(agent)) && hasKpiResult(resultForAgent(agent).calc);
+    });
+    return [...activeResults, ...historicalResults];
+  }, [visibleAgents, visibleReportAgents, rows, period.from, period.to]);
 
   function rowForAgent(agent: any) {
     return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code))
@@ -360,7 +399,7 @@ export function CrmKpiPage() {
     const isForm = Boolean(rowOrForm?.userId);
     const details = normalizeDetails(rowOrForm?.details, number(rowOrForm?.details?.workDays, 1));
     const result = calculate(details);
-    const agentName = isForm ? agents.find((agent) => agent.id === rowOrForm.userId)?.full_name || "المندوب" : rowOrForm.full_name || "المندوب";
+    const agentName = isForm ? (agents.find((agent) => agent.id === rowOrForm.userId)?.full_name || historicalReportAgents.find((agent) => agent.id === rowOrForm.userId)?.full_name || "المندوب") : rowOrForm.full_name || "المندوب";
     const from = isForm ? rowOrForm.periodStart : String(rowOrForm.period_start).slice(0, 10);
     const to = isForm ? rowOrForm.periodEnd : String(rowOrForm.period_end).slice(0, 10);
     const branch = isForm ? rowOrForm.branchName : rowOrForm.branch_name;
@@ -594,7 +633,7 @@ th{background:#f8ece5;font-weight:900}
         </div>
         <div className="kpi-filter-group kpi-filter-people">
           <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilters((current) => ({ ...current, branch: event.target.value }))}><option value="">كل الفروع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
+          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{tab === "reports" ? historicalReportAgents.map((agent) => <option key={agent.report_key || agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>) : agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
           <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="بحث باسم المندوب أو الفرع أو القسم" /></label>
           <button type="button" className="crm-secondary-button" onClick={() => setFilters({ month: defaultMonth, from: defaultPeriod.from, to: defaultPeriod.to, branch: "", agent: "", q: "" })}>مسح الفلاتر</button>
         </div>

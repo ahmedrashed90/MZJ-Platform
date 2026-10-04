@@ -8999,3 +8999,25 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .owners-club-design.design_3 .owners-club-hero:after{display:none}
   .owners-club-design .owners-public-section,.owners-club-design .owners-invite-card{border-radius:16px;padding:16px}
 }
+
+/* Attendance report: per-employee blocks and authorized departure range */
+.attendance-employee-title { padding: 9px 16px; align-items: center; }
+.attendance-employee-title > div { display: grid; gap: 2px; }
+.attendance-employee-title strong { color: #55362e; font-size: 13px; font-weight: 950; }
+.attendance-employee-title small { color: #8b7067; font-size: 9px; font-weight: 800; }
+.attendance-report-table-compact col.attendance-col-day { width: 9%; }
+.attendance-report-table-compact col.attendance-col-date { width: 10%; }
+.attendance-early-departure-done { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 3px; }
+.attendance-permission-backdrop { position: fixed; inset: 0; z-index: 160; display: grid; place-items: center; padding: 18px; background: rgba(48,31,26,.48); backdrop-filter: blur(3px); }
+.attendance-permission-dialog { width: min(520px,96vw); border: 1px solid #ead8cf; border-radius: 18px; padding: 18px; background: #fff; box-shadow: 0 24px 70px rgba(56,35,29,.22); direction: rtl; }
+.attendance-permission-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid #eee2dc; }
+.attendance-permission-dialog > header h2 { margin: 0; color: #4b3028; font-size: 19px; }
+.attendance-permission-dialog > header p { margin: 5px 0 0; color: #92766d; font-size: 11px; }
+.attendance-permission-dialog > header > button { width: 32px; height: 32px; border: 1px solid #e3d4cd; border-radius: 9px; background: #fff; color: #6c4438; font-size: 20px; cursor: pointer; }
+.attendance-permission-times { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 18px 0 10px; }
+.attendance-permission-times label { display: grid; gap: 6px; color: #5c4037; font-size: 11px; font-weight: 900; }
+.attendance-permission-times input { min-height: 42px; border: 1px solid #dbc8bf; border-radius: 10px; padding: 0 11px; background: #fffdfc; color: #3e2b25; font: inherit; direction: ltr; }
+.attendance-permission-note { margin: 4px 0 16px; border-radius: 10px; padding: 9px 11px; background: #faf4f1; color: #80665d; font-size: 10px; line-height: 1.7; }
+.attendance-permission-dialog > footer { display: flex; justify-content: flex-end; gap: 9px; }
+.attendance-permission-dialog > footer button { min-width: 112px; }
+@media (max-width: 720px) { .attendance-permission-times { grid-template-columns: 1fr; } }

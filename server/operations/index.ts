@@ -306,6 +306,13 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const timeFrom = clean(request.query.timeFrom);
   const timeTo = clean(request.query.timeTo);
   const pattern = `%${search}%`;
+  const [vinLookup] = search ? await sql<{ exact_vin: boolean }[]>`
+    select exists(
+      select 1 from operations.vehicles vehicle_search
+      where lower(btrim(vehicle_search.vin))=lower(btrim(${search}))
+    ) as exact_vin
+  ` : [{ exact_vin: false }];
+  const lifetimeVinHistory = Boolean(vinLookup?.exact_vin);
   const scope = accessScope(sql, user, "tl");
   const statusScope = vehicleStatusScope(sql, user, "movement");
   const rows = await sql<any[]>`
@@ -395,10 +402,10 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
       and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date)
-      and (${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time)
-      and (${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
     order by m.created_at desc,m.id desc limit ${pageSize} offset ${offset}
@@ -453,8 +460,8 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date) and (${lifetimeVinHistory}=true or ${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time) and (${lifetimeVinHistory}=true or ${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
   `;

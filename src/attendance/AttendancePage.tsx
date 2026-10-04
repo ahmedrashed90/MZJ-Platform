@@ -30,6 +30,10 @@ type ReportPeriod = {
   checkInText: string;
   checkOutText: string;
   checkoutSource: string | null;
+  earlyDepartureFrom: string | null;
+  earlyDepartureTo: string | null;
+  earlyDepartureFromText: string;
+  earlyDepartureToText: string;
   result: string;
   delayMinutes: number;
   workMinutes: number;
@@ -63,6 +67,20 @@ function missingResultLabel(result: string | null | undefined) {
   return "—";
 }
 
+function formatDurationMinutes(value: unknown) {
+  const minutes = Math.max(0, Math.round(Number(value || 0)));
+  if (minutes < 60) return `${minutes} دقيقة`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} ساعة و ${remainder} دقيقة` : `${hours} ساعة`;
+}
+
+function riyadhTimeNow() {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date());
+}
+
 function groupReportRows(rows: ReportRow[]) {
   const groups = new Map<string, ReportRow[]>();
   for (const row of rows) {
@@ -70,6 +88,20 @@ function groupReportRows(rows: ReportRow[]) {
     groups.get(row.date)!.push(row);
   }
   return Array.from(groups.entries()).map(([date, grouped]) => ({ date, rows: grouped }));
+}
+
+function groupReportRowsByEmployee(rows: ReportRow[]) {
+  const groups = new Map<string, { userId: string; name: string; branch: string; rows: ReportRow[] }>();
+  for (const row of rows) {
+    const current = groups.get(row.userId) || { userId: row.userId, name: row.name, branch: row.branch, rows: [] };
+    current.name = row.name;
+    current.branch = row.branch;
+    current.rows.push(row);
+    groups.set(row.userId, current);
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, rows: group.rows.slice().sort((a, b) => a.date.localeCompare(b.date)) }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ar"));
 }
 
 function excelXmlEscape(value: unknown) {
@@ -124,7 +156,7 @@ function exportRowsByEmployee(payload: ReportPayload) {
 
 function exportDelay(period: ReportPeriod | undefined) {
   if (!period?.checkIn) return "—";
-  return `${Math.max(0, Number(period.delayMinutes || 0))} دقيقة`;
+  return formatDurationMinutes(period.delayMinutes);
 }
 
 function exportAbsence(period: ReportPeriod | undefined) {
@@ -284,6 +316,7 @@ export function AttendancePage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
   const [earlyDepartureUserId, setEarlyDepartureUserId] = useState("");
+  const [earlyDepartureDialog, setEarlyDepartureDialog] = useState<{ row: ReportRow; fromTime: string; toTime: string } | null>(null);
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -296,6 +329,8 @@ export function AttendancePage() {
   }, [adminUsers, employeeSearch]);
 
   const groupedRows = useMemo(() => groupReportRows(report?.rows || []), [report?.rows]);
+  const employeeGroups = useMemo(() => groupReportRowsByEmployee(report?.rows || []), [report?.rows]);
+  const showEmployeeBlocks = employeeIds.length > 1;
 
   async function loadAdminUsers() {
     if (!isAdmin) return;
@@ -339,17 +374,36 @@ export function AttendancePage() {
     void loadReport("", "", []);
   }, [isAdmin]);
 
-  async function authorizeEarlyDeparture(row: ReportRow) {
+  function openEarlyDepartureDialog(row: ReportRow) {
     if (!isAdmin || earlyDepartureUserId) return;
+    const openPeriod = row.periods.find((period) => period?.checkIn && !period?.checkOut) || null;
+    if (!openPeriod) {
+      setError("لا توجد فترة حضور مفتوحة الآن لهذا المستخدم");
+      return;
+    }
+    const nowTime = riyadhTimeNow();
+    setError("");
+    setMessage("");
+    setEarlyDepartureDialog({ row, fromTime: nowTime, toTime: openPeriod.endTime || nowTime });
+  }
+
+  async function authorizeEarlyDeparture() {
+    if (!isAdmin || earlyDepartureUserId || !earlyDepartureDialog) return;
+    const { row, fromTime, toTime } = earlyDepartureDialog;
+    if (!fromTime || !toTime) {
+      setError("حدد وقت بداية ونهاية إذن الانصراف");
+      return;
+    }
     setEarlyDepartureUserId(row.userId);
     setError("");
     setMessage("");
     try {
       const result = await attendanceFetch<{ ok: true; message: string }>("/api/attendance", {
         method: "POST",
-        body: JSON.stringify({ action: "authorize_early_departure", userId: row.userId, workDate: row.date }),
+        body: JSON.stringify({ action: "authorize_early_departure", userId: row.userId, workDate: row.date, fromTime, toTime }),
       });
       setMessage(result.message || `تم تسجيل إذن الانصراف المبكر لـ ${row.name}`);
+      setEarlyDepartureDialog(null);
       await loadReport();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تسجيل إذن الانصراف المبكر");
@@ -513,7 +567,82 @@ export function AttendancePage() {
         </form>
 
         <div className="attendance-day-groups">
-          {groupedRows.map((group, groupIndex) => {
+          {showEmployeeBlocks ? employeeGroups.map((employee, groupIndex) => (
+            <section className={`attendance-day-block attendance-employee-block day-tone-${groupIndex % 8}`} key={employee.userId}>
+              <header className="attendance-day-title attendance-employee-title">
+                <div>
+                  <strong>{employee.name}</strong>
+                  <small>{employee.branch || "—"} • {employee.rows.length} يوم</small>
+                </div>
+              </header>
+              <div className="attendance-day-table-wrap">
+                <table className={`attendance-report-table attendance-report-table-compact attendance-day-table periods-${Math.min(periodHeaders.length, 4)}`}>
+                  <colgroup>
+                    <col className="attendance-col-index" />
+                    <col className="attendance-col-day" />
+                    <col className="attendance-col-date" />
+                    <col className="attendance-col-action" />
+                    {periodHeaders.flatMap((header) => [
+                      <col key={`${employee.userId}-${header}-col-in`} className="attendance-col-period-time" />,
+                      <col key={`${employee.userId}-${header}-col-out`} className="attendance-col-period-time" />,
+                      <col key={`${employee.userId}-${header}-col-result`} className="attendance-col-period-result" />,
+                    ])}
+                  </colgroup>
+                  <thead>
+                    <tr className="attendance-main-head-row">
+                      <th rowSpan={2}>م</th>
+                      <th rowSpan={2}>اليوم</th>
+                      <th rowSpan={2}>التاريخ</th>
+                      <th rowSpan={2}>إذن الانصراف</th>
+                      {periodHeaders.map((header) => <th key={`${employee.userId}-${header}-group`} colSpan={3}>{header}</th>)}
+                    </tr>
+                    <tr className="attendance-sub-head-row">
+                      {periodHeaders.flatMap((header) => [
+                        <th key={`${employee.userId}-${header}-in`}>الحضور</th>,
+                        <th key={`${employee.userId}-${header}-out`}>الانصراف</th>,
+                        <th key={`${employee.userId}-${header}-result`}>النتيجة</th>,
+                      ])}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {employee.rows.map((row, index) => (
+                      <tr key={`${row.userId}:${row.date}`}>
+                        <td>{index + 1}</td>
+                        <td>{formatAttendanceDay(row.date)}</td>
+                        <td>{formatAttendanceDate(row.date)}</td>
+                        <td className="attendance-early-departure-cell">
+                          {row.periods.some((period) => period?.checkoutSource === "authorized") ? (
+                            <span className="attendance-early-departure-done">تم الإذن{(() => { const authorized = row.periods.find((period) => period?.checkoutSource === "authorized"); return authorized?.earlyDepartureFromText && authorized?.earlyDepartureToText ? ` ${authorized.earlyDepartureFromText} - ${authorized.earlyDepartureToText}` : ""; })()}</span>
+                          ) : row.periods.some((period) => period?.checkIn && !period?.checkOut) ? (
+                            <button type="button" onClick={() => openEarlyDepartureDialog(row)} disabled={Boolean(earlyDepartureUserId)}>
+                              {earlyDepartureUserId === row.userId ? "جاري التسجيل..." : "إذن مبكر"}
+                            </button>
+                          ) : <span className="attendance-early-departure-empty">—</span>}
+                        </td>
+                        {periodHeaders.flatMap((_, periodIndex) => {
+                          const period = row.periods[periodIndex];
+                          const delay = Math.max(0, Number(period?.delayMinutes || 0));
+                          const hasCheckIn = Boolean(period?.checkIn);
+                          return [
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell-plain">
+                              {period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}
+                            </td>,
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
+                              {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}
+                              {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
+                            </td>,
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
+                              {hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                            </td>,
+                          ];
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )) : groupedRows.map((group, groupIndex) => {
             const isCollapsed = collapsedDays.has(group.date);
             return (
               <section className={`attendance-day-block day-tone-${groupIndex % 8}${isCollapsed ? " is-collapsed" : ""}`} key={group.date}>
@@ -563,14 +692,12 @@ export function AttendancePage() {
                           <tr key={`${row.userId}:${row.date}`}>
                             <td>{index + 1}</td>
                             <td>{row.branch}</td>
-                            <td className="attendance-name-cell">
-                              <strong>{row.name}</strong>
-                            </td>
+                            <td className="attendance-name-cell"><strong>{row.name}</strong></td>
                             <td className="attendance-early-departure-cell">
                               {row.periods.some((period) => period?.checkoutSource === "authorized") ? (
-                                <span className="attendance-early-departure-done">تم الإذن</span>
+                                <span className="attendance-early-departure-done">تم الإذن{(() => { const authorized = row.periods.find((period) => period?.checkoutSource === "authorized"); return authorized?.earlyDepartureFromText && authorized?.earlyDepartureToText ? ` ${authorized.earlyDepartureFromText} - ${authorized.earlyDepartureToText}` : ""; })()}</span>
                               ) : row.periods.some((period) => period?.checkIn && !period?.checkOut) ? (
-                                <button type="button" onClick={() => void authorizeEarlyDeparture(row)} disabled={Boolean(earlyDepartureUserId)}>
+                                <button type="button" onClick={() => openEarlyDepartureDialog(row)} disabled={Boolean(earlyDepartureUserId)}>
                                   {earlyDepartureUserId === row.userId ? "جاري التسجيل..." : "إذن مبكر"}
                                 </button>
                               ) : <span className="attendance-early-departure-empty">—</span>}
@@ -588,7 +715,7 @@ export function AttendancePage() {
                                   {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                                  {hasCheckIn ? <strong>{delay} دقيقة</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                                  {hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
                                 </td>,
                               ];
                             })}
@@ -606,6 +733,28 @@ export function AttendancePage() {
           ) : null}
         </div>
       </section>
+
+      {earlyDepartureDialog ? (
+        <div className="attendance-permission-backdrop" onMouseDown={() => !earlyDepartureUserId && setEarlyDepartureDialog(null)}>
+          <div className="attendance-permission-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div><h2>إذن انصراف مبكر</h2><p>{earlyDepartureDialog.row.name} • {formatAttendanceDate(earlyDepartureDialog.row.date)}</p></div>
+              <button type="button" onClick={() => setEarlyDepartureDialog(null)} disabled={Boolean(earlyDepartureUserId)}>×</button>
+            </header>
+            <div className="attendance-permission-times">
+              <label><span>من الساعة</span><input type="time" value={earlyDepartureDialog.fromTime} onChange={(event) => setEarlyDepartureDialog((current) => current ? { ...current, fromTime: event.target.value } : current)} /></label>
+              <label><span>إلى الساعة</span><input type="time" value={earlyDepartureDialog.toTime} onChange={(event) => setEarlyDepartureDialog((current) => current ? { ...current, toTime: event.target.value } : current)} /></label>
+            </div>
+            <p className="attendance-permission-note">يتم تسجيل وقت الانصراف على بداية الإذن، مع حفظ مدة الإذن من وإلى داخل سجل الحضور.</p>
+            <footer>
+              <button type="button" className="secondary-button" onClick={() => setEarlyDepartureDialog(null)} disabled={Boolean(earlyDepartureUserId)}>إلغاء</button>
+              <button type="button" className="attendance-view-button" onClick={() => void authorizeEarlyDeparture()} disabled={Boolean(earlyDepartureUserId)}>
+                {earlyDepartureUserId ? "جاري الحفظ..." : "حفظ الإذن"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

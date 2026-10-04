@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261003-global-attendance-v11-authorized-early-departure";
+export const ATTENDANCE_SCHEMA_VERSION = "20261004-global-attendance-v12-authorized-time-range";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -122,6 +122,8 @@ create table if not exists core.attendance_records (
   checkout_source text,
   early_departure_authorized_at timestamptz,
   early_departure_authorized_by uuid references core.users(id) on delete set null,
+  early_departure_from_at timestamptz,
+  early_departure_to_at timestamptz,
   delay_minutes integer not null default 0,
   work_minutes integer not null default 0,
   status text not null default 'present',
@@ -133,6 +135,8 @@ create unique index if not exists attendance_records_user_period_day_unique
   on core.attendance_records(user_id,period_id,work_date) where period_id is not null;
 alter table core.attendance_records add column if not exists early_departure_authorized_at timestamptz;
 alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
+alter table core.attendance_records add column if not exists early_departure_from_at timestamptz;
+alter table core.attendance_records add column if not exists early_departure_to_at timestamptz;
 do $$
 begin
   if exists (
@@ -220,6 +224,14 @@ async function attendanceSchemaReady() {
         where table_schema='core' and table_name='attendance_records' and column_name='early_departure_authorized_by'
       )
       and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='early_departure_from_at'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='early_departure_to_at'
+      )
+      and exists (
         select 1 from pg_constraint
         where conname='attendance_records_checkout_source_check'
           and conrelid='core.attendance_records'::regclass
@@ -304,6 +316,8 @@ export function ensureAttendanceSchema() {
           alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);
           alter table core.attendance_records add column if not exists early_departure_authorized_at timestamptz;
           alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
+          alter table core.attendance_records add column if not exists early_departure_from_at timestamptz;
+          alter table core.attendance_records add column if not exists early_departure_to_at timestamptz;
           do $$
           begin
             if exists (

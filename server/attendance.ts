@@ -820,6 +820,7 @@ async function reportData(request: VercelRequest) {
         id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,
         work_date::text as work_date,period_name,period_sort_order,grace_minutes,
         scheduled_start_at,scheduled_end_at,check_in,check_out,checkout_source,
+        early_departure_from_at,early_departure_to_at,
         delay_minutes,work_minutes,status,legacy_source_key
       from core.attendance_records
       where user_id::text in ${sql(userIds)}
@@ -959,7 +960,7 @@ async function reportData(request: VercelRequest) {
         if (record?.check_in) {
           const statusText = delayMinutes > 0 ? "متأخر" : "حاضر";
           const workText = record.check_out ? `العمل ${formatMinutes(Number(record.work_minutes || 0))}` : "الفترة مفتوحة";
-          const delayText = delayMinutes > 0 ? `تأخير ${delayMinutes} د` : "بدون تأخير";
+          const delayText = delayMinutes > 0 ? `تأخير ${formatMinutes(delayMinutes)}` : "بدون تأخير";
           const departureText = record.checkout_source === "authorized" ? " • إذن انصراف مبكر" : "";
           result = `${statusText} • ${workText} • ${delayText}${departureText}`;
         } else if (isDayOff) {
@@ -986,6 +987,10 @@ async function reportData(request: VercelRequest) {
           checkInText: reportClock(record?.check_in),
           checkOutText: reportClock(record?.check_out),
           checkoutSource: record?.check_out ? (record.checkout_source === "authorized" ? "authorized" : "auto") : null,
+          earlyDepartureFrom: record?.early_departure_from_at || null,
+          earlyDepartureTo: record?.early_departure_to_at || null,
+          earlyDepartureFromText: reportClock(record?.early_departure_from_at),
+          earlyDepartureToText: reportClock(record?.early_departure_to_at),
           result,
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
@@ -1021,8 +1026,12 @@ async function reportData(request: VercelRequest) {
 async function authorizeEarlyDeparture(body: Record<string, any>, adminId: string) {
   const userId = clean(body.userId);
   const workDate = clean(body.workDate);
+  const fromTime = clean(body.fromTime).slice(0, 5);
+  const toTime = clean(body.toTime).slice(0, 5);
   if (!validUuid(userId)) throw new AttendanceError("USER_REQUIRED", "المستخدم غير موجود", 404);
   if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ الحضور غير صحيح");
+  if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف");
+  if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
 
   const sql = getSql();
   return sql.begin(async (tx) => {
@@ -1035,7 +1044,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
     if (!user) throw new AttendanceError("USER_NOT_FOUND", "المستخدم غير موجود", 404);
 
     const [record] = await tx<any[]>`
-      select id::text,check_in,scheduled_start_at,scheduled_end_at,checkout_source
+      select id::text,check_in,scheduled_start_at,scheduled_end_at,checkout_source,early_departure_from_at,early_departure_to_at
       from core.attendance_records
       where user_id=${userId}::uuid
         and work_date=${workDate}::date
@@ -1052,7 +1061,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
 
     if (!record) {
       const [authorized] = await tx<any[]>`
-        select id::text
+        select id::text,early_departure_from_at,early_departure_to_at
         from core.attendance_records
         where user_id=${userId}::uuid
           and work_date=${workDate}::date
@@ -1064,18 +1073,42 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة الآن لهذا المستخدم", 400);
     }
 
+    const [permission] = await tx<any[]>`
+      select
+        ((${workDate}::date + ${fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,
+        ((${workDate}::date + ${toTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as to_at
+    `;
+    const fromAt = permission?.from_at;
+    const toAt = permission?.to_at;
+    if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
+
+    const [validation] = await tx<any[]>`
+      select
+        ${fromAt}::timestamptz >= ${record.check_in}::timestamptz as after_check_in,
+        ${fromAt}::timestamptz >= ${record.scheduled_start_at}::timestamptz as after_schedule_start,
+        ${fromAt}::timestamptz <= now() as not_future,
+        ${toAt}::timestamptz > ${fromAt}::timestamptz as valid_order,
+        ${toAt}::timestamptz <= ${record.scheduled_end_at}::timestamptz as within_schedule
+    `;
+    if (!validation?.after_check_in || !validation?.after_schedule_start) throw new AttendanceError("EARLY_DEPARTURE_BEFORE_CHECKIN", "بداية الإذن لا يمكن أن تكون قبل تسجيل الحضور");
+    if (!validation?.not_future) throw new AttendanceError("EARLY_DEPARTURE_IN_FUTURE", "بداية الإذن لا يمكن أن تكون بعد الوقت الحالي");
+    if (!validation?.valid_order) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
+    if (!validation?.within_schedule) throw new AttendanceError("EARLY_DEPARTURE_AFTER_SHIFT", "نهاية الإذن لا يمكن أن تتجاوز نهاية دوام اليوزر");
+
     const [updated] = await tx<any[]>`
       update core.attendance_records
-      set check_out=now(),
+      set check_out=${fromAt}::timestamptz,
           checkout_source='authorized',
           early_departure_authorized_at=now(),
           early_departure_authorized_by=${adminId}::uuid,
-          work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60)::int),
+          early_departure_from_at=${fromAt}::timestamptz,
+          early_departure_to_at=${toAt}::timestamptz,
+          work_minutes=greatest(0,floor(extract(epoch from (${fromAt}::timestamptz-check_in))/60)::int),
           updated_at=now()
       where id=${record.id}::uuid
-      returning id::text,check_out
+      returning id::text,check_out,early_departure_from_at,early_departure_to_at
     `;
-    return { ok: true, recordId: updated.id, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name}` };
+    return { ok: true, recordId: updated.id, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name} من ${fromTime} إلى ${toTime}` };
   });
 }
 

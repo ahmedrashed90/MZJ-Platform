@@ -219,13 +219,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
         e.user_id::text,
         u.full_name,
         u.employee_no,
-        primary_branch.code as branch_code,
-        primary_branch.name as branch_name,
-        primary_department.code as department_code,
-        primary_department.name as department_name
+        coalesce(nullif(e.details->>'branchCode',''),primary_branch.code) as branch_code,
+        coalesce(nullif(e.details->>'branchName',''),primary_branch.name) as branch_name,
+        coalesce(nullif(e.details->>'departmentCode',''),primary_department.code) as department_code,
+        coalesce(nullif(e.details->>'departmentName',''),primary_department.name) as department_name,
+        u.is_active,
+        coalesce(u.is_archived,false) as is_archived
       from crm.kpi_evaluations e
-      join core.users u on u.id=e.user_id and u.is_active=true and coalesce(u.is_archived,false)=false
-      join lateral (
+      join core.users u on u.id=e.user_id
+      left join lateral (
         select d.code,d.name
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
@@ -234,7 +236,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
       ) primary_department on true
-      join lateral (
+      left join lateral (
         select b.code,b.name,b.sort_order
         from core.user_system_branches usb
         join core.branches b on b.id=usb.branch_id and b.is_active=true
@@ -245,20 +247,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where (${from || null}::date is null or e.period_end >= ${from || null}::date)
         and (${to || null}::date is null or e.period_start <= ${to || null}::date)
         and (${agent || null}::uuid is null or e.user_id=${agent || null}::uuid)
-        and (${branch || null}::text is null or primary_branch.code=${branch || null})
+        and (${branch || null}::text is null or coalesce(nullif(e.details->>'branchCode',''),primary_branch.code)=${branch || null})
         and (
-          u.can_receive_leads=true
-          or exists (
-            select 1 from core.user_systems us join core.roles r on r.id=us.role_id
-            where us.user_id=u.id and us.system_code='crm' and us.is_enabled=true and r.code='sales_user'
-          )
-          or exists (
-            select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id
-            where ur.user_id=u.id and r.code='sales_user'
-          )
+          ${kpiScopeAll}::boolean
+          or coalesce(nullif(e.details->>'departmentCode',''),primary_department.code)=any(${scope.departmentCodes}::text[])
         )
-        and (${kpiScopeAll}::boolean or primary_department.code=any(${scope.departmentCodes}::text[]))
-        and (${kpiScopeAll}::boolean or ${scope.branchCodes.length === 0}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
+        and (
+          ${kpiScopeAll}::boolean
+          or ${scope.branchCodes.length === 0}::boolean
+          or coalesce(nullif(e.details->>'branchCode',''),primary_branch.code)=any(${scope.branchCodes}::text[])
+        )
       order by e.period_start desc,u.full_name
     `;
 
