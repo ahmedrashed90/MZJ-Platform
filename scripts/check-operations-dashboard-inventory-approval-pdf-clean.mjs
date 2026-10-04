@@ -87,9 +87,10 @@ expect(
 expect(
   "Movement PDF keeps prior/current state and all notes without adding narrow duplicate columns",
   movementHistory.includes('lines([["الحالي", row.to_location_name], ["السابق", row.from_location_name]])')
-    && movementHistory.includes('lines([["الحالية", row.new_status_name || row.new_status], ["السابقة", row.old_status_name || row.old_status]])')
+    && movementHistory.includes('lines([["الحالية", movementStatusLabel(row.new_status_name || row.new_status)], ["السابقة", movementStatusLabel(row.old_status_name || row.old_status)]])')
     && movementHistory.includes('["الحركة", row.note]')
-    && movementHistory.includes('["الحالة", row.state_note]'),
+    && movementHistory.includes('["الحالة", row.state_note]')
+    && movementHistory.includes('movementTypeLabel(row.movement_type)'),
 );
 expect(
   "Movement PDF waits for fonts, preserves technical references, and prevents row splitting",
