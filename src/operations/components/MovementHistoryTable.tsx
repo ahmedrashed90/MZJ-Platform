@@ -1,5 +1,6 @@
 import { formatOperationsDate } from "../api";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "./ResizableOperationsTable";
+import { movementStatusLabel, movementTypeLabel } from "../movementHistoryLabels";
 
 export type MovementHistoryRow = {
   id: string;
@@ -50,14 +51,14 @@ export type MovementHistoryRow = {
 
 const columns: ResizableOperationsColumn<MovementHistoryRow>[] = [
   { key: "date", label: "التاريخ والوقت", width: 190, min: 150, max: 280, value: (row) => formatOperationsDate(row.created_at), render: (row) => formatOperationsDate(row.created_at) },
-  { key: "movementType", label: "نوع الحركة", width: 190, min: 130, max: 340, value: (row) => row.movement_type, render: (row) => row.movement_type || "—" },
+  { key: "movementType", label: "نوع الحركة", width: 190, min: 130, max: 340, value: (row) => movementTypeLabel(row.movement_type), render: (row) => movementTypeLabel(row.movement_type) },
   { key: "vin", label: "VIN", width: 150, min: 110, max: 260, value: (row) => row.vin, render: (row) => <strong dir="ltr">{row.vin}</strong> },
   { key: "car", label: "السيارة", width: 150, min: 110, max: 300, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
   { key: "statement", label: "البيان", width: 190, min: 120, max: 380, value: (row) => row.statement, render: (row) => row.statement || "—" },
   { key: "from", label: "المكان السابق", width: 135, min: 105, max: 240, value: (row) => row.from_location_name, render: (row) => row.from_location_name || "—" },
   { key: "to", label: "المكان الجديد", width: 135, min: 105, max: 240, value: (row) => row.to_location_name, render: (row) => row.to_location_name || "—" },
-  { key: "oldStatus", label: "الحالة السابقة", width: 155, min: 115, max: 250, value: (row) => row.old_status_name || row.old_status, render: (row) => row.old_status_name || row.old_status || "—" },
-  { key: "newStatus", label: "الحالة الجديدة", width: 155, min: 115, max: 250, value: (row) => row.new_status_name || row.new_status, render: (row) => row.new_status_name || row.new_status || "—" },
+  { key: "oldStatus", label: "الحالة السابقة", width: 155, min: 115, max: 250, value: (row) => movementStatusLabel(row.old_status_name || row.old_status), render: (row) => movementStatusLabel(row.old_status_name || row.old_status) },
+  { key: "newStatus", label: "الحالة الجديدة", width: 155, min: 115, max: 250, value: (row) => movementStatusLabel(row.new_status_name || row.new_status), render: (row) => movementStatusLabel(row.new_status_name || row.new_status) },
   { key: "actor", label: "منفذ الحركة", width: 155, min: 115, max: 280, value: (row) => row.performed_by_name, render: (row) => row.performed_by_name || "—" },
   { key: "operationsAdmin", label: "إداري العمليات", width: 165, min: 120, max: 300, value: (row) => row.operations_admin_name, render: (row) => row.operations_admin_name || "—" },
   { key: "branch", label: "الفرع", width: 125, min: 95, max: 220, value: (row) => row.performed_by_branch, render: (row) => row.performed_by_branch || "—" },

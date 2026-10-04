@@ -4,6 +4,7 @@ import { MovementHistoryTable, type MovementHistoryRow } from "../components/Mov
 import { exportExcel, formatOperationsDate, operationsFetch, queryString } from "../api";
 import { useOperations } from "../useOperations";
 import { loadLegacyMovementHistory, looksLikeLegacyVinSearch } from "../legacyMovementHistory";
+import { movementStatusLabel, movementTypeLabel } from "../movementHistoryLabels";
 
 export function MovementHistoryPage() {
   const { meta } = useOperations();
@@ -125,7 +126,7 @@ export function MovementHistoryPage() {
     setError("");
     try {
       const all = await fetchAllRows();
-      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","نوع الحركة","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","إداري العمليات","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,row.movement_type,row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,row.old_status_name || row.old_status,row.new_status_name || row.new_status,row.performed_by_name,row.operations_admin_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
+      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","نوع الحركة","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","إداري العمليات","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,movementTypeLabel(row.movement_type),row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,movementStatusLabel(row.old_status_name || row.old_status),movementStatusLabel(row.new_status_name || row.new_status),row.performed_by_name,row.operations_admin_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تصدير سجل الحركات");
     } finally {
@@ -182,7 +183,7 @@ export function MovementHistoryPage() {
         <td class="stack-cell">${lines([["الحالي", row.to_location_name], ["السابق", row.from_location_name]])}</td>
         <td class="stack-cell notes-cell">${lines([["السيارة", row.vehicle_notes], ["الحركة", row.note], ["الحالة", row.state_note]])}</td>
         <td class="stack-cell notes-cell">${lines([["الحجز/النواقص", row.shortage_note]])}</td>
-        <td class="stack-cell">${lines([["الحالية", row.new_status_name || row.new_status], ["السابقة", row.old_status_name || row.old_status]])}</td>
+        <td class="stack-cell">${lines([["الحالية", movementStatusLabel(row.new_status_name || row.new_status)], ["السابقة", movementStatusLabel(row.old_status_name || row.old_status)]])}</td>
         <td>${mark(row.sensor_status)}</td>
         <td>${mark(row.camera_status)}</td>
         <td>${mark(row.ac_status)}</td>
@@ -197,7 +198,7 @@ export function MovementHistoryPage() {
         <td>${approval(row.administrative_approved)}</td>
         <td class="stack-cell">${lines([["الاسم", row.performed_by_name], ["الفرع", row.performed_by_branch]])}</td>
         <td class="stack-cell">${lines([["المسؤول", row.operations_admin_name]])}</td>
-        <td class="stack-cell">${lines([["النوع", row.movement_type], ["الطلب", row.request_no || row.transfer_request_id]])}</td>
+        <td class="stack-cell">${lines([["النوع", movementTypeLabel(row.movement_type)], ["الطلب", row.request_no || row.transfer_request_id]])}</td>
       </tr>`;
 
       const filterSummary = [
