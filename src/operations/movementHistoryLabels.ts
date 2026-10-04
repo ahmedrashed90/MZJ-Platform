@@ -67,11 +67,11 @@ const APPROVAL_ACTION_LABELS: Record<string, string> = {
   cancelled: "إلغاء",
 };
 
-function clean(value: unknown) {
+function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-export function movementStatusLabel(value: unknown) {
+export function movementStatusLabel(value: unknown): string {
   const raw = clean(value);
   if (!raw || raw === "—") return "—";
   if (ARABIC_RE.test(raw)) return raw;
@@ -79,7 +79,7 @@ export function movementStatusLabel(value: unknown) {
   return STATUS_LABELS[key] || raw;
 }
 
-export function movementTypeLabel(value: unknown) {
+export function movementTypeLabel(value: unknown): string {
   const raw = clean(value);
   if (!raw || raw === "—") return "—";
 
