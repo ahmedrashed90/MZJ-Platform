@@ -313,6 +313,8 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     ) as exact_vin
   ` : [{ exact_vin: false }];
   const lifetimeVinHistory = Boolean(vinLookup?.exact_vin);
+  const movementQueryLimit = lifetimeVinHistory ? 100000 : pageSize;
+  const movementQueryOffset = lifetimeVinHistory ? 0 : offset;
   const scope = accessScope(sql, user, "tl");
   const statusScope = vehicleStatusScope(sql, user, "movement");
   const rows = await sql<any[]>`
@@ -408,7 +410,7 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       and (${lifetimeVinHistory}=true or ${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
-    order by m.created_at desc,m.id desc limit ${pageSize} offset ${offset}
+    order by m.created_at desc,m.id desc limit ${movementQueryLimit} offset ${movementQueryOffset}
   `;
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
@@ -465,6 +467,277 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       and ${scope}
       and ${statusScope}
   `;
+  if (lifetimeVinHistory) {
+    const vehicleScope = accessScope(sql, user, "l");
+    const historyStatusScope = vehicleStatusScope(sql, user);
+    const [vehicle] = await sql<any[]>`
+      select
+        v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.interior_color,v.exterior_color,v.model_year,v.plate_no,v.batch_no,
+        v.notes as vehicle_notes,v.status_code,v.created_at,v.updated_at,
+        l.code as current_location_code,l.name as current_location_name,
+        coalesce(checks.sensor_status,'unknown') as sensor_status,coalesce(checks.camera_status,'unknown') as camera_status,
+        coalesce(checks.ac_status,'unknown') as ac_status,coalesce(checks.radio_status,'unknown') as radio_status,
+        coalesce(checks.screen_status,'unknown') as screen_status,coalesce(checks.remote_status,'unknown') as remote_status,
+        coalesce(checks.mats_status,'unknown') as mats_status,coalesce(checks.extinguisher_status,'unknown') as extinguisher_status,
+        coalesce(checks.safety_bag_status,'unknown') as safety_bag_status,coalesce(checks.spare_tire_status,'unknown') as spare_tire_status,
+        coalesce(approval.financial_approved,false) as financial_approved,
+        coalesce(approval.administrative_approved,false) as administrative_approved
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      left join lateral (
+        select
+          max(status) filter(where item_code='sensor') as sensor_status,
+          max(status) filter(where item_code='camera') as camera_status,
+          max(status) filter(where item_code='ac') as ac_status,
+          max(status) filter(where item_code='radio') as radio_status,
+          max(status) filter(where item_code='screen') as screen_status,
+          max(status) filter(where item_code='remote') as remote_status,
+          max(status) filter(where item_code='mats') as mats_status,
+          max(status) filter(where item_code='extinguisher') as extinguisher_status,
+          max(status) filter(where item_code='safety_bag') as safety_bag_status,
+          max(status) filter(where item_code='spare_tire') as spare_tire_status
+        from operations.vehicle_check_values cv where cv.vehicle_id=v.id
+      ) checks on true
+      left join lateral (
+        select financial_approved,administrative_approved
+        from operations.vehicle_approvals va
+        where va.vehicle_id=v.id and va.is_active=true
+        order by va.cycle_no desc,va.created_at desc limit 1
+      ) approval on true
+      where lower(btrim(v.vin))=lower(btrim(${search}))
+        and v.is_deleted=false
+        and ${vehicleScope}
+        and ${historyStatusScope}
+      limit 1
+    `;
+
+    if (vehicle) {
+      const [auditRows, requestEventRows, archiveRows] = await Promise.all([
+        sql<any[]>`
+          select a.id::text,a.action,a.before_data,a.after_data,a.created_at,
+            coalesce(u.full_name,nullif(a.after_data->>'updated_by_name',''),nullif(a.before_data->>'updated_by_name','')) as actor_name,
+            coalesce(a.branch_code,nullif(a.after_data->>'branch_name',''),nullif(a.before_data->>'branch_name','')) as actor_branch
+          from audit.activity_log a
+          left join core.users u on u.id=a.user_id
+          where a.system_code='operations'
+            and a.entity_type='vehicle'
+            and a.action in ('vehicle_created','vehicle_updated','vehicle_deleted')
+            and (
+              a.entity_id=${vehicle.id}
+              or lower(btrim(coalesce(a.after_data->>'vin',a.before_data->>'vin','')))=lower(btrim(${search}))
+            )
+          order by a.created_at desc,a.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.stage,e.action,e.note,e.actor_name,e.actor_role,e.actor_branch,e.before_data,e.after_data,e.created_at,
+            r.id::text as transfer_request_id,r.request_no,
+            sl.code as from_location_code,sl.name as from_location_name,
+            dl.code as to_location_code,dl.name as to_location_name
+          from operations.transfer_request_events e
+          join operations.transfer_requests r on r.id=e.transfer_request_id
+          join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id and rv.vehicle_id=${vehicle.id}::uuid
+          left join operations.locations sl on sl.id=r.source_location_id
+          left join operations.locations dl on dl.id=r.destination_location_id
+          order by e.created_at desc,e.id desc
+        `,
+        sql<any[]>`
+          select id::text,action,reason,actor_name,created_at,snapshot
+          from operations.vehicle_archive_events
+          where vehicle_id=${vehicle.id}::uuid
+          order by created_at desc,id desc
+        `,
+      ]);
+
+      const base = {
+        vehicle_id: vehicle.id,
+        vin: vehicle.vin,
+        car_name: vehicle.car_name,
+        statement: vehicle.statement,
+        agent_name: vehicle.agent_name,
+        interior_color: vehicle.interior_color,
+        exterior_color: vehicle.exterior_color,
+        model_year: vehicle.model_year,
+        plate_no: vehicle.plate_no,
+        batch_no: vehicle.batch_no,
+        vehicle_notes: vehicle.vehicle_notes,
+        sensor_status: vehicle.sensor_status,
+        camera_status: vehicle.camera_status,
+        ac_status: vehicle.ac_status,
+        radio_status: vehicle.radio_status,
+        screen_status: vehicle.screen_status,
+        remote_status: vehicle.remote_status,
+        mats_status: vehicle.mats_status,
+        extinguisher_status: vehicle.extinguisher_status,
+        safety_bag_status: vehicle.safety_bag_status,
+        spare_tire_status: vehicle.spare_tire_status,
+        financial_approved: vehicle.financial_approved,
+        administrative_approved: vehicle.administrative_approved,
+      };
+      const textValue = (value: unknown) => String(value ?? "").trim();
+      const jsonValue = (source: any, keys: string[]) => {
+        for (const key of keys) {
+          const value = source && typeof source === "object" ? source[key] : null;
+          if (textValue(value)) return textValue(value);
+        }
+        return "";
+      };
+      const statusName = (value: unknown) => textValue(value);
+      const supplemental: any[] = [];
+
+      for (const item of auditRows) {
+        const before = item.before_data && typeof item.before_data === "object" ? item.before_data : {};
+        const after = item.after_data && typeof item.after_data === "object" ? item.after_data : {};
+        const oldStatus = jsonValue(before, ["status_name","status_label","status_code","status"]);
+        const newStatus = jsonValue(after, ["status_name","status_label","status_code","status"]);
+        const fromLocation = jsonValue(before, ["location_name","place_name","location"]);
+        const toLocation = jsonValue(after, ["location_name","place_name","location"]);
+        const label = item.action === "vehicle_created"
+          ? "تسجيل السيارة في النظام"
+          : item.action === "vehicle_deleted"
+            ? "حذف السيارة من النظام"
+            : "تحديث بيانات السيارة";
+        supplemental.push({
+          ...base,
+          id: `audit:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: item.action,
+          old_status: oldStatus || null,
+          new_status: newStatus || null,
+          old_status_name: oldStatus || null,
+          new_status_name: newStatus || null,
+          note: label,
+          state_note: null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: item.actor_branch || null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: fromLocation || null,
+          to_location_code: null,
+          to_location_name: toLocation || null,
+        });
+      }
+
+      for (const item of requestEventRows) {
+        const before = item.before_data && typeof item.before_data === "object" ? item.before_data : {};
+        const after = item.after_data && typeof item.after_data === "object" ? item.after_data : {};
+        const oldStatus = jsonValue(before, ["status","status_code"]);
+        const newStatus = jsonValue(after, ["status","status_code"]) || textValue(item.stage);
+        supplemental.push({
+          ...base,
+          id: `request-event:${item.id}`,
+          batch_id: null,
+          transfer_request_id: item.transfer_request_id || null,
+          request_no: item.request_no || null,
+          created_at: item.created_at,
+          movement_type: `request_${textValue(item.action) || "event"}`,
+          old_status: oldStatus || null,
+          new_status: newStatus || null,
+          old_status_name: oldStatus || null,
+          new_status_name: newStatus || null,
+          note: textValue(item.note) || `حركة طلب ${item.request_no || "نقل"}`,
+          state_note: textValue(item.stage) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: item.actor_role || null,
+          performed_by_branch: item.actor_branch || null,
+          operations_admin_name: null,
+          from_location_code: item.from_location_code || null,
+          from_location_name: item.from_location_name || null,
+          to_location_code: item.to_location_code || null,
+          to_location_name: item.to_location_name || null,
+        });
+      }
+
+      for (const item of archiveRows) {
+        supplemental.push({
+          ...base,
+          id: `archive:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: `archive_${textValue(item.action) || "event"}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: textValue(item.reason) || (textValue(item.action) === "restored" ? "استعادة السيارة من الأرشيف" : "أرشفة السيارة"),
+          state_note: textValue(item.action) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const hasCreatedAudit = auditRows.some((item) => item.action === "vehicle_created");
+      if (!hasCreatedAudit && vehicle.created_at) {
+        supplemental.push({
+          ...base,
+          id: `vehicle-created:${vehicle.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: vehicle.created_at,
+          movement_type: "vehicle_registered",
+          old_status: null,
+          new_status: vehicle.status_code || null,
+          old_status_name: null,
+          new_status_name: statusName(vehicle.status_code) || null,
+          note: "تسجيل السيارة في النظام",
+          state_note: null,
+          shortage_note: null,
+          performed_by_name: null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: vehicle.current_location_code || null,
+          to_location_name: vehicle.current_location_name || null,
+        });
+      }
+
+      const matchesExtraFilters = (row: any) => {
+        if (from && textValue(row.from_location_code) !== from) return false;
+        if (to && textValue(row.to_location_code) !== to) return false;
+        if (status && textValue(row.new_status) !== status) return false;
+        if (userSearch) {
+          const needle = userSearch.toLocaleLowerCase("ar-SA");
+          const haystack = `${textValue(row.performed_by_name)} ${textValue(row.operations_admin_name)}`.toLocaleLowerCase("ar-SA");
+          if (!haystack.includes(needle)) return false;
+        }
+        return true;
+      };
+
+      const merged = [...rows, ...supplemental.filter(matchesExtraFilters)]
+        .sort((left, right) => {
+          const dateDiff = new Date(String(right.created_at || 0)).getTime() - new Date(String(left.created_at || 0)).getTime();
+          if (dateDiff) return dateDiff;
+          return String(right.id || "").localeCompare(String(left.id || ""));
+        });
+      const seen = new Set<string>();
+      const uniqueRows = merged.filter((row) => {
+        const key = String(row.id || "");
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const start = (page - 1) * pageSize;
+      return { ok: true, rows: uniqueRows.slice(start, start + pageSize), total: uniqueRows.length, page, pageSize };
+    }
+  }
+
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 

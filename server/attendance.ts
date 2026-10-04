@@ -796,7 +796,7 @@ async function reportData(request: VercelRequest) {
   const userIds = users.map((user) => String(user.id));
   if (!userIds.length) return { ok: true, from, to, today, officialDayEnd, rows: [], periodHeaders: [] };
 
-  const [assignments, periods, records] = await Promise.all([
+  const [assignments, periods, records, earlyPermissions] = await Promise.all([
     sql<any[]>`
       select
         a.id::text,a.user_id::text,a.schedule_id::text,a.branch_id::text,a.attendance_branch_name,a.daily_work_hours,
@@ -830,6 +830,13 @@ async function reportData(request: VercelRequest) {
           or (check_out is not null and (check_out at time zone ${ATTENDANCE_TIME_ZONE})::date between ${from}::date and ${to}::date)
         )
       order by coalesce(check_in,scheduled_start_at),user_id,period_sort_order nulls last
+    `,
+    sql<any[]>`
+      select id::text,user_id::text,work_date::text as work_date,from_at,to_at,authorized_at,authorized_by::text as authorized_by
+      from core.attendance_early_departure_permissions
+      where user_id::text in ${sql(userIds)}
+        and work_date between ${from}::date and ${to}::date
+      order by work_date,user_id
     `,
   ]);
 
@@ -877,6 +884,11 @@ async function reportData(request: VercelRequest) {
     recordMap.get(key)!.push(record);
   }
 
+  const permissionMap = new Map<string, any>();
+  for (const permission of earlyPermissions) {
+    permissionMap.set(`${permission.user_id}:${dateOnlyValue(permission.work_date)}`, permission);
+  }
+
   const rawRows: any[] = [];
   const headerMeta = new Map<string, { key: string; label: string; sortOrder: number; firstSeen: number }>();
   let headerSequence = 0;
@@ -899,6 +911,7 @@ async function reportData(request: VercelRequest) {
       if (branchId && effectiveBranchId !== branchId) continue;
       if (attendanceBranchName && assignmentBranchName !== attendanceBranchName) continue;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
+      const earlyDeparturePermission = permissionMap.get(`${user.id}:${day}`) || null;
       const visibleDayRecords = dayRecords.filter((record) => {
         const legacySourceKey = clean(record.legacy_source_key);
         const periodName = clean(record.period_name);
@@ -1004,6 +1017,14 @@ async function reportData(request: VercelRequest) {
         employeeNo: user.employee_no,
         name: user.full_name,
         scheduleName: assignment?.schedule_name || null,
+        earlyDeparturePermission: earlyDeparturePermission ? {
+          id: earlyDeparturePermission.id,
+          fromAt: earlyDeparturePermission.from_at,
+          toAt: earlyDeparturePermission.to_at,
+          fromText: reportClock(earlyDeparturePermission.from_at),
+          toText: reportClock(earlyDeparturePermission.to_at),
+          authorizedAt: earlyDeparturePermission.authorized_at,
+        } : null,
         periodsByKey,
       });
     }
@@ -1024,91 +1045,92 @@ async function reportData(request: VercelRequest) {
 }
 
 async function authorizeEarlyDeparture(body: Record<string, any>, adminId: string) {
-  const userId = clean(body.userId);
   const workDate = clean(body.workDate);
-  const fromTime = clean(body.fromTime).slice(0, 5);
-  const toTime = clean(body.toTime).slice(0, 5);
-  if (!validUuid(userId)) throw new AttendanceError("USER_REQUIRED", "المستخدم غير موجود", 404);
-  if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ الحضور غير صحيح");
-  if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف");
-  if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
+  if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ إذن الانصراف غير صحيح");
+
+  const rawItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
+  const itemMap = new Map<string, { userId: string; fromTime: string; toTime: string }>();
+  for (const raw of rawItems) {
+    const source = raw && typeof raw === "object" ? raw as Record<string, any> : {};
+    const userId = clean(source.userId);
+    const fromTime = clean(source.fromTime).slice(0, 5);
+    const toTime = clean(source.toTime).slice(0, 5);
+    if (!validUuid(userId)) throw new AttendanceError("USER_REQUIRED", "اختر مستخدمًا صحيحًا");
+    if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف لكل مستخدم");
+    if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
+    itemMap.set(userId, { userId, fromTime, toTime });
+  }
+  const items = [...itemMap.values()];
+  if (!items.length) throw new AttendanceError("USERS_REQUIRED", "اختر مستخدمًا واحدًا على الأقل");
 
   const sql = getSql();
   return sql.begin(async (tx) => {
-    const [user] = await tx<any[]>`
+    const userIds = items.map((item) => item.userId);
+    const users = await tx<any[]>`
       select id::text,full_name
       from core.users
-      where id=${userId}::uuid
-      limit 1
+      where id::text in ${tx(userIds)}
     `;
-    if (!user) throw new AttendanceError("USER_NOT_FOUND", "المستخدم غير موجود", 404);
+    const userMap = new Map<string, string>(users.map((user) => [String(user.id), clean(user.full_name) || "المستخدم"] as [string, string]));
+    if (userMap.size !== userIds.length) throw new AttendanceError("USER_NOT_FOUND", "يوجد مستخدم غير موجود ضمن الاختيارات", 404);
 
-    const [record] = await tx<any[]>`
-      select id::text,check_in,scheduled_start_at,scheduled_end_at,checkout_source,early_departure_from_at,early_departure_to_at
-      from core.attendance_records
-      where user_id=${userId}::uuid
-        and work_date=${workDate}::date
-        and check_in is not null
-        and check_out is null
-        and scheduled_start_at is not null
-        and scheduled_end_at is not null
-        and now() >= scheduled_start_at
-        and now() < scheduled_end_at
-      order by scheduled_start_at desc,period_sort_order desc nulls last
-      limit 1
-      for update
-    `;
-
-    if (!record) {
-      const [authorized] = await tx<any[]>`
-        select id::text,early_departure_from_at,early_departure_to_at
-        from core.attendance_records
-        where user_id=${userId}::uuid
-          and work_date=${workDate}::date
-          and checkout_source='authorized'
-        order by check_out desc nulls last
-        limit 1
+    const saved: Array<{ userId: string; name: string; fromTime: string; toTime: string }> = [];
+    for (const item of items) {
+      const [permissionClock] = await tx<any[]>`
+        select
+          ((${workDate}::date + ${item.fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,
+          ((${workDate}::date + ${item.toTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as to_at
       `;
-      if (authorized) return { ok: true, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name} بالفعل` };
-      throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة الآن لهذا المستخدم", 400);
+      const fromAt = permissionClock?.from_at;
+      const toAt = permissionClock?.to_at;
+      if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
+
+      await tx`
+        insert into core.attendance_early_departure_permissions(
+          user_id,work_date,from_at,to_at,authorized_by,authorized_at,created_at,updated_at
+        ) values (
+          ${item.userId}::uuid,${workDate}::date,${fromAt}::timestamptz,${toAt}::timestamptz,${adminId}::uuid,now(),now(),now()
+        )
+        on conflict(user_id,work_date) do update set
+          from_at=excluded.from_at,
+          to_at=excluded.to_at,
+          authorized_by=excluded.authorized_by,
+          authorized_at=now(),
+          updated_at=now()
+      `;
+
+      await tx`
+        update core.attendance_records r
+        set check_out=greatest(${fromAt}::timestamptz,r.check_in),
+            checkout_source='authorized',
+            early_departure_authorized_at=now(),
+            early_departure_authorized_by=${adminId}::uuid,
+            early_departure_from_at=${fromAt}::timestamptz,
+            early_departure_to_at=${toAt}::timestamptz,
+            work_minutes=greatest(0,floor(extract(epoch from (greatest(${fromAt}::timestamptz,r.check_in)-r.check_in))/60)::int),
+            updated_at=now()
+        where r.user_id=${item.userId}::uuid
+          and r.work_date=${workDate}::date
+          and r.check_in is not null
+          and r.check_out is null
+          and r.scheduled_start_at is not null
+          and r.scheduled_end_at is not null
+          and ${fromAt}::timestamptz >= r.scheduled_start_at
+          and ${fromAt}::timestamptz < r.scheduled_end_at
+          and greatest(${fromAt}::timestamptz,r.check_in) <= now()
+      `;
+
+      saved.push({ userId: item.userId, name: userMap.get(item.userId) || "المستخدم", fromTime: item.fromTime, toTime: item.toTime });
     }
 
-    const [permission] = await tx<any[]>`
-      select
-        ((${workDate}::date + ${fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,
-        ((${workDate}::date + ${toTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as to_at
-    `;
-    const fromAt = permission?.from_at;
-    const toAt = permission?.to_at;
-    if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
-
-    const [validation] = await tx<any[]>`
-      select
-        ${fromAt}::timestamptz >= ${record.check_in}::timestamptz as after_check_in,
-        ${fromAt}::timestamptz >= ${record.scheduled_start_at}::timestamptz as after_schedule_start,
-        ${fromAt}::timestamptz <= now() as not_future,
-        ${toAt}::timestamptz > ${fromAt}::timestamptz as valid_order,
-        ${toAt}::timestamptz <= ${record.scheduled_end_at}::timestamptz as within_schedule
-    `;
-    if (!validation?.after_check_in || !validation?.after_schedule_start) throw new AttendanceError("EARLY_DEPARTURE_BEFORE_CHECKIN", "بداية الإذن لا يمكن أن تكون قبل تسجيل الحضور");
-    if (!validation?.not_future) throw new AttendanceError("EARLY_DEPARTURE_IN_FUTURE", "بداية الإذن لا يمكن أن تكون بعد الوقت الحالي");
-    if (!validation?.valid_order) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
-    if (!validation?.within_schedule) throw new AttendanceError("EARLY_DEPARTURE_AFTER_SHIFT", "نهاية الإذن لا يمكن أن تتجاوز نهاية دوام اليوزر");
-
-    const [updated] = await tx<any[]>`
-      update core.attendance_records
-      set check_out=${fromAt}::timestamptz,
-          checkout_source='authorized',
-          early_departure_authorized_at=now(),
-          early_departure_authorized_by=${adminId}::uuid,
-          early_departure_from_at=${fromAt}::timestamptz,
-          early_departure_to_at=${toAt}::timestamptz,
-          work_minutes=greatest(0,floor(extract(epoch from (${fromAt}::timestamptz-check_in))/60)::int),
-          updated_at=now()
-      where id=${record.id}::uuid
-      returning id::text,check_out,early_departure_from_at,early_departure_to_at
-    `;
-    return { ok: true, recordId: updated.id, message: `تم تسجيل إذن الانصراف المبكر لـ ${user.full_name} من ${fromTime} إلى ${toTime}` };
+    return {
+      ok: true,
+      count: saved.length,
+      items: saved,
+      message: saved.length === 1
+        ? `تم حفظ إذن الانصراف المبكر لـ ${saved[0].name} من ${saved[0].fromTime} إلى ${saved[0].toTime}`
+        : `تم حفظ أذونات الانصراف المبكر لـ ${saved.length} مستخدمين`,
+    };
   });
 }
 

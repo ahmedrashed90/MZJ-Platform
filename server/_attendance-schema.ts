@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261004-global-attendance-v12-authorized-time-range";
+export const ATTENDANCE_SCHEMA_VERSION = "20261004-global-attendance-v13-independent-early-departure";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -165,6 +165,23 @@ create index if not exists attendance_records_open_end_idx
 create index if not exists attendance_records_date_idx
   on core.attendance_records(work_date desc);
 
+create table if not exists core.attendance_early_departure_permissions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references core.users(id) on delete cascade,
+  work_date date not null,
+  from_at timestamptz not null,
+  to_at timestamptz not null,
+  authorized_by uuid references core.users(id) on delete set null,
+  authorized_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (to_at > from_at)
+);
+create unique index if not exists attendance_early_departure_user_day_unique
+  on core.attendance_early_departure_permissions(user_id,work_date);
+create index if not exists attendance_early_departure_date_idx
+  on core.attendance_early_departure_permissions(work_date desc,user_id);
+
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('core','attendance','الحضور والانصراف','/attendance',15,true)
 on conflict(system_code,code) do update
@@ -187,6 +204,7 @@ async function attendanceSchemaReady() {
       and to_regclass('core.attendance_periods') is not null
       and to_regclass('core.attendance_user_schedules') is not null
       and to_regclass('core.attendance_records') is not null
+      and to_regclass('core.attendance_early_departure_permissions') is not null
       and exists (
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_user_schedules' and column_name='weekly_off_day'
@@ -318,6 +336,22 @@ export function ensureAttendanceSchema() {
           alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
           alter table core.attendance_records add column if not exists early_departure_from_at timestamptz;
           alter table core.attendance_records add column if not exists early_departure_to_at timestamptz;
+          create table if not exists core.attendance_early_departure_permissions (
+            id uuid primary key default gen_random_uuid(),
+            user_id uuid not null references core.users(id) on delete cascade,
+            work_date date not null,
+            from_at timestamptz not null,
+            to_at timestamptz not null,
+            authorized_by uuid references core.users(id) on delete set null,
+            authorized_at timestamptz not null default now(),
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            check (to_at > from_at)
+          );
+          create unique index if not exists attendance_early_departure_user_day_unique
+            on core.attendance_early_departure_permissions(user_id,work_date);
+          create index if not exists attendance_early_departure_date_idx
+            on core.attendance_early_departure_permissions(work_date desc,user_id);
           do $$
           begin
             if exists (
