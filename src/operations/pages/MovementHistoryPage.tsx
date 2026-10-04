@@ -12,10 +12,11 @@ export function MovementHistoryPage() {
   const [filters, setFilters] = useState({ search: "", from: "", to: "", status: "", user: "", dateFrom: "", dateTo: "", timeFrom: "", timeTo: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [legacyWarning, setLegacyWarning] = useState("");
   const pageSize = 50;
 
   async function fetchPage(targetPage: number, targetSize: number) {
-    return operationsFetch<{ rows: MovementHistoryRow[]; total: number }>(`/api/operations${queryString({ resource: "movements", ...filters, page: targetPage, pageSize: targetSize })}`);
+    return operationsFetch<{ rows: MovementHistoryRow[]; total: number; legacyWarning?: string }>(`/api/operations${queryString({ resource: "movements", ...filters, page: targetPage, pageSize: targetSize })}`);
   }
 
   async function fetchAllRows() {
@@ -33,9 +34,11 @@ export function MovementHistoryPage() {
       const payload = await fetchPage(targetPage, pageSize);
       setRows(payload.rows);
       setTotal(payload.total);
+      setLegacyWarning(payload.legacyWarning || "");
     } catch (failure) {
       setRows([]);
       setTotal(0);
+      setLegacyWarning("");
       setError(failure instanceof Error ? failure.message : "تعذر تحميل سجل الحركات");
     } finally {
       setLoading(false);
@@ -255,6 +258,7 @@ export function MovementHistoryPage() {
     <div className="module-page operations-page operations-history-page">
       <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA-u-nu-latn")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
+      {legacyWarning ? <div className="operations-alert error"><WarningCircle size={18} />تعذر قراءة سجل النظام القديم: {legacyWarning}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-history-filters">
           <label className="operations-search"><MagnifyingGlass size={18} /><input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") void applyFilters(); }} placeholder="VIN أو السيارة أو البيان أو الملاحظة" /></label>

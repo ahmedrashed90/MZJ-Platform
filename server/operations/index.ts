@@ -14,6 +14,7 @@ import {
   requireOperationsUser,
 } from "../_operations-auth.js";
 import { emitOperationsNotification } from "../_notifications.js";
+import { readLegacyVinHistory } from "../_operations-legacy-history.js";
 import {
   operationsApprovalVisibilityScope,
   operationsRequestAccessScope,
@@ -312,7 +313,66 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       where lower(btrim(vehicle_search.vin))=lower(btrim(${search}))
     ) as exact_vin
   ` : [{ exact_vin: false }];
-  const lifetimeVinHistory = Boolean(vinLookup?.exact_vin);
+  const legacyVinCandidate = Boolean(search && /^[A-Za-z0-9-]{5,40}$/.test(search));
+  const legacyHistory = legacyVinCandidate
+    ? await readLegacyVinHistory(search)
+    : { rows: [] as any[], warning: "" };
+  let legacyRows = legacyHistory.rows as any[];
+
+  if (legacyRows.length) {
+    const [legacyLocations, legacyStatuses] = await Promise.all([
+      sql<any[]>`select code,name,branch_code from operations.locations`,
+      sql<any[]>`select code,name from operations.vehicle_statuses`,
+    ]);
+    const normalizeKey = (value: unknown) => clean(value).toLocaleLowerCase("ar-SA");
+    const locationsByName = new Map(legacyLocations.map((item) => [normalizeKey(item.name), item]));
+    const locationsByCode = new Map(legacyLocations.map((item) => [normalizeKey(item.code), item]));
+    const statusesByName = new Map(legacyStatuses.map((item) => [normalizeKey(item.name), item]));
+    const statusesByCode = new Map(legacyStatuses.map((item) => [normalizeKey(item.code), item]));
+    const resolveLocation = (value: unknown) => locationsByName.get(normalizeKey(value)) || locationsByCode.get(normalizeKey(value));
+    const resolveStatus = (value: unknown) => statusesByName.get(normalizeKey(value)) || statusesByCode.get(normalizeKey(value));
+
+    legacyRows = legacyRows.map((row) => {
+      const fromLocation = resolveLocation(row.from_location_name);
+      const toLocation = resolveLocation(row.to_location_name);
+      const oldStatus = resolveStatus(row.old_status_name || row.old_status);
+      const newStatus = resolveStatus(row.new_status_name || row.new_status);
+      return {
+        ...row,
+        from_location_code: fromLocation?.code || row.from_location_code || null,
+        from_location_name: fromLocation?.name || row.from_location_name || null,
+        to_location_code: toLocation?.code || row.to_location_code || null,
+        to_location_name: toLocation?.name || row.to_location_name || null,
+        old_status: oldStatus?.code || row.old_status || null,
+        old_status_name: oldStatus?.name || row.old_status_name || row.old_status || null,
+        new_status: newStatus?.code || row.new_status || null,
+        new_status_name: newStatus?.name || row.new_status_name || row.new_status || null,
+        __legacy_to_branch: toLocation?.branch_code || null,
+      };
+    });
+
+    const access = getSystemAccess(user, "operations");
+    if (access.dataScope !== "all") {
+      legacyRows = legacyRows.filter((row) => {
+        const toCode = clean(row.to_location_code);
+        const toBranch = clean(row.__legacy_to_branch);
+        return Boolean((toCode && access.branchCodes.includes(toCode)) || (toBranch && access.branchCodes.includes(toBranch)));
+      });
+    }
+    legacyRows = legacyRows.filter((row) => {
+      if (from && clean(row.from_location_code) !== from) return false;
+      if (to && clean(row.to_location_code) !== to) return false;
+      if (status && clean(row.new_status) !== status) return false;
+      if (userSearch) {
+        const needle = userSearch.toLocaleLowerCase("ar-SA");
+        const haystack = `${clean(row.performed_by_name)} ${clean(row.operations_admin_name)}`.toLocaleLowerCase("ar-SA");
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    }).map(({ __legacy_to_branch, ...row }) => row);
+  }
+
+  const lifetimeVinHistory = Boolean(vinLookup?.exact_vin || legacyRows.length);
   const movementQueryLimit = lifetimeVinHistory ? 100000 : pageSize;
   const movementQueryOffset = lifetimeVinHistory ? 0 : offset;
   const scope = accessScope(sql, user, "tl");
@@ -720,7 +780,7 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
         return true;
       };
 
-      const merged = [...rows, ...supplemental.filter(matchesExtraFilters)]
+      const merged = [...rows, ...supplemental.filter(matchesExtraFilters), ...legacyRows]
         .sort((left, right) => {
           const dateDiff = new Date(String(right.created_at || 0)).getTime() - new Date(String(left.created_at || 0)).getTime();
           if (dateDiff) return dateDiff;
@@ -734,11 +794,21 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
         return true;
       });
       const start = (page - 1) * pageSize;
-      return { ok: true, rows: uniqueRows.slice(start, start + pageSize), total: uniqueRows.length, page, pageSize };
+      return { ok: true, rows: uniqueRows.slice(start, start + pageSize), total: uniqueRows.length, page, pageSize, legacyWarning: legacyHistory.warning || undefined };
     }
   }
 
-  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
+  if (lifetimeVinHistory && legacyRows.length) {
+    const merged = [...rows, ...legacyRows].sort((left, right) => {
+      const dateDiff = new Date(String(right.created_at || 0)).getTime() - new Date(String(left.created_at || 0)).getTime();
+      if (dateDiff) return dateDiff;
+      return String(right.id || "").localeCompare(String(left.id || ""));
+    });
+    const start = (page - 1) * pageSize;
+    return { ok: true, rows: merged.slice(start, start + pageSize), total: merged.length, page, pageSize, legacyWarning: legacyHistory.warning || undefined };
+  }
+
+  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize, legacyWarning: legacyHistory.warning || undefined };
 }
 
 const requestStageOrder = ["created", "request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
