@@ -51,6 +51,7 @@ import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpne
 import zohoIntegrationHandler from "../server/integrations/zoho.js";
 import googleDriveIntegrationHandler from "../server/integrations/google-drive.js";
 import operationsHandler from "../server/operations/index.js";
+import legacyOperationsHistoryHandler from "../server/operations/legacy-history.js";
 import marketingHandler from "../server/marketing/index.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import instagramMediaHandler from "../server/marketing/instagram-media.js";
@@ -128,6 +129,7 @@ const routes = new Map<string, ApiHandler>([
   ["integrations/erpnext/sales-order", erpNextSalesOrderIntegrationHandler],
   ["integrations/erpnext/serial-no-status", erpNextVehicleStatusIntegrationHandler],
   ["operations", operationsHandler],
+  ["operations/legacy-history", legacyOperationsHistoryHandler],
   ["marketing", marketingHandler],
   ["marketing/instagram-media", instagramMediaHandler],
   ["marketing/google-drive-media", googleDriveMediaHandler],
