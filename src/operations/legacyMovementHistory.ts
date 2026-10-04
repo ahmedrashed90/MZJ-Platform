@@ -145,51 +145,35 @@ async function legacyAuthToken(): Promise<string> {
   }
 }
 
-async function legacyFetch(url: string, init?: RequestInit) {
-  const token = await legacyAuthToken();
-  const headers = new Headers(init?.headers || {});
-  if (token) headers.set("authorization", `Bearer ${token}`);
-  if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  return fetch(url, { ...init, headers, cache: "no-store" });
-}
-
-function firestoreValue(value: string) {
-  return { stringValue: value };
-}
-
-async function runLegacyQuery(collectionId: string, fieldPath: string, op: "EQUAL" | "ARRAY_CONTAINS", value: string): Promise<PlainDoc[]> {
-  const response = await legacyFetch(LEGACY_QUERY_URL, {
+async function legacyApi(body: Record<string, unknown>) {
+  const response = await fetch("/api/operations/legacy-history", {
     method: "POST",
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId }],
-        where: { fieldFilter: { field: { fieldPath }, op, value: firestoreValue(value) } },
-      },
-    }),
+    credentials: "include",
+    cache: "no-store",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   });
-
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const message = text(payload?.error?.message || payload?.error?.status || response.statusText);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    const message = text(payload?.error || payload?.message || response.statusText);
     const error = new Error(message || "تعذر قراءة سجل النظام القديم") as Error & { status?: number };
     error.status = response.status;
     throw error;
   }
+  return payload?.payload;
+}
 
-  const payload = await response.json().catch(() => []);
+async function runLegacyQuery(collectionId: string, fieldPath: string, op: "EQUAL" | "ARRAY_CONTAINS", value: string): Promise<PlainDoc[]> {
+  const payload = await legacyApi({ kind: "query", collectionId, fieldPath, op, value });
   return (Array.isArray(payload) ? payload : [])
     .map((item: any) => decodeFirestoreDocument(item?.document))
     .filter(Boolean) as PlainDoc[];
 }
 
 async function getLegacyCar(vin: string): Promise<Record<string, any>> {
-  const url = `${LEGACY_DOCS_BASE}/cars/${encodeURIComponent(vin)}?key=${encodeURIComponent(LEGACY_FIREBASE.apiKey)}`;
   try {
-    const response = await legacyFetch(url);
-    if (response.status === 404) return {};
-    if (!response.ok) return {};
-    const payload = await response.json().catch(() => ({}));
-    return decodeFirestoreDocument(payload)?.data || {};
+    const payload = await legacyApi({ kind: "car", vin });
+    return payload ? (decodeFirestoreDocument(payload)?.data || {}) : {};
   } catch {
     return {};
   }
