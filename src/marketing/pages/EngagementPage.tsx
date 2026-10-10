@@ -164,6 +164,9 @@ export function EngagementPage() {
   const [data, setData] = useState<Payload | null>(null);
   const loadingRequest = useRef(false);
   const [loading, setLoading] = useState(false);
+  const openedAutoRefresh = useRef(false);
+  const mountedPage = useRef(false);
+  const [autoRefreshStatus, setAutoRefreshStatus] = useState<"idle" | "loading" | "updated" | "pending" | "failed">("idle");
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -212,6 +215,32 @@ export function EngagementPage() {
     }, 60_000);
     return () => window.clearInterval(interval);
   }, []);
+  useEffect(() => {
+    mountedPage.current = true;
+    return () => { mountedPage.current = false; };
+  }, []);
+  const dataAvailable = data !== null;
+  useEffect(() => {
+    // Show stored counts immediately, then refresh recent Facebook/Instagram
+    // figures once when the engagement page opens. Never wait for the archive
+    // import or make requests to Meta on the one-minute cached-data poll.
+    if (!dataAvailable || view !== "engagement" || !canRefresh || openedAutoRefresh.current) return;
+    openedAutoRefresh.current = true;
+    setAutoRefreshStatus("loading");
+    void (async () => {
+      try {
+        const result = await marketingFetch<{ updated: number; failed: number; skipped?: boolean }>("/api/marketing", {
+          method: "POST", body: JSON.stringify({ action: "refresh_meta_engagement_metrics", automatic: true }),
+        });
+        if (!mountedPage.current) return;
+        setAutoRefreshStatus(result.skipped ? "pending" : result.failed && !result.updated ? "failed" : "updated");
+        if (!result.skipped) await load(true);
+      } catch {
+        // Keep the saved counters available if Meta is slow or unavailable.
+        if (mountedPage.current) setAutoRefreshStatus("failed");
+      }
+    })();
+  }, [dataAvailable, view, canRefresh]);
   useEffect(() => {
     const nextView = pageView(searchParams.get("view"));
     if (nextView !== view) setView(nextView);
@@ -278,16 +307,57 @@ export function EngagementPage() {
     setError("");
     setMessage("");
     try {
-      const result = await marketingFetch<{ updated: number; failed: number }>("/api/marketing", {
-        method: "POST",
-        body: JSON.stringify({ action: "refresh_engagement" }),
-      });
-      setMessage(`تم تحديث ${count(result.updated)} منشور${result.failed ? `، وتعذر تحديث ${count(result.failed)} منشور` : ""}`);
+      // Refreshing published/system posts does not update posts imported from
+      // Meta. Both requests use their own safe paths and existing permission.
+      const [system, meta] = await Promise.allSettled([
+        marketingFetch<{ updated: number; failed: number }>("/api/marketing", {
+          method: "POST", body: JSON.stringify({ action: "refresh_engagement" }),
+        }),
+        marketingFetch<{ updated: number; failed: number; deferred?: boolean }>("/api/marketing", {
+          method: "POST", body: JSON.stringify({ action: "refresh_meta_engagement_metrics" }),
+        }),
+      ]);
+      if (system.status === "rejected" && meta.status === "rejected") {
+        throw new Error("تعذر تحديث تفاعل النشر من السيستم وMeta");
+      }
+      const systemUpdated = system.status === "fulfilled" ? system.value.updated : 0;
+      const metaUpdated = meta.status === "fulfilled" ? meta.value.updated : 0;
+      setMessage(`تم تحديث ${count(systemUpdated)} منشور من السيستم و${count(metaUpdated)} منشور حديث من Meta`);
+      if (system.status === "rejected" || meta.status === "rejected" ||
+          (system.status === "fulfilled" && system.value.failed) ||
+          (meta.status === "fulfilled" && meta.value.failed)) {
+        setError("بعض المنشورات تعذر تحديثها؛ يمكنك تحديث أي منشور من Meta مباشرة من زر تحديث في صفه.");
+      }
       await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحديث التفاعل");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshMetaPost(row: any) {
+    const key = `meta-refresh:${row.id}`;
+    setBusyKey(key);
+    setError("");
+    setMessage("");
+    try {
+      const response = await marketingFetch<{
+        updated: number; failed: number; results: Array<{ id?: string; likes?: number | null; comments?: number | null; error?: string }>;
+      }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "refresh_meta_engagement_metrics", ids: [row.id] }),
+      });
+      const result = response.results.find((item) => item.id === row.id);
+      if (!response.updated || response.failed || result?.error) {
+        throw new Error(result?.error || "تعذر قراءة أرقام التفاعل من Meta");
+      }
+      setMessage(`تمت قراءة تفاعل المنشور من Meta: ${optionalCount(result?.likes)} لايك، ${optionalCount(result?.comments)} تعليق`);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحديث المنشور من Meta");
+    } finally {
+      setBusyKey("");
     }
   }
 
@@ -403,7 +473,12 @@ export function EngagementPage() {
 
         <section className="panel marketing-engagement-panel marketing-posts-panel">
           <header>
-            <div><h3>جميع المنشورات</h3><p>المنشورات التاريخية والجديدة من السيستم أو Meta، مع آخر مزامنة ومصدر النشر.</p></div>
+            <div><h3>جميع المنشورات</h3><p>المنشورات التاريخية والجديدة من السيستم أو Meta، مع آخر مزامنة ومصدر النشر.</p>
+              {canRefresh && autoRefreshStatus !== "idle" ? <small className={`marketing-meta-auto-status ${autoRefreshStatus}`} aria-live="polite">
+                {autoRefreshStatus === "loading" ? <ArrowClockwise size={14} className="spin" /> : autoRefreshStatus === "updated" ? <CheckCircle size={14} /> : <ArrowClockwise size={14} />}
+                {autoRefreshStatus === "loading" ? "جاري تحديث تفاعل أحدث منشورات Meta تلقائيًا..." : autoRefreshStatus === "updated" ? "تم تحديث أرقام أحدث منشورات Meta تلقائيًا" : autoRefreshStatus === "pending" ? "المزامنة المجدولة تعمل الآن؛ ستظهر الأرقام المحفوظة عند اكتمالها" : "تعذر التحديث التلقائي؛ الأرقام المحفوظة متاحة ويمكنك التحديث يدويًا"}
+              </small> : null}
+            </div>
             <div className="marketing-segmented" aria-label="فلتر حالة المنشورات">
               <button type="button" className={postStatus === "active" ? "active" : ""} onClick={() => setPostStatus("active")}>النشطة</button>
               <button type="button" className={postStatus === "archived" ? "active" : ""} onClick={() => setPostStatus("archived")}>الأرشيف</button>
@@ -423,14 +498,18 @@ export function EngagementPage() {
               <td><b title={row.caption || row.creative_name} className="marketing-meta-post-caption">{row.publication_origin === "meta" ? (row.caption || "منشور بدون نص") : row.creative_name}</b><small>{row.post_type_name || "نوع النشر غير مسجل"}</small></td>
               <td>{marketingDate(row.published_at, true)}</td>
               <td>{optionalCount(row.likes_count)}</td><td>{optionalCount(row.comments_count)}</td><td>{optionalCount(row.shares_count)}</td><td>{optionalCount(row.reach_count)}</td>
-              <td><span className={`marketing-sync-status ${row.sync_status}`}>{row.sync_status === "synced" ? "محدث" : row.sync_status === "failed" ? "فشل" : "بانتظار التحديث"}</span>{row.sync_error ? <details className="marketing-error-compact"><summary>عرض سبب الفشل</summary><p>{row.sync_error}</p></details> : null}</td>
+              <td><span className={`marketing-sync-status ${row.sync_status}`}>{row.sync_status === "synced" ? "آخر قراءة محفوظة" : row.sync_status === "failed" ? "فشل" : "بانتظار التحديث"}</span><small className="marketing-sync-timestamp">{row.last_synced_at ? marketingDate(row.last_synced_at, true) : "لم تتم القراءة بعد"}</small>{row.sync_error ? <details className="marketing-error-compact"><summary>عرض سبب الفشل</summary><p>{row.sync_error}</p></details> : null}</td>
               <td>{row.permalink ? <a className="secondary-button small" href={row.permalink} target="_blank" rel="noreferrer"><LinkSimple size={15} /> فتح</a> : "—"}</td>
-              <td>{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات المنشور"><DotsThreeVertical size={20} weight="bold" /></summary><div>
-                {row.archived_at
-                  ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("post", "restore", row)}><ArrowCounterClockwise size={16} /> استعادة</button>
-                  : <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("post", "archive", row)}><Archive size={16} /> أرشفة</button>}
-                <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("post", "delete", row)}><Trash size={16} /> مسح</button>
-              </div></details> : "—"}</td>
+              <td><div className="marketing-post-row-actions">
+                {canRefresh && row.publication_origin === "meta" ? <button type="button" className="secondary-button small" disabled={loading || Boolean(busyKey)} onClick={() => void refreshMetaPost(row)} aria-label="تحديث أرقام المنشور من Meta"><ArrowClockwise size={15} className={busyKey === `meta-refresh:${row.id}` ? "spin" : ""} /> تحديث</button> : null}
+                {canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات المنشور"><DotsThreeVertical size={20} weight="bold" /></summary><div>
+                  {row.archived_at
+                    ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("post", "restore", row)}><ArrowCounterClockwise size={16} /> استعادة</button>
+                    : <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("post", "archive", row)}><Archive size={16} /> أرشفة</button>}
+                  <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("post", "delete", row)}><Trash size={16} /> مسح</button>
+                </div></details> : null}
+                {!canManage && !(canRefresh && row.publication_origin === "meta") ? "—" : null}
+              </div></td>
             </tr>)}
             {!rows.length ? <tr><td colSpan={11} className="empty-cell">{loading ? "جاري التحميل..." : postStatus === "archived" ? "لا توجد منشورات في الأرشيف" : "لا توجد منشورات مطابقة"}</td></tr> : null}
           </tbody></table></div>

@@ -278,6 +278,33 @@ async function importPage(sql: Sql, conn: MetaConnection, after: string, limit: 
   return { imported: unique.size, cursor: hasNext ? cursor : '', complete: !hasNext };
 }
 
+/**
+ * A saved external post is refreshed directly by its genuine Meta media/post id.
+ * This is shared by historical rotation and the user-requested refresh; neither
+ * route creates publishing records or CRM engagements.
+ */
+async function refreshStoredPostMetrics(sql: Sql, conn: MetaConnection, row: any, budget: SyncBudget) {
+  const fields = conn.platform === 'facebook'
+    ? 'id,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares'
+    : 'id,like_count,comments_count';
+  const payload = await metaGet(conn, clean(row.provider_post_id), { fields }, budget);
+  const updates = conn.platform === 'facebook'
+    ? { likes: numberOrNull(payload?.reactions?.summary?.total_count), comments: numberOrNull(payload?.comments?.summary?.total_count), shares: numberOrNull(payload?.shares?.count) }
+    : { likes: numberOrNull(payload?.like_count), comments: numberOrNull(payload?.comments_count), shares: null };
+  if (updates.likes === null && updates.comments === null && updates.shares === null) {
+    throw new Error('Meta لم ترجع أي أرقام تفاعل للمنشور');
+  }
+  await sql`
+    update marketing.meta_external_posts set
+      likes_count=coalesce(${updates.likes},likes_count),
+      comments_count=coalesce(${updates.comments},comments_count),
+      shares_count=coalesce(${updates.shares},shares_count),
+      last_synced_at=now(),sync_status='synced',sync_error=null,updated_at=now()
+    where id=${row.id}::uuid and is_deleted=false
+  `;
+  return updates;
+}
+
 // Old content is rotated in small batches, and never allowed to consume the
 // remaining run budget needed for other accounts and cursor persistence.
 async function refreshOlderMetrics(sql: Sql, conn: MetaConnection, budget: SyncBudget, limit = 4) {
@@ -290,24 +317,11 @@ async function refreshOlderMetrics(sql: Sql, conn: MetaConnection, budget: SyncB
   for (const row of candidates) {
     if (!hasTime(budget, SINGLE_REQUEST_HEADROOM_MS)) break;
     try {
-      const fields = conn.platform === 'facebook'
-        ? 'id,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares'
-        : 'id,like_count,comments_count';
-      const payload = await metaGet(conn, clean(row.provider_post_id), { fields }, budget);
-      const updates = conn.platform === 'facebook'
-        ? { likes: numberOrNull(payload?.reactions?.summary?.total_count), comments: numberOrNull(payload?.comments?.summary?.total_count), shares: numberOrNull(payload?.shares?.count) }
-        : { likes: numberOrNull(payload?.like_count), comments: numberOrNull(payload?.comments_count), shares: null };
-      await sql`
-        update marketing.meta_external_posts set
-          likes_count=coalesce(${updates.likes},likes_count),
-          comments_count=coalesce(${updates.comments},comments_count),
-          shares_count=coalesce(${updates.shares},shares_count),
-          last_synced_at=now(),sync_status='synced',sync_error=null,updated_at=now()
-        where id=${row.id}::uuid
-      `;
+      await refreshStoredPostMetrics(sql, conn, row, budget);
       refreshed += 1;
     } catch (error) {
-      await sql`update marketing.meta_external_posts set sync_status='failed',sync_error=${normalizedError(error)},last_synced_at=now(),updated_at=now() where id=${row.id}::uuid`;
+      // A failed attempt must not claim the old metrics were just updated.
+      await sql`update marketing.meta_external_posts set sync_status='failed',sync_error=${normalizedError(error)},updated_at=now() where id=${row.id}::uuid`;
     }
   }
   return refreshed;
@@ -379,6 +393,79 @@ async function syncOne(sql: Sql, conn: MetaConnection, budget: SyncBudget) {
     await sql`update marketing.meta_sync_state set last_error=${message},updated_at=now() where platform=${conn.platform} and account_id=${conn.accountId}`;
     return { platform: conn.platform, accountId: conn.accountId, imported, followers, backfillComplete: Boolean(state.backfill_complete), error: message };
   }
+}
+
+/**
+ * Refresh engagement figures independently from archival discovery and the
+ * Cron advisory lock. The overview fetches just the newest 15 per connected
+ * account; one saved post can also be refreshed directly, even if older.
+ * Both modes use the existing encrypted Meta connection and permission gate.
+ */
+export async function refreshExternalMetaMetrics(sql: Sql, postIds: string[] = []) {
+  const ids = [...new Set(postIds.map(clean).filter(Boolean))];
+  if (ids.length > 10 || ids.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+    throw new Error('معرفات منشورات Meta غير صالحة أو أكثر من الحد المسموح');
+  }
+  const activeConnections = await connections(sql);
+  const budget: SyncBudget = { deadline: Date.now() + 45000 };
+  let updated = 0;
+  let failed = 0;
+  let deferred = false;
+  const results: Array<{ id?: string; platform: MetaPlatform; likes?: number | null; comments?: number | null; shares?: number | null; updated?: number; error?: string }> = [];
+  if (ids.length) {
+    const rows = await sql<any[]>`
+      select id::text,platform,account_id,provider_post_id from marketing.meta_external_posts
+      where id=any(${ids}::uuid[]) and is_deleted=false
+    `;
+    if (!rows.length) throw new Error('منشور Meta المطلوب غير موجود');
+    for (const row of rows) {
+      if (!hasTime(budget, SINGLE_REQUEST_HEADROOM_MS)) { deferred = true; break; }
+      const conn = activeConnections.find((item) => item.platform === row.platform && item.accountId === row.account_id);
+      if (!conn) {
+        failed += 1;
+        results.push({ id: row.id, platform: row.platform, error: 'حساب Meta غير متصل' });
+        continue;
+      }
+      try {
+        const metrics = await refreshStoredPostMetrics(sql, conn, row, budget);
+        updated += 1;
+        results.push({ id: row.id, platform: conn.platform, ...metrics });
+      } catch (error) {
+        failed += 1;
+        const message = normalizedError(error);
+        await sql`update marketing.meta_external_posts set sync_status='failed',sync_error=${message},updated_at=now() where id=${row.id}::uuid`;
+        results.push({ id: row.id, platform: conn.platform, error: message });
+      }
+    }
+    return { ok: true, updated, failed, deferred, results };
+  }
+  // Two small Graph pages update the visible recent media quickly. This never
+  // advances the historical cursor or waits for full archive import to finish.
+  for (const conn of activeConnections) {
+    if (!hasTime(budget, SINGLE_REQUEST_HEADROOM_MS)) { deferred = true; break; }
+    try {
+      const page = await importPage(sql, conn, '', RECENT_SIZE, conn.platform === 'facebook', budget);
+      updated += page.imported;
+      results.push({ platform: conn.platform, updated: page.imported });
+    } catch (error) {
+      failed += 1;
+      results.push({ platform: conn.platform, error: normalizedError(error) });
+    }
+  }
+  return { ok: true, updated, failed, deferred, results };
+}
+
+/**
+ * Opening the engagement page refreshes recent Meta metrics without scanning
+ * the archive. Share the Cron lock so many simultaneous page opens cannot
+ * duplicate Graph requests or compete with the scheduled importer.
+ */
+export async function autoRefreshExternalMetaMetrics(sql: Sql) {
+  const attempt = await tryWithDatabaseAdvisoryLock('marketing:meta-engagement-sync',
+    () => refreshExternalMetaMetrics(sql));
+  return attempt.acquired
+    ? { ...attempt.result!, skipped: false }
+    : { ok: true, updated: 0, failed: 0, deferred: true, skipped: true, results: [] };
 }
 
 export type MetaSyncOptions = { scheduled?: boolean; runtimeBudgetMs?: number };

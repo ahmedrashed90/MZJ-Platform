@@ -3769,6 +3769,21 @@
   color: #b22d2d;
 }
 
+.marketing-sync-timestamp {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  color: #856c65;
+  white-space: nowrap;
+}
+
+.marketing-post-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
 .marketing-error-compact {
   max-width: 220px;
   margin-top: 6px;
@@ -6097,6 +6112,9 @@
   .marketing-meta-account-metrics { grid-template-columns: 1fr 1fr; }
 }
 
+.marketing-meta-auto-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.marketing-meta-auto-status.updated { color: #167443; }
+.marketing-meta-auto-status.failed { color: #a55c32; }
 .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(230px,1.45fr) minmax(145px,.55fr) minmax(165px,.65fr); }
 .marketing-posts-panel .marketing-engagement-filter-note { grid-column: 1/-1; }
 @media (max-width: 1280px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(220px,1.2fr) minmax(155px,.8fr); } }

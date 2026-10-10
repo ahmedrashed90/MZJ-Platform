@@ -70,3 +70,14 @@
 - The engagement page now polls its **stored database data** every 60 seconds while visible. It never calls Meta in the polling loop and never triggers manual sync automatically.
 - `Vercel Settings > Cron Jobs > /api/internal/meta-engagement-sync > View Logs`: look for `Meta engagement scheduler completed`, HTTP 200 and import counts after deploy. An error from Graph for a particular account can appear in stored sync state even if the HTTP request returns 200; check account warnings and import progress.
 - Runtime/Graph/DB validation on production is still required after deployment. Do not increase the function timeout, modify the attendance schedule, or paste tokens into logs.
+
+## 2026-10-11: تحديث أرقام Meta تلقائيًا عند فتح تفاعل النشر
+
+- يبدأ العرض بقراءة **البيانات المحفوظة فورًا**، ثم ينفذ تلقائيًا **مرة واحدة عند فتح تبويب «تفاعل النشر»** عملية تحديث أرقام أحدث 15 منشورًا من كل حساب Facebook أو Instagram متصل، من غير أن يضغط المستخدم زرًا.
+- التحديث التلقائي **منفصل تمامًا عن استيراد الأرشيف**: يقرأ صفحتين صغيرتين من Graph API ويحفظهما باستعلامات UPSERT مجمّعة، ثم يعيد جلب الأرقام المحفوظة لعرض اللايكات والتعليقات الجديدة. حالة التحديث التلقائي تظهر أسفل عنوان «جميع المنشورات».
+- إجراء التحديث الخفيف يستخدم مسار التصاريح نفسه `marketing.engagement.refresh` والجلسة الفعلية، لكنه لا يعيد تنفيذ جميع ترحيلات التسويق والعمليات في كل فتح للصفحة؛ يتحقق فقط من وجود الجداول الموجودة بالفعل. **لا توجد صلاحية جديدة أو إعداد بيئي جديد.**
+- التحديث يشترك في القفل غير المنتظر مع Cron: لو بدأ Cron أولًا تُعرض البيانات المحفوظة، ويستمر فحص قاعدة البيانات مرة في الدقيقة؛ لا تُرسل طلبات Graph متزامنة إضافية.
+- القراءة الدورية كل دقيقة تجلب **البيانات المحفوظة فقط**، ولا تكرر النداء إلى Meta أو تحدث التفاعل في حلقة مستمرة، لتجنب الضغط على حدود Graph API.
+- المنشورات الأقدم من أحدث 15 لكل حساب تتحدث بدوران Cron أو بزر «تحديث» الموجود في صف المنشور. الزر اليدوي «تحديث الأرقام الآن» يظل متاحًا، والنشر والـCRM والحضور لا تتغير.
+- اختبار محاكاة منشور توسان رقم `17910769611525659`: تخزين `like_count=0`، ثم Graph API يرجع `1`، وبعد التحديث التلقائي تصبح القيمة المحفوظة `1` وتظهر بعد إعادة تحميل بيانات الجدول. تم اختبار تجاوز التشغيل تلقائيًا عند انشغال قفل Cron أيضًا.
+- نتيجة الفحص الدلالي `strict` لوحدة المزامنة: **صفر أخطاء**، مع نجاح اختبارات المزامنة وCRM/التفاعل ذات الصلة. يلزم اختبار البناء النهائي والنشر في Vercel؛ لم تتوفر اعتماديات npm لإجراء بناء الإنتاج كاملًا في بيئة الفحص.

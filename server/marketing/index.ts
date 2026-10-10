@@ -37,7 +37,7 @@ import {
   verifyGoogleDriveUploadedFile,
 } from "../_google-drive-storage.js";
 import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delivery.js";
-import { syncMetaEngagement } from "../_marketing-meta-sync.js";
+import { autoRefreshExternalMetaMetrics, refreshExternalMetaMetrics, syncMetaEngagement } from "../_marketing-meta-sync.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -4647,6 +4647,25 @@ async function createRawFolders(sql:ReturnType<typeof getSql>,body:any,user:Sess
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
   try {
+    // The engagement page updates current Meta counts on open. This action
+    // uses tables already deployed by the normal marketing flow; do not run
+    // all marketing/operations migrations during each lightweight refresh.
+    const initialBody = request.method === "POST" ? bodyObject(request) : {};
+    if (initialBody.action === "refresh_meta_engagement_metrics" && initialBody.automatic === true) {
+      const user = await requireUser(request, response); if (!user) return;
+      if (!canUseMarketing(user) || !hasPermission(user, "marketing.engagement.refresh")) {
+        return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتحديث تفاعل Meta" });
+      }
+      const sql = getSql();
+      const [schema] = await sql<any[]>`
+        select to_regclass('marketing.meta_external_posts') is not null as posts_ready,
+               to_regclass('marketing.platform_connections') is not null as connections_ready
+      `;
+      if (!schema?.posts_ready || !schema?.connections_ready) {
+        return response.status(503).json({ ok: false, error: "قاعدة بيانات تفاعل Meta غير مهيأة" });
+      }
+      return response.status(200).json(await autoRefreshExternalMetaMetrics(sql));
+    }
     await ensureAccessControlSchema(); await ensureOperationsSchema(); await ensureMarketingSchema();
     const user = await requireUser(request,response); if(!user)return;
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
@@ -4721,6 +4740,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='publish_now')result=await publishNow(sql,body,user);
     else if(action==='sync_meta_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لمزامنة Meta');result=await syncMetaEngagement(sql);}
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
+    else if(action==='refresh_meta_engagement_metrics'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل Meta');result=await refreshExternalMetaMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
     else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
     else if(action==='manage_engagement_item'){
       if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لإدارة تفاعل النشر');
