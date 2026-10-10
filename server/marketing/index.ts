@@ -37,6 +37,7 @@ import {
   verifyGoogleDriveUploadedFile,
 } from "../_google-drive-storage.js";
 import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delivery.js";
+import { syncMetaEngagement } from "../_marketing-meta-sync.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -4718,6 +4719,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='discard_manual_publish_entry')result=await discardManualPublishEntry(sql,body,user);
     else if(action==='remove_publish_prep_entry')result=await removePublishPrepEntry(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
+    else if(action==='sync_meta_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لمزامنة Meta');result=await syncMetaEngagement(sql);}
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
     else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
     else if(action==='manage_engagement_item'){

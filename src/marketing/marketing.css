@@ -6066,3 +6066,38 @@
   .marketing-subscription-history-list article { grid-template-columns: auto minmax(0,1fr); }
   .marketing-subscription-history-list time { grid-column: 2; }
 }
+
+/* Meta direct publishing + account monitoring, within the existing marketing palette. */
+.marketing-meta-post-caption { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marketing-meta-account-intro { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 2px 18px; }
+.marketing-meta-account-intro h3 { margin: 0 0 5px; font-size: 18px; color: var(--ink); }
+.marketing-meta-account-intro p { margin: 0; color: var(--muted); font-size: 12px; }
+.marketing-meta-accounts-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.marketing-meta-account-card { padding: 22px; min-width: 0; }
+.marketing-meta-account-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.marketing-meta-account-card h4 { margin: 16px 0 8px; font-size: 14px; color: var(--ink); }
+.marketing-meta-follower-number { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.marketing-meta-follower-number strong { font-size: clamp(26px,3vw,38px); font-weight: 900; color: var(--brand); }
+.marketing-meta-follower-number small { font-size: 12px; color: var(--muted); }
+.marketing-meta-account-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 18px 0; gap: 8px; }
+.marketing-meta-account-metrics > div { display: grid; gap: 7px; padding: 12px; background: var(--surface,#fffaf8); border: 1px solid var(--line); border-radius: 12px; }
+.marketing-meta-account-metrics span { font-size: 11px; color: var(--muted); }
+.marketing-meta-account-metrics strong { font-size: 14px; color: var(--ink); }
+.marketing-meta-followers-chart { min-width: 0; }
+.marketing-meta-chart-empty { min-height: 160px; display: flex; justify-content: center; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); border-radius: 12px; }
+.marketing-meta-account-footer { margin-top: 15px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.marketing-meta-account-empty { grid-column: 1 / -1; padding: 24px; color: var(--muted); font-size: 13px; }
+.marketing-meta-account-disclaimer { margin: 12px 0 0; font-size: 11px; color: var(--muted); }
+@media (max-width: 850px) {
+  .marketing-meta-accounts-grid { grid-template-columns: 1fr; }
+  .marketing-meta-account-intro { align-items: stretch; flex-direction: column; }
+}
+@media (max-width: 420px) {
+  .marketing-meta-account-card { padding: 14px; }
+  .marketing-meta-account-metrics { grid-template-columns: 1fr 1fr; }
+}
+
+.marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(230px,1.45fr) minmax(145px,.55fr) minmax(165px,.65fr); }
+.marketing-posts-panel .marketing-engagement-filter-note { grid-column: 1/-1; }
+@media (max-width: 1280px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(220px,1.2fr) minmax(155px,.8fr); } }
+@media (max-width: 850px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: 1fr; } }

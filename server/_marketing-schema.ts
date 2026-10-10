@@ -1146,6 +1146,63 @@ create table if not exists marketing.data_migrations (
   details jsonb not null default '{}'::jsonb
 );
 
+-- Meta posts imported independently of the publishing schedule and CRM event pipeline.
+create table if not exists marketing.meta_external_posts (
+  id uuid primary key default gen_random_uuid(),
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  provider_post_id text not null,
+  provider_media_id text,
+  caption text,
+  permalink text,
+  post_type_name text,
+  published_at timestamptz not null,
+  likes_count bigint,
+  comments_count bigint,
+  shares_count bigint,
+  saves_count bigint,
+  views_count bigint,
+  reach_count bigint,
+  sync_status text not null default 'pending' check(sync_status in ('pending','synced','failed')),
+  sync_error text,
+  last_synced_at timestamptz,
+  raw_metrics jsonb not null default '{}'::jsonb,
+  archived_at timestamptz,
+  archived_by uuid references core.users(id),
+  is_deleted boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(platform,account_id,provider_post_id)
+);
+create index if not exists marketing_meta_external_active_idx on marketing.meta_external_posts(published_at desc) where is_deleted=false;
+
+create table if not exists marketing.meta_sync_state (
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  next_after text,
+  backfill_complete boolean not null default false,
+  last_recent_at timestamptz,
+  last_backfill_at timestamptz,
+  last_success_at timestamptz,
+  last_error text,
+  updated_at timestamptz not null default now(),
+  primary key(platform,account_id)
+);
+
+create table if not exists marketing.meta_follower_snapshots (
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  account_name text,
+  snapshot_date date not null default current_date,
+  followers_count bigint not null,
+  fan_count bigint,
+  media_count bigint,
+  updated_at timestamptz not null default now(),
+  primary key(platform,account_id,snapshot_date)
+);
+
 create table if not exists marketing.engagement_snapshots (
   id bigserial primary key,
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,

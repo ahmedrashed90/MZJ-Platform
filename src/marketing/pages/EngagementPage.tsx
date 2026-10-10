@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import {
   Archive,
   ArrowClockwise,
@@ -13,6 +14,7 @@ import {
   LinkSimple,
   MagnifyingGlass,
   ShareNetwork,
+  ChartLineUp,
   TiktokLogo,
   Trash,
   UsersThree,
@@ -67,8 +69,30 @@ type EngagementSummary = {
   shareEvents: number;
 };
 
+type MetaAccount = {
+  platform: 'facebook' | 'instagram';
+  accountId: string;
+  accountName: string;
+  connected: boolean;
+  followers: number | null;
+  discoveredCount: number;
+  fans: number | null;
+  mediaCount: number | null;
+  dailyChange: number | null;
+  monthlyChange: number | null;
+  snapshots: Array<{ date: string; followers: number }>;
+  state: {
+    backfill_complete: boolean;
+    last_recent_at: string | null;
+    last_backfill_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+  } | null;
+};
+
 type Payload = {
   rows: any[];
+  accounts: MetaAccount[];
   engagements: any[];
   comments: any[];
   summary: EngagementSummary;
@@ -79,7 +103,8 @@ type Payload = {
 type RecordStatus = "active" | "archived" | "all";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
-type PageView = "engagement" | "campaigns" | "agendas";
+type PageView = "engagement" | "accounts" | "campaigns" | "agendas";
+type PostOrigin = "all" | "system" | "meta";
 
 const EMPTY_SUMMARY: EngagementSummary = {
   posts: 0,
@@ -97,6 +122,8 @@ const EMPTY_SUMMARY: EngagementSummary = {
 };
 
 function count(value: unknown) { return Number(value || 0).toLocaleString("ar-SA-u-nu-latn"); }
+function optionalCount(value: unknown) { return value === null || value === undefined ? "—" : count(value); }
+function followerChange(value: number | null) { return value === null ? "لا توجد مقارنة بعد" : `${value > 0 ? "+" : ""}${count(value)}`; }
 function platformLabel(platform: string) { return marketingResultPlatformLabel(platform); }
 function sourceLabel(platform: string) {
   if (platform === "facebook") return "بوست فيس بوك";
@@ -125,7 +152,7 @@ function processingLabel(status: string) {
   return "قيد المعالجة";
 }
 function pageView(value: string | null): PageView {
-  return value === "campaigns" || value === "agendas" ? value : "engagement";
+  return value === "campaigns" || value === "agendas" || value === "accounts" ? value : "engagement";
 }
 function bestPlatform(result: EngagementResultGroup) {
   return [...result.platforms].sort((a, b) => b.engagements - a.engagements || b.posts - a.posts)[0];
@@ -147,6 +174,7 @@ export function EngagementPage() {
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
+  const [postOrigin, setPostOrigin] = useState<PostOrigin>("all");
   const [engagementStatus, setEngagementStatus] = useState<RecordStatus>("active");
   const canRefresh = hasPermission(user, "marketing.engagement.refresh");
   const canManage = hasPermission(user, "marketing.publish.now");
@@ -184,11 +212,12 @@ export function EngagementPage() {
   }, [data, searchParams, selectedResult]);
 
   const rows = useMemo(() => (data?.rows || []).filter((row: any) => {
-    const haystack = `${row.source_name || ""} ${row.creative_name || ""} ${row.task_name || ""} ${row.assigned_name || ""}`.toLowerCase();
+    const haystack = `${row.source_name || ""} ${row.creative_name || ""} ${row.task_name || ""} ${row.assigned_name || ""} ${row.caption || ""} ${row.permalink || ""}`.toLowerCase();
     return (!platform || row.platform === platform)
+      && (postOrigin === "all" || row.publication_origin === postOrigin)
       && recordMatchesStatus(row, postStatus)
       && (!search || haystack.includes(search.toLowerCase()));
-  }), [data, platform, postStatus, search]);
+  }), [data, platform, postOrigin, postStatus, search]);
 
   const engagements = useMemo(() => (data?.engagements || []).filter((row: any) => {
     const haystack = `${row.actor_name || ""} ${row.customer_name || ""} ${row.event_text || ""} ${row.campaign_name || ""} ${row.creative_name || ""} ${row.crm_source_name || ""}`.toLowerCase();
@@ -248,6 +277,28 @@ export function EngagementPage() {
     }
   }
 
+  async function syncMeta() {
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await marketingFetch<{
+        imported: number;
+        accounts: Array<{ platform: string; error?: string; followersError?: string; backfillComplete: boolean }>;
+      }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "sync_meta_engagement" }) });
+      const failures = response.accounts.filter((account) => account.error || account.followersError);
+      const unfinished = response.accounts.filter((account) => !account.backfillComplete);
+      setMessage(`تمت معالجة ${count(response.imported)} منشور من Meta${unfinished.length ? "؛ جارٍ استكمال المنشورات التاريخية تلقائيًا" : "؛ اكتمل سحب الأرشيف المتاح"}`);
+      if (!response.accounts.length) setError("لا يوجد حساب Facebook أو Instagram متصل بالمنصة");
+      else if (failures.length) setError(failures.map((account) => `${platformLabel(account.platform)}: ${account.error || account.followersError}`).join(" — "));
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذرت مزامنة حسابات Meta");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function subscribe() {
     setLoading(true);
     setError("");
@@ -284,7 +335,7 @@ export function EngagementPage() {
     try {
       const result = await marketingFetch<{ message: string }>("/api/marketing", {
         method: "POST",
-        body: JSON.stringify({ action: "manage_engagement_item", entity, operation, id: row.id }),
+        body: JSON.stringify({ action: "manage_engagement_item", entity, operation, id: row.id, publicationOrigin: row.publication_origin }),
       });
       setMessage(result.message || `تم ${labels[operation]} ${target}`);
       await load();
@@ -300,11 +351,12 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة أرقام النشر والتفاعل؛ تعليقات Facebook وInstagram وتفاعلات Facebook ذات الهوية تدخل مسار CRM وتُوزّع حسب قواعد مبيعات الكاش."
+    description="متابعة منشورات السيستم وMeta مباشرة، وتحليلات الحسابات والمتابعين. تحويل التعليقات إلى CRM يظل مرتبطًا بمنشورات السيستم فقط."
     actions={<div className="marketing-engagement-actions">
       {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
       {data && canViewWebhookUrl ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
+      {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> مزامنة Meta والأرشيف</button> : null}
       {canRefresh ? <button type="button" className="primary-button" disabled={loading} onClick={refresh}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
     </div>}
   >
@@ -314,13 +366,14 @@ export function EngagementPage() {
 
       <div className="marketing-engagement-view-tabs" role="tablist" aria-label="أقسام تفاعل النشر">
         <button type="button" className={view === "engagement" ? "active" : ""} onClick={() => changeView("engagement")}>تفاعل النشر</button>
+        <button type="button" className={view === "accounts" ? "active" : ""} onClick={() => changeView("accounts")}>الحسابات والمتابعون</button>
         <button type="button" className={view === "campaigns" ? "active" : ""} onClick={() => changeView("campaigns")}>نتائج الحملات</button>
         <button type="button" className={view === "agendas" ? "active" : ""} onClick={() => changeView("agendas")}>نتائج الأجندات</button>
       </div>
 
       {view === "engagement" ? <>
         <section className="marketing-engagement-stats">
-          <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>منشورات السيستم فقط</small></article>
+          <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>
           <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق محفوظ ومربوط بالسيستم</small></article>
           <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
@@ -329,7 +382,7 @@ export function EngagementPage() {
 
         <section className="panel marketing-engagement-panel marketing-posts-panel">
           <header>
-            <div><h3>المنشورات المنشورة من السيستم</h3><p>آخر مزامنة وأرقام التفاعل لكل منشور مع إجراءات الأرشفة والمسح.</p></div>
+            <div><h3>جميع المنشورات</h3><p>المنشورات التاريخية والجديدة من السيستم أو Meta، مع آخر مزامنة ومصدر النشر.</p></div>
             <div className="marketing-segmented" aria-label="فلتر حالة المنشورات">
               <button type="button" className={postStatus === "active" ? "active" : ""} onClick={() => setPostStatus("active")}>النشطة</button>
               <button type="button" className={postStatus === "archived" ? "active" : ""} onClick={() => setPostStatus("archived")}>الأرشيف</button>
@@ -337,17 +390,18 @@ export function EngagementPage() {
             </div>
           </header>
           <div className="marketing-engagement-control-panel">
-            <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
+            <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف أو محتوى المنشور" /></div>
             <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
-            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة تعمل على نفس بيانات الحملات والأجندات، وسجل العملاء هنا للتعليقات وتفاعلات Facebook المعرّفة بالهوية.</small></div>
+            <label><span>مصدر النشر</span><select value={postOrigin} onChange={(event) => setPostOrigin(event.target.value as PostOrigin)}><option value="all">كل المنشورات</option><option value="system">نشر من السيستم</option><option value="meta">نشر من Meta</option></select></label>
+            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>المحتوى الخارجي للعرض والتحليل فقط ولا ينشئ عملاء CRM، وتقارير الحملات والأجندات تظل مرتبطة بالنشر الداخلي.</small></div>
           </div>
-          <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>الحملة / الأجندة</th><th>الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
+          <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>المصدر / الحملة</th><th>المحتوى / الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
             {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
               <td><span className={`marketing-platform-chip ${row.platform}`}>{platformIcon(row.platform, 17)}{platformLabel(row.platform)}</span></td>
-              <td><b>{row.source_name}</b><small>{row.task_name}</small></td>
-              <td><b>{row.creative_name}</b><small>{row.post_type_name || "نوع النشر غير مسجل"}</small></td>
+              <td><b>{row.publication_origin === "meta" ? "Meta مباشرة" : row.source_name}</b><small>{row.publication_origin === "meta" ? "غير مرتبط بحملة أو أجندة" : row.task_name}</small></td>
+              <td><b title={row.caption || row.creative_name} className="marketing-meta-post-caption">{row.publication_origin === "meta" ? (row.caption || "منشور بدون نص") : row.creative_name}</b><small>{row.post_type_name || "نوع النشر غير مسجل"}</small></td>
               <td>{marketingDate(row.published_at, true)}</td>
-              <td>{count(row.likes_count)}</td><td>{count(row.comments_count)}</td><td>{count(row.shares_count)}</td><td>{count(row.reach_count)}</td>
+              <td>{optionalCount(row.likes_count)}</td><td>{optionalCount(row.comments_count)}</td><td>{optionalCount(row.shares_count)}</td><td>{optionalCount(row.reach_count)}</td>
               <td><span className={`marketing-sync-status ${row.sync_status}`}>{row.sync_status === "synced" ? "محدث" : row.sync_status === "failed" ? "فشل" : "بانتظار التحديث"}</span>{row.sync_error ? <details className="marketing-error-compact"><summary>عرض سبب الفشل</summary><p>{row.sync_error}</p></details> : null}</td>
               <td>{row.permalink ? <a className="secondary-button small" href={row.permalink} target="_blank" rel="noreferrer"><LinkSimple size={15} /> فتح</a> : "—"}</td>
               <td>{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات المنشور"><DotsThreeVertical size={20} weight="bold" /></summary><div>
@@ -396,6 +450,43 @@ export function EngagementPage() {
             {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تفاعلات في الأرشيف" : "لم تصل تفاعلات مطابقة بعد"}</div> : null}
           </div>
         </section>
+      </> : view === "accounts" ? <>
+        <section className="marketing-meta-account-intro">
+          <div><h3>متابعو حسابات Meta</h3><p>العدد الحالي من الحسابات المرتبطة وتاريخ النمو منذ أول مزامنة داخل السيستم؛ لا يتم اختلاق بيانات سابقة.</p></div>
+          {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={17} /> تحديث الحسابات والمنشورات</button> : null}
+        </section>
+        <div className="marketing-meta-accounts-grid">
+          {(data?.accounts || []).map((account) => <article key={`${account.platform}-${account.accountId}`} className="panel marketing-meta-account-card">
+            <header className="marketing-meta-account-heading">
+              <span className={`marketing-platform-chip ${account.platform}`}>{platformIcon(account.platform, 20)}{platformLabel(account.platform)}</span>
+              <span className={`marketing-sync-status ${account.connected ? "synced" : "pending"}`}>{account.connected ? "متصل" : "غير متصل"}</span>
+            </header>
+            <h4>{account.accountName || platformLabel(account.platform)}</h4>
+            <div className="marketing-meta-follower-number"><strong>{optionalCount(account.followers)}</strong><small>متابع</small></div>
+            <div className="marketing-meta-account-metrics">
+              <div><span>من آخر قراءة محفوظة</span><strong>{followerChange(account.dailyChange)}</strong></div>
+              <div><span>نمو الشهر المسجل</span><strong>{followerChange(account.monthlyChange)}</strong></div>
+              <div><span>{account.platform === "facebook" ? "المعجبون بالصفحة" : "عدد المحتوى"}</span><strong>{optionalCount(account.platform === "facebook" ? account.fans : account.mediaCount)}</strong></div>
+            </div>
+            {account.snapshots.length > 1 ? <div className="marketing-meta-followers-chart" dir="ltr">
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={account.snapshots} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 4" vertical={false} stroke="#ebe5e0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={18} />
+                  <Tooltip formatter={(value) => [count(value), "المتابعون"]} labelFormatter={(value) => `التاريخ: ${value}`} />
+                  <Line type="monotone" dataKey="followers" name="المتابعون" stroke="var(--brand)" strokeWidth={2.5} dot={account.snapshots.length < 12} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div> : <div className="marketing-meta-chart-empty"><ChartLineUp size={18} /> يبدأ الرسم البياني بعد حفظ بيانات يومين مختلفين.</div>}
+            <footer className="marketing-meta-account-footer">
+              <span>تمت قراءة {count(account.discoveredCount)} منشور · آخر تحديث: {account.state?.last_success_at ? marketingDate(account.state.last_success_at, true) : "لم تبدأ المزامنة"}</span>
+              <span>{account.state?.backfill_complete ? "اكتمل الأرشيف المتاح" : "استيراد الأرشيف جارٍ على دفعات"}</span>
+            </footer>
+            {account.state?.last_error ? <details className="marketing-error-compact"><summary>تنبيه المزامنة</summary><p>{account.state.last_error}</p></details> : null}
+          </article>)}
+          {!(data?.accounts || []).length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
+        </div>
+        <p className="marketing-meta-account-disclaimer">تحديث المتابعين يسجل لقطة يومية للحساب، والتغيرات تُحسب من البيانات المسجلة منذ تفعيل المزامنة. قد تختلف المؤشرات المتاحة حسب نوع المنشور والمنصة.</p>
       </> : <>
         <section className="marketing-engagement-stats marketing-result-summary-stats">
           <article><LinkSimple size={24} /><span>{view === "campaigns" ? "الحملات" : "الأجندات"}</span><strong>{marketingResultCount(resultSummary.sources)}</strong><small>بها منشورات أو نتائج محفوظة</small></article>

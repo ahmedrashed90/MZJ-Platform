@@ -5,6 +5,7 @@ import { classifyConversationService, ensureContactIdentity } from "./_crm-lifec
 import { decryptPlatformToken, getYouTubeAccessToken } from "./_platform-connections.js";
 import type { SessionUser } from "./_auth.js";
 import { emitSocialEngagementLeadNotification } from "./_notifications.js";
+import { externalMetaPosts, manageExternalMetaPost, metaAccountData } from "./_marketing-meta-sync.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function asObject(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
@@ -1013,7 +1014,12 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pp.is_deleted=false
     order by coalesce(pe.engaged_at,pe.created_at) desc limit 500
   `;
-  const activeRows = rows.filter((row: any) => !row.archived_at);
+  const discovered = await externalMetaPosts(sql);
+  const allPosts = [
+    ...rows.map((row: any) => ({ ...row, publication_origin: 'system' })),
+    ...discovered,
+  ].sort((a: any, b: any) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+  const activeRows = allPosts.filter((row: any) => !row.archived_at);
   const activeEngagements = engagements.filter((row: any) => !row.archived_at && !row.post_archived_at);
   const summary = activeRows.reduce((total: any, row: any) => ({
     posts: total.posts + 1,
@@ -1042,7 +1048,8 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
   const results = await engagementResultsData(sql);
   return {
     ok: true,
-    rows,
+    rows: allPosts,
+    accounts: await metaAccountData(sql),
     engagements,
     comments: engagements.filter((row: any) => row.engagement_type === 'comment'),
     summary: { ...summary, ...engagementSummary, crmLeads },
@@ -1934,6 +1941,9 @@ export async function manageEngagementItem(sql: ReturnType<typeof getSql>, body:
   const id = clean(body.id);
   if (!id || !['post','engagement'].includes(entity) || !['archive','restore','delete','delete_customer'].includes(operation)) {
     throw new Error('إجراء تفاعل النشر غير صالح');
+  }
+  if (entity === 'post' && clean(body.publicationOrigin) === 'meta') {
+    return manageExternalMetaPost(sql, id, operation, user.id);
   }
   if (entity === 'post') {
     if (operation === 'delete_customer') throw new Error('هذا الإجراء متاح للتفاعلات المرتبطة بعميل فقط');

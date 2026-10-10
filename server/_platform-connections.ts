@@ -357,7 +357,7 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
 function metaVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 function metaScopes() {
   const required = [
-    "public_profile","pages_show_list","pages_read_engagement","pages_read_user_content","pages_manage_posts","pages_manage_metadata",
+    "public_profile","pages_show_list","pages_read_engagement","pages_read_user_content","pages_manage_posts","pages_manage_metadata","read_insights",
     "instagram_basic","instagram_content_publish","instagram_manage_comments","instagram_manage_insights",
   ];
   return [...new Set([...parseScopes(process.env.META_SCOPES || ""), ...required])];

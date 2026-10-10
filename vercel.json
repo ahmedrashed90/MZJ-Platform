@@ -30,6 +30,10 @@
     {
       "path": "/api/internal/attendance-tick",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/meta-engagement-sync",
+      "schedule": "*/15 * * * *"
     }
   ]
 }
