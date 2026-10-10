@@ -13,9 +13,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!secret) return response.status(503).json({ ok: false, error: 'CRON_SECRET is required' });
   if (!token || !safeSecretEquals(token, secret)) return response.status(401).json({ ok: false, error: 'Unauthorized' });
   try {
-    return response.status(200).json(await syncMetaEngagement(getSql()));
+    const result = await syncMetaEngagement(getSql(), { scheduled: true });
+    // Only operational counts and durations are logged, never Graph tokens or URLs.
+    console.info('Meta engagement scheduler completed', JSON.stringify({
+      elapsedMs: result.elapsedMs, imported: result.imported,
+      skipped: 'skipped' in result ? result.skipped : false,
+      deferred: 'deferred' in result ? result.deferred : false,
+      accounts: result.accounts.map((account) => ({
+        platform: account.platform, imported: account.imported,
+        error: 'error' in account ? Boolean(account.error) : false,
+      })),
+    }));
+    return response.status(200).json(result);
   } catch (error) {
-    console.error('Meta engagement scheduler failed', error instanceof Error ? error.message : 'Unknown error');
-    return response.status(500).json({ ok: false, error: 'Meta engagement scheduler failed' });
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Meta engagement scheduler failed', message);
+    return response.status(message === 'META_SYNC_SCHEMA_NOT_READY' ? 503 : 500).json({
+      ok: false, error: message === 'META_SYNC_SCHEMA_NOT_READY' ? message : 'Meta engagement scheduler failed',
+    });
   }
 }

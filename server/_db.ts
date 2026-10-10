@@ -86,6 +86,37 @@ export async function withDatabaseAdvisoryLock<T>(lockKey: string, work: () => P
   }
 }
 
+/**
+ * Non-blocking form of the same session advisory lock. A scheduled invocation
+ * must not spend its runtime waiting for an active manual or scheduled sync.
+ * Existing callers of withDatabaseAdvisoryLock keep their original behavior.
+ */
+export async function tryWithDatabaseAdvisoryLock<T>(
+  lockKey: string,
+  work: () => Promise<T>,
+): Promise<{ acquired: boolean; result?: T }> {
+  const normalizedKey = String(lockKey || "").trim();
+  if (!normalizedKey) return { acquired: true, result: await work() };
+  const [lockNamespace, lockValue] = databaseAdvisoryLockPair(`session:${normalizedKey}`);
+  const locks = getLockSql();
+  await ensureLockClientReady(locks);
+  const reserved = await locks.reserve();
+  let acquired = false;
+  try {
+    const [row] = await reserved<{ acquired: boolean }[]>`
+      select pg_try_advisory_lock(${lockNamespace}::integer,${lockValue}::integer) as acquired
+    `;
+    acquired = Boolean(row?.acquired);
+    if (!acquired) return { acquired: false };
+    return { acquired: true, result: await work() };
+  } finally {
+    if (acquired) {
+      await reserved`select pg_advisory_unlock(${lockNamespace}::integer,${lockValue}::integer)`.catch(() => undefined);
+    }
+    await reserved.release();
+  }
+}
+
 function splitSqlStatements(sqlText: string) {
   const statements: string[] = [];
   let current = "";

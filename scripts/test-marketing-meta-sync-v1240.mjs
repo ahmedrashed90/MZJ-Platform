@@ -10,7 +10,7 @@ const js = ts.transpileModule(fs.readFileSync('server/_marketing-meta-sync.ts','
 }).outputText;
 const mod={exports:{}};
 new Function('require','module','exports',js)((id)=>{
-  if(id==='./_db.js')return {getSql:()=>null,withDatabaseAdvisoryLock:async (_,callback)=>callback()};
+  if(id==='./_db.js')return {getSql:()=>null,tryWithDatabaseAdvisoryLock:async (_,callback)=>({ acquired: true, result: await callback() })};
   if(id==='./_marketing-schema.js')return {ensureMarketingSchema:async()=>{}};
   if(id==='./_platform-connections.js')return {decryptPlatformToken:token=>token};
   throw Error(id);
@@ -24,6 +24,7 @@ const accountRows=[
 const key=(p,a)=>`${p}:${a}`;
 async function sql(strings,...values){
   const query=strings.join(' ? ').replace(/\s+/g,' ').trim().toLowerCase();
+  if(query.includes("to_regclass('marketing.meta_external_posts')"))return [{posts_ready:true,state_ready:true,followers_ready:true}];
   if(query.startsWith('select platform,account_id,account_name,page_id')&&query.includes('marketing.platform_connections'))return accountRows;
   if(query.startsWith('insert into marketing.meta_sync_state')){
     const id=key(values[0],values[1]);
@@ -35,9 +36,11 @@ async function sql(strings,...values){
     return [];
   }
   if(query.startsWith('insert into marketing.meta_external_posts')){
-    const id=key(values[0],`${values[1]}:${values[2]}`);
-    const existing=posts.get(id)||{};
-    posts.set(id,{...existing,id,platform:values[0],account_id:values[1],provider_post_id:values[2],provider_media_id:values[3],caption:values[4],permalink:values[5],post_type_name:values[6],published_at:values[7],likes_count:values[8],comments_count:values[9],shares_count:values[10],last_synced_at:new Date().toISOString(),is_deleted:false});
+    for (const row of JSON.parse(values[0])) {
+      const id=key(row.platform,`${row.account_id}:${row.provider_post_id}`);
+      const existing=posts.get(id)||{};
+      posts.set(id,{...existing,...row,id,last_synced_at:new Date().toISOString(),is_deleted:false});
+    }
     return [];
   }
   if(query.startsWith('update marketing.meta_sync_state')){
@@ -93,6 +96,17 @@ assert.equal(first.accounts.every(x=>!x.backfillComplete),true);
 assert.equal(posts.size,4,'Recent and historical first pages must not create duplicates');
 assert.equal(posts.get(key('facebook','616836628446846:616836628446846_2')).shares_count,null,'Absent shares must remain unknown');
 assert.equal(states.get(key('facebook','616836628446846')).next_after,'FB_NEXT');
+// A scheduled request does not run the global DDL; a tiny time budget must
+// defer a Graph page safely without advancing its historical cursor.
+const before=posts.size;
+const cursorBefore=states.get(key('facebook','616836628446846')).next_after;
+const tiny=await syncMetaEngagement(sql,{scheduled:true,runtimeBudgetMs:100});
+assert.equal(tiny.ok,true);
+assert.equal(tiny.imported,0);
+assert.equal(posts.size,before);
+assert.equal(states.get(key('facebook','616836628446846')).next_after,cursorBefore);
+console.log('PASS Scheduled schema probe, runtime budget, safe deferral with no lost historical cursor');
+
 const second=await syncMetaEngagement(sql);
 assert.equal(posts.size,6,'Second historical cursor adds only new posts');
 assert.equal(second.accounts.every(x=>x.backfillComplete),true);

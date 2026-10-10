@@ -16,7 +16,7 @@ const moduleJs = ts.transpileModule(moduleSource, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const mockRequire = (id) => {
-  if (id === './_db.js') return { withDatabaseAdvisoryLock: async (_, work) => work(), getSql: () => null };
+  if (id === './_db.js') return { tryWithDatabaseAdvisoryLock: async (_, work) => ({ acquired: true, result: await work() }), getSql: () => null };
   if (id === './_marketing-schema.js') return { ensureMarketingSchema: async () => {} };
   if (id === './_platform-connections.js') return { decryptPlatformToken: (token) => token };
   throw new Error(`Unexpected import: ${id}`);
@@ -44,11 +44,15 @@ check('Sync progress and daily follower snapshots persisted',schema.includes('cr
 check('External importer writes only to isolated marketing tables',!moduleSource.includes('insert into marketing.published_posts')&&!moduleSource.includes('insert into crm.leads')&&!moduleSource.includes('insert into marketing.post_engagements'));
 check('Duplicate post reconciliation includes media id and permalink',moduleSource.includes('pp.provider_media_id in (mp.provider_post_id,mp.provider_media_id)')&&moduleSource.includes('trim(trailing \'/\' from mp.permalink)'));
 check('Import advances history by Graph cursor, never stores paging.next URL',moduleSource.includes('paging?.cursors?.after')&&!moduleSource.includes('searchParams.set("access_token"'));
-check('Older engagement metrics are rotated after backfill',moduleSource.includes('refreshOlderMetrics(sql, conn)'));
+check('Older engagement metrics are rotated after backfill',moduleSource.includes('refreshOlderMetrics(sql, conn, budget)'));
+check('Graph pages use a single atomic SQL upsert and preserve complete-page cursors',moduleSource.includes('jsonb_to_recordset(')&&moduleSource.includes('await savePostBatch(sql,')&&moduleSource.includes('cursor is only saved'));
+check('Scheduled worker does not rerun full marketing schema',moduleSource.includes('if (options.scheduled)')&&moduleSource.includes("to_regclass('marketing.meta_external_posts')"));
+check('Cron uses a bounded runtime and a non-blocking sync lock',moduleSource.includes('SYNC_BUDGET_MS = 72000')&&moduleSource.includes('tryWithDatabaseAdvisoryLock('));
 const engagement=read('server/_marketing-engagement.ts');
 check('Existing publishing and CRM paths retained',engagement.includes('upsertSocialEngagementAndCrm')&&engagement.includes('recordPublishedPost'));
 check('Meta is merged into the engagement view, not campaign results',engagement.includes('const discovered = await externalMetaPosts(sql)')&&engagement.includes('const results = await engagementResultsData(sql)'));
 const ui=read('src/marketing/pages/EngagementPage.tsx');
+check('UI quietly polls cached engagement data every minute',ui.includes('window.setInterval(')&&ui.includes('load(true)')&&ui.includes('60_000'));
 check('UI has source filters, account view, incremental sync and unavailable-metric display',ui.includes('setPostOrigin')&&ui.includes('view === "accounts"')&&ui.includes('sync_meta_engagement')&&ui.includes('optionalCount(row.shares_count)'));
 const permissions=read('server/_api-permissions.ts');
 check('Sync action uses existing engagement refresh permission',permissions.includes('sync_meta_engagement: "marketing.engagement.refresh"'));

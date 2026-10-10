@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import {
@@ -162,6 +162,7 @@ export function EngagementPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<Payload | null>(null);
+  const loadingRequest = useRef(false);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
@@ -183,21 +184,34 @@ export function EngagementPage() {
   const canViewWebhookUrl = hasPermission(user, "marketing.engagement.webhook.view");
   const canDeleteCustomer = hasPermission(user, "crm.customer.delete");
 
-  async function load() {
-    setLoading(true);
-    setError("");
+  async function load(silent = false) {
+    if (loadingRequest.current) return;
+    loadingRequest.current = true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
+      // Read our stored snapshot only; polling never triggers requests to Meta.
       const payload = await marketingFetch<Payload>(`/api/marketing${marketingQuery({ resource: "engagement" })}`);
       setData(payload);
       if (!subscriptionResults.length && payload.webhook.subscriptionResults?.length) setSubscriptionResults(payload.webhook.subscriptionResults);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل تفاعل النشر");
+      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل تفاعل النشر");
     } finally {
-      setLoading(false);
+      loadingRequest.current = false;
+      if (!silent) setLoading(false);
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    // Updates appear while this page stays open, without clicking Refresh.
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load(true);
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
   useEffect(() => {
     const nextView = pageView(searchParams.get("view"));
     if (nextView !== view) setView(nextView);
@@ -284,12 +298,19 @@ export function EngagementPage() {
     try {
       const response = await marketingFetch<{
         imported: number;
+        skipped?: boolean;
+        deferred?: boolean;
         accounts: Array<{ platform: string; error?: string; followersError?: string; backfillComplete: boolean }>;
       }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "sync_meta_engagement" }) });
+      if (response.skipped) {
+        setMessage("المزامنة التلقائية تعمل بالفعل؛ ستظهر البيانات عند انتهاء الدفعة الجارية.");
+        await load();
+        return;
+      }
       const failures = response.accounts.filter((account) => account.error || account.followersError);
       const unfinished = response.accounts.filter((account) => !account.backfillComplete);
-      setMessage(`تمت معالجة ${count(response.imported)} منشور من Meta${unfinished.length ? "؛ جارٍ استكمال المنشورات التاريخية تلقائيًا" : "؛ اكتمل سحب الأرشيف المتاح"}`);
-      if (!response.accounts.length) setError("لا يوجد حساب Facebook أو Instagram متصل بالمنصة");
+      setMessage(`تمت معالجة ${count(response.imported)} منشور من Meta${response.deferred || unfinished.length ? "؛ جارٍ استكمال المنشورات التاريخية تلقائيًا" : "؛ اكتمل سحب الأرشيف المتاح"}`);
+      if (!response.accounts.length && !response.deferred) setError("لا يوجد حساب Facebook أو Instagram متصل بالمنصة");
       else if (failures.length) setError(failures.map((account) => `${platformLabel(account.platform)}: ${account.error || account.followersError}`).join(" — "));
       await load();
     } catch (failure) {
