@@ -145,6 +145,17 @@ type DirectMetaResult = {
   error?: string;
 };
 
+// Both the automatic and single-post refresh routes return the same Meta
+// result records. Keep their platform and share fields in one contract so the
+// page cannot pass an incomplete response type to applyDirectMetaResults.
+type DirectMetaRefreshResponse = {
+  updated: number;
+  failed: number;
+  skipped?: boolean;
+  deferred?: boolean;
+  results: DirectMetaResult[];
+};
+
 function visibleMetaPostIds(rows: any[]): string[] {
   const perPlatform: Record<'facebook' | 'instagram', number> = { facebook: 0, instagram: 0 };
   const ids: string[] = [];
@@ -306,9 +317,7 @@ export function EngagementPage() {
       setAutoRefreshStatus("loading");
       setAutoRefreshDetail("");
       try {
-        const result = await marketingFetch<{
-          updated: number; failed: number; skipped?: boolean; deferred?: boolean; results?: DirectMetaResult[];
-        }>("/api/marketing", {
+        const result = await marketingFetch<DirectMetaRefreshResponse>("/api/marketing", {
           method: "POST",
           body: JSON.stringify({ action: "refresh_meta_engagement_metrics", automatic: true, ids }),
         });
@@ -449,9 +458,7 @@ export function EngagementPage() {
     setError("");
     setMessage("");
     try {
-      const response = await marketingFetch<{
-        updated: number; failed: number; results: Array<{ id?: string; likes?: number | null; comments?: number | null; error?: string }>;
-      }>("/api/marketing", {
+      const response = await marketingFetch<DirectMetaRefreshResponse>("/api/marketing", {
         method: "POST",
         body: JSON.stringify({ action: "refresh_meta_engagement_metrics", ids: [row.id] }),
       });
