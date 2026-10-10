@@ -1,0 +1,53 @@
+MZJ Platform Operations Native V2 - Changed Files
+
+Created: 27
++ database/migrations/20260720_operations_native_v2.sql
++ database/migrations/20260720_operations_native_v2_rollback.sql
++ docs/OPERATIONS-NATIVE-V2-CHANGED-FILES.txt
++ docs/OPERATIONS-NATIVE-V2-DEPLOYMENT-AR.md
++ docs/OPERATIONS-NATIVE-V2-IMPLEMENTATION-REPORT-AR.md
++ docs/OPERATIONS-NATIVE-V2-TEST-RESULTS.txt
++ scripts/check-operations-native-v2.mjs
++ server/_operations-auth.ts
++ server/_operations-schema.ts
++ server/_operations-utils.ts
++ server/operations/index.ts
++ src/components/Modal.tsx
++ src/operations/OperationsLayout.tsx
++ src/operations/api.ts
++ src/operations/components/DashboardOperationsModal.tsx
++ src/operations/components/OperationsSettingsPanel.tsx
++ src/operations/components/VehicleDetailModal.tsx
++ src/operations/components/VehicleTable.tsx
++ src/operations/excel.ts
++ src/operations/pages/ApprovalsPage.tsx
++ src/operations/pages/InventoryPage.tsx
++ src/operations/pages/MovementHistoryPage.tsx
++ src/operations/pages/MovementPage.tsx
++ src/operations/pages/TransferRequestsPage.tsx
++ src/operations/pages/VehicleManagementPage.tsx
++ src/operations/types.ts
++ src/operations/useOperations.ts
+
+Modified: 19
+M README.md
+M api/index.ts
+M package.json
+M server/_auth.ts
+M server/_dashboard-data.ts
+M server/dashboard.ts
+M server/integrations/tracking-orders.ts
+M server/setup/initialize.ts
+M server/tracking/delete.ts
+M src/App.tsx
+M src/auth/AuthContext.tsx
+M src/components/Sidebar.tsx
+M src/pages/DashboardPage.tsx
+M src/pages/SettingsPage.tsx
+M src/styles.css
+M src/tracking/api.ts
+M src/tracking/pages/TrackingDeletePage.tsx
+M src/tracking/pages/TrackingOrdersPage.tsx
+M src/types.ts
+
+Deleted: 0

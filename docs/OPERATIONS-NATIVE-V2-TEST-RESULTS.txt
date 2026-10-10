@@ -1,0 +1,36 @@
+MZJ Platform v1.14.0 - Operations Native V2
+نتائج الفحوص المنفذة داخل بيئة التسليم
+التاريخ: 2026-07-20
+
+نجح فعليًا:
+1) جميع Scripts البنيوية الموجودة في المشروع:
+   - check-api-imports.mjs
+   - check-crm-entry-distribution-v192.mjs
+   - check-crm-module.mjs
+   - check-crm-reference-v27.mjs
+   - check-crm-settings-v180.mjs
+   - check-customer-completion.mjs
+   - check-mersal-unified-send-v193.mjs
+   - check-operations-native-v2.mjs
+   - check-tracking-module-v112.mjs
+   - check-worker-route-discovery-v194.mjs
+2) فحص Transpile نحوي لـ109 ملفات TypeScript/TSX: صفر أخطاء نحوية.
+3) فحص TypeScript مستقل وصارم للملف src/operations/excel.ts: نجح.
+4) إنشاء ملف Excel XLSX حقيقي من الوحدة الجديدة واختبار unzip -t: لا توجد أخطاء.
+5) التحقق من أن VIN تجريبي 000123 ظل نصًا داخل ملف XLSX.
+6) تطابق Migration مع OPERATIONS_SCHEMA_SQL: 371 سطرًا، تطابق كامل.
+7) فحص قواعد الأمان البنيوية: صلاحيات الفروع في الكتابة، منع حذف تاريخ السيارة، internal ID لمسح التراكينج، عدم حظر orderNumber، Modal Portal، وتوحيد Query الداش بورد: نجح.
+
+لم يمكن تشغيله داخل هذه البيئة، ولا يُدعى نجاحه:
+1) pnpm install / Production build / Project TypeScript build:
+   Corepack احتاج تنزيل pnpm@9.15.9 من registry.npmjs.org وفشل بسبب DNS EAI_AGAIN وعدم توفر الشبكة.
+2) اختبارات PostgreSQL الفعلية وMigration على قاعدة Staging:
+   لا يوجد DATABASE_URL أو خادم PostgreSQL أو أداة psql متاحة داخل بيئة التنفيذ.
+3) تتبع Log الإنتاج لرقم المرجع ops-mrsg1s3c-de275f7c:
+   Logs الإنتاج غير متاحة داخل البيئة.
+
+المطلوب قبل Main:
+- تثبيت Dependencies وتشغيل pnpm run typecheck ثم pnpm run build.
+- Backup كامل ثم Migration على Staging.
+- تنفيذ اختبارات القبول الواردة في docs/OPERATIONS-NATIVE-V2-DEPLOYMENT-AR.md.
+- عدم تشغيل Migration على Main قبل نجاح الخطوات السابقة.

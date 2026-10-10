@@ -1,0 +1,20 @@
+إعادة بناء تبويب ربط المنصات — الملفات المعدلة/المضافة
+
+MODIFIED
+- .env.example
+- api/index.ts
+- package.json
+- server/_api-permissions.ts
+- server/_marketing-schema.ts
+- server/marketing/index.ts
+- src/marketing/marketing.css
+- src/marketing/pages/PlatformConnectionsPage.tsx
+
+ADDED
+- database/migrations/20260730_marketing_platform_connections_clean_rebuild.sql
+- server/_platform-connections.ts
+- server/marketing/platform-connections.ts
+- scripts/check-marketing-platform-connections-rebuild-v1212.mjs
+- docs/MARKETING-PLATFORM-CONNECTIONS-CLEAN-REBUILD-V1212-AR.md
+- docs/MARKETING-PLATFORM-CONNECTIONS-V1212-CHANGED-FILES.txt
+- test-results/MARKETING-PLATFORM-CONNECTIONS-REBUILD-TEST-RESULTS.txt

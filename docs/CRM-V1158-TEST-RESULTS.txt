@@ -1,0 +1,15 @@
+PASS: API/server import extension validation
+PASS: CRM service reclassification v1.15.6 checks
+PASS: CRM v1.15.8 UI/voice checks
+PASS: CRM module structure checks
+PASS: Customer completion checks
+PASS: CRM reference v27 checks
+PASS: CRM settings v1.8 checks
+PASS: CRM reference v39 checks
+PASS: CRM entry/distribution v1.9.2 checks
+PASS: Worker route discovery v1.9.4 checks
+PASS: Tracking module checks
+PASS: Operations Native V2 checks
+PASS: TypeScript project build (tsc -b)
+PASS: Vite production build
+NOTE: End-to-end voice delivery requires deployment and a live Mersal/WhatsApp test.
