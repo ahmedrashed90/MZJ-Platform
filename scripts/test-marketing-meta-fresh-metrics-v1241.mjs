@@ -8,12 +8,15 @@ const source = fs.readFileSync('server/_marketing-meta-sync.ts', 'utf8');
 const script = ts.transpileModule(source, {fileName:'server/_marketing-meta-sync.ts', compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}, reportDiagnostics:true});
 assert.equal(script.diagnostics?.length || 0,0,'Meta module should transpile without diagnostics');
 const mod={exports:{}};
-let busyLock = false;
+let busyVisibleLock = false;
+let busyCronLock = false;
 let recentLockCalls = 0;
 new Function('require','module','exports',script.outputText)((id)=>{
   if (id==='./_db.js') return {getSql:()=>null,tryWithDatabaseAdvisoryLock:async(key,fn)=>{
-    if (key === 'marketing:meta-engagement-sync') recentLockCalls++;
-    return busyLock ? {acquired:false} : {acquired:true,result:await fn()};
+    if (key === 'marketing:meta-visible-metrics') recentLockCalls++;
+    return ((key === 'marketing:meta-visible-metrics' && busyVisibleLock) ||
+      (key === 'marketing:meta-engagement-sync' && busyCronLock))
+      ? {acquired:false} : {acquired:true,result:await fn()};
   }};
   if (id==='./_marketing-schema.js')return {ensureMarketingSchema:async()=>{}};
   if (id==='./_platform-connections.js')return {decryptPlatformToken:(token)=>token};
@@ -105,31 +108,41 @@ console.log('PASS Overview refresh updates Instagram and Facebook recent posts i
 
 igLike=3;
 const beforeAutoCalls=requestCount;
-const auto=await autoRefreshExternalMetaMetrics(sql);
+const auto=await autoRefreshExternalMetaMetrics(sql,[igUUID]);
 assert.equal(auto.skipped,false,'Opening page must initiate recent Meta refresh automatically');
-assert.equal(auto.updated,2);
+assert.equal(auto.updated,1);
 assert.equal(posts.get(igUUID).likes_count,3);
 assert.equal(recentLockCalls,1);
 assert.ok(requestCount>beforeAutoCalls);
 console.log('PASS Opening engagement page updates the Tuscon reel automatically with bounded Graph pages');
 
-busyLock=true;
+busyVisibleLock=true;
 const beforeBusy=requestCount;
-const overlapping=await autoRefreshExternalMetaMetrics(sql);
+const overlapping=await autoRefreshExternalMetaMetrics(sql,[igUUID]);
 assert.equal(overlapping.skipped,true,'Simultaneous scheduled/automatic refresh must not duplicate Graph requests');
 assert.equal(overlapping.updated,0);
 assert.equal(requestCount,beforeBusy);
-console.log('PASS Automatic refresh yields safely while the Meta cron already holds the lock');
-busyLock=false;
+console.log('PASS A second page refresh yields while another visible refresh is in progress');
+busyVisibleLock=false;
+busyCronLock=true; igLike=4;
+const duringCron=await autoRefreshExternalMetaMetrics(sql,[igUUID]);
+assert.equal(duringCron.skipped,false,'Visible metrics must not wait for historical Cron import');
+assert.equal(posts.get(igUUID).likes_count,4);
+console.log('PASS Instagram like refresh runs even while archival Cron has its own lock');
+busyCronLock=false;
+busyVisibleLock=false;
 
 const ui=fs.readFileSync('src/marketing/pages/EngagementPage.tsx','utf8');
 const api=fs.readFileSync('server/marketing/index.ts','utf8');
 const acl=fs.readFileSync('server/_api-permissions.ts','utf8');
 assert.ok(ui.includes('refresh_meta_engagement_metrics')&&ui.includes('refreshMetaPost(row)'));
 assert.ok(ui.includes('row.last_synced_at'));
-assert.ok(ui.includes('openedAutoRefresh.current') && ui.includes('automatic: true'));
+assert.ok(ui.includes('openedAutoRefresh.current') && ui.includes('automatic: true, ids'));
+assert.ok(ui.includes('visibleMetaPostIds(data?.rows || [])'));
+assert.ok(ui.includes('applyDirectMetaResults(refreshed)'));
+assert.ok(ui.includes('setAutoRefreshDetail(detail') && ui.includes('AUTO_META_RETRY_DELAY_MS')); 
 assert.ok(ui.includes('mountedPage.current') && ui.includes('await load(true)'));
-assert.ok(api.includes('initialBody.automatic === true') && api.includes('autoRefreshExternalMetaMetrics(sql)'));
+assert.ok(api.includes('initialBody.automatic === true') && api.includes('autoRefreshExternalMetaMetrics(sql, arrayValue<string>(initialBody.ids)')); 
 assert.ok(api.includes("action==='refresh_meta_engagement_metrics'"));
 assert.ok(acl.includes('refresh_meta_engagement_metrics: "marketing.engagement.refresh"'));
 assert.ok(!source.includes('update marketing.published_posts') && !source.includes('insert into marketing.published_posts'),'External refresh must not write publishing records');

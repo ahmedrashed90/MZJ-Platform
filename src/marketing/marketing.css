@@ -6115,6 +6115,7 @@
 .marketing-meta-auto-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); }
 .marketing-meta-auto-status.updated { color: #167443; }
 .marketing-meta-auto-status.failed { color: #a55c32; }
+.marketing-meta-auto-detail { overflow-wrap: anywhere; white-space: normal; }
 .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(230px,1.45fr) minmax(145px,.55fr) minmax(165px,.65fr); }
 .marketing-posts-panel .marketing-engagement-filter-note { grid-column: 1/-1; }
 @media (max-width: 1280px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(220px,1.2fr) minmax(155px,.8fr); } }

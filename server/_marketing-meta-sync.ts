@@ -418,24 +418,30 @@ export async function refreshExternalMetaMetrics(sql: Sql, postIds: string[] = [
       where id=any(${ids}::uuid[]) and is_deleted=false
     `;
     if (!rows.length) throw new Error('منشور Meta المطلوب غير موجود');
-    for (const row of rows) {
+    // Individual Graph node reads are bounded and independent of archival
+    // pagination. A small concurrency limit lets the visible rows finish well
+    // before Vercel's deadline without flooding Meta with requests.
+    const concurrency = 3;
+    for (let start = 0; start < rows.length; start += concurrency) {
       if (!hasTime(budget, SINGLE_REQUEST_HEADROOM_MS)) { deferred = true; break; }
-      const conn = activeConnections.find((item) => item.platform === row.platform && item.accountId === row.account_id);
-      if (!conn) {
-        failed += 1;
-        results.push({ id: row.id, platform: row.platform, error: 'حساب Meta غير متصل' });
-        continue;
-      }
-      try {
-        const metrics = await refreshStoredPostMetrics(sql, conn, row, budget);
-        updated += 1;
-        results.push({ id: row.id, platform: conn.platform, ...metrics });
-      } catch (error) {
-        failed += 1;
-        const message = normalizedError(error);
-        await sql`update marketing.meta_external_posts set sync_status='failed',sync_error=${message},updated_at=now() where id=${row.id}::uuid`;
-        results.push({ id: row.id, platform: conn.platform, error: message });
-      }
+      await Promise.all(rows.slice(start, start + concurrency).map(async (row: any) => {
+        const conn = activeConnections.find((item) => item.platform === row.platform && item.accountId === row.account_id);
+        if (!conn) {
+          failed += 1;
+          results.push({ id: row.id, platform: row.platform, error: 'حساب Meta غير متصل أو لا يطابق حساب المنشور' });
+          return;
+        }
+        try {
+          const metrics = await refreshStoredPostMetrics(sql, conn, row, budget);
+          updated += 1;
+          results.push({ id: row.id, platform: conn.platform, ...metrics });
+        } catch (error) {
+          failed += 1;
+          const message = normalizedError(error);
+          await sql`update marketing.meta_external_posts set sync_status='failed',sync_error=${message},updated_at=now() where id=${row.id}::uuid`;
+          results.push({ id: row.id, platform: conn.platform, error: message });
+        }
+      }));
     }
     return { ok: true, updated, failed, deferred, results };
   }
@@ -456,16 +462,32 @@ export async function refreshExternalMetaMetrics(sql: Sql, postIds: string[] = [
 }
 
 /**
- * Opening the engagement page refreshes recent Meta metrics without scanning
- * the archive. Share the Cron lock so many simultaneous page opens cannot
- * duplicate Graph requests or compete with the scheduled importer.
+ * Refresh already saved, visible posts by their exact Graph media IDs.
+ * This is deliberately independent of the archival Cron lock: the Cron can
+ * spend a minute importing history while the page still refreshes its likes.
+ * A dedicated non-blocking lock prevents simultaneous viewers from each
+ * sending an identical batch of Meta requests.
  */
-export async function autoRefreshExternalMetaMetrics(sql: Sql) {
-  const attempt = await tryWithDatabaseAdvisoryLock('marketing:meta-engagement-sync',
-    () => refreshExternalMetaMetrics(sql));
+export async function autoRefreshExternalMetaMetrics(sql: Sql, visiblePostIds: string[] = []) {
+  let ids = [...new Set(visiblePostIds.map(clean).filter(Boolean))];
+  if (!ids.length) {
+    // Serve previously cached browser clients that do not send row IDs yet.
+    // Pick five saved posts per platform, never start a new archive import.
+    const recent = await sql<any[]>`
+      select id::text from (
+        select id,platform,row_number() over(partition by platform order by published_at desc) as row_rank
+        from marketing.meta_external_posts
+        where platform in ('facebook','instagram') and is_deleted=false and archived_at is null
+      ) selected where row_rank<=5 order by row_rank,platform
+    `;
+    ids = recent.map((row: any) => clean(row.id)).filter(Boolean);
+  }
+  if (!ids.length) return { ok: true, updated: 0, failed: 0, deferred: false, skipped: false, results: [] };
+  const attempt = await tryWithDatabaseAdvisoryLock('marketing:meta-visible-metrics',
+    () => refreshExternalMetaMetrics(sql, ids));
   return attempt.acquired
     ? { ...attempt.result!, skipped: false }
-    : { ok: true, updated: 0, failed: 0, deferred: true, skipped: true, results: [] };
+    : { ok: true, updated: 0, failed: 0, deferred: true, skipped: true, reason: 'META_VISIBLE_REFRESH_ALREADY_RUNNING', results: [] };
 }
 
 export type MetaSyncOptions = { scheduled?: boolean; runtimeBudgetMs?: number };

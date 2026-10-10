@@ -4664,7 +4664,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (!schema?.posts_ready || !schema?.connections_ready) {
         return response.status(503).json({ ok: false, error: "قاعدة بيانات تفاعل Meta غير مهيأة" });
       }
-      return response.status(200).json(await autoRefreshExternalMetaMetrics(sql));
+      return response.status(200).json(await autoRefreshExternalMetaMetrics(sql, arrayValue<string>(initialBody.ids).map(clean).filter(Boolean)));
     }
     await ensureAccessControlSchema(); await ensureOperationsSchema(); await ensureMarketingSchema();
     const user = await requireUser(request,response); if(!user)return;

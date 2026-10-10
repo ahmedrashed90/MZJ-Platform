@@ -133,6 +133,34 @@ function sourceLabel(platform: string) {
   if (platform === "snapchat") return "منشور Snapchat";
   return marketingResultSourceLabel(platform);
 }
+const VISIBLE_META_POSTS_PER_PLATFORM = 5;
+const AUTO_META_RETRY_DELAY_MS = 12_000;
+
+type DirectMetaResult = {
+  id?: string;
+  platform: 'facebook' | 'instagram';
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  error?: string;
+};
+
+function visibleMetaPostIds(rows: any[]): string[] {
+  const perPlatform: Record<'facebook' | 'instagram', number> = { facebook: 0, instagram: 0 };
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (row.publication_origin !== 'meta' || row.archived_at) continue;
+    const platform = String(row.platform || '');
+    if (platform !== 'facebook' && platform !== 'instagram') continue;
+    if (perPlatform[platform] >= VISIBLE_META_POSTS_PER_PLATFORM) continue;
+    const id = String(row.id || '');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) continue;
+    perPlatform[platform]++;
+    ids.push(id);
+  }
+  return ids;
+}
+
 function platformIcon(platform: string, size: number) {
   if (platform === "facebook") return <FacebookLogo size={size} weight="fill" />;
   if (platform === "instagram") return <InstagramLogo size={size} weight="fill" />;
@@ -163,10 +191,12 @@ export function EngagementPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<Payload | null>(null);
   const loadingRequest = useRef(false);
+  const queuedReload = useRef(false);
   const [loading, setLoading] = useState(false);
   const openedAutoRefresh = useRef(false);
   const mountedPage = useRef(false);
   const [autoRefreshStatus, setAutoRefreshStatus] = useState<"idle" | "loading" | "updated" | "pending" | "failed">("idle");
+  const [autoRefreshDetail, setAutoRefreshDetail] = useState("");
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -188,7 +218,10 @@ export function EngagementPage() {
   const canDeleteCustomer = hasPermission(user, "crm.customer.delete");
 
   async function load(silent = false) {
-    if (loadingRequest.current) return;
+    if (loadingRequest.current) {
+      if (silent) queuedReload.current = true;
+      return;
+    }
     loadingRequest.current = true;
     if (!silent) {
       setLoading(true);
@@ -204,7 +237,44 @@ export function EngagementPage() {
     } finally {
       loadingRequest.current = false;
       if (!silent) setLoading(false);
+      if (queuedReload.current) {
+        queuedReload.current = false;
+        void load(true);
+      }
     }
+  }
+
+  function applyDirectMetaResults(results: DirectMetaResult[]) {
+    const updates = new Map(results.filter((result) => result.id && !result.error)
+      .map((result): [string, DirectMetaResult] => [String(result.id), result]));
+    if (!updates.size) return;
+    setData((current) => {
+      if (!current) return current;
+      let likesDelta = 0;
+      let commentsDelta = 0;
+      let sharesDelta = 0;
+      const refreshedAt = new Date().toISOString();
+      const rows = current.rows.map((row: any) => {
+        if (row.publication_origin !== 'meta') return row;
+        const update = updates.get(String(row.id));
+        if (!update) return row;
+        const likes = update.likes ?? row.likes_count;
+        const comments = update.comments ?? row.comments_count;
+        const shares = update.shares ?? row.shares_count;
+        if (!row.archived_at) {
+          likesDelta += Number(likes ?? 0) - Number(row.likes_count ?? 0);
+          commentsDelta += Number(comments ?? 0) - Number(row.comments_count ?? 0);
+          sharesDelta += Number(shares ?? 0) - Number(row.shares_count ?? 0);
+        }
+        return { ...row, likes_count: likes, comments_count: comments,
+          shares_count: shares, sync_status: 'synced', sync_error: null,
+          last_synced_at: refreshedAt };
+      });
+      return { ...current, rows, summary: { ...current.summary,
+        likes: current.summary.likes + likesDelta,
+        comments: current.summary.comments + commentsDelta,
+        shares: current.summary.shares + sharesDelta } };
+    });
   }
 
   useEffect(() => {
@@ -221,25 +291,62 @@ export function EngagementPage() {
   }, []);
   const dataAvailable = data !== null;
   useEffect(() => {
-    // Show stored counts immediately, then refresh recent Facebook/Instagram
-    // figures once when the engagement page opens. Never wait for the archive
-    // import or make requests to Meta on the one-minute cached-data poll.
+    // Refresh the actual saved posts visible in this view by media ID, not by
+    // re-reading a feed page or waiting for the archival Cron lock. A second
+    // viewer may already be updating them; retry when the short-lived lock is
+    // busy. The one-minute cached-data poll never makes requests to Meta.
     if (!dataAvailable || view !== "engagement" || !canRefresh || openedAutoRefresh.current) return;
+    const ids = visibleMetaPostIds(data?.rows || []);
+    if (!ids.length) return;
     openedAutoRefresh.current = true;
-    setAutoRefreshStatus("loading");
-    void (async () => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const run = async (attempt: number): Promise<void> => {
+      if (cancelled || !mountedPage.current) return;
+      setAutoRefreshStatus("loading");
+      setAutoRefreshDetail("");
       try {
-        const result = await marketingFetch<{ updated: number; failed: number; skipped?: boolean }>("/api/marketing", {
-          method: "POST", body: JSON.stringify({ action: "refresh_meta_engagement_metrics", automatic: true }),
+        const result = await marketingFetch<{
+          updated: number; failed: number; skipped?: boolean; deferred?: boolean; results?: DirectMetaResult[];
+        }>("/api/marketing", {
+          method: "POST",
+          body: JSON.stringify({ action: "refresh_meta_engagement_metrics", automatic: true, ids }),
         });
-        if (!mountedPage.current) return;
-        setAutoRefreshStatus(result.skipped ? "pending" : result.failed && !result.updated ? "failed" : "updated");
-        if (!result.skipped) await load(true);
-      } catch {
-        // Keep the saved counters available if Meta is slow or unavailable.
-        if (mountedPage.current) setAutoRefreshStatus("failed");
+        if (cancelled || !mountedPage.current) return;
+        if (result.skipped) {
+          setAutoRefreshStatus("pending");
+          setAutoRefreshDetail("هناك تحديث آخر جارٍ؛ سنعيد المحاولة تلقائيًا.");
+          if (attempt < 2) retryTimer = window.setTimeout(() => void run(attempt + 1), AUTO_META_RETRY_DELAY_MS);
+          await load(true);
+          return;
+        }
+        const refreshed = result.results || [];
+        applyDirectMetaResults(refreshed);
+        await load(true);
+        if (cancelled || !mountedPage.current) return;
+        const errors = refreshed.filter((item) => item.error);
+        if (result.failed || result.deferred || !result.updated) {
+          setAutoRefreshStatus("failed");
+          const detail = errors.slice(0, 2).map((item) => `${platformLabel(item.platform)}: ${item.error}`).join(" — ");
+          setAutoRefreshDetail(detail || (result.deferred ? "اكتملت بعض القراءات؛ الباقي مؤجل لإعادة المحاولة." : "لم تكتمل قراءة أرقام Meta."));
+          if (attempt < 2) retryTimer = window.setTimeout(() => void run(attempt + 1), AUTO_META_RETRY_DELAY_MS);
+        } else {
+          setAutoRefreshStatus("updated");
+          setAutoRefreshDetail(`تمت قراءة ${count(result.updated)} منشورات مباشرة من Meta.`);
+        }
+      } catch (failure) {
+        if (cancelled || !mountedPage.current) return;
+        setAutoRefreshStatus("failed");
+        setAutoRefreshDetail(failure instanceof Error ? failure.message : "تعذر الاتصال بMeta");
+        if (attempt < 2) retryTimer = window.setTimeout(() => void run(attempt + 1), AUTO_META_RETRY_DELAY_MS);
       }
-    })();
+    };
+    void run(0);
+    return () => {
+      cancelled = true;
+      openedAutoRefresh.current = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
   }, [dataAvailable, view, canRefresh]);
   useEffect(() => {
     const nextView = pageView(searchParams.get("view"));
@@ -352,6 +459,7 @@ export function EngagementPage() {
       if (!response.updated || response.failed || result?.error) {
         throw new Error(result?.error || "تعذر قراءة أرقام التفاعل من Meta");
       }
+      applyDirectMetaResults(response.results);
       setMessage(`تمت قراءة تفاعل المنشور من Meta: ${optionalCount(result?.likes)} لايك، ${optionalCount(result?.comments)} تعليق`);
       await load();
     } catch (failure) {
@@ -476,7 +584,8 @@ export function EngagementPage() {
             <div><h3>جميع المنشورات</h3><p>المنشورات التاريخية والجديدة من السيستم أو Meta، مع آخر مزامنة ومصدر النشر.</p>
               {canRefresh && autoRefreshStatus !== "idle" ? <small className={`marketing-meta-auto-status ${autoRefreshStatus}`} aria-live="polite">
                 {autoRefreshStatus === "loading" ? <ArrowClockwise size={14} className="spin" /> : autoRefreshStatus === "updated" ? <CheckCircle size={14} /> : <ArrowClockwise size={14} />}
-                {autoRefreshStatus === "loading" ? "جاري تحديث تفاعل أحدث منشورات Meta تلقائيًا..." : autoRefreshStatus === "updated" ? "تم تحديث أرقام أحدث منشورات Meta تلقائيًا" : autoRefreshStatus === "pending" ? "المزامنة المجدولة تعمل الآن؛ ستظهر الأرقام المحفوظة عند اكتمالها" : "تعذر التحديث التلقائي؛ الأرقام المحفوظة متاحة ويمكنك التحديث يدويًا"}
+                {autoRefreshStatus === "loading" ? "جاري قراءة تفاعل المنشورات من Meta مباشرة..." : autoRefreshStatus === "updated" ? "اكتمل تحديث تفاعل المنشورات الظاهرة" : autoRefreshStatus === "pending" ? "يتم تحديث المنشورات بواسطة جلسة أخرى" : "تعذر تحديث بعض أرقام Meta"}
+                {autoRefreshDetail ? <span className="marketing-meta-auto-detail"> {autoRefreshDetail}</span> : null}
               </small> : null}
             </div>
             <div className="marketing-segmented" aria-label="فلتر حالة المنشورات">
