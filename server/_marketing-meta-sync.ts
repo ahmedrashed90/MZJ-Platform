@@ -152,7 +152,6 @@ async function listPosts(conn: MetaConnection, after: string, limit: number) {
     const fallbackFields = conn.platform === 'facebook'
       ? 'id,message,created_time,permalink_url'
       : 'id,caption,media_type,timestamp,permalink,like_count,comments_count';
-    if (fallbackFields === fields) throw error;
     return {
       response: await metaGet(conn, `${conn.accountId}/${edge}`, { ...params, fields: fallbackFields }),
       detailed: conn.platform === 'instagram',
