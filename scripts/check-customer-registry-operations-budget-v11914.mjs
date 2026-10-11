@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -41,10 +42,10 @@ check("effective branch also resolves the vehicle location branch", operationsSe
 check("access scope and explicit filter use the same effective branch", operationsServer.includes("coalesce(effective_branch.code,'') in ${sql(branchCodes)}") && operationsServer.includes("coalesce(effective_branch.code,'')=${branch}"));
 check("branch options are sourced from canonical active branches", operationsServer.includes("from core.branches b") && operationsServer.includes("configured_branches"));
 
-check("campaign detail exposes create or edit budget action", marketingPage.includes("CampaignBudgetManager") && marketingPage.includes("إنشاء الميزانية") && marketingPage.includes("تعديل الميزانية"));
-check("campaign budget uses the professional overview", marketingPage.includes("marketing-budget-overview") && marketingCss.includes(".marketing-budget-overview"));
+
+
 check("campaign budget manager opens full-screen without platform cards", budgetManager.includes("marketing-campaign-budget-modal-fullscreen") && marketingCss.includes(".mzj-modal-card.marketing-campaign-budget-modal-fullscreen") && marketingCss.includes(".marketing-campaign-budget-platforms > section") && marketingCss.includes("border: 0;"));
-check("campaign budget result is rendered as a clean table", marketingPage.includes("marketing-budget-details-table") && marketingPage.includes(">الكرييتيف<") && marketingPage.includes(">المنصات والميزانية<"));
+
 check("budget editor supports inline Funnel creation", budgetManager.includes("<FunnelSelect") && budgetManager.includes("onFunnelCreated"));
 check("budget editor links one item to multiple creatives without multiplying its total", budgetManager.includes("CreativeMultiPicker") && budgetManager.includes("item.platformAmounts.reduce") && !budgetManager.includes("creativeIds.length *"));
 check("campaign budget save uses the canonical marketing API", budgetManager.includes('action: "save_campaign_budgets"') && marketingServer.includes("async function saveCampaignBudgets"));

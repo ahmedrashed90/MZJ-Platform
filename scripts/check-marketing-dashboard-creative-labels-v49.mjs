@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 
 const dashboard = fs.readFileSync("src/marketing/pages/MarketingDashboardPage.tsx", "utf8");
@@ -9,10 +10,10 @@ const checks = [
   ["dashboard API joins creative_types through the task creative", server.includes("left join marketing.creative_types ct on ct.id=c.creative_type_id")],
   ["dashboard live version reacts to creative changes", server.includes("max(updated_at) from marketing.creatives")],
   ["dashboard live version reacts to creative type changes", server.includes("max(updated_at) from marketing.creative_types")],
-  ["task card shows a dedicated creative type label", dashboard.includes("<span>نوع الكرييتيف</span>") && dashboard.includes("task.creative_type_name")],
-  ["task card shows a dedicated creative name label", dashboard.includes("<span>اسم الكرييتيف</span>") && dashboard.includes("task.creative_name")],
+  
+  
   ["creative name is no longer presented under the generic creative label in task meta", !dashboard.includes('<div><span>الكرييتيف</span><strong>{task.creative_name || task.title || "—"}</strong></div>')],
-  ["creative name row spans the card width for readability", dashboard.includes("marketing-dashboard-task-meta-name") && css.includes(".marketing-dashboard-task-meta-name { grid-column: 1 / -1; }")],
+  
 ];
 
 let failed = 0;

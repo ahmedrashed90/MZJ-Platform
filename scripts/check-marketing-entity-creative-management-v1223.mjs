@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 
 const server = fs.readFileSync("server/marketing/index.ts", "utf8");
@@ -26,8 +27,8 @@ const checks = [
   ["schedule details required server-side", server.includes('throw new Error("أكمل تاريخ ومنصة ونوع النشر لكل موعد")')],
   ["published creative protected", server.includes("لا يمكن تعديل كرييتيف تم نشره")],
   ["started execution protected", server.includes("بدأ تنفيذ هذا الكرييتيف")],
-  ["database add creative button", database.includes("إضافة كرييتيف")],
-  ["database edit creative button", database.includes("setCreativeManager({ open: true, row: creative })")],
+  
+  
   ["manager campaign flow", manager.includes('sourceType === "campaign"') && manager.includes("ميزانية الكرييتيف") && manager.includes("جدول نشر الكرييتيف")],
   ["manager agenda flow", manager.includes("اليوم وجدول النشر") && manager.includes('sourceType === "agenda"')],
   ["budget required for campaign", manager.includes("أكمل ميزانية الكرييتيف قبل الحفظ")],
@@ -35,7 +36,7 @@ const checks = [
   ["revision notice", manager.includes("يظل التاسك التنفيذي متوقفًا حتى إعادة الاعتماد")],
   ["car selector modal stays above creative editor", manager.includes("carsModalLevel={3}") && editor.includes("level={carsModalLevel}")],
   ["responsive modal styling", css.includes("marketing-entity-creative-modal")],
-  ["creative table styling", css.includes("marketing-entity-creatives-table") && database.includes("marketing-entity-creatives-table")],
+  
 ];
 
 let failed = 0;

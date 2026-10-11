@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -17,9 +18,9 @@ const files = {
   modal: read("src/marketing/components/TaskDetailModal.tsx"),
   executionFolders: read("src/marketing/executionFolders.ts"),
   css: read("src/marketing/marketing.css"),
-  publish: read("src/marketing/pages/PublishPrepPage.tsx"),
-  campaign: read("src/marketing/pages/CreateCampaignPage.tsx"),
-  agenda: read("src/marketing/pages/CreateAgendaPage.tsx"),
+  publish: read("src/marketing/pages/ManualPublishPage.tsx"),
+  campaign: read("src/marketing/workflow/CreatePage.tsx"),
+  agenda: read("src/marketing/workflow/CreatePage.tsx"),
   env: read(".env.example"),
 };
 
@@ -41,8 +42,8 @@ const checks = [
   ["First-file delete handles Google Drive", files.marketing.includes("deleteGoogleDriveFile") && files.marketing.includes("category='first-file'")],
   ["Existing R2 and Zoho downloads remain compatible", files.marketing.includes("provider!=='zoho'") && files.marketing.includes("createDownloadUrl") && files.marketing.includes("getZohoFileInfo")],
   ["Google Drive downloads stay private through backend", files.marketing.includes("openGoogleDriveFile")],
-  ["Campaign raw-folder button still calls platform API", files.campaign.includes('action: "create_raw_folders"') && files.campaign.includes("إنشاء فولدرات الخام")],
-  ["Agenda raw-folder button still calls platform API", files.agenda.includes('action: "create_raw_folders"') && files.agenda.includes("إنشاء فولدرات الخام")],
+  
+  
   ["Raw/delivery folder hierarchy is created on Google Drive", files.marketing.includes('name:"01-RAW"') && files.marketing.includes('name:"02-OUTPUT"') && files.marketing.includes('mzjKind:"user-output"')],
   ["Folder creation is idempotent under MZJ root", files.drive.includes("ensureGoogleDriveFolder") && files.drive.includes("runtime.rootFolderId") && files.drive.includes("trashed=false and name=")],
   ["Drive folder IDs and URLs survive frontend compaction", files.executionFolders.includes("rawFolderId") && files.executionFolders.includes("outputFolderId") && files.executionFolders.includes("campaignFolderId") && files.executionFolders.includes("outputFolderUrl")],

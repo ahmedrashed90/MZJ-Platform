@@ -35,14 +35,12 @@ const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePag
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
 const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
 const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
-const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPage").then((module) => ({ default: module.CreateCampaignPage })));
-const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
+const MarketingCreatePage = lazy(() => import("./marketing/workflow/CreatePage").then(module => ({ default: module.MarketingCreatePage })));
+const ProductsPage = lazy(() => import("./marketing/pages/ProductsPage").then(module => ({ default: module.ProductsPage })));
 const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingDatabasePage").then((module) => ({ default: module.MarketingDatabasePage })));
 const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
 const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
 const EngagementPage = lazy(() => import("./marketing/pages/EngagementPage").then((module) => ({ default: module.EngagementPage })));
-const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").then((module) => ({ default: module.MonitoringPage })));
-const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
 const SubscriptionsPage = lazy(() => import("./marketing/pages/SubscriptionsPage").then((module) => ({ default: module.SubscriptionsPage })));
@@ -118,15 +116,17 @@ function PlatformRoutes() {
           </Route>
           <Route path="/marketing" element={<SystemGuard system="marketing"><MarketingLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="marketing.dashboard.view"><MarketingDashboardPage /></PermissionGuard>} />
-            <Route path="create-campaign" element={<PermissionGuard permission="marketing.create_campaign.view"><CreateCampaignPage /></PermissionGuard>} />
-            <Route path="create-agenda" element={<PermissionGuard permission="marketing.create_agenda.view"><CreateAgendaPage /></PermissionGuard>} />
+            <Route path="create-campaign" element={<Navigate to="/marketing/create?mode=campaign" replace />} />
+            <Route path="create-agenda" element={<Navigate to="/marketing/create?mode=agenda" replace />} />
+            <Route path="create" element={<PermissionGuard permission="marketing.create.view"><MarketingCreatePage /></PermissionGuard>} />
+            <Route path="products" element={<PermissionGuard permission="marketing.products.view"><ProductsPage /></PermissionGuard>} />
             <Route path="database" element={<PermissionGuard permission="marketing.database.view"><MarketingDatabasePage /></PermissionGuard>} />
             <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
             <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><Navigate to="/settings?section=marketing&tab=platforms" replace /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
             <Route path="engagement" element={<PermissionGuard permission="marketing.engagement.view"><EngagementPage /></PermissionGuard>} />
-            <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />
-            <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
+            <Route path="monitoring" element={<Navigate to="/marketing" replace />} />
+            <Route path="calendar" element={<Navigate to="/marketing/receipt-calendar" replace />} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
             <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
             <Route path="subscriptions" element={<PermissionGuard permission="marketing.subscriptions.view"><SubscriptionsPage /></PermissionGuard>} />

@@ -1,3 +1,4 @@
+import { ensureMarketingWorkflowAccess } from './_marketing-workflow-access.js';
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 export const ACCESS_CONTROL_SQL = String.raw`-- MZJ centralized access control. Safe and idempotent.
@@ -856,6 +857,7 @@ export function ensureAccessControlSchema() {
       }
       await ensureMersalUserLinkSchema();
       await ensureRequiredPagePermissionCatalog();
+      await ensureMarketingWorkflowAccess();
     })().catch((error) => {
       accessControlSchemaPromise = null;
       throw error;

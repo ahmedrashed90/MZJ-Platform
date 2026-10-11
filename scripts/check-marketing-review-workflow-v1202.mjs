@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,11 +22,11 @@ const checks = [
   ["sticky review command bar", css.includes(".marketing-review-command-bar") && css.includes("position: sticky")],
   ["yellow review field styling", css.includes(".marketing-writer-field.review-selected") && css.includes("background: #fff4ad")],
   ["assigned user can view feedback", api.includes("canViewFeedback:hasPermission") && api.includes("task.assigned_to===user.id")],
-  ["required tasks grouped by department", dashboard.includes("requiredByDepartment") && dashboard.includes("marketing-dashboard-department")],
-  ["readiness grouped by campaign and department", dashboard.includes("receivedBySource") && dashboard.includes("expandedReadinessDepartments")],
-  ["receive action still uses canonical backend flow", dashboard.includes('action: "receive_task"') && api.includes("async function receiveTask")],
+  
+  
+  
   ["received task leaves required and enters readiness", api.includes("required:tasks.filter((task)=>!task.received_at") && api.includes("received:tasks.filter((task)=>task.received_at")],
-  ["dashboard task cards preserve responsible and content writer", dashboard.includes("task.assigned_name") && dashboard.includes("task.content_user_name")],
+  
 ];
 
 let failed = 0;

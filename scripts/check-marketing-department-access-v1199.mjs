@@ -9,8 +9,8 @@ const usersPanel = read("../src/access-control/UsersPermissionsPanel.tsx");
 const settings = read("../src/pages/SettingsPage.tsx");
 const departments = read("../src/marketing/pages/DepartmentsPage.tsx");
 const creativeEditor = read("../src/marketing/components/CreativeEditor.tsx");
-const campaignPage = read("../src/marketing/pages/CreateCampaignPage.tsx");
-const agendaPage = read("../src/marketing/pages/CreateAgendaPage.tsx");
+const campaignPage = read("../src/marketing/workflow/CreatePage.tsx");
+const agendaPage = read("../src/marketing/workflow/CreatePage.tsx");
 
 const checks = [
   [!marketing.includes("marketing.department_users"), "Marketing API must not read/write the legacy department_users table"],
@@ -24,7 +24,7 @@ const checks = [
   [schema.includes("marketing_departments_core_department_fk") && schema.includes("drop table marketing.department_users"), "Schema must canonicalize IDs and retire legacy membership storage"],
   [schema.includes("id-sync-") && schema.includes("replace(optional_assignments::text") && schema.includes("replace(payload::text"), "ID migration must handle same-name collisions and stored campaign/agenda references"],
   [schema.includes("marketing_department_duplicate_repair") && schema.includes("having count(*) > 1") && schema.includes("no role or role_id data is touched"), "Duplicate marketing department IDs must be consolidated without touching roles"],
-  [creativeEditor.includes("meta.departments.find((item) => item.id === departmentId)?.users") && campaignPage.includes("<CreativeEditor") && agendaPage.includes("<CreativeEditor"), "Campaign and agenda user selectors must consume users from each allowed marketing department"],
+  [campaignPage.includes("meta.departments.find(department => department.id === assignee.departmentId)?.users") && campaignPage.includes("departmentId: event.target.value, assigneeId: ''"), "Task user selector consumes canonical department users and clears stale selections"],
   [settings.includes("unified-settings-section-grid") && settings.includes("إغلاق القسم") && settings.includes("ابحث عن إعداد أو نظام"), "Settings workspace navigation/search/collapse must remain present"],
   [departments.includes("marketing-department-user-list") && departments.includes("الأقسام المسموحة للمستخدم"), "Marketing department user picker must use the central membership UX"],
   [accessSchema.includes("drop constraint if exists departments_name_key") && accessSchema.includes("core_departments_system_normalized_name_idx"), "Legacy global department-name uniqueness must be removed safely"],

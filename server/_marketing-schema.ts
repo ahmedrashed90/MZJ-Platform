@@ -8,24 +8,7 @@ create extension if not exists pgcrypto;
 
 create schema if not exists marketing;
 
-do $marketing_schema_reset$
-declare
-  current_version integer;
-begin
-  if to_regclass('marketing.schema_state') is not null then
-    begin
-      execute 'select version from marketing.schema_state where id = 1' into current_version;
-    exception when others then
-      current_version := null;
-    end;
-  end if;
-
-  if current_version is distinct from 1 then
-    execute 'drop schema marketing cascade';
-    execute 'create schema marketing';
-  end if;
-end
-$marketing_schema_reset$;
+-- Marketing workflow migrations are additive. Existing history/media/publication data is retained.
 
 create table if not exists marketing.departments (
   id uuid primary key default gen_random_uuid(),

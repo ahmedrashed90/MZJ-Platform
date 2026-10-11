@@ -1,3 +1,4 @@
+import { W } from './marketing-workflow-labels.js';
 export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking" | "website";
 export type AccessSystemCode = PlatformSystem | "core";
 export type DataScope =
@@ -95,16 +96,14 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "crm", code: "kpi", name: "تقييم المناديب KPI", route: "/crm/kpi", sortOrder: 90 },
 
   { system: "marketing", code: "dashboard", name: "الداش بورد", route: "/marketing", sortOrder: 10 },
-  { system: "marketing", code: "create_campaign", name: "إنشاء حملة", route: "/marketing/create-campaign", sortOrder: 20 },
-  { system: "marketing", code: "create_agenda", name: "إنشاء أجندة", route: "/marketing/create-agenda", sortOrder: 30 },
-  { system: "marketing", code: "database", name: "قاعدة البيانات", route: "/marketing/database", sortOrder: 40 },
+  { system: "marketing", code: "create", name: W.create, route: "/marketing/create", sortOrder: 30 },
+  { system: "marketing", code: "products", name: W.products, route: "/marketing/products", sortOrder: 40 },
+  { system: "marketing", code: "database", name: "قاعدة البيانات", route: "/marketing/database", sortOrder: 20 },
   { system: "marketing", code: "packages", name: "إدارة الباقات", route: "/marketing/packages", sortOrder: 50 },
   { system: "marketing", code: "platforms", name: "ربط المنصات", route: "/marketing/platforms", sortOrder: 60 },
-  { system: "marketing", code: "publish_prep", name: "تجهيز النشر", route: "/marketing/publish-prep", sortOrder: 70 },
+  { system: "marketing", code: "publish_prep", name: W.publishing, route: "/marketing/publish-prep", sortOrder: 60 },
   { system: "marketing", code: "engagement", name: "تفاعل النشر", route: "/marketing/engagement", sortOrder: 75 },
-  { system: "marketing", code: "monitoring", name: "المتابعة", route: "/marketing/monitoring", sortOrder: 80 },
-  { system: "marketing", code: "calendar", name: "التقويم", route: "/marketing/calendar", sortOrder: 90 },
-  { system: "marketing", code: "receipt_calendar", name: "تقويم الاستلام", route: "/marketing/receipt-calendar", sortOrder: 100 },
+  { system: "marketing", code: "receipt_calendar", name: W.calendar, route: "/marketing/receipt-calendar", sortOrder: 50 },
   { system: "marketing", code: "stock", name: "الاستوك", route: "/marketing/stock", sortOrder: 110 },
   { system: "marketing", code: "subscriptions", name: "الاشتراكات", route: "/marketing/subscriptions", sortOrder: 120 },
 
@@ -299,9 +298,14 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("tracking.stage.skip", "تخطي مراحل التتبع", "tracking", "orders", "stage_skip", "workflow", "تخطي ترتيب المراحل", true),
 
   p("system.marketing.access", "دخول نظام التسويق", "marketing", "dashboard", "access", "system"),
+  p("marketing.create.view", W.create, "marketing", "create", "view", "page"),
+  p("marketing.task.create", W.createTask, "marketing", "create", "task_create", "action", W.createTask, true),
+  p("marketing.task.edit", W.edit + " " + W.task, "marketing", "create", "task_edit", "action", W.edit, true),
+  p("marketing.task.review", W.approve, "marketing", "dashboard", "task_review", "workflow", W.approve, true),
+  p("marketing.products.view", W.products, "marketing", "products", "view", "page"),
   p("marketing.dashboard.view", "مشاهدة داش بورد التسويق", "marketing", "dashboard", "view", "page"),
-  p("marketing.create_campaign.view", "فتح إنشاء حملة", "marketing", "create_campaign", "view", "page"),
-  p("marketing.create_agenda.view", "فتح إنشاء أجندة", "marketing", "create_agenda", "view", "page"),
+  p("marketing.create_campaign.view", "فتح إنشاء حملة", "marketing", "create", "view_campaign", "page"),
+  p("marketing.create_agenda.view", "فتح إنشاء أجندة", "marketing", "create", "view_agenda", "page"),
   p("marketing.database.view", "مشاهدة قاعدة بيانات التسويق", "marketing", "database", "view", "page"),
   p("marketing.packages.view", "مشاهدة إدارة الباقات", "marketing", "packages", "view", "page"),
   p("marketing.platforms.view", "مشاهدة ربط المنصات", "marketing", "platforms", "view", "page"),
@@ -318,11 +322,11 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.subscriptions.view", "مشاهدة الاشتراكات", "marketing", "subscriptions", "view", "page", "فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق", true),
   p("marketing.subscriptions.renew", "تجديد الاشتراكات", "marketing", "subscriptions", "renew", "action", "تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام", true),
   p("marketing.subscriptions.manage", "إدارة الاشتراكات", "marketing", "subscriptions", "manage", "settings", "إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق", true),
-  p("marketing.campaign.create", "إنشاء حملة", "marketing", "create_campaign", "create", "action", "إنشاء حملة جديدة", true),
+  p("marketing.campaign.create", "إنشاء حملة", "marketing", "create", "campaign_create", "action", "إنشاء حملة جديدة", true),
   p("marketing.campaign.edit", "تعديل حملة", "marketing", "database", "edit", "action", "تعديل بيانات حملة", true),
   p("marketing.campaign.delete", "حذف حملة", "marketing", "database", "delete", "action", "حذف حملة", true),
   p("marketing.campaign.archive", "أرشفة حملة", "marketing", "database", "archive", "action"),
-  p("marketing.agenda.create", "إنشاء أجندة", "marketing", "create_agenda", "create", "action", "إنشاء أجندة جديدة", true),
+  p("marketing.agenda.create", "إنشاء أجندة", "marketing", "create", "agenda_create", "action", "إنشاء أجندة جديدة", true),
   p("marketing.agenda.edit", "تعديل أجندة", "marketing", "database", "edit", "action", "تعديل أجندة", true),
   p("marketing.agenda.delete", "حذف أجندة", "marketing", "database", "delete", "action", "حذف أجندة", true),
   p("marketing.structure.approve", "اعتماد الهيكل", "marketing", "database", "structure_approve", "workflow", "اعتماد هيكل الحملة أو الأجندة", true),

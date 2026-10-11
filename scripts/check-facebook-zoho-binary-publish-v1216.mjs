@@ -3,7 +3,8 @@ import fs from "node:fs";
 const marketingApi = fs.readFileSync("server/marketing/index.ts", "utf8");
 const instagramPublisher = fs.readFileSync("server/_instagram-publisher.ts", "utf8");
 
-const facebookBlock = marketingApi.split("if(schedule.platform_code==='facebook')")[1]?.split("}else if(schedule.platform_code==='instagram')")[0] || "";
+const nativePublishApi = marketingApi.slice(marketingApi.indexOf("async function publishScheduleItem"));
+const facebookBlock = nativePublishApi.split("if(schedule.platform_code==='facebook')")[1]?.split("}else if(schedule.platform_code==='instagram')")[0] || "";
 const checks = [
   ["Zoho image content is downloaded from the Saudi binary download endpoint", marketingApi.includes("/v1/workdrive/download/${encodeURIComponent(externalId)}") && marketingApi.includes("Authorization:`Zoho-oauthtoken ${runtime.accessToken}`")],
   ["Facebook photo upload uses multipart source instead of a Zoho URL", marketingApi.includes("async function graphFileRequest") && marketingApi.includes("form.append('source'") && facebookBlock.includes("graphFileRequest(`/${pageId}/photos`")],

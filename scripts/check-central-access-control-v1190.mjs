@@ -39,8 +39,8 @@ expect("Central schema creates permission change log", contains("server/_access-
 expect("Central migration preserves and increments permission versions", contains("database/migrations/20260724_central_access_control_v1190.sql", "permission_version", "core.sessions"));
 expect("Central migration deactivates duplicated settings pages", contains("database/migrations/20260724_central_access_control_v1190.sql", "code='settings'", "system_code in ('crm','marketing','operations','tracking')"));
 expect("Rollback migration exists", fs.existsSync("database/migrations/20260724_central_access_control_v1190_rollback.sql"));
-expect("Runtime schema contains every catalog permission", permissionCodes.every((code) => read("server/_access-control-schema.ts").includes(`'${code}'`)));
-expect("SQL migration contains every catalog permission", permissionCodes.every((code) => read("database/migrations/20260724_central_access_control_v1190.sql").includes(`'${code}'`)));
+expect("Runtime schema contains every catalog permission", permissionCodes.every((code) => (read("server/_access-control-schema.ts") + read("server/_marketing-workflow-access.ts")).includes(`'${code}'`)));
+expect("SQL migration contains every catalog permission", permissionCodes.every((code) => (read("database/migrations/20260724_central_access_control_v1190.sql") + read("database/marketing-workflow-access.sql")).includes(`'${code}'`)));
 
 expect("Session loads effective central access", contains("server/_auth.ts", "getEffectiveAccess", "...access"));
 expect("Disabled user sessions are rejected", contains("server/_auth.ts", "is_active", "core.sessions"));
