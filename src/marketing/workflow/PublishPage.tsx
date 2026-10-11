@@ -5,30 +5,117 @@ import { Modal } from '../../components/Modal';
 import { YouTubeOptionsFields } from '../components/YouTubeOptionsFields';
 import { marketingFetch, marketingQuery } from '../api';
 import { W, Empty, Field, FormatSelector, MediaLabel, ProductViewButton, Search, Status, WorkAlert, WorkHeader } from './components';
-import { showDate, useWorkQuery, workPost } from './api';
+import { fileUrl, showDate, useWorkQuery, workPost } from './api';
 import type { WorkCapabilities, WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 import { normalizeYouTubePublishOptions, YOUTUBE_CATEGORY_FALLBACKS, type YouTubePublishOptions, type YouTubePublishSettings, type YouTubeOptionItem } from '../../../shared/youtube-publishing';
 const ManualPublishPage = lazy(() => import('../pages/ManualPublishPage').then(module => ({ default: module.ManualPublishPage })));
 
 type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions } };
-type PrepData = { line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities };
+type PrepData = { draftFormatIds?: string[]; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities };
+type ProductDraft = { product_id: string; format_ids: string[]; caption: string; hashtags: string; updated_at: string };
+type PublishingData = { products: WorkProduct[]; lines: WorkPlanLine[]; drafts: ProductDraft[]; capabilities: WorkCapabilities };
+
 export function PublishPage() {
-  const [params, setParams] = useSearchParams(), [manual, setManual] = useState(false), [search, setSearch] = useState('');
-  const query = useWorkQuery<{ products: WorkProduct[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities }>('publishing');
-  const selectedLine = params.get('line') || '', term = search.trim().toLocaleLowerCase();
+  const [params, setParams] = useSearchParams();
+  const [manual, setManual] = useState(false), [search, setSearch] = useState('');
+  const [expandedProduct, setExpandedProduct] = useState('');
+  const query = useWorkQuery<PublishingData>('publishing');
+  const selectedLine = params.get('line') || '';
+  const term = search.trim().toLocaleLowerCase();
+  const products = (query.data?.products || []).filter(product =>
+    `${product.task_name} ${product.idea_name} ${product.task_no} ${product.statement}`.toLocaleLowerCase().includes(term));
   const groups = new Map<string, WorkProduct[]>();
-  for (const product of (query.data?.products || []).filter(row => `${row.task_name} ${row.idea_name} ${row.task_no}`.toLocaleLowerCase().includes(term))) groups.set(product.task_id, [...(groups.get(product.task_id) || []), product]);
-  return <div className="mkw"><WorkHeader title={W.publishing} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.prepare && <button type="button" className="secondary" onClick={() => setManual(value => !value)}>{manual ? W.prepare : W.manual}</button>}</WorkHeader><WorkAlert>{query.error}</WorkAlert>
-    {manual ? <Suspense fallback={<Empty>{W.loading}</Empty>}><ManualPublishPage /></Suspense> : <><div className="mkw-toolbar"><Search value={search} onChange={setSearch} /></div>
-      {!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
-      {[...groups.entries()].map(([id, products]) => <details key={id} className="mkw-plan-group" open={!!term}><summary><div><h3>{products[0].task_name}</h3><span className="mkw-code">{products[0].task_no}</span></div><div className="mkw-actions"><span>{W.productCount}: {products.length}</span><CaretDown size={18} /></div></summary><div className="mkw-plan-lines">{products.map(product => <article key={product.id} className="mkw-plan-line"><div className="mkw-section-title"><div><h3>{product.idea_name}</h3><MediaLabel kind={product.media_kind} /></div><ProductViewButton id={product.id} /></div>
-        <div className="mkw-actions">{query.data?.capabilities.createAgenda && <Link className="mkw-link-button" to={`/marketing/create?mode=agenda&product=${encodeURIComponent(product.id)}`}>{W.createAgenda}</Link>}{query.data?.capabilities.createCampaign && <Link className="mkw-link-button" to={`/marketing/create?mode=campaign&product=${encodeURIComponent(product.id)}`}>{W.createCampaign}</Link>}</div>
-        {(query.data?.lines || []).filter(line => line.product_id === product.id).map(line => <div key={line.id} className="mkw-upload-format"><div className="mkw-section-title"><strong>{line.name}</strong><Status value={line.status} /></div><div className="mkw-section-title"><span>{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span><button type="button" className="secondary" onClick={() => setParams({ line: line.id })}>{W.prepare}</button></div></div>)}
-      </article>)}</div></details>)}
+  for (const product of products) groups.set(product.task_id, [...(groups.get(product.task_id) || []), product]);
+  const firstId = products[0]?.id;
+  const plannedCount = (query.data?.lines || []).length;
+  const draftCount = (query.data?.drafts || []).filter(d => d.caption || d.hashtags).length;
+
+  return <div className="mkw mkw-publishing-page">
+    <WorkHeader title={W.publishing} onRefresh={() => void query.reload()} loading={query.loading}>
+      {query.data?.capabilities.prepare && <button type="button" className="secondary" onClick={() => setManual(value => !value)}>{manual ? W.prepare : W.manual}</button>}
+    </WorkHeader>
+    <WorkAlert>{query.error}</WorkAlert>
+    {manual ? <Suspense fallback={<Empty>{W.loading}</Empty>}><ManualPublishPage /></Suspense> : <>
+      <div className="mkw-publish-summary">
+        <div><small>{W.productCount}</small><strong>{query.data?.products.length ?? '—'}</strong></div>
+        <div><small>{W.prepare}</small><strong>{query.data ? draftCount : '—'}</strong></div>
+        <div><small>{W.agenda} / {W.campaign}</small><strong>{query.data ? plannedCount : '—'}</strong></div>
+      </div>
+      <div className="mkw-toolbar mkw-publish-toolbar"><Search value={search} onChange={setSearch} /></div>
+      {!query.data ? <div className="mkw-panel mkw-loading-panel"><strong>{query.loading ? W.loading : query.error || W.noData}</strong><button className="secondary" type="button" disabled={query.loading} onClick={() => void query.reload()}>{W.refresh}</button></div> : null}
+      {query.data && !groups.size && <Empty>{W.noData}</Empty>}
+      {[...groups.entries()].map(([taskId, items]) => <section key={taskId} className="mkw-publish-group">
+        <header className="mkw-publish-group-header"><div><span className="mkw-code">{items[0].task_no}</span><h2>{items[0].task_name}</h2></div><span className="mkw-publish-count">{W.productCount}: {items.length}</span></header>
+        <div className="mkw-publish-products">{items.map(product => {
+          const open = (expandedProduct || firstId) === product.id;
+          const draft = query.data?.drafts.find(row => row.product_id === product.id);
+          const plans = (query.data?.lines || []).filter(line => line.product_id === product.id);
+          return <article key={product.id} className={`mkw-publish-product ${open ? 'expanded' : ''}`}>
+            <div className="mkw-publish-product-head"><div className="mkw-publish-product-heading">
+              <MediaLabel kind={product.media_kind} /><div><small>{W.statement}</small><h3>{product.idea_name || product.statement}</h3><span className="mkw-muted">{product.assignee_name} · {W.sizes}: {product.formats.length}</span></div>
+            </div><div className="mkw-publish-product-actions"><ProductViewButton id={product.id} />
+              <button type="button" className={open ? 'primary' : 'secondary'} aria-expanded={open} onClick={() => setExpandedProduct(open ? '_none' : product.id)}><PaperPlaneTilt size={18}/>{W.prepare}<CaretDown size={16} className={open ? 'mkw-publish-up' : ''}/></button>
+            </div></div>
+            {open && <div className="mkw-publish-product-body">
+              <ProductDraftEditor product={product} draft={draft} canSave={!!query.data?.capabilities.prepare} onSaved={() => void query.reload()} />
+              <div className="mkw-publish-plans"><header><h4>{W.agenda} / {W.campaign}</h4><div className="mkw-actions">
+                {query.data?.capabilities.createAgenda && <Link className="mkw-link-button" to={`/marketing/create?mode=agenda&product=${encodeURIComponent(product.id)}`}>{W.createAgenda}</Link>}
+                {query.data?.capabilities.createCampaign && <Link className="mkw-link-button" to={`/marketing/create?mode=campaign&product=${encodeURIComponent(product.id)}`}>{W.createCampaign}</Link>}
+              </div></header>
+              {plans.length ? plans.map(line => <div key={line.id} className="mkw-publish-plan-row"><div><strong>{line.name}</strong><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span></div><Status value={line.status}/><button type="button" className="secondary" onClick={() => setParams({ line: line.id })}>{W.prepare}</button></div>) : <p className="mkw-muted">اختر المنتج في {W.createAgenda} أو {W.createCampaign} لتحديد تاريخ النشر أو التمويل.</p>}
+              </div>
+            </div>}
+          </article>;
+        })}</div>
+      </section>)}
     </>}
     {selectedLine && <PreparationModal id={selectedLine} onClose={() => setParams({})} onChanged={() => void query.reload()} />}
   </div>;
 }
+
+function ProductDraftEditor({ product, draft, canSave, onSaved }: {
+  product: WorkProduct; draft?: ProductDraft; canSave: boolean; onSaved: () => void;
+}) {
+  const [selected, setSelected] = useState<string[]>(() => draft?.format_ids?.length ? draft.format_ids : product.formats.map(f => f.id));
+  const [caption, setCaption] = useState(draft?.caption || ''), [hashtags, setHashtags] = useState(draft?.hashtags || '');
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
+  useEffect(() => {
+    setSelected(draft?.format_ids?.length ? draft.format_ids : product.formats.map(f => f.id));
+    setCaption(draft?.caption || ''); setHashtags(draft?.hashtags || '');
+  }, [draft?.updated_at, product.id]);
+  const groups = new Map<string, typeof product.formats>();
+  for (const format of product.formats) {
+    const key = format.platform_id;
+    groups.set(key, [...(groups.get(key) || []), format]);
+  }
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !canSave) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await workPost('save_product_draft', { productId: product.id, formatIds: selected, caption, hashtags });
+      setMessage(W.saved); onSaved();
+    } catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  return <form className="mkw-publish-draft" onSubmit={save}>
+    <header className="mkw-publish-draft-head"><h4>{W.platforms}</h4><div className="mkw-actions"><span className="mkw-muted">{selected.length} / {product.formats.length}</span>
+      <label className="mkw-checkbox"><input type="checkbox" disabled={!canSave || busy || !product.formats.length} checked={!!product.formats.length && product.formats.every(f => selected.includes(f.id))} onChange={event => setSelected(event.target.checked ? product.formats.map(f => f.id) : [])}/>{W.selectAll}</label>
+    </div></header>
+    <div className="mkw-publish-platforms">{[...groups.entries()].map(([id, formats]) => <section className="mkw-publish-platform" key={id}>
+      <header><strong>{formats[0].platform_name}</strong><span className="mkw-muted">{formats.filter(f => selected.includes(f.id)).length} / {formats.length}</span></header>
+      <div className="mkw-publish-format-grid">{formats.map(format => <label key={format.id} className={`mkw-publish-format ${selected.includes(format.id) ? 'selected' : ''}`}>
+        <input type="checkbox" disabled={!canSave || busy} checked={selected.includes(format.id)} onChange={event => setSelected(current => event.target.checked ? [...current, format.id] : current.filter(id => id !== format.id))}/>
+        <span>{format.name}{format.width && format.height ? <small dir="ltr">{format.width} × {format.height}</small> : null}</span>
+      </label>)}</div>
+    </section>)}</div>
+    <div className="mkw-publish-copy"><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field>
+      <Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div>
+    <div className="mkw-publish-files"><strong>{W.finalFiles}</strong><div>{product.files.filter(file => file.category === 'final' && file.status === 'ready').map(file => <a key={file.id} className="mkw-publish-file" href={fileUrl(file.id, true)} target="_blank" rel="noreferrer">{file.name}</a>)}</div></div>
+    <div className="mkw-publish-draft-footer"><div><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert></div>{canSave && <button type="submit" className="primary" disabled={busy || !selected.length}>{busy ? W.loading : W.save}</button>}</div>
+  </form>;
+}
+
 function PreparationModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const query = useWorkQuery<PrepData>('prep', { id });
   async function refresh() { await query.reload(); onChanged(); }
@@ -36,7 +123,7 @@ function PreparationModal({ id, onClose, onChanged }: { id: string; onClose: () 
 }
 function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => Promise<void> }) {
   const initialSelected = data.targets.filter(target => target.status !== 'cancelled').map(target => target.post_type_id);
-  const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : data.product.formats.map(format => format.id));
+  const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
   const originalYouTube = normalizeYouTubePublishOptions(data.targets.find(target => target.platform_code === 'youtube')?.publish_options?.youtube || {}, data.youtubeDefaults, { title: data.line.caption, description: [data.line.caption, data.line.hashtags].filter(Boolean).join('\n\n') });
   const [youtube, setYouTube] = useState(originalYouTube);

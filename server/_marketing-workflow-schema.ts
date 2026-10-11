@@ -1,4 +1,4 @@
-import { getSql, runSqlScript, withDatabaseAdvisoryLock } from './_db.js';
+import { getSql, runSqlScript, tryWithDatabaseAdvisoryLock } from './_db.js';
 import { W } from '../shared/marketing-workflow-labels.js';
 
 export const MARKETING_WORKFLOW_SQL = `begin;
@@ -17,7 +17,8 @@ create table if not exists marketing.work_tasks (
   type_id uuid not null references marketing.campaign_types(id),
   created_by uuid not null references core.users(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   status text not null default 'active' check(status in ('active','completed','empty')),
-  completed_at timestamptz, version integer not null default 1
+  completed_at timestamptz, version integer not null default 1,
+  is_deleted boolean not null default false, deleted_at timestamptz, deleted_by uuid references core.users(id)
 );
 create table if not exists marketing.work_items (
   id uuid primary key default gen_random_uuid(), task_id uuid not null references marketing.work_tasks(id) on delete cascade,
@@ -30,6 +31,9 @@ create table if not exists marketing.work_items (
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   unique(task_id,client_key), check(jsonb_typeof(formats)='array' and jsonb_array_length(formats)>0)
 );
+alter table marketing.work_tasks add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_tasks add column if not exists deleted_at timestamptz;
+alter table marketing.work_tasks add column if not exists deleted_by uuid references core.users(id);
 create index if not exists work_items_task on marketing.work_items(task_id,sort_order);
 create index if not exists work_items_delivery on marketing.work_items(assigned_to,due_on,status);
 create index if not exists work_items_approved on marketing.work_items(approved_at desc) where status='approved';
@@ -85,23 +89,61 @@ alter table marketing.tasks add column if not exists workflow_product_id uuid re
 alter table marketing.assignment_actions add column if not exists is_final_approval boolean not null default false;
 update marketing.assignment_actions set is_final_approval=true,admin_only=true
  where regexp_replace(name,'[[:space:]_-]+','','g')=regexp_replace('${W.approve}','[[:space:]_-]+','','g');
-insert into marketing.workflow_migrations(code) values('schema-1') on conflict do nothing;
+insert into marketing.workflow_migrations(code) values('schema-1'),('schema-2') on conflict do nothing;
+commit;`;
+
+// Small, additive migration for databases created by older Marketing V2 builds.
+// Do not re-run the initial full workflow DDL just because a new column/table
+// was introduced: ALTER/CREATE within the entire bootstrap may deadlock with
+// concurrent reads and leave every serverless request running for 120 seconds.
+export const MARKETING_WORKFLOW_TASK_DELETE_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+alter table marketing.work_tasks add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_tasks add column if not exists deleted_at timestamptz;
+alter table marketing.work_tasks add column if not exists deleted_by uuid references core.users(id);
+insert into marketing.workflow_migrations(code) values('schema-2') on conflict do nothing;
+commit;`;
+
+export const MARKETING_WORKFLOW_UPGRADE_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_product_drafts (
+  product_id uuid primary key references marketing.work_items(id) on delete cascade,
+  format_ids jsonb not null default '[]'::jsonb,
+  caption text not null default '',
+  hashtags text not null default '',
+  updated_by uuid references core.users(id),
+  updated_at timestamptz not null default now(),
+  constraint work_product_drafts_format_array check(jsonb_typeof(format_ids)='array')
+);
+insert into marketing.workflow_migrations(code) values('schema-3') on conflict do nothing;
 commit;`;
 
 let ready: Promise<void> | null = null;
 export function ensureMarketingWorkflowSchema() {
   if (!ready) ready = (async () => {
     const sql = getSql();
-    const exists = async () => {
-      const [relation] = await sql<any[]>`select to_regclass('marketing.workflow_migrations') is not null as ready`;
-      if (!relation?.ready) return false;
-      const [version] = await sql<any[]>`select 1 from marketing.workflow_migrations where code='schema-1'`;
-      return Boolean(version);
+    const flags = async () => {
+      const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, current: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), current: rows.some(x => x.code === 'schema-3') };
     };
-    if (await exists()) return;
-    await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
-      if (!await exists()) await runSqlScript(MARKETING_WORKFLOW_SQL);
+    if ((await flags()).current) return;
+    // Avoid waiting behind a second cold-start migration. The first request
+    // performs the migration; other requests receive a quick retriable error.
+    const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
+      const state = await flags();
+      if (!state.base) await runSqlScript(MARKETING_WORKFLOW_SQL);
+      if (!(await flags()).hasTaskDeletion) await runSqlScript(MARKETING_WORKFLOW_TASK_DELETE_SQL);
+      if (!(await flags()).current) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
     });
+    if (!acquired) {
+      const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
+      (error as Error & { code?: string }).code = 'MARKETING_MIGRATION_BUSY';
+      throw error;
+    }
   })().catch(error => { ready = null; throw error; });
   return ready;
 }

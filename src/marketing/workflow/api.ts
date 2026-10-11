@@ -5,8 +5,39 @@ import type { WorkCapabilities } from '../../../shared/marketing-workflow';
 import { W } from '../../../shared/marketing-workflow-labels';
 
 export type WorkMeta = MarketingMeta & { capabilities: WorkCapabilities; userId: string };
-export function workGet<T>(resource: string, query: Record<string, unknown> = {}, signal?: AbortSignal) {
-  return marketingFetch<T>(`/api/marketing${marketingQuery({ resource: `work_${resource}`, ...query })}`, { signal });
+export async function workGet<T>(resource: string, query: Record<string, unknown> = {}, signal?: AbortSignal) {
+  // A stuck Postgres migration previously left dozens of 120-second Vercel
+  // requests active. Bound reads locally, but never auto-retry mutations.
+  const request = new AbortController();
+  let timedOut = false;
+  const onAbort = () => request.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) request.abort();
+  const timeout = window.setTimeout(() => { timedOut = true; request.abort(); }, 18000);
+  const url = `/api/marketing${marketingQuery({ resource: `work_${resource}`, ...query })}`;
+  try {
+    try {
+      return await marketingFetch<T>(url, { signal: request.signal });
+    } catch (e) {
+      if (timedOut || request.signal.aborted) throw e;
+      // Only the short-lived schema-upgrade response gets a single delayed
+      // read retry. Never automatically repeat a user mutation or publication.
+      if (!(e instanceof Error) || !e.message.includes('تهيئة قاعدة بيانات التسويق قيد التنفيذ')) throw e;
+      await new Promise<void>((resolve, reject) => {
+        const onCancel = () => { window.clearTimeout(timer); reject(new Error('تم إلغاء التحميل')); };
+        const timer = window.setTimeout(() => { request.signal.removeEventListener('abort', onCancel); resolve(); }, 3500);
+        request.signal.addEventListener('abort', onCancel, { once: true });
+        if (request.signal.aborted) onCancel();
+      });
+      return await marketingFetch<T>(url, { signal: request.signal });
+    }
+  } catch (e) {
+    if (timedOut) throw new Error('استغرق تحميل التسويق وقتًا أطول من المتوقع. حاول التحديث بعد قليل.');
+    throw e;
+  } finally {
+    window.clearTimeout(timeout);
+    signal?.removeEventListener('abort', onAbort);
+  }
 }
 export async function workPost<T = { ok: boolean; message?: string; id?: string; version?: number }>(action: string, body: Record<string, unknown>) {
   const result = await marketingFetch<T>('/api/marketing', { method: 'POST', body: JSON.stringify({ ...body, action: `work_${action}` }) });
@@ -17,27 +48,33 @@ export const fileUrl = (id: string, download = false) => `/api/marketing${market
 
 export function useWorkQuery<T>(resource: string, query: Record<string, unknown> = {}, enabled = true) {
   const key = JSON.stringify(query), current = useRef<AbortController | null>(null);
+  const lastRefresh = useRef(0), reading = useRef(false);
   const [data, setData] = useState<T | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(false);
   const reload = useCallback(async () => {
     if (!enabled) return null;
     current.current?.abort();
     const controller = new AbortController(); current.current = controller;
-    setLoading(true); setError('');
+    reading.current = true; setLoading(true); setError('');
     try {
       const result = await workGet<T>(resource, JSON.parse(key), controller.signal);
-      if (!controller.signal.aborted) setData(result);
+      if (!controller.signal.aborted) { setData(result); lastRefresh.current = Date.now(); }
       return result;
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : W.invalid);
       return null;
-    } finally { if (!controller.signal.aborted) setLoading(false); }
+    } finally {
+      if (current.current === controller) {
+        reading.current = false;
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
   }, [resource, key, enabled]);
   useEffect(() => { setData(null); void reload(); return () => current.current?.abort(); }, [reload]);
   useEffect(() => {
     if (!enabled || !['dashboard','database','products','publishing','calendar'].includes(resource)) return;
     let active = true, checking = false, seen = '';
     const check = async () => {
-      if (!active || checking || document.visibilityState !== 'visible') return;
+      if (!active || checking || reading.current || document.visibilityState !== 'visible') return;
       checking = true;
       try {
         const result = await workGet<{ version: string }>('version');
@@ -46,9 +83,8 @@ export function useWorkQuery<T>(resource: string, query: Record<string, unknown>
       } catch { /* A transient live-check failure must not discard displayed data. */ }
       finally { checking = false; }
     };
-    const refreshVisible = () => { if (document.visibilityState === 'visible') void reload(); };
-    const timer = window.setInterval(() => void check(), 20000);
-    void check();
+    const refreshVisible = () => { if (document.visibilityState === 'visible' && !reading.current && Date.now() - lastRefresh.current > 90000) void reload(); };
+    const timer = window.setInterval(() => void check(), 90000);
     document.addEventListener('visibilitychange', refreshVisible);
     window.addEventListener('focus', refreshVisible);
     window.addEventListener('mzj-marketing-work-changed', refreshVisible);

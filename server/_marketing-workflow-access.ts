@@ -8,11 +8,11 @@ export async function ensureMarketingWorkflowAccess() {
   const ready = async () => {
     const [exists] = await sql<any[]>`select to_regclass('marketing.workflow_migrations') is not null as ready`;
     if (!exists?.ready) return false;
-    const [done] = await sql<any[]>`select 1 from marketing.workflow_migrations where code='access-1'`;
+    const [done] = await sql<any[]>`select 1 from marketing.workflow_migrations where code='access-2'`;
     return Boolean(done);
   };
   if (await ready()) return;
-  await withDatabaseAdvisoryLock('mzj:marketing:workflow-access:1', async () => {
+  await withDatabaseAdvisoryLock('mzj:marketing:workflow-access:2', async () => {
     if (await ready()) return;
     await runSqlScript(`begin;
       create schema if not exists marketing;
@@ -30,6 +30,7 @@ export async function ensureMarketingWorkflowAccess() {
         ('marketing.task.create','${W.createTask}','marketing','create','task_create','${W.createTask}','${W.createTask}','action',true,1451,true),
         ('marketing.task.edit','${W.edit} ${W.task}','marketing','create','task_edit','${W.edit} ${W.task}','${W.edit} ${W.task}','action',true,1452,true),
         ('marketing.task.review','${W.approve}','marketing','dashboard','task_review','${W.approve}','${W.approve}','workflow',true,1453,true),
+        ('marketing.task.delete','${W.remove} ${W.task}','marketing','database','task_delete','${W.remove} ${W.task}','${W.remove} ${W.task}','action',true,1455,true),
         ('marketing.products.view','${W.products}','marketing','products','view','${W.products}','${W.products}','page',false,1454,true)
       on conflict(code) do update set name=excluded.name,name_ar=excluded.name_ar,page_code=excluded.page_code,is_active=true;
       update core.permissions set page_code='create' where system_code='marketing' and code in ('marketing.create_campaign.view','marketing.create_agenda.view','marketing.campaign.create','marketing.agenda.create');
@@ -56,9 +57,19 @@ export async function ensureMarketingWorkflowAccess() {
         join core.user_permission_overrides o on o.permission_id=oldp.id
         group by o.user_id,newp.id
       on conflict(user_id,permission_id) do nothing;
+      insert into core.role_permissions(role_id,permission_id)
+        select rp.role_id,newp.id from core.role_permissions rp
+        join core.permissions oldp on oldp.id=rp.permission_id and oldp.code='marketing.campaign.delete'
+        join core.permissions newp on newp.code='marketing.task.delete'
+      on conflict do nothing;
+      insert into core.user_permission_overrides(user_id,permission_id,effect)
+        select o.user_id,newp.id,o.effect from core.user_permission_overrides o
+        join core.permissions oldp on oldp.id=o.permission_id and oldp.code='marketing.campaign.delete'
+        join core.permissions newp on newp.code='marketing.task.delete'
+      on conflict(user_id,permission_id) do nothing;
       update core.users set permission_version=permission_version+1
         where id in (select user_id from core.user_systems where system_code='marketing' and is_enabled=true);
-      insert into marketing.workflow_migrations(code) values('access-1') on conflict do nothing;
+      insert into marketing.workflow_migrations(code) values('access-1'),('access-2') on conflict do nothing;
       commit;`);
   });
 }

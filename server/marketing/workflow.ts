@@ -16,7 +16,7 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
 export type WorkflowServices = {
-  meta: (sql: Sql, user: SessionUser) => Promise<any>;
+  meta: (sql: Sql, user: SessionUser, synchronize?: boolean) => Promise<any>;
   streamFile: (sql: Sql, id: string, user: SessionUser, response: VercelResponse, download: boolean) => Promise<any>;
   publishItem: (sql: Sql, schedule: any, user: SessionUser) => Promise<any>;
   validatePublishItem: (sql: Sql, schedule: any) => Promise<void>;
@@ -69,7 +69,7 @@ async function notify(user: SessionUser, action: string, taskId: string, title: 
 }
 async function taskVisible(db: any, user: SessionUser, taskId: string) {
   const scopes = departmentScope(user);
-  const [row] = await db`select t.* from marketing.work_tasks t where t.id=${taskId}::uuid and (
+  const [row] = await db`select t.* from marketing.work_tasks t where t.id=${taskId}::uuid and t.is_deleted=false and (
     ${isManager(user)} or t.created_by=${user.id}::uuid or exists(
       select 1 from marketing.work_items i left join core.departments d on d.id=i.department_id
       where i.task_id=t.id and (i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
@@ -81,7 +81,7 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
   const scopes = departmentScope(user);
   const [row] = await db`select i.*,t.name as task_name,t.task_no,t.created_by,t.status as task_status
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
-    left join core.departments d on d.id=i.department_id where i.id=${itemId}::uuid and (
+    left join core.departments d on d.id=i.department_id where i.id=${itemId}::uuid and t.is_deleted=false and (
       ${isManager(user)} or i.assigned_to=${user.id}::uuid or
       (${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))} and t.created_by=${user.id}::uuid) or d.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.notFound);
@@ -141,7 +141,7 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
     left join marketing.work_items i on i.task_id=t.id
-    where (${!activeOnly} or t.status='active') and (
+    where t.is_deleted=false and (${!activeOnly} or t.status='active') and (
       ${isManager(user)} or t.created_by=${user.id}::uuid or exists(select 1 from marketing.work_items own
         left join core.departments d on d.id=own.department_id where own.task_id=t.id and
           (own.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))))
@@ -492,7 +492,7 @@ async function products(sql: Sql, user: SessionUser) {
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=i.department_id
     left join core.users u on u.id=i.assigned_to
-    where t.status='completed' and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
+    where t.is_deleted=false and t.status='completed' and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
       i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))
     order by t.completed_at desc,i.approved_at desc,i.created_at desc,i.id desc`;
   return rows.filter(row => finalCoverage(row as WorkItem)).map(row => ({ ...row,
@@ -504,13 +504,41 @@ async function productVisible(db: any, user: SessionUser, itemId: string) {
     u.full_name as assignee_name,d.name as department_name from marketing.work_items i
     join marketing.work_tasks t on t.id=i.task_id left join core.users u on u.id=i.assigned_to
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=d.id
-    where i.id=${itemId}::uuid and i.status='approved' and t.status='completed' and (
+    where i.id=${itemId}::uuid and i.status='approved' and t.status='completed' and t.is_deleted=false and (
       ${productManager(user)} or ${isManager(user)} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.productUnavailable);
   const item = (await loadItems(db, row.task_id)).find(r => r.id === itemId);
   if (!item || !finalCoverage(item)) throw new Error(W.productUnavailable);
   return { ...row, ...item, files: item.files.filter(file => file.category === 'final'), actions: undefined, pending_uploads: undefined };
 }
+/** Product-level publishing preparation is independent of agenda/financing dates.
+ * The draft does not create schedules, publish content or change approved files.
+ * Creating an agenda/campaign snapshots its caption and hashtags into each line.
+ */
+async function productDrafts(sql: Sql, products: Row[]) {
+  const productIds = products.map(product => String(product.id));
+  if (!productIds.length) return [];
+  return sql<any[]>`select product_id::text,format_ids,caption,hashtags,updated_at
+    from marketing.work_product_drafts where product_id=any(${productIds}::uuid[])`;
+}
+
+async function saveProductDraft(sql: Sql, user: SessionUser, body: Row) {
+  requirePermission(user, 'marketing.publish_prep.manage');
+  const productId = id(body.productId);
+  const product = await productVisible(sql, user, productId);
+  const formats = list(product.formats) as WorkFormat[];
+  const selected = [...new Set(list(body.formatIds).map(v => id(v)))];
+  if (!selected.length || selected.some(formatId => !formats.some(format => format.id === formatId))) {
+    throw new Error(W.selectFormats);
+  }
+  const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
+  await sql`insert into marketing.work_product_drafts(product_id,format_ids,caption,hashtags,updated_by,updated_at)
+    values(${productId}::uuid,${sql.json(selected)},${caption},${hashtags},${user.id}::uuid,now())
+    on conflict(product_id) do update set format_ids=excluded.format_ids,caption=excluded.caption,
+      hashtags=excluded.hashtags,updated_by=excluded.updated_by,updated_at=now()`;
+  return { ok: true, id: productId, message: W.saved };
+}
+
 async function createPlan(sql: Sql, body: Row, user: SessionUser) {
   const kind = body.kind === 'agenda' || body.kind === 'campaign' ? body.kind : null;
   if (!kind) throw new Error(W.invalid);
@@ -549,8 +577,11 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
       values(${planId}::uuid,${name},${start.slice(0, 7)},${start}::date,${end}::date,'publishing',${payload},100,${user.id}::uuid)`;
     else await tx`insert into marketing.campaigns(id,campaign_code,name,campaign_date,publish_start,publish_end,status,payload,progress,created_by)
       values(${planId}::uuid,${planNo},${name},current_date,${start}::date,${end}::date,'publishing',${payload},100,${user.id}::uuid)`;
-    for (const entry of normalized) await tx`insert into marketing.work_plan_items(plan_id,product_id,scheduled_on)
-      values(${planId}::uuid,${entry.productId}::uuid,${entry.date}::date)`;
+    for (const entry of normalized) await tx`insert into marketing.work_plan_items(plan_id,product_id,scheduled_on,caption,hashtags)
+      select ${planId}::uuid,${entry.productId}::uuid,${entry.date}::date,
+        coalesce(draft.caption,''),coalesce(draft.hashtags,'')
+      from (select 1) as seed left join marketing.work_product_drafts draft
+        on draft.product_id=${entry.productId}::uuid`;
     return { ok: true, id: planId, planNo, message: W.saved };
   });
 }
@@ -564,7 +595,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id
-    where (${planId}='' or p.id=nullif(${planId},'')::uuid)
+    where t.is_deleted=false and (${planId}='' or p.id=nullif(${planId},'')::uuid)
       and (p.kind<>'campaign' or exists (
         select 1 from marketing.campaigns campaign
         where campaign.id=p.id and campaign.is_deleted=false
@@ -607,6 +638,34 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   if (!lines.length) throw new Error(W.notFound);
   return { ok: true, plan: { id: planId, plan_no: lines[0].plan_no, name: lines[0].name, kind: lines[0].kind, created_at: lines[0].created_at }, lines };
 }
+/** Hide a new-workflow task without destroying historical files or audit rows.
+ * A task already used in an agenda/campaign cannot be deleted because it may
+ * have externally published content and downstream engagement references.
+ */
+async function deleteWorkflowTask(sql: Sql, user: SessionUser, taskId: string) {
+  requirePermission(user, 'marketing.task.delete');
+  return sql.begin(async tx => {
+    const [task] = await tx<any[]>`select id,name,task_no,is_deleted from marketing.work_tasks
+      where id=${taskId}::uuid for update`;
+    if (!task || task.is_deleted) throw new Error(W.notFound);
+    const [linked] = await tx<any[]>`select 1 from marketing.work_plan_items plan_item
+      join marketing.work_items item on item.id=plan_item.product_id
+      where item.task_id=${taskId}::uuid limit 1`;
+    if (linked) throw new Error(W.taskHasPlans);
+    const [pending] = await tx<any[]>`select 1 from marketing.work_uploads upload
+      join marketing.work_items item on item.id=upload.item_id
+      join marketing.files file on file.id=upload.file_id
+      where item.task_id=${taskId}::uuid and upload.cancelled_at is null
+        and upload.committed_at is null and file.status='uploading' limit 1`;
+    if (pending) throw new Error(W.taskHasUploads);
+    await tx`update marketing.work_tasks
+      set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now(),version=version+1
+      where id=${taskId}::uuid and is_deleted=false`;
+    await history(tx, user, taskId, null, 'task_deleted');
+    return { ok: true, id: taskId, message: W.saved };
+  });
+}
+
 async function database(sql: Sql, user: SessionUser, services: WorkflowServices) {
   requirePermission(user, 'marketing.database.view');
   const [tasks, lines, historical] = await Promise.all([taskList(sql, user), planLines(sql, user), services.legacyDatabase(sql, user)]);
@@ -635,7 +694,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   if ((new Date(to).getTime() - new Date(from).getTime()) / 86400000 > 62) throw new Error(W.dateInvalid);
   const rows = await sql<any[]>`select i.id,i.task_id,i.due_on::text,i.media_kind,i.idea_name,i.status,t.name as task_name,t.task_no
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
-    where i.assigned_to=${user.id}::uuid and i.due_on between ${from}::date and ${to}::date
+    where t.is_deleted=false and i.assigned_to=${user.id}::uuid and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
   return { ok: true, rows };
 }
@@ -650,7 +709,8 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
     from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id
     join marketing.platforms p on p.id=s.platform_id join marketing.platform_post_types pt on pt.id=s.post_type_id
     where target.line_id=${lineId}::uuid order by p.name,pt.name`;
-  return { ok: true, line, product, targets, youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user) };
+  const [draft] = await sql<any[]>`select format_ids from marketing.work_product_drafts where product_id=${product.id}::uuid`;
+  return { ok: true, line, product, targets, draftFormatIds: list(draft?.format_ids), youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user) };
 }
 
 async function savePreparation(sql: Sql, user: SessionUser, body: Row, services: WorkflowServices) {
@@ -741,7 +801,7 @@ export async function workflowScheduleFiles(sql: Sql, schedule: Row): Promise<an
     join marketing.files f on f.id=link.file_id join marketing.work_publish_targets target on target.schedule_id=link.schedule_id
     join marketing.work_plan_items l on l.id=target.line_id join marketing.work_items i on i.id=l.product_id
     join marketing.work_tasks t on t.id=i.task_id
-    where link.schedule_id=${schedule.id}::uuid and f.status='ready' and i.status='approved' and t.status='completed'
+    where link.schedule_id=${schedule.id}::uuid and f.status='ready' and i.status='approved' and t.status='completed' and t.is_deleted=false
       and exists(select 1 from marketing.work_item_files jf where jf.item_id=i.id and jf.file_id=f.id and jf.category='final' and jf.format_id=target.post_type_id::text)
     order by link.sort_order,f.created_at,f.id`;
   if (!rows.length) throw new Error(W.productUnavailable);
@@ -864,7 +924,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
         (select max(updated_at)::text from marketing.agendas))) as version`;
       result = { ok: true, version: row.version };
     } else if (resource === 'work_meta') {
-      const meta = await services.meta(sql, user);
+      const meta = await services.meta(sql, user, false);
       const enabled = new Set((await sql<any[]>`select user_id::text from core.user_systems where system_code='marketing' and is_enabled=true`).map(row => row.user_id));
       result = { ...meta, users: [], departments: meta.departments.map((department: any) => ({ ...department, users: department.users.filter((member: any) => enabled.has(member.id)) })), capabilities: workflowCapabilities(user), userId: user.id };
     } else if (resource === 'work_dashboard') {
@@ -883,7 +943,9 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (resource === 'work_plan') { requirePermission(user, 'marketing.database.view'); result = await planDetails(sql, user, id(request.query.id)); }
     else if (resource === 'work_publishing') {
       requirePermission(user, 'marketing.publish_prep.view');
-      result = { ok: true, products: await products(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user) };
+      const visibleProducts = await products(sql, user);
+      const [lines, drafts] = await Promise.all([planLines(sql, user), productDrafts(sql, visibleProducts)]);
+      result = { ok: true, products: visibleProducts, lines, drafts, capabilities: workflowCapabilities(user) };
     } else if (resource === 'work_prep') result = await preparationDetail(sql, user, id(request.query.id), services);
     else if (resource === 'work_file') {
       await services.streamFile(sql, id(request.query.id), user, response, text(request.query.download) === '1'); return true;
@@ -900,6 +962,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_delete_campaign') result = await deleteWorkflowCampaign(sql, user, id(body.id));
+    else if (action === 'work_delete_task') result = await deleteWorkflowTask(sql, user, id(body.id));
+    else if (action === 'work_save_product_draft') result = await saveProductDraft(sql, user, body);
     else if (action === 'work_save_prep') result = await savePreparation(sql, user, body, services);
     else if (action === 'work_reset_publication') result = await resetPublicationAfterCheck(sql, user, body);
     else if (action === 'work_publish') result = await publishTarget(sql, user, body, services);

@@ -4,6 +4,7 @@ import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus } from '
 import { W, Empty, MediaLabel, ProductViewButton, Readiness, Search, Status, WorkAlert, WorkHeader } from '../workflow/components';
 import { showDate, showRange, useWorkQuery } from '../workflow/api';
 import { TaskDetail } from '../workflow/TaskDetail';
+import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
 export function MarketingDashboardPage() {
@@ -22,7 +23,7 @@ export function MarketingDashboardPage() {
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21} /><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
         <div className="mkw-column-body">{!tasks.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
           {tasks.map(task => <article className="mkw-dashboard-task" key={task.id}>
-            <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3>{task.name}</h3></div><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20} /></button></div>
+            <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3>{task.name}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20} /></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()} /></div></div>
             <div className="mkw-dashboard-stats"><div><small>{W.createdAt}</small><strong>{showDate(task.created_at)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
             <Readiness value={task.readiness} />
             <button type="button" className="mkw-dashboard-open" onClick={() => openTask(task.id)}>{W.open}<CaretLeft size={16} /></button>

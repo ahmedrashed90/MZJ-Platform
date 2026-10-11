@@ -1,6 +1,7 @@
-import { runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
+import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
+const MARKETING_SCHEMA_VERSION = 1;
 
 const MARKETING_SCHEMA_SQL = String.raw`begin;
 
@@ -1212,16 +1213,24 @@ on conflict(id) do update set version=excluded.version,updated_at=excluded.updat
 commit;
 `;
 
+async function marketingSchemaIsCurrent() {
+  const sql = getSql();
+  const [relation] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.schema_state')::text as relation`;
+  if (!relation?.relation) return false;
+  const [state] = await sql<{ version: number }[]>`select version from marketing.schema_state where id=1`;
+  return Number(state?.version || 0) >= MARKETING_SCHEMA_VERSION;
+}
+
 export async function ensureMarketingSchema() {
   if (!ready) {
-    // Vercel instances may cold-start simultaneously. Serialize every marketing
-    // schema migration with the workflow bootstrap using one database-wide
-    // advisory lock; ALTER TABLE / CREATE INDEX otherwise can deadlock.
-    ready = withDatabaseAdvisoryLock('mzj:marketing:schema-setup',
-      () => runSqlScript(MARKETING_SCHEMA_SQL)).catch((error) => {
-      ready = null;
-      throw error;
-    });
+    // Migrations are NOT a normal page-load operation. Cold starts perform
+    // read-only version checks, while only outdated schemas enter serialized DDL.
+    ready = (async () => {
+      if (await marketingSchemaIsCurrent()) return;
+      await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
+        if (!await marketingSchemaIsCurrent()) await runSqlScript(MARKETING_SCHEMA_SQL);
+      });
+    })().catch(error => { ready = null; throw error; });
   }
   await ready;
 }

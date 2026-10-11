@@ -350,11 +350,12 @@ async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: 
   await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data,ip_address) values (${user.id}::uuid,'marketing',${action},${entityType},${entityId},${beforeData ? sql.json(dbJson(beforeData)) : null},${afterData ? sql.json(dbJson(afterData)) : null},${ip || null})`;
 }
 
-async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
+async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser, synchronize = true) {
   // Keep marketing metadata mirrored without crashing when an older database
   // contains the same marketing name under a different legacy ID. Existing
   // metadata wins until the user edits it, while missing canonical IDs are
   // inserted only when their normalized name is not already represented.
+  if (synchronize) {
   await sql`
     update marketing.departments md
     set name=d.name,is_active=d.is_active,updated_at=greatest(md.updated_at,d.updated_at)
@@ -379,6 +380,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     on conflict(id) do update set name=excluded.name,is_active=excluded.is_active,updated_at=greatest(marketing.departments.updated_at,excluded.updated_at)
   `;
 
+  }
   // Recover the single canonical content department ID. Older data can keep the
   // user membership on the correct department while the is_content flag points
   // to another row. Prefer the established content department name only as a
@@ -406,7 +408,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     limit 1
   `;
   const contentDepartmentIdValue=clean(contentDepartment?.id);
-  if(contentDepartmentIdValue){
+  if(contentDepartmentIdValue && synchronize){
     await sql`
       update marketing.departments
       set is_content=(id=${contentDepartmentIdValue}::uuid),updated_at=case when is_content is distinct from (id=${contentDepartmentIdValue}::uuid) then now() else updated_at end
@@ -4418,7 +4420,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       }
       return response.status(200).json(await autoRefreshExternalMetaMetrics(sql, arrayValue<string>(initialBody.ids).map(clean).filter(Boolean)));
     }
-    await ensureAccessControlSchema(); await ensureOperationsSchema(); await ensureMarketingSchema();
+    await ensureAccessControlSchema();
+    // Workflow pages never use operations schema migrations. Avoid long DDL
+    // waits while opening Marketing and during review/upload refreshes.
+    const workflowRequest = clean(request.query.resource).startsWith('work_') || clean(initialBody.action).startsWith('work_');
+    if (!workflowRequest) {
+      await ensureOperationsSchema();
+      await ensureMarketingSchema();
+    }
     const user = await requireUser(request,response); if(!user)return;
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
@@ -4521,5 +4530,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);
     await emitMarketingNotification(user, action, body, result).catch((error) => console.error("Marketing notification failed", error));
     return response.status(200).json(result);
-  } catch(error:any){console.error('Marketing API failed',error);const message=clean(error?.message)||"تعذر تنفيذ العملية";const status=/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;return response.status(status).json({ok:false,error:message});}
+  } catch(error:any){
+    console.error('Marketing API failed', { code: error?.code, message: error?.message, resource: clean(request.query.resource) || null });
+    const message=clean(error?.message)||"تعذر تنفيذ العملية";
+    const status=error?.code==='MARKETING_MIGRATION_BUSY'?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
+    if(status===503)response.setHeader('Retry-After','5');
+    return response.status(status).json({ok:false,error:message});
+  }
 }
