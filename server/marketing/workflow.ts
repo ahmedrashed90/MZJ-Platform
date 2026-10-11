@@ -90,6 +90,9 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
   const rows = await db`select i.*,i.due_on::text,coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
+    case when i.status in ('submitted','approved') and i.submitted_at is not null
+      then case when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
+      else null end as delivery_status,
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,
       'file_size',f.file_size,'category',j.category,'format_id',j.format_id,'status',f.status,'order_index',j.order_index)
       order by j.order_index,j.created_at,j.id) from marketing.work_item_files j join marketing.files f on f.id=j.file_id
@@ -138,6 +141,12 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   const rows = await sql<any[]>`select t.*,ct.name as type_name,
     count(i.id)::int as product_count,
     count(i.id) filter(where i.status='approved' and exists(select 1 from marketing.work_item_files jf join marketing.files f on f.id=jf.file_id where jf.item_id=i.id and jf.category='final' and f.status='ready'))::int as approved_count,
+    -- On-time delivery measures the executor's submission, NOT admin approval.
+    -- Riyadh calendar date makes submissions around UTC midnight unambiguous.
+    count(i.id) filter(where i.status in ('submitted','approved') and i.submitted_at is not null
+      and (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on)::int as submitted_on_time_count,
+    count(i.id) filter(where i.status in ('submitted','approved') and i.submitted_at is not null
+      and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as submitted_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
     left join marketing.work_items i on i.task_id=t.id

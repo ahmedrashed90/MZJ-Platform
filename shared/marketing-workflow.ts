@@ -9,6 +9,7 @@ export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
   media_kind: WorkMediaKind; idea_name: string; idea: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
   files: WorkFile[]; review_note: string; version: number; approved_at?: string | null; submitted_at?: string | null;
+  delivery_status?: 'on_time' | 'late' | null;
   pending_uploads?: { id: string; name: string; category: string }[];
   sort_order: number; task_name?: string; task_no?: string; actions?: { id: string; name: string; completed: boolean; admin_only: boolean; is_final_approval: boolean }[];
 };
@@ -16,6 +17,7 @@ export type WorkTask = {
   id: string; task_no: string; name: string; type_id: string; type_name: string; created_at: string; created_by: string;
   status: 'active' | 'completed' | 'empty'; due_from: string | null; due_to: string | null; product_count: number;
   approved_count: number; readiness: number; version: number; completed_at?: string | null; items?: WorkItem[];
+  submitted_on_time_count?: number; submitted_late_count?: number;
 };
 export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string };
 export type WorkPlanLine = {

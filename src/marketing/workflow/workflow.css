@@ -416,3 +416,16 @@
  .mkw .mkw-task-card { padding:14px; }
  .mkw .mkw-publish-summary>div { min-height:60px; }
 }
+
+
+/* Executor delivery punctuality: use MZJ's existing positive/negative palette. */
+.mkw-delivery-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.mkw-delivery-summary-card { display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; border:1px solid currentColor; border-radius:11px; padding:11px 13px; background:var(--surface); font-size:12px; font-weight:800; }
+.mkw-delivery-summary-card span { line-height:1.6; }
+.mkw-delivery-summary-card strong { font-size:18px; font-weight:800; font-variant-numeric:tabular-nums; }
+.mkw-delivery-summary-card.is-on-time, .mkw-delivery-badge.is-on-time { color:var(--green); }
+.mkw-delivery-summary-card.is-late, .mkw-delivery-badge.is-late { color:var(--red); }
+.mkw-delivery-badge { display:inline-flex; align-items:center; justify-content:center; border:1px solid currentColor; background:var(--surface); border-radius:100px; padding:6px 12px; font-size:12px; font-weight:800; line-height:1.5; white-space:nowrap; }
+.mkw-execution-delivery { display:flex; align-items:center; gap:8px 22px; flex-wrap:wrap; padding:11px 14px; color:var(--muted); background:var(--surface-soft); border-radius:10px; border:1px solid var(--line); font-size:12px; }
+.mkw-execution-delivery strong { color:var(--ink); font-weight:800; }
+@media (max-width:480px) { .mkw-delivery-summary { gap:7px; } .mkw-delivery-summary-card { padding:9px; } .mkw-delivery-summary-card span { font-size:11px; } .mkw-delivery-summary-card strong { font-size:16px; } }

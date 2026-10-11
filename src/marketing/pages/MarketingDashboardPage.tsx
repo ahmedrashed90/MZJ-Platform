@@ -26,6 +26,10 @@ export function MarketingDashboardPage() {
             <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3>{task.name}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20} /></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()} /></div></div>
             <div className="mkw-dashboard-stats"><div><small>{W.createdAt}</small><strong>{showDate(task.created_at)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
             <Readiness value={task.readiness} />
+            <div className="mkw-delivery-summary" aria-label="مواعيد تسليم المطلوبات">
+              <div className="mkw-delivery-summary-card is-on-time"><span>{W.deliveryOnTime}</span><strong>{task.submitted_on_time_count ?? 0}</strong></div>
+              <div className="mkw-delivery-summary-card is-late"><span>{W.deliveryLate}</span><strong>{task.submitted_late_count ?? 0}</strong></div>
+            </div>
             <button type="button" className="mkw-dashboard-open" onClick={() => openTask(task.id)}>{W.open}<CaretLeft size={16} /></button>
           </article>)}
         </div>

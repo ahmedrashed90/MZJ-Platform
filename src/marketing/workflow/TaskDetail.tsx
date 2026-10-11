@@ -7,6 +7,13 @@ import { finalCoverage, ideaFileAllowed, workFileMatches, type WorkCapabilities,
 import { W, Empty, Field, FileLink, FilesPreview, Formats, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 
+// The database uses the same Riyadh civil date for its on-time/late counts.
+function submittedDayInRiyadh(value: string | null | undefined) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh' }) : '—';
+}
+
 type Detail = { task: WorkTask & { items: WorkItem[] }; events: { id: string; action: string; note: string; actor_name: string; created_at: string; item_id: string | null }[]; capabilities: WorkCapabilities };
 export function TaskDetail({ id, onClose, onChanged, onlyItems }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[] }) {
   const query = useWorkQuery<Detail>('task', { id }), meta = useWorkQuery<WorkMeta>('meta');
@@ -71,8 +78,9 @@ function ItemEditor({ item, number, capabilities, meta, refresh }: { item: WorkI
     if (decision === 'reject' && !window.confirm(W.rejectedConfirm)) return;
     await run(() => workPost('review', { itemId: item.id, version: version.current, decision, note }));
   }
-  return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} /></div></header>
+  return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
+      {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
       {item.review_note && <div className="mkw-alert"><strong>{W.reviewNote}</strong><p className="mkw-idea-text">{item.review_note}</p></div>}
       <div className="mkw-item-detail-grid">
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
