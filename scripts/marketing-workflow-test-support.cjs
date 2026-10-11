@@ -30,6 +30,8 @@ function scriptedSql(steps) {
   const calls = [];
   const sql = async (strings, ...values) => {
     const query = strings.join('?').replace(/\s+/g, ' ').trim(); calls.push({ query, values });
+    // Transaction-local lock/statement guards do not alter business query results.
+    if (/^set local (?:lock_timeout|statement_timeout) =/i.test(query)) return [];
     const step = steps.shift();
     if (!step || !(typeof step.match === 'string' ? query.includes(step.match) : step.match.test(query))) throw new Error('Unexpected SQL: ' + query + '\nExpected: ' + step?.match);
     if (step.check) step.check(values, query);

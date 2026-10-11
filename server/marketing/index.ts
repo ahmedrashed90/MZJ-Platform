@@ -1,5 +1,5 @@
 import { handleMarketingWorkflow, assertWorkflowFileAccess, workflowScheduleFiles, assertLegacyMarketingTarget } from './workflow.js';
-import { ensureMarketingWorkflowSchema } from '../_marketing-workflow-schema.js';
+import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
 import { isTerminalApproval } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -11,7 +11,6 @@ import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
 import { getSystemAccess } from "../_access-control.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
-import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, copyMediaObject, createDeleteUrl, createDownloadUrl, createUploadUrl, headMediaObject, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
 import {
@@ -2299,7 +2298,7 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
 
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any,user:SessionUser){
   if(!hasPermission(user,"settings.marketing.manage"))throw new Error(W.denied);
-  await ensureMarketingWorkflowSchema();
+  await assertMarketingWorkflowReady(sql);
   const actionId=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name);
   const terminal=isTerminalApproval(name),percentage=terminal?100:numberValue(body.percentage);
   if(!departmentId||!name||percentage<0||percentage>100)throw new Error(W.requiredFields);
@@ -4421,20 +4420,33 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json(await autoRefreshExternalMetaMetrics(sql, arrayValue<string>(initialBody.ids).map(clean).filter(Boolean)));
     }
     await ensureAccessControlSchema();
-    // Workflow pages never use operations schema migrations. Avoid long DDL
-    // waits while opening Marketing and during review/upload refreshes.
+    // Operations DDL belongs to the operations/bootstrap lifecycle, not
+    // to any Marketing page load. Operations is already initialized by the
+    // platform and retains its independent migration implementation.
+    // Only legacy Marketing requests keep their existing version-aware
+    // Marketing schema check; new workflow reads never run Marketing DDL.
     const workflowRequest = clean(request.query.resource).startsWith('work_') || clean(initialBody.action).startsWith('work_');
     if (!workflowRequest) {
-      await ensureOperationsSchema();
       await ensureMarketingSchema();
     }
     const user = await requireUser(request,response); if(!user)return;
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
-    if (await handleMarketingWorkflow(request,response,sql,user,{
+    const workflowServices = {
       meta:marketingMeta,streamFile:streamMarketingFileDownload,publishItem:publishScheduleItem,
       youtubeDefaults:getYouTubePublishSettings,legacyDatabase:databaseRows,validatePublishItem:validateWorkflowPublication,
-    })) return;
+    };
+    if (workflowRequest && request.method === 'GET' && resource !== 'work_file') {
+      // Ordinary workflow reads are guaranteed not to wait behind PostgreSQL
+      // AccessExclusiveLock indefinitely. No schema DDL runs on page loads.
+      const handled = await sql.begin(async tx => {
+        await tx`set transaction read only`;
+        await tx`set local lock_timeout = '3s'`;
+        await tx`set local statement_timeout = '15s'`;
+        return handleMarketingWorkflow(request,response,tx as unknown as typeof sql,user,workflowServices);
+      });
+      if (handled) return;
+    } else if (await handleMarketingWorkflow(request,response,sql,user,workflowServices)) return;
 
     if(request.method==='GET'){
       if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create')||hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.agenda.edit'))?await loadOperationsCars(sql):[]});
@@ -4533,8 +4545,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   } catch(error:any){
     console.error('Marketing API failed', { code: error?.code, message: error?.message, resource: clean(request.query.resource) || null });
     const message=clean(error?.message)||"تعذر تنفيذ العملية";
-    const status=error?.code==='MARKETING_MIGRATION_BUSY'?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
-    if(status===503)response.setHeader('Retry-After','5');
-    return response.status(status).json({ok:false,error:message});
+    const databaseWait = ['55P03', '57014', '53300', 'MARKETING_MIGRATION_BUSY'].includes(String(error?.code || ''));
+    const status=error?.code==='MARKETING_SCHEMA_NOT_READY'?503:databaseWait?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
+    if (status===503) response.setHeader('Retry-After','2');
+    return response.status(status).json({
+      ok:false,
+      code: databaseWait ? 'MARKETING_DB_BUSY' : error?.code === 'MARKETING_SCHEMA_NOT_READY' ? 'MARKETING_SCHEMA_NOT_READY' : undefined,
+      error: databaseWait ? 'تعذر الوصول إلى بيانات التسويق بسبب انشغال قاعدة البيانات مؤقتًا.' : message,
+    });
   }
 }

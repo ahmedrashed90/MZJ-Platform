@@ -1,7 +1,10 @@
 import { getSql, runSqlScript, tryWithDatabaseAdvisoryLock } from './_db.js';
+
 import { W } from '../shared/marketing-workflow-labels.js';
 
 export const MARKETING_WORKFLOW_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
 create schema if not exists marketing;
 create table if not exists marketing.workflow_migrations(code text primary key, applied_at timestamptz not null default now());
 create sequence if not exists marketing.work_task_number_seq as bigint;
@@ -146,4 +149,32 @@ export function ensureMarketingWorkflowSchema() {
     }
   })().catch(error => { ready = null; throw error; });
   return ready;
+}
+
+/**
+ * Normal Marketing requests must NEVER execute DDL, lock table schemas or
+ * race with a cold-start migration. Database setup is a separate, controlled
+ * operation (platform bootstrap). Inspect only catalog metadata at startup.
+ * Catalog checks are intentionally read-only and shared per server instance.
+ */
+let workflowStructureReady: Promise<void> | null = null;
+export function assertMarketingWorkflowReady(sql = getSql()) {
+  if (!workflowStructureReady) {
+    workflowStructureReady = (async () => {
+      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean }[]>`
+        select
+          to_regclass('marketing.work_tasks') is not null as tasks,
+          to_regclass('marketing.work_items') is not null as items,
+          to_regclass('marketing.work_plans') is not null as plans,
+          to_regclass('marketing.work_product_drafts') is not null as drafts,
+          to_regclass('marketing.work_item_files') is not null as files
+      `;
+      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files) {
+        const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
+        (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
+        throw error;
+      }
+    })().catch(error => { workflowStructureReady = null; throw error; });
+  }
+  return workflowStructureReady;
 }

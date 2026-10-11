@@ -20,12 +20,15 @@ export async function workGet<T>(resource: string, query: Record<string, unknown
       return await marketingFetch<T>(url, { signal: request.signal });
     } catch (e) {
       if (timedOut || request.signal.aborted) throw e;
-      // Only the short-lived schema-upgrade response gets a single delayed
-      // read retry. Never automatically repeat a user mutation or publication.
-      if (!(e instanceof Error) || !e.message.includes('تهيئة قاعدة بيانات التسويق قيد التنفيذ')) throw e;
+      // Retry a transient database lock ONCE on idempotent GET only. Never
+      // repeat approvals, file uploads, campaign edits or publication POSTs.
+      if (!(e instanceof Error) || !(
+        e.message.includes('انشغال قاعدة البيانات مؤقتًا') ||
+        e.message.includes('تهيئة قاعدة بيانات التسويق قيد التنفيذ')
+      )) throw e;
       await new Promise<void>((resolve, reject) => {
         const onCancel = () => { window.clearTimeout(timer); reject(new Error('تم إلغاء التحميل')); };
-        const timer = window.setTimeout(() => { request.signal.removeEventListener('abort', onCancel); resolve(); }, 3500);
+        const timer = window.setTimeout(() => { request.signal.removeEventListener('abort', onCancel); resolve(); }, 1200);
         request.signal.addEventListener('abort', onCancel, { once: true });
         if (request.signal.aborted) onCancel();
       });

@@ -4,7 +4,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { loadUserProfile, type SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { ensureMarketingWorkflowSchema } from '../_marketing-workflow-schema.js';
+import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
 import { createNotification } from '../_notifications.js';
 import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketingStorageKey } from '../_media-storage.js';
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
@@ -181,6 +181,8 @@ async function createTask(sql: Sql, body: Row, user: SessionUser) {
   if (!name || !incoming.length || incoming.length > 100) throw new Error(W.requiredFields);
   const audiences: string[] = [];
   const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const [reservation] = await tx<any[]>`select * from marketing.work_reservations where id=${reservationId}::uuid and created_by=${user.id}::uuid for update`;
     if (!reservation) throw new Error(W.notFound);
     if (reservation.used_at) return { ok: true, id: reservationId, message: W.saved, existed: true };
@@ -221,6 +223,8 @@ async function createTask(sql: Sql, body: Row, user: SessionUser) {
 async function saveItem(sql: Sql, body: Row, user: SessionUser) {
   const itemId = id(body.itemId);
   return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const current = await visibleItem(tx, user, itemId, true);
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
@@ -247,6 +251,8 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.final_file.upload');
   const itemId = id(body.itemId);
   const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const current = await visibleItem(tx, user, itemId, true);
     if (current.assigned_to !== user.id) throw new Error(W.denied);
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
@@ -280,6 +286,8 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
   if (!['approve','revise','reject'].includes(decision)) throw new Error(W.invalid);
   if (decision === 'revise' && !note) throw new Error(W.notesRequired);
   const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const visible = await visibleItem(tx, user, itemId);
     await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
@@ -319,6 +327,8 @@ async function toggleAction(sql: Sql, body: Row, user: SessionUser) {
   if (item.status === 'approved' || item.status === 'submitted') throw new Error(W.immutable);
   if (!action.admin_only && item.assigned_to !== user.id && !isManager(user)) throw new Error(W.denied);
   await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select status,version from marketing.work_items where id=${itemId}::uuid for update`;
     if (locked.version !== Number(body.version)) throw new Error(W.conflict);
@@ -342,6 +352,8 @@ async function prepareUpload(sql: Sql, body: Row, user: SessionUser) {
   // Persist the pending upload under the same task/item locks as submission.
   // Submission can never overlook an upload being staged concurrently.
   const staged = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     let formats: string[] = [], taskId: string | null = null, taskNo = '';
     if (itemId) {
       const visible = await visibleItem(tx, user, itemId, true);
@@ -399,6 +411,8 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
     if (!head.exists || head.size !== Number(upload.file_size)) throw new Error(W.fileInvalid);
   }
   await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     if (upload.item_id) {
       const item = await visibleItem(tx, user, upload.item_id, true);
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
@@ -433,6 +447,8 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
 async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
   const fileId = id(body.fileId), requestedItemId = body.itemId ? id(body.itemId) : null;
   await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const [upload] = await tx<any[]>`select * from marketing.work_uploads where file_id=${fileId}::uuid`;
     const itemId = requestedItemId || upload?.item_id;
     if (itemId) {
@@ -467,7 +483,7 @@ async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
 }
 
 export async function assertWorkflowFileAccess(sql: Sql, file: any, user: SessionUser) {
-  await ensureMarketingWorkflowSchema();
+  await assertMarketingWorkflowReady(sql);
   const scopes = departmentScope(user);
   const [allowed] = await sql<any[]>`select 1 where exists(
     select 1 from marketing.work_item_files j join marketing.work_items i on i.id=j.item_id
@@ -547,6 +563,8 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
   const requestKey = id(body.requestKey), entries = list(body.entries);
   if (!entries.length || entries.length > 500) throw new Error(W.requiredFields);
   return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     await tx`select pg_advisory_xact_lock(hashtext(${`work-plan:${user.id}:${requestKey}`}))`;
     const [existing] = await tx<any[]>`select id from marketing.work_plans where created_by=${user.id}::uuid and request_key=${requestKey}::uuid`;
     if (existing) return { ok: true, id: existing.id, message: W.saved };
@@ -612,6 +630,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
 async function deleteWorkflowCampaign(sql: Sql, user: SessionUser, planId: string) {
   requirePermission(user, 'marketing.campaign.delete');
   return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const [campaign] = await tx<any[]>`select p.id,p.name,p.created_by
       from marketing.work_plans p join marketing.campaigns c on c.id=p.id
       where p.id=${planId}::uuid and p.kind='campaign' and c.is_deleted=false
@@ -645,6 +665,8 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
 async function deleteWorkflowTask(sql: Sql, user: SessionUser, taskId: string) {
   requirePermission(user, 'marketing.task.delete');
   return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const [task] = await tx<any[]>`select id,name,task_no,is_deleted from marketing.work_tasks
       where id=${taskId}::uuid for update`;
     if (!task || task.is_deleted) throw new Error(W.notFound);
@@ -727,6 +749,8 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   const defaults = await services.youtubeDefaults(sql);
   const youtube = normalizeYouTubePublishOptions(body.youtubeOptions, defaults, { title: caption, description: [caption, hashtags].join('\n\n') });
   return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
     const [line] = await tx<any[]>`select l.*,p.kind,p.created_by from marketing.work_plan_items l
       join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid for update of l`;
     if (!line || Number(body.version) !== Number(line.version)) throw new Error(W.conflict);
@@ -822,6 +846,8 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
     // The snapshot and claim are atomic with the preparation editor. A save
     // cannot change caption/files between the read and the provider request.
     const claimed = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
       const [schedule] = await tx<any[]>`select s.*,p.code as platform_code,p.name as platform_name,pt.name as post_type_name
         from marketing.publish_schedule s join marketing.platforms p on p.id=s.platform_id
         join marketing.platform_post_types pt on pt.id=s.post_type_id
@@ -891,7 +917,7 @@ export async function assertLegacyMarketingTarget(sql: Sql, body: Row) {
   }
   collect(body);
   if (!identifiers.size) return;
-  await ensureMarketingWorkflowSchema();
+  await assertMarketingWorkflowReady(sql);
   const ids = [...identifiers];
   const [owned] = await sql<any[]>`select 1 where
     exists(select 1 from marketing.work_tasks where id=any(${ids}::uuid[])) or
@@ -910,7 +936,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
   const resource = text(request.query.resource), body = request.method === 'POST' ? queryBody(request) : {};
   const action = text(body.action);
   if (!resource.startsWith('work_') && !action.startsWith('work_')) return false;
-  await ensureMarketingWorkflowSchema();
+  await assertMarketingWorkflowReady(sql);
   let result: any;
   if (request.method === 'GET') {
     if (resource === 'work_version') {

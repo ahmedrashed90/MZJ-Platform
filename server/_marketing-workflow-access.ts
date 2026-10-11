@@ -3,7 +3,9 @@ import { W } from '../shared/marketing-workflow-labels.js';
 
 // This extension changes marketing catalog rows only. It never grants any
 // permission in CRM, operations, tracking, attendance, owners or website.
-export async function ensureMarketingWorkflowAccess() {
+export async function ensureMarketingWorkflowAccess(options: { allowMigration?: boolean } = {}) {
+  // Normal session/access checks only read permissions: never acquire a DDL lock.
+  if (!options.allowMigration) return;
   const sql = getSql();
   const ready = async () => {
     const [exists] = await sql<any[]>`select to_regclass('marketing.workflow_migrations') is not null as ready`;

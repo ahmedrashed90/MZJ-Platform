@@ -7,6 +7,8 @@ import { loadUserProfile } from "../_auth.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
+import { ensureMarketingWorkflowSchema } from "../_marketing-workflow-schema.js";
+import { ensureMarketingWorkflowAccess } from "../_marketing-workflow-access.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -41,6 +43,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await ensureTrackingSchema();
     await ensureOperationsSchema();
     await ensureMarketingSchema();
+    await ensureMarketingWorkflowSchema();
+    await ensureMarketingWorkflowAccess({ allowMigration: true });
 
     const sql = getSql();
     const [admin] = await sql<{ exists: boolean }[]>`
