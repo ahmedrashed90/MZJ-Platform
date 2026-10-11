@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle, PaperPlaneTilt, UploadSimple, X } from '@phosphor-icons/react';
+import { CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
@@ -11,19 +11,27 @@ type Detail = { task: WorkTask & { items: WorkItem[] }; events: { id: string; ac
 export function TaskDetail({ id, onClose, onChanged, onlyItems }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[] }) {
   const query = useWorkQuery<Detail>('task', { id }), meta = useWorkQuery<WorkMeta>('meta');
   const task = query.data?.task;
+  const items = task?.items.filter(item => !onlyItems || onlyItems.includes(item.id)) || [];
   async function refresh() { await query.reload(); onChanged?.(); }
-  return <Modal open title={task ? `${task.task_no} - ${task.name}` : W.task} onClose={onClose} className="mkw-modal"><div className="mkw">
-    <WorkAlert>{query.error || meta.error}</WorkAlert>
-    {!task ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
-      <div className="mkw-summary"><div><small>{W.taskType}</small><strong>{task.type_name}</strong></div><div><small>{W.createdAt}</small><strong>{showDate(task.created_at, true)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
-      <Readiness value={task.readiness} />
-      {!task.items.length ? <Empty>{W.emptyTask}</Empty> : task.items.filter(item => !onlyItems || onlyItems.includes(item.id)).map(item => <ItemEditor key={`${item.id}:${item.version}`} item={item} capabilities={query.data!.capabilities} meta={meta.data} refresh={refresh} />)}
-      <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
-    </>}
-  </div></Modal>;
+  return <Modal open title={task ? `${task.task_no} - ${task.name}` : W.task} onClose={onClose} className="mkw-fullscreen">
+    <div className="mkw mkw-detail-view">
+      <WorkAlert>{query.error || meta.error}</WorkAlert>
+      {!task ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
+        <section className="mkw-detail-overview">
+          <div className="mkw-detail-title"><div><span className="mkw-code">{task.task_no}</span><h2>{task.name}</h2></div><Status value={task.status} /></div>
+          <div className="mkw-summary"><div><small>{W.taskNo}</small><strong dir="ltr">{task.task_no}</strong></div><div><small>{W.taskType}</small><strong>{task.type_name}</strong></div><div><small>{W.createdAt}</small><strong>{showDate(task.created_at, true)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
+          <Readiness value={task.readiness} />
+        </section>
+        <section className="mkw-detail-items"><div className="mkw-section-title"><h2>{W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></div>
+          {!items.length ? <Empty>{W.emptyTask}</Empty> : items.map((item, index) => <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities} meta={meta.data} refresh={refresh} />)}
+        </section>
+        <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
+      </>}
+    </div>
+  </Modal>;
 }
 
-function ItemEditor({ item, capabilities, meta, refresh }: { item: WorkItem; capabilities: WorkCapabilities; meta: WorkMeta | null; refresh: () => Promise<void> }) {
+function ItemEditor({ item, number, capabilities, meta, refresh }: { item: WorkItem; number: number; capabilities: WorkCapabilities; meta: WorkMeta | null; refresh: () => Promise<void> }) {
   const { user } = useAuth();
   const own = user?.id === item.assigned_to;
   const editable = ['in_progress', 'revision'].includes(item.status) && (own || capabilities.editTask);
@@ -63,25 +71,33 @@ function ItemEditor({ item, capabilities, meta, refresh }: { item: WorkItem; cap
     if (decision === 'reject' && !window.confirm(W.rejectedConfirm)) return;
     await run(() => workPost('review', { itemId: item.id, version: version.current, decision, note }));
   }
-  return <article className="mkw-execution-item"><header className="mkw-section-title"><div><h3>{item.assignee_name}</h3><span className="mkw-muted">{item.department_name}</span></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} /></div></header><div className="mkw-item">
-    <WorkAlert>{error}</WorkAlert>
-    {item.review_note && <div className="mkw-alert"><strong>{W.reviewNote}</strong><p className="mkw-idea-text">{item.review_note}</p></div>}
-    <div className="mkw-fields"><Field label={W.ideaName}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => setIdeaName(event.target.value)} /></Field><Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)} /></Field>
-      {editable && capabilities.editTask && meta ? <><Field label={W.department}><select value={departmentId} disabled={busy} onChange={event => { setDepartmentId(event.target.value); setAssigneeId(''); }}>{meta.departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}</select></Field><Field label={W.assignee}><select value={assigneeId} disabled={busy} onChange={event => setAssigneeId(event.target.value)}><option value="">{W.choose}</option>{meta.departments.find(department => department.id === departmentId)?.users.map(member => <option key={member.id} value={member.id}>{member.fullName || member.full_name}</option>)}</select></Field></> : null}
+  return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} /></div></header>
+    <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
+      {item.review_note && <div className="mkw-alert"><strong>{W.reviewNote}</strong><p className="mkw-idea-text">{item.review_note}</p></div>}
+      <div className="mkw-item-detail-grid">
+        <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
+          <div className="mkw-fields"><Field label={W.ideaName}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => setIdeaName(event.target.value)} /></Field><Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)} /></Field>
+            {editable && capabilities.editTask && meta ? <><Field label={W.department}><select value={departmentId} disabled={busy} onChange={event => { setDepartmentId(event.target.value); setAssigneeId(''); }}>{meta.departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}</select></Field><Field label={W.assignee}><select value={assigneeId} disabled={busy} onChange={event => setAssigneeId(event.target.value)}><option value="">{W.choose}</option>{meta.departments.find(department => department.id === departmentId)?.users.map(member => <option key={member.id} value={member.id}>{member.fullName || member.full_name}</option>)}</select></Field></> : null}
+          </div>
+          <Field label={W.idea}>{editable ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => setIdea(event.target.value)} /> : <p className="mkw-idea-text">{idea}</p>}</Field>
+          <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
+            {editable && <input type="file" aria-label={W.ideaFile} accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { void upload(event.target.files, 'idea'); event.target.value = ''; }} />}
+            {!ideaFiles.length && !editable && <span className="mkw-muted">—</span>}
+          </section>
+          <div className="mkw-sizes"><div className="mkw-section-title"><h4>{W.sizes}</h4></div><Formats formats={item.formats} /></div>
+        </section>
+        <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span></div>
+          <div className="mkw-final-grid">{item.formats.map(format => <div className="mkw-upload-format" key={format.id}><div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong>{finals.some(file => file.format_id === format.id) ? <CheckCircle size={19} /> : <UploadSimple size={19} />}</div>
+            {finals.filter(file => file.format_id === format.id).map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
+            {canUpload && <label className="mkw-upload-action"><UploadSimple size={17} /><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
+          </div>)}</div>
+          {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
+          {progress && <div className="mkw-upload-format"><span>{progress.name} {progress.percent}%</span><progress max={100} value={progress.percent} /><button type="button" className="secondary" onClick={() => controller.current?.abort()}>{W.cancel}</button></div>}
+          {!!finals.length && <details><summary><FileArrowDown size={17} />{W.viewProduct}</summary><FilesPreview files={finals} /></details>}
+        </section>
+      </div>
+      {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy || (capabilities.editTask && !assigneeId)} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !finalCoverage(item) || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
+      {capabilities.review && item.status === 'submitted' && <section className="mkw-review-controls"><Field label={W.reviewNote}><textarea value={note} disabled={busy} onChange={event => setNote(event.target.value)} /></Field><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve}</button><button type="button" className="secondary" disabled={busy} onClick={() => void review('revise')}>{W.revise}</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
     </div>
-    <Field label={W.idea}>{editable ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => setIdea(event.target.value)} /> : <p className="mkw-idea-text">{idea}</p>}</Field>
-    {ideaFiles.length > 0 && <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}</section>}
-    {editable && <Field label={W.ideaFile}><input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { void upload(event.target.files, 'idea'); event.target.value = ''; }} /></Field>}
-    <Formats formats={item.formats} />
-    <section className="mkw-upload-section"><h4>{W.finalFiles}</h4>{item.formats.map(format => <div className="mkw-upload-format" key={format.id}><div className="mkw-section-title"><strong>{format.platform_name} - {format.name}{format.width && format.height ? ` (${format.width} x ${format.height})` : ''}</strong>{finals.some(file => file.format_id === format.id) ? <CheckCircle size={19} /> : <UploadSimple size={19} />}</div>
-      {finals.filter(file => file.format_id === format.id).map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
-      {canUpload && <input aria-label={`${W.upload} ${format.platform_name} ${format.name}`} type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} />}
-    </div>)}</section>
-    {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
-    {progress && <div className="mkw-upload-format"><span>{progress.name} {progress.percent}%</span><progress max={100} value={progress.percent} /><button type="button" className="secondary" onClick={() => controller.current?.abort()}>{W.cancel}</button></div>}
-    {!!finals.length && <details><summary>{W.viewProduct}</summary><FilesPreview files={finals} /></details>}
-    {!!item.actions?.length && <section className="mkw-upload-section"><h4>{W.assignmentActions}</h4><div className="mkw-chips">{item.actions.filter(action => !action.is_final_approval).map(action => <label key={action.id} className="mkw-checkbox"><input type="checkbox" checked={action.completed} disabled={busy || !editable || !hasPermission(user, action.admin_only ? 'marketing.assignment_action.admin' : 'marketing.assignment_action.execute')} onChange={event => { const completed = event.target.checked; void run(async () => { const nextVersion = await persist(); await workPost('action', { itemId: item.id, actionId: action.id, version: nextVersion, completed }); }); }} />{action.name}</label>)}</div></section>}
-    {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy || (capabilities.editTask && !assigneeId)} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !finalCoverage(item) || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
-    {capabilities.review && item.status === 'submitted' && <section className="mkw-review-controls"><Field label={W.reviewNote}><textarea value={note} disabled={busy} onChange={event => setNote(event.target.value)} /></Field><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve}</button><button type="button" className="secondary" disabled={busy} onClick={() => void review('revise')}>{W.revise}</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
-  </div></article>;
+  </article>;
 }

@@ -564,10 +564,43 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id
-    where (${planId}='' or p.id=nullif(${planId},'')::uuid) and (
+    where (${planId}='' or p.id=nullif(${planId},'')::uuid)
+      and (p.kind<>'campaign' or exists (
+        select 1 from marketing.campaigns campaign
+        where campaign.id=p.id and campaign.is_deleted=false
+      )) and (
       ${productManager(user)} or ${isManager(user)} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     order by l.scheduled_on,p.created_at desc,l.id`;
   return rows.map(row => ({ ...row, status: row.prepared_count && row.published_count === row.prepared_count ? 'published' : row.failed_count ? 'failed' : row.prepared_count ? 'prepared' : 'waiting' }));
+}
+
+/** Native campaigns share their ID with the existing marketing.campaigns adapter.
+ * Soft-delete that adapter, so historical files, published posts and engagement
+ * references are preserved. Never remove work_plan_items by cascading delete.
+ */
+async function deleteWorkflowCampaign(sql: Sql, user: SessionUser, planId: string) {
+  requirePermission(user, 'marketing.campaign.delete');
+  return sql.begin(async tx => {
+    const [campaign] = await tx<any[]>`select p.id,p.name,p.created_by
+      from marketing.work_plans p join marketing.campaigns c on c.id=p.id
+      where p.id=${planId}::uuid and p.kind='campaign' and c.is_deleted=false
+      for update of p`;
+    if (!campaign) throw new Error(W.notFound);
+    if (!isManager(user) && campaign.created_by !== user.id) throw new Error(W.denied);
+    // A publication being sent to a provider cannot be safely cancelled.
+    const [sending] = await tx<any[]>`select 1 from marketing.work_plan_items line
+      join marketing.work_publish_targets target on target.line_id=line.id
+      join marketing.publish_schedule s on s.id=target.schedule_id
+      where line.plan_id=${planId}::uuid and s.status in ('processing','verification_required') limit 1`;
+    if (sending) throw new Error(W.unpublishedOnly);
+    await tx`update marketing.campaigns set is_deleted=true,updated_at=now()
+      where id=${planId}::uuid and is_deleted=false`;
+    await tx`update marketing.publish_schedule s set status='cancelled',updated_at=now()
+      where s.id in (select target.schedule_id from marketing.work_publish_targets target
+        join marketing.work_plan_items line on line.id=target.line_id where line.plan_id=${planId}::uuid)
+      and s.status in ('waiting','failed')`;
+    return { ok:true, id:planId, message:W.remove };
+  });
 }
 async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const lines = await planLines(sql, user, planId);
@@ -866,6 +899,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_commit_upload') result = await commitUpload(sql, body, user);
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
+    else if (action === 'work_delete_campaign') result = await deleteWorkflowCampaign(sql, user, id(body.id));
     else if (action === 'work_save_prep') result = await savePreparation(sql, user, body, services);
     else if (action === 'work_reset_publication') result = await resetPublicationAfterCheck(sql, user, body);
     else if (action === 'work_publish') result = await publishTarget(sql, user, body, services);

@@ -99,7 +99,7 @@ export function ensureMarketingWorkflowSchema() {
       return Boolean(version);
     };
     if (await exists()) return;
-    await withDatabaseAdvisoryLock('mzj:marketing:workflow-schema:1', async () => {
+    await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
       if (!await exists()) await runSqlScript(MARKETING_WORKFLOW_SQL);
     });
   })().catch(error => { ready = null; throw error; });

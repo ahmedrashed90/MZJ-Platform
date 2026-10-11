@@ -1,4 +1,4 @@
-import { runSqlScript } from "./_db.js";
+import { runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
 
@@ -1214,7 +1214,11 @@ commit;
 
 export async function ensureMarketingSchema() {
   if (!ready) {
-    ready = runSqlScript(MARKETING_SCHEMA_SQL).catch((error) => {
+    // Vercel instances may cold-start simultaneously. Serialize every marketing
+    // schema migration with the workflow bootstrap using one database-wide
+    // advisory lock; ALTER TABLE / CREATE INDEX otherwise can deadlock.
+    ready = withDatabaseAdvisoryLock('mzj:marketing:schema-setup',
+      () => runSqlScript(MARKETING_SCHEMA_SQL)).catch((error) => {
       ready = null;
       throw error;
     });
