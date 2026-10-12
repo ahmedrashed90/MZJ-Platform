@@ -367,6 +367,13 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   };
 }
 
+// Only for external finance imports: choose among the CRM's active finance rules
+// without forcing the online branch. Keep all other assignment paths unchanged.
+export async function chooseFinanceImportAssignment(sourceCode: string) {
+  return (await chooseFromConfiguredRule("finance_sales", "", sourceCode))
+    || { assignedTo: null, assignedName: "", branchCode: branchForDepartment("finance") };
+}
+
 export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
   const department = departmentCodeFromKey(serviceKey);
   const branch = requestedBranch || branchForDepartment(serviceKey);

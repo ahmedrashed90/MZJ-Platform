@@ -286,7 +286,9 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     ["finance", "finance_sales"].includes(leadService) &&
     !lead.assigned_to,
   );
-  const shouldClassifyForDistribution = !lead || requestNeedsFinanceDistribution || leadNeedsFinanceDistribution;
+  const shouldClassifyForDistribution = !lead || requestNeedsFinanceDistribution || leadNeedsFinanceDistribution
+    || Boolean(request && !["finance", "finance_sales"].includes(requestService))
+    || Boolean(lead && !request && !["finance", "finance_sales"].includes(leadService));
 
   if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
@@ -296,7 +298,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       classificationMethod: "lead_import",
       eventKey: eventId,
       skipAutomaticTemplate: true,
-      requestedBranchCode: "online",
+      financeImportRouting: true,
     });
     createdLead = !lead && classified.reused !== true;
     request = classified.request;
@@ -359,9 +361,9 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       source_code=${sourceCode},
       source_name=${sourceName},
       platform_code=${sourceCode},
-      service_key=case when ${existedBefore} then service_key else 'finance' end,
-      department_code=case when ${existedBefore} then department_code else 'finance_sales' end,
-      branch_code=case when ${existedBefore} then branch_code else 'online' end,
+      service_key=${lead.service_key || 'finance'},
+      department_code=${lead.department_code || 'finance_sales'},
+      branch_code=${lead.branch_code || 'online'},
       status_label='عميل جديد',
       payment_type=case when ${existedBefore} then payment_type else 'تمويل' end,
       car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
