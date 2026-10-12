@@ -117,6 +117,7 @@ export function sourceLabel(source: string, fallback = "") {
     facebook: "فيسبوك", fb: "فيسبوك", meta: "فيسبوك", facebook_chat: "فيسبوك",
     instagram: "إنستجرام", ig: "إنستجرام", insta: "إنستجرام", instagram_chat: "إنستجرام",
     tiktok: "تيك توك", tt: "تيك توك", tik_tok: "تيك توك", tiktok_chat: "تيك توك", tiktok_snapchat: "تيك توك ليد وسناب شات ليد",
+    facebook_lead: "فيسبوك ليد", instagram_lead: "إنستجرام ليد",
     tiktok_lead: "تيك توك ليد", snapchat: "سناب شات", snap: "سناب شات", snapchat_lead: "سناب شات ليد",
     whatsapp: "واتساب", wa: "واتساب", mersal: "واتساب",
     installment_calculator: "حاسبة التقسيط", installment: "حاسبة التقسيط", calculator: "حاسبة التقسيط",

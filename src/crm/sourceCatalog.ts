@@ -23,6 +23,8 @@ const SOURCE_LABELS: Record<string, string> = {
   whatsapp: "واتساب",
   wa: "واتساب",
   mersal: "واتساب",
+  facebook_lead: "فيسبوك ليد",
+  instagram_lead: "إنستجرام ليد",
   tiktok_lead: "تيك توك ليد",
   "tiktok-lead": "تيك توك ليد",
   snapchat_lead: "سناب شات ليد",

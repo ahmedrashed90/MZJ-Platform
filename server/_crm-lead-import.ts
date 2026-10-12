@@ -34,8 +34,17 @@ function dateValue(payload: any) {
 
 function sourceCodeForImport(routeSource: string, payload: any) {
   if (routeSource === "installment-calculator") return "installment_calculator";
-  const declared = first(payload?.sourceCode, payload?.source_code, payload?.source, payload?.platform, payload?.channel).toLowerCase();
-  return declared.includes("snap") ? "snapchat_lead" : "tiktok_lead";
+  const declared = first(payload?.sourceCode, payload?.source_code, payload?.leadSourceCode, payload?.lead_source_code, payload?.source, payload?.platform, payload?.channel).toLowerCase();
+  // The shared gateway receives Snapchat, TikTok and Meta sheet leads.
+  // Preserve the actual row-level platform instead of mapping all non-Snapchat rows to TikTok.
+  if (["facebook_lead", "facebook", "fb"].includes(declared)) return "facebook_lead";
+  if (["instagram_lead", "instagram", "ig"].includes(declared)) return "instagram_lead";
+  if (["snapchat_lead", "snapchat", "snap"].includes(declared)) return "snapchat_lead";
+  if (["tiktok_lead", "tiktok", "tt"].includes(declared)) return "tiktok_lead";
+  if (declared.includes("snap")) return "snapchat_lead";
+  if (declared.includes("instagram")) return "instagram_lead";
+  if (declared.includes("facebook")) return "facebook_lead";
+  return "tiktok_lead";
 }
 
 function importedData(payload: any) {
@@ -347,13 +356,13 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       customer_name=case when ${existedBefore} then coalesce(nullif(customer_name,''),${data.customerName}) else ${data.customerName} end,
       phone=case when ${existedBefore} then coalesce(nullif(phone,''),${data.phone || data.phoneNormalized}) else ${data.phone || data.phoneNormalized} end,
       phone_normalized=coalesce(nullif(phone_normalized,''),${data.phoneNormalized}),
-      source_code=case when ${existedBefore} then source_code else ${sourceCode} end,
-      source_name=case when ${existedBefore} then source_name else ${sourceName} end,
-      platform_code=case when ${existedBefore} then platform_code else ${sourceCode} end,
+      source_code=${sourceCode},
+      source_name=${sourceName},
+      platform_code=${sourceCode},
       service_key=case when ${existedBefore} then service_key else 'finance' end,
       department_code=case when ${existedBefore} then department_code else 'finance_sales' end,
       branch_code=case when ${existedBefore} then branch_code else 'online' end,
-      status_label=case when ${existedBefore} then status_label else 'عميل جديد' end,
+      status_label='عميل جديد',
       payment_type=case when ${existedBefore} then payment_type else 'تمويل' end,
       car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
       car_type=case when ${existedBefore} then coalesce(nullif(car_type,''),${data.carName || null}) else ${data.carName || null} end,
