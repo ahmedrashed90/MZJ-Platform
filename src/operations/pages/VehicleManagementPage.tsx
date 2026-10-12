@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { FileArrowDown, FileArrowUp, FloppyDisk, MagnifyingGlass, Plus, WarningCircle } from "@phosphor-icons/react";
 import { exportExcel, operationsFetch, queryString } from "../api";
 import { parseExcelFile } from "../excel";
+import { OPERATIONS_VEHICLE_IMPORT_HEADERS } from "../../../shared/operations-vehicle-import";
 import type { VehicleRow } from "../types";
 import { useOperations } from "../useOperations";
 
-const emptyForm = { id: "", vin: "", carName: "", statement: "", agentName: "", exteriorColor: "", interiorColor: "", modelYear: "", plateNo: "", batchNo: "", locationId: "", statusCode: "available_for_sale", sourceType: "", notes: "", stateNote: "", shortageNote: "" };
+const emptyForm = { id: "", vin: "", carName: "", statement: "", agentName: "", exteriorColor: "", interiorColor: "", modelYear: "", plateNo: "", batchNo: "", locationId: "", statusCode: "available_for_sale", sourceType: "", stateNote: "" };
 
 export function VehicleManagementPage() {
   const { meta } = useOperations();
@@ -27,7 +28,7 @@ export function VehicleManagementPage() {
   useEffect(() => { const timer = window.setTimeout(() => void findVehicles(), 300); return () => window.clearTimeout(timer); }, [search]);
 
   function edit(row: VehicleRow) {
-    setForm({ id: row.id, vin: row.vin, carName: row.car_name || "", statement: row.statement || "", agentName: row.agent_name || "", exteriorColor: row.exterior_color || "", interiorColor: row.interior_color || "", modelYear: row.model_year || "", plateNo: row.plate_no || "", batchNo: row.batch_no || "", locationId: row.location_id || "", statusCode: row.status_code, sourceType: row.source_type || "", notes: row.notes || "", stateNote: row.state_note || "", shortageNote: row.shortage_note || "" });
+    setForm({ id: row.id, vin: row.vin, carName: row.car_name || "", statement: row.statement || "", agentName: row.agent_name || "", exteriorColor: row.exterior_color || "", interiorColor: row.interior_color || "", modelYear: row.model_year || "", plateNo: row.plate_no || "", batchNo: row.batch_no || "", locationId: row.location_id || "", statusCode: row.status_code, sourceType: row.source_type || "", stateNote: row.state_note || "" });
     setResults([]); setSearch("");
   }
 
@@ -42,12 +43,7 @@ export function VehicleManagementPage() {
   }
 
   function downloadTemplate() {
-    exportExcel("قالب-استيراد-السيارات.xlsx", [
-      "الهيكل (VIN)","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","موديل","اللوحة","اسم الدفعة بالتاريخ","المكان",
-      "ملاحظات في السيارة","حجز - نواقص - تحديد مكان","الحالة","ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)",
-      "فرشات","طفاية","شنطة","اسبير","ريموت","شاشة","مسجل","مكيف","كاميرا","حساس",
-      "الموافقة المالية","الموافقة الادارية","Tracking",
-    ], []);
+    exportExcel("قالب-استيراد-السيارات.xlsx", [...OPERATIONS_VEHICLE_IMPORT_HEADERS], []);
   }
 
   async function importFile(file: File) {
@@ -80,10 +76,8 @@ export function VehicleManagementPage() {
             <label><span>اسم الدفعة بالتاريخ</span><input value={form.batchNo} onChange={(e) => setForm({ ...form, batchNo: e.target.value })} /></label>
             <label><span>المكان</span><select required disabled={Boolean(form.id)} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label><span>الحالة</span><select value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-            {form.statusCode === "has_notes" ? <label className="wide"><span>ملاحظات السيارات</span><textarea required value={form.stateNote} onChange={(e) => setForm({ ...form, stateNote: e.target.value })} /></label> : null}
+            <label className="wide"><span>ملاحظات</span><textarea required={form.statusCode === "has_notes"} value={form.stateNote} onChange={(e) => setForm({ ...form, stateNote: e.target.value })} /></label>
             <label><span>المصدر</span><input value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value })} /></label>
-            <label className="wide"><span>ملاحظات في السيارة</span><textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
-            <label className="wide"><span>حجز - نواقص - تحديد مكان</span><textarea value={form.shortageNote} onChange={(e) => setForm({ ...form, shortageNote: e.target.value })} /></label>
             <button className="operations-primary-button wide" type="submit" disabled={saving || (form.id ? !meta.permissions.canEditVehicle : !meta.permissions.canCreateVehicle)}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ"}</button>
           </form>
         </section>

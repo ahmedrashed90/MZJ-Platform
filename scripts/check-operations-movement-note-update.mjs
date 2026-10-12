@@ -13,7 +13,7 @@ const migrations = [
 
 const checks = [
   ['Same location/status is detected before the note-only path', operations.includes('const sameLocationAndStatus = String(v.location_id) === destinationLocationId && v.status_code === newStatus;')],
-  ['The shared note is applied to حجز - نواقص - تحديد مكان', operations.includes('const effectiveShortageNote = sharedMovementNote || clean(raw.shortageNote);')],
+  ['Removed shortage input does not erase old vehicle data', operations.includes('raw.shortageNote === undefined && !sharedMovementNote ? undefined') && operations.includes('raw.shortageNote === undefined ? clean(vehicle.shortage_note)')],
   ['A note-only update is accepted when a note changed', operations.includes('const hasNoteUpdate = Boolean(clean(raw.note) || sharedMovementNote)') && operations.includes('if (sameLocationAndStatus) {')],
   ['A no-op remains blocked when there is no new note', operations.includes('ولم تتم إضافة ملاحظة جديدة')],
   ['Note-only persistence does not change location or status', operations.includes('const [updated] = noteOnly') && operations.includes('update operations.vehicles set state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null}')],

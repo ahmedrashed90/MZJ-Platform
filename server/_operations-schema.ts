@@ -146,6 +146,13 @@ alter table operations.vehicles add column if not exists version integer not nul
 alter table operations.vehicles add column if not exists photographed boolean not null default false;
 alter table operations.vehicles add column if not exists photographed_at timestamptz;
 alter table operations.vehicles add column if not exists photographed_by uuid references core.users(id);
+alter table operations.vehicles add column if not exists is_tajyeer boolean not null default false;
+alter table operations.vehicles add column if not exists tajyeer_updated_at timestamptz;
+alter table operations.vehicles add column if not exists tajyeer_updated_by uuid references core.users(id);
+alter table operations.vehicles add column if not exists tajyeer_updated_by_name text;
+
+-- The central access-control schema owns all permission grants for this feature.
+
 create index if not exists operations_vehicles_vin_text_idx on operations.vehicles(vin);
 create index if not exists operations_vehicles_search_idx on operations.vehicles(lower(coalesce(car_name,'')),lower(coalesce(statement,'')));
 create index if not exists operations_vehicles_active_idx on operations.vehicles(is_deleted,is_inventory_active,archived_at,location_id,status_code);

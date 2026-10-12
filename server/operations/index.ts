@@ -1,3 +1,4 @@
+import { vehicleImportStateNote } from "../../shared/operations-vehicle-import.js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { getSystemAccess } from "../_access-control.js";
@@ -20,6 +21,7 @@ import {
   operationsRequestHasActiveVehicle,
 } from "../_operations-query-scope.js";
 import { isOperationsInventoryMetric, operationsInventoryMetricCondition } from "../_operations-inventory-metrics.js";
+import { OPERATIONS_INVENTORY_FIELDS, canViewOperationsInventoryField } from "../../shared/operations-inventory-fields.js";
 import {
   boolValue,
   clean,
@@ -128,6 +130,7 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
     locations,
     statuses,
     checkItems,
+    inventoryVisibleColumns: OPERATIONS_INVENTORY_FIELDS.filter((field) => canViewOperationsInventoryField(user, field.permission)).map((field) => field.key),
     permissions: {
       canCreateVehicle: hasPermission(user, "operations.vehicle.create"),
       canEditVehicle: hasPermission(user, "operations.vehicle.edit"),
@@ -141,6 +144,7 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
       canApproveAdministrative: hasPermission(user, "operations.approval.administrative"),
       canManageSettings: hasPermission(user, "settings.operations.manage"),
       canEditVin: hasPermission(user, "operations.vehicle.vin.update"),
+      canUpdateTajyeer: hasPermission(user, "operations.inventory.tajyeer.update"),
     },
   };
 }
@@ -151,6 +155,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
   const status = clean(request.query.status);
   const model = clean(request.query.model);
   const agent = clean(request.query.agent);
+  const tajyeer = clean(request.query.tajyeer);
+  if (tajyeer && !["yes", "no"].includes(tajyeer)) throw new OperationError(400, "VALIDATION_ERROR", "فلتر التجيير غير صحيح");
   const archived = boolValue(request.query.archived);
   const all = boolValue(request.query.all);
   const activeOnly = !archived && !all;
@@ -171,6 +177,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       and (${status}='' or v.status_code=${status})
       and (${model}='' or coalesce(v.model_year,'')=${model})
       and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and (${tajyeer}='' or v.is_tajyeer=(${tajyeer}='yes'))
       and ${scope}
       and ${statusScope}
   `;
@@ -181,6 +188,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
       v.status_code,coalesce(s.name,v.status_code) as status_name,v.source_type,v.has_notes,v.notes,v.state_note,v.shortage_note,
       v.reserved_by_email,v.reserved_by_name,v.reserved_at,
+      v.is_tajyeer,v.tajyeer_updated_at,v.tajyeer_updated_by_name,
       v.archived_at,v.archive_reason,v.created_by_name,v.updated_by_name,v.created_at,v.updated_at,v.version,
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved,
@@ -224,12 +232,61 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       and (${status}='' or v.status_code=${status})
       and (${model}='' or coalesce(v.model_year,'')=${model})
       and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and (${tajyeer}='' or v.is_tajyeer=(${tajyeer}='yes'))
       and ${scope}
       and ${statusScope}
     order by v.updated_at desc,v.vin
     limit ${pageSize} offset ${offset}
   `;
+  // Field-level inventory visibility applies only to stock queries. Movement and
+  // other operational workflows keep their own existing permissions and data.
+  if (boolValue(request.query.inventory)) {
+    const responseFields: Record<string, string[]> = {
+      car: ["car_name"], statement: ["statement"], agent: ["agent_name"], interior: ["interior_color"],
+      exterior: ["exterior_color"], model: ["model_year"], plate: ["plate_no"], batch: ["batch_no"],
+      location: ["location_name"], status: ["status_name"], checks: ["check_values"],
+      tajyeer: ["is_tajyeer", "tajyeer_updated_by_name", "tajyeer_updated_at"],
+      financialApproval: ["financial_approved", "financial_note"],
+      administrativeApproval: ["administrative_approved", "administrative_note"],
+      tracking: ["tracking_active_orders", "tracking_order_id", "tracking_order_no", "tracking_status", "tracking_progress"],
+    };
+    for (const field of OPERATIONS_INVENTORY_FIELDS) {
+      if (canViewOperationsInventoryField(user, field.permission)) continue;
+      for (const row of rows) for (const key of responseFields[field.key] || []) delete row[key];
+    }
+  }
   return { ok: true, rows, total: Number(countRow?.total || 0), page, pageSize };
+}
+
+async function updateVehicleTajyeer(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) || typeof body.isTajyeer !== "boolean") {
+    throw new OperationError(400, "VALIDATION_ERROR", "حدد السيارة وحالة التجيير: نعم أو لا");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const scope = accessScope(tx as ReturnType<typeof getSql>, user, "l");
+    const statusScope = vehicleStatusScope(tx as ReturnType<typeof getSql>, user);
+    const [before] = await tx<any[]>`
+      select v.*,v.id::text from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false and ${scope} and ${statusScope}
+      for update of v
+    `;
+    if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة ضمن صلاحياتك");
+    if (Boolean(before.is_tajyeer) === body.isTajyeer) return { ok: true, row: before, unchanged: true };
+    const [row] = await tx<any[]>`
+      update operations.vehicles set is_tajyeer=${body.isTajyeer},
+      tajyeer_updated_at=now(),tajyeer_updated_by=${who.id}::uuid,tajyeer_updated_by_name=${who.name},
+      updated_at=now(),updated_by=${who.id}::uuid,updated_by_name=${who.name},version=version+1
+      where id=${id}::uuid returning *,id::text
+    `;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+      values (${who.id}::uuid,'operations','vehicle_tajyeer_updated','vehicle',${id},
+        ${tx.json({ vin: before.vin, isTajyeer: Boolean(before.is_tajyeer) })},
+        ${tx.json({ vin: row.vin, isTajyeer: Boolean(row.is_tajyeer), by: who.name })})`;
+    return { ok: true, row };
+  });
 }
 
 async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1146,7 +1203,7 @@ async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string
     assertVehicleStatusAccess(user, valid.status_code, "لا تملك صلاحية إضافة سيارة بهذه الحالة");
     const [row] = await tx<any[]>`
       insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,source_type,notes,state_note,shortage_note,has_notes,created_by,created_by_name,updated_by,updated_by_name)
-      values (${vin},${clean(body.carName)||null},${clean(body.statement)||null},${clean(body.agentName)||null},${clean(body.exteriorColor)||null},${clean(body.interiorColor)||null},${clean(body.modelYear)||null},${clean(body.plateNo)||null},${clean(body.batchNo)||null},${locationId}::uuid,${statusCode},${clean(body.sourceType)||null},${clean(body.notes)||null},${clean(body.stateNote)||null},${clean(body.shortageNote)||null},${statusCode==='has_notes' || Boolean(clean(body.notes))},${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+      values (${vin},${clean(body.carName)||null},${clean(body.statement)||null},${clean(body.agentName)||null},${clean(body.exteriorColor)||null},${clean(body.interiorColor)||null},${clean(body.modelYear)||null},${clean(body.plateNo)||null},${clean(body.batchNo)||null},${locationId}::uuid,${statusCode},${clean(body.sourceType)||null},${clean(body.notes)||null},${clean(body.stateNote)||null},${clean(body.shortageNote)||null},${statusCode==='has_notes' || Boolean(clean(body.notes)) || Boolean(clean(body.stateNote))},${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
       returning *,id::text
     `;
     await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','vehicle_created','vehicle',${row.id},${tx.json(row)})`;
@@ -1184,11 +1241,15 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
       throw new OperationError(400, "VALIDATION_ERROR", "ملاحظات الحالة مطلوبة عند اختيار حالة بها ملاحظات");
     }
 
+    // The removed legacy inputs are not sent by the vehicle-management page.
+    // Keep any old values in the database rather than resetting them to NULL.
+    const legacyNotes = body.notes === undefined ? before.notes : clean(body.notes) || null;
+    const legacyShortageNote = body.shortageNote === undefined ? before.shortage_note : clean(body.shortageNote) || null;
     const [detailsRow] = await tx<any[]>`
       update operations.vehicles set vin=${vin},car_name=${clean(body.carName)||null},statement=${clean(body.statement)||null},agent_name=${clean(body.agentName)||null},
         exterior_color=${clean(body.exteriorColor)||null},interior_color=${clean(body.interiorColor)||null},model_year=${clean(body.modelYear)||null},plate_no=${clean(body.plateNo)||null},batch_no=${clean(body.batchNo)||null},
-        source_type=${clean(body.sourceType)||null},notes=${clean(body.notes)||null},state_note=${clean(body.stateNote)||null},shortage_note=${clean(body.shortageNote)||null},
-        has_notes=${statusCode==='has_notes' || Boolean(clean(body.notes))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+        source_type=${clean(body.sourceType)||null},notes=${legacyNotes},state_note=${clean(body.stateNote)||null},shortage_note=${legacyShortageNote},
+        has_notes=${statusCode==='has_notes' || Boolean(legacyNotes) || Boolean(clean(body.stateNote))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
       where id=${id}::uuid returning *,id::text
     `;
 
@@ -1421,7 +1482,7 @@ async function persistVehicleMovement(
     await tx.savepoint(async (eventTx: any) => {
       const eventType = noteOnly ? 'operations.vehicle.note_updated' : 'operations.vehicle.moved';
       const eventTitle = noteOnly ? 'تم تحديث ملاحظة سيارة' : 'تم تحريك سيارة';
-      const eventDescription = noteOnly ? `${vehicle.vin}: تم تحديث حجز - نواقص - تحديد مكان` : `${vehicle.vin} إلى ${destination.name}`;
+      const eventDescription = noteOnly ? `${vehicle.vin}: تم تحديث الملاحظات` : `${vehicle.vin} إلى ${destination.name}`;
       await eventTx`insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values (${eventType},'vehicle',${vehicle.id},'vehicle',${vehicle.id},${vehicle.id}::uuid,${vehicle.vin},${who.id}::uuid,${who.name},${destination.branch_code},${eventTitle},${eventDescription},${eventTx.json({ movementId: movement.id, batchId, noteOnly })})`;
     });
   } catch (outboxError) {
@@ -1471,7 +1532,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       assertVehicleStatusAccess(user, v.status_code, `لا تملك صلاحية التعامل مع الحالة الحالية للسيارة ${v.vin}`);
       const sameLocationAndStatus = String(v.location_id) === destinationLocationId && v.status_code === newStatus;
       const sharedMovementNote = clean(body.note);
-      const effectiveShortageNote = sharedMovementNote || clean(raw.shortageNote);
+      const effectiveShortageNote = raw.shortageNote === undefined && !sharedMovementNote ? undefined : sharedMovementNote || clean(raw.shortageNote);
       const effectiveStateNote = clean(raw.stateNote);
       const agencyInteriorColor = v.location_code === "agency" ? clean(raw.agencyInteriorColor) : "";
       if (agencyInteriorColor && !AGENCY_INTERIOR_COLORS.has(agencyInteriorColor)) {
@@ -1484,7 +1545,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
         agencyInteriorColor: v.location_code === "agency" && agencyInteriorColor ? agencyInteriorColor : undefined,
       };
       const hasNoteUpdate = Boolean(clean(raw.note) || sharedMovementNote)
-        || effectiveShortageNote !== clean(v.shortage_note)
+        || (effectiveShortageNote !== undefined && effectiveShortageNote !== clean(v.shortage_note))
         || effectiveStateNote !== clean(v.state_note);
       if (sameLocationAndStatus && !hasNoteUpdate) throw new OperationError(409, "CONFLICT", `السيارة ${v.vin} موجودة بالفعل في المكان والحالة المختارين ولم تتم إضافة ملاحظة جديدة`);
       if (newStatus === "has_notes" && !effectiveStateNote) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
@@ -1929,6 +1990,12 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
   return sql.begin(async (tx) => {
     const report: any = { total: rows.length, inserted: 0, updated: 0, skipped: 0, failed: 0, errors: [], warnings: [] };
     const vins = new Set<string>();
+    const removedHeadings = ["ملاحظات في السيارة", "حجز - نواقص - تحديد مكان"].filter((header) =>
+      Object.prototype.hasOwnProperty.call(rows[0] || {}, header),
+    );
+    if (removedHeadings.length) {
+      report.warnings.push({ row: 1, warning: `تم تجاهل أعمدة القالب القديم: ${removedHeadings.join("، ")}. استخدم حقل ملاحظات فقط.` });
+    }
     const normalized = rows.map((raw: any, index: number) => ({
       row: index + 2,
       vin: clean(raw.vin || raw["الهيكل (VIN)"] || raw["رقم الهيكل"] || raw["الهيكل"]),
@@ -1936,8 +2003,7 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
       exteriorColor: clean(raw.exteriorColor || raw["خارجي"] || raw["اللون الخارجي"]), interiorColor: clean(raw.interiorColor || raw["داخلي"] || raw["اللون الداخلي"]),
       modelYear: clean(raw.modelYear || raw["موديل"]), plateNo: clean(raw.plateNo || raw["اللوحة"]), batchNo: clean(raw.batchNo || raw["اسم الدفعة بالتاريخ"]),
       locationCode: clean(raw.locationCode || raw["المكان"]), statusCode: clean(raw.statusCode || raw["الحالة"]),
-      notes: clean(raw.notes || raw["ملاحظات في السيارة"]), shortageNote: clean(raw.shortageNote || raw["حجز - نواقص - تحديد مكان"]),
-      stateNote: clean(raw.stateNote || raw["ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)"]),
+      stateNote: clean(vehicleImportStateNote(raw)),
       checks: IMPORT_CHECK_COLUMNS.map(([itemCode, column]) => ({ itemCode, status: importedCheckStatus(raw[column]) })).filter((item) => item.status),
     }));
     for (const row of normalized) {
@@ -1968,8 +2034,8 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
           let vehicleId = existing?.id;
           if (!existing) {
             const [created] = await rowTx<any[]>`
-              insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,notes,state_note,shortage_note,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name)
-              values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${targetStatusCode},${row.notes||null},${row.stateNote||null},${row.shortageNote||null},${status?.code==='has_notes' || Boolean(row.notes) || Boolean(row.stateNote)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+              insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,state_note,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name)
+              values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${targetStatusCode},${row.stateNote||null},${targetStatusCode==='has_notes' || Boolean(row.stateNote)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
               returning id::text
             `;
             vehicleId = created.id;
@@ -1977,9 +2043,9 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
             await rowTx`
               update operations.vehicles set car_name=coalesce(nullif(${row.carName},''),car_name),statement=coalesce(nullif(${row.statement},''),statement),agent_name=coalesce(nullif(${row.agentName},''),agent_name),
                 exterior_color=coalesce(nullif(${row.exteriorColor},''),exterior_color),interior_color=coalesce(nullif(${row.interiorColor},''),interior_color),model_year=coalesce(nullif(${row.modelYear},''),model_year),
-                plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),notes=coalesce(nullif(${row.notes},''),notes),
-                state_note=coalesce(nullif(${row.stateNote},''),state_note),shortage_note=coalesce(nullif(${row.shortageNote},''),shortage_note),
-                has_notes=case when status_code='has_notes' or nullif(${row.notes},'') is not null or nullif(${row.stateNote},'') is not null then true else has_notes end,
+                plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),
+                state_note=coalesce(nullif(${row.stateNote},''),state_note),
+                has_notes=case when status_code='has_notes' or nullif(${row.stateNote},'') is not null then true else has_notes end,
                 is_inventory_active=true,updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
               where id=${existing.id}::uuid
             `;
@@ -2478,6 +2544,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else if (action === "archive_vehicle") {
       if (!requireOperationsPermission(user, "operations.vehicle.archive", response)) return;
       result = await archiveVehicle(sql, body, user);
+    } else if (action === "update_vehicle_tajyeer") {
+      if (!requireOperationsPermission(user, "operations.inventory.tajyeer.update", response)) return;
+      result = await updateVehicleTajyeer(sql, body, user);
     } else if (action === "move_vehicles") {
       if (!requireOperationsPermission(user, "operations.movement.create", response)) return;
       result = await moveVehicles(sql, body, user);

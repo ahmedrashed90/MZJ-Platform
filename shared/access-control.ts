@@ -1,4 +1,5 @@
 import { W } from './marketing-workflow-labels.js';
+import { OPERATIONS_INVENTORY_FIELDS } from './operations-inventory-fields.js';
 export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking" | "website";
 export type AccessSystemCode = PlatformSystem | "core";
 export type DataScope =
@@ -229,6 +230,8 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
 
   p("system.operations.access", "دخول نظام العمليات", "operations", "inventory", "access", "system"),
   p("operations.inventory.view", "مشاهدة مخزون السيارات", "operations", "inventory", "view", "page"),
+  p("operations.inventory.tajyeer.update", "التجيير", "operations", "inventory", "tajyeer_update", "action", "تغيير حالة التجيير لكل رقم هيكل", true),
+  ...OPERATIONS_INVENTORY_FIELDS.map((field) => p(field.permission, `إظهار ${field.label}`, "operations", "inventory", `column_${field.key}`, "action", `إظهار عمود ${field.label} في مخزون السيارات`)),
   p("operations.manage.view", "فتح إدارة السيارات", "operations", "manage", "view", "page"),
   p("operations.movement.view", "فتح صفحة الحركة", "operations", "movement", "view", "page"),
   p("operations.transfers.view", "مشاهدة طلبات العمليات", "operations", "transfers", "view", "page"),

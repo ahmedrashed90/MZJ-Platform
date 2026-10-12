@@ -1,6 +1,38 @@
 import { ensureMarketingWorkflowAccess } from './_marketing-workflow-access.js';
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
+const OPERATIONS_INVENTORY_ACCESS_SQL = String.raw`
+-- Operations inventory: independent tajyeer edit grant and per-column visibility options.
+insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
+  ('operations.inventory.tajyeer.update','التجيير','operations','inventory','update','التجيير','تعديل التجيير','action',true,8550,true),
+  ('operations.inventory.column.car','إظهار السيارة','operations','inventory','car','إظهار السيارة','إظهار عمود السيارة بمخزون السيارات','action',false,8551,true),
+  ('operations.inventory.column.statement','إظهار البيان','operations','inventory','statement','إظهار البيان','إظهار عمود البيان بمخزون السيارات','action',false,8552,true),
+  ('operations.inventory.column.agent','إظهار الوكيل','operations','inventory','agent','إظهار الوكيل','إظهار عمود الوكيل بمخزون السيارات','action',false,8553,true),
+  ('operations.inventory.column.interior','إظهار اللون الداخلي','operations','inventory','interior','إظهار اللون الداخلي','إظهار عمود اللون الداخلي بمخزون السيارات','action',false,8554,true),
+  ('operations.inventory.column.exterior','إظهار اللون الخارجي','operations','inventory','exterior','إظهار اللون الخارجي','إظهار عمود اللون الخارجي بمخزون السيارات','action',false,8555,true),
+  ('operations.inventory.column.model','إظهار الموديل','operations','inventory','model','إظهار الموديل','إظهار عمود الموديل بمخزون السيارات','action',false,8556,true),
+  ('operations.inventory.column.plate','إظهار اللوحة','operations','inventory','plate','إظهار اللوحة','إظهار عمود اللوحة بمخزون السيارات','action',false,8557,true),
+  ('operations.inventory.column.batch','إظهار اسم الدفعة','operations','inventory','batch','إظهار اسم الدفعة','إظهار عمود اسم الدفعة بمخزون السيارات','action',false,8558,true),
+  ('operations.inventory.column.location','إظهار المكان','operations','inventory','location','إظهار المكان','إظهار عمود المكان بمخزون السيارات','action',false,8559,true),
+  ('operations.inventory.column.status','إظهار الحالة','operations','inventory','status','إظهار الحالة','إظهار عمود الحالة بمخزون السيارات','action',false,8560,true),
+  ('operations.inventory.column.tajyeer','إظهار التجيير','operations','inventory','tajyeer','إظهار التجيير','إظهار عمود التجيير بمخزون السيارات','action',false,8561,true),
+  ('operations.inventory.column.checks','إظهار التشييك','operations','inventory','checks','إظهار التشييك','إظهار عمود التشييك بمخزون السيارات','action',false,8562,true),
+  ('operations.inventory.column.financialApproval','إظهار الموافقة المالية','operations','inventory','financialApproval','إظهار الموافقة المالية','إظهار عمود الموافقة المالية بمخزون السيارات','action',false,8563,true),
+  ('operations.inventory.column.administrativeApproval','إظهار الموافقة الإدارية','operations','inventory','administrativeApproval','إظهار الموافقة الإدارية','إظهار عمود الموافقة الإدارية بمخزون السيارات','action',false,8564,true),
+  ('operations.inventory.column.tracking','إظهار التراكينج','operations','inventory','tracking','إظهار التراكينج','إظهار عمود التراكينج بمخزون السيارات','action',false,8565,true)
+on conflict(code) do update set name=excluded.name,system_code=excluded.system_code,page_code=excluded.page_code,action_code=excluded.action_code,name_ar=excluded.name_ar,description_ar=excluded.description_ar,category=excluded.category,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order,is_active=true;
+
+insert into core.role_permissions(role_id,permission_id)
+select rp.role_id,col.id from core.role_permissions rp
+join core.permissions base on base.id=rp.permission_id and base.code='operations.inventory.view'
+join core.permissions col on col.code like 'operations.inventory.column.%'
+on conflict do nothing;
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r join core.permissions p on p.code='operations.inventory.tajyeer.update'
+where r.code in ('admin','system_admin')
+on conflict do nothing;
+`;
+
 export const ACCESS_CONTROL_SQL = String.raw`-- MZJ centralized access control. Safe and idempotent.
 
 create table if not exists core.systems (
@@ -416,6 +448,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('tracking.stage.10.sms','إرسال SMS للمرحلة 10','tracking','orders','stage_10_sms','إرسال SMS للمرحلة 10','إرسال رسالة المرحلة رقم 10','workflow',true,2200,true)
 on conflict(code) do update set name=excluded.name,system_code=excluded.system_code,page_code=excluded.page_code,action_code=excluded.action_code,name_ar=excluded.name_ar,description_ar=excluded.description_ar,category=excluded.category,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order,is_active=true;
 
+
 update core.permissions
 set is_active=false
 where code in ('marketing.manage','tracking.orders.delete','crm.settings.manage','crm.settings.view','marketing.settings.manage','marketing.settings.view','operations.settings.manage','operations.settings.view','tracking.settings.manage','tracking.settings.view');
@@ -558,6 +591,7 @@ insert into core.access_control_schema_state(id,version,updated_at)
 values(1,1193,now())
 on conflict(id) do update set version=greatest(core.access_control_schema_state.version,excluded.version),updated_at=now();
 
+${OPERATIONS_INVENTORY_ACCESS_SQL}
 `;
 
 
@@ -840,6 +874,25 @@ async function ensureRequiredPagePermissionCatalog() {
  * The readiness check is cheap; the full idempotent migration runs only when required.
  * An advisory lock prevents concurrent serverless instances from applying DDL together.
  */
+let operationsInventoryAccessPromise: Promise<void> | null = null;
+async function ensureOperationsInventoryPermissionCatalog() {
+  if (!operationsInventoryAccessPromise) {
+    operationsInventoryAccessPromise = (async () => {
+      const sql = getSql();
+      const [row] = await sql<{ total: number }[]>`
+        select count(*)::int as total from core.permissions
+        where system_code='operations' and page_code='inventory'
+          and is_active=true and (code='operations.inventory.tajyeer.update' or code like 'operations.inventory.column.%')
+      `;
+      if (Number(row?.total || 0) >= 16) return;
+      await withDatabaseAdvisoryLock('mzj:operations-inventory-fields:v1', async () => {
+        await runSqlScript(OPERATIONS_INVENTORY_ACCESS_SQL);
+      });
+    })().catch((error) => { operationsInventoryAccessPromise = null; throw error; });
+  }
+  return operationsInventoryAccessPromise;
+}
+
 export function ensureAccessControlSchema() {
   if (!accessControlSchemaPromise) {
     accessControlSchemaPromise = (async () => {
@@ -857,6 +910,7 @@ export function ensureAccessControlSchema() {
       }
       await ensureMersalUserLinkSchema();
       await ensureRequiredPagePermissionCatalog();
+      await ensureOperationsInventoryPermissionCatalog();
       await ensureMarketingWorkflowAccess();
     })().catch((error) => {
       accessControlSchemaPromise = null;
