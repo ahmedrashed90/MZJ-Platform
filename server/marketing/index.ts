@@ -495,6 +495,7 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved,
       coalesce(req.active_requests,0)::int as active_transfer_requests,
+      coalesce(req.active_request_details,'[]'::json) as active_request_details,
       coalesce(ms.content_usage,'[]'::jsonb) as content_usage
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
@@ -506,7 +507,12 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
       order by va.cycle_no desc limit 1
     ) a on true
     left join lateral (
-      select count(*)::int as active_requests
+      select count(*)::int as active_requests,
+        coalesce(json_agg(json_build_object(
+          'requestNo',r.request_no,
+          'requestKind',r.request_kind,
+          'status',r.status
+        ) order by r.requested_at desc),'[]'::json) as active_request_details
       from operations.transfer_request_vehicles rv
       join operations.transfer_requests r on r.id=rv.transfer_request_id
       where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
@@ -4070,19 +4076,34 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
   return sql.begin(async tx=>{
     const[destination]=await tx<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
     if(!destination)throw new Error("المكان المستهدف غير صحيح");
-    const cars:any[]=[];
-    for(const item of vehicles){
-      const[v]=await tx<any[]>`
-        select v.*,v.id::text,l.code as location_code,l.branch_code
-        from operations.vehicles v left join operations.locations l on l.id=v.location_id
-        where v.id=${item.vehicleId}::uuid and v.is_deleted=false and v.archived_at is null
-        for update of v
-      `;
-      if(!v)throw new Error("إحدى السيارات غير موجودة");
-      const[active]=await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${item.vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
-      if(active)throw new Error(`السيارة ${v.vin} مرتبطة بطلب نشط ${active.request_no}`);
-      cars.push({...v,itemNote:item.note});
+    // Lock all selected VINs in a stable order, then check the same active-request
+    // rule used by the Operations transfer system. This also supports large selections.
+    const lockedCars=await tx<any[]>`
+      select v.*,v.id::text as vehicle_id_text,l.code as location_code,l.branch_code
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id in ${tx(uniqueIds)} and v.is_deleted=false and v.archived_at is null
+      order by v.id
+      for update of v
+    `;
+    const vehicleById=new Map(lockedCars.map((car:any)=>[String(car.vehicle_id_text),car]));
+    if(vehicleById.size!==uniqueIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
+    const conflicts=await tx<any[]>`
+      select distinct on (rv.vehicle_id) rv.vehicle_id::text as vehicle_id,
+        r.request_no,r.request_kind,r.status
+      from operations.transfer_request_vehicles rv
+      join operations.transfer_requests r on r.id=rv.transfer_request_id
+      where rv.vehicle_id in ${tx(uniqueIds)}
+        and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
+      order by rv.vehicle_id,r.requested_at desc
+    `;
+    if(conflicts.length){
+      const active=conflicts[0];
+      const conflictCar=vehicleById.get(String(active.vehicle_id));
+      const kind=active.request_kind==='photography'?'طلب تصوير':'طلب نقل';
+      throw new Error(`السيارة ${conflictCar?.vin||''} مرتبطة بـ${kind} نشط رقم ${active.request_no}، ولا يمكن إضافتها حتى إغلاق الطلب في النظام المختص`);
     }
+    const cars:any[]=vehicles.map((item:any)=>({...vehicleById.get(item.vehicleId),itemNote:item.note}));
     const source=cars[0];
     const sourceLocationIds=[...new Set(cars.map((vehicle)=>String(vehicle.location_id||"")).filter(Boolean))];
     const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;

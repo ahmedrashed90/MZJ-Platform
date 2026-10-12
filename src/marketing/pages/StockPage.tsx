@@ -65,6 +65,13 @@ type StockSummaryRow = {
   quantity: number;
 };
 
+function blockingRequestDescription(row: StockVehicleRow) {
+  const blockers = row.active_request_details || [];
+  return blockers.length
+    ? blockers.map((request) => `${request.requestKind === "photography" ? "طلب تصوير" : "طلب نقل"} ${request.requestNo || "غير مرقم"} (${requestStatusLabels[request.status] || request.status})`).join("، ")
+    : "طلب نشط غير ظاهر في متابعة التصوير";
+}
+
 const requestStageOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
 const requestStatusLabels: Record<string, string> = {
   created: "طلب جديد",
@@ -134,12 +141,16 @@ export function StockPage() {
   const [photographyDate, setPhotographyDate] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [requestNote, setRequestNote] = useState("");
+  const [vinBatch, setVinBatch] = useState("");
+  const [requestError, setRequestError] = useState("");
+  const [followupError, setFollowupError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [completingRequestId, setCompletingRequestId] = useState("");
   const [deletingRequestId, setDeletingRequestId] = useState("");
   const [markingStockId, setMarkingStockId] = useState("");
+  const [refreshingRequestLocks, setRefreshingRequestLocks] = useState(false);
   const photographyDateInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
@@ -148,8 +159,16 @@ export function StockPage() {
       const payload = await marketingFetch<StockPayload>("/api/marketing?resource=stock");
       setData(payload);
       setSelectedRequest((current) => current ? payload.requests.find((row) => row.id === current.id) || null : null);
+      // Requests can be completed by other users while the creation dialog stays open.
+      const freshById = new Map<string, StockCar>(payload.cars.map((row) => [row.id, row]));
+      setSelectedCars((current) => current.map((row) => {
+        const fresh = freshById.get(row.id);
+        return fresh ? { ...fresh, usage: Array.isArray(fresh.content_usage) ? [...fresh.content_usage] : [] } : row;
+      }));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل الاستوك");
+      const text = failure instanceof Error ? failure.message : "تعذر تحميل الاستوك";
+      if (requestOpen) setRequestError(text);
+      else setError(text);
     }
   }
 
@@ -234,6 +253,7 @@ export function StockPage() {
     [data?.requests],
   );
   const visibleRequests = requestTab === "active" ? activeRequests : completedRequests;
+  const blockedSelectedCars = selectedCars.filter((row) => Number(row.active_transfer_requests || 0) > 0);
 
   const destination = useMemo(
     () => data?.locations.find((item) => item.id === destinationLocationId),
@@ -290,6 +310,8 @@ export function StockPage() {
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
+    setVinBatch("");
+    setRequestError("");
     setRequestOpen(true);
   }
 
@@ -298,16 +320,49 @@ export function StockPage() {
     if (!row) return;
 
     if (selectedCars.some((item) => item.id === row.id)) {
-      setError(`السيارة ${row.vin} مضافة بالفعل إلى طلب التصوير`);
+      setRequestError(`السيارة ${row.vin} مضافة بالفعل إلى طلب التصوير`);
       return;
     }
     if (row.active_transfer_requests) {
-      setError(`السيارة ${row.vin} مرتبطة بطلب نشط ولا يمكن إضافتها إلى طلب تصوير جديد`);
+      setRequestError(`السيارة ${row.vin} مرتبطة بـ${blockingRequestDescription(row)}. راجع الطلب في النظام المختص أولًا.`);
       return;
     }
-    setError("");
+    setRequestError("");
     setSelectedCars((current) => [...current, row]);
     setPickerSearch("");
+  }
+
+  function addCarsByVin() {
+    const values = [...new Set(vinBatch.trim().split(/[\s,،;؛]+/).map((vin) => vin.trim().toUpperCase()).filter(Boolean))];
+    if (!values.length) {
+      setRequestError("اكتب أو الصق رقم هيكل واحدًا على الأقل");
+      return;
+    }
+    const carsByVin = new Map<string, StockVehicleRow>(stockRows.map((row) => [String(row.vin || "").trim().toUpperCase(), row]));
+    const existingIds = new Set(selectedCars.map((row) => row.id));
+    const found: StockVehicleRow[] = [];
+    const unknown: string[] = [];
+    const blocked: string[] = [];
+    const already: string[] = [];
+    for (const vin of values) {
+      const row = carsByVin.get(vin);
+      if (!row) unknown.push(vin);
+      else if (existingIds.has(row.id)) already.push(vin);
+      else if (row.active_transfer_requests) blocked.push(`${vin} (${blockingRequestDescription(row)})`);
+      else {
+        existingIds.add(row.id);
+        found.push(row);
+      }
+    }
+    if (found.length) setSelectedCars((current) => [...current, ...found]);
+    const describe = (values: string[]) => values.slice(0, 4).join("، ") + (values.length > 4 ? `، و${values.length - 4} أخرى` : "");
+    const notices = [
+      unknown.length ? `أرقام غير موجودة في الاستوك: ${describe(unknown)}` : "",
+      blocked.length ? `سيارات مرتبطة بطلبات نشطة ولم تُضف: ${describe(blocked)}` : "",
+      already.length ? `أرقام موجودة مسبقًا في الطلب: ${describe(already)}` : "",
+    ].filter(Boolean);
+    setRequestError(notices.join(". "));
+    setVinBatch([...unknown, ...blocked.map((item) => item.split(" ")[0])].join("\n"));
   }
 
   function resetRequest() {
@@ -318,6 +373,8 @@ export function StockPage() {
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
+    setVinBatch("");
+    setRequestError("");
     setError("");
   }
 
@@ -347,6 +404,7 @@ export function StockPage() {
   async function completePhotoRequest(requestId: string) {
     setBusy(true);
     setCompletingRequestId(requestId);
+    setFollowupError("");
     setError("");
     setMessage("");
     try {
@@ -359,7 +417,7 @@ export function StockPage() {
       setRequestTab("completed");
       await load();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر إنهاء طلب التصوير");
+      setFollowupError(failure instanceof Error ? failure.message : "تعذر إنهاء طلب التصوير");
     } finally {
       setBusy(false);
       setCompletingRequestId("");
@@ -389,9 +447,16 @@ export function StockPage() {
   }
 
   async function createRequest() {
-    if (!selectedCars.length || !destinationLocationId || !photographyDate) return;
+    if (!selectedCars.length || !destinationLocationId || !photographyDate) {
+      setRequestError("اختر السيارات والمكان المستهدف وتاريخ التصوير قبل إنشاء الطلب");
+      return;
+    }
+    if (blockedSelectedCars.length) {
+      setRequestError(`لا يمكن إنشاء الطلب: ${blockedSelectedCars.map((row) => `${row.vin} (${blockingRequestDescription(row)})`).join("، ")}`);
+      return;
+    }
     setBusy(true);
-    setError("");
+    setRequestError("");
     setMessage("");
     try {
       const result = await marketingFetch<{ message: string }>("/api/marketing", {
@@ -410,10 +475,16 @@ export function StockPage() {
       setRequestTab("active");
       await load();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر إنشاء طلب التصوير");
+      setRequestError(failure instanceof Error ? failure.message : "تعذر إنشاء طلب التصوير");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function refreshRequestLocks() {
+    setRefreshingRequestLocks(true);
+    await load();
+    setRefreshingRequestLocks(false);
   }
 
   function openPhotographyDatePicker() {
@@ -531,7 +602,7 @@ export function StockPage() {
                       <td>{row.vehicles.length.toLocaleString("ar-SA-u-nu-latn")}</td>
                       <td>
                         <div className="marketing-inline-actions">
-                          <button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button>
+                          <button type="button" className="secondary marketing-request-action-button" onClick={() => { setFollowupError(""); setSelectedRequest(row); }}>عرض ومتابعة</button>
                           {row.can_delete ? (
                             <button type="button" className="danger marketing-request-action-button" disabled={busy} onClick={() => void deletePhotoRequest(row.id, row.request_no)}>
                               <Trash size={16} />{deletingRequestId === row.id ? "جاري المسح..." : "حذف"}
@@ -552,11 +623,12 @@ export function StockPage() {
         open={Boolean(selectedRequest)}
         title={selectedRequest ? `متابعة طلب التصوير — ${selectedRequest.request_no}` : "متابعة طلب التصوير"}
         subtitle={selectedRequest ? `${selectedRequest.requested_by_name || "—"} · ${marketingDate(selectedRequest.requested_at, true)}` : undefined}
-        onClose={() => setSelectedRequest(null)}
+        onClose={() => { setFollowupError(""); setSelectedRequest(null); }}
         className="operations-request-detail-modal marketing-photo-followup-modal"
       >
         {selectedRequest ? (
           <div className="operations-transfer-detail">
+            {followupError ? <div role="alert" className="operations-alert error marketing-photo-dialog-error"><WarningCircle size={18} />{followupError}</div> : null}
             <div className="operations-request-summary-grid">
               <div><small>الحالة الحالية</small><strong>{selectedRequest.cancelled_at ? "ملغي" : requestStatusLabels[selectedRequest.status] || selectedRequest.status}</strong></div>
               <div><small>تاريخ التصوير</small><strong>{formatPhotographyDate(selectedRequest.photography_date)}</strong></div>
@@ -616,14 +688,38 @@ export function StockPage() {
         className="operations-request-detail-modal marketing-photo-request-modal"
         footer={(
           <>
+            {requestError ? <div role="alert" className="operations-alert error marketing-photo-dialog-error"><WarningCircle size={18} />{requestError}</div> : null}
             <button type="button" className="secondary" disabled={busy} onClick={closeRequest}>إلغاء</button>
-            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || !photographyDate || selectedCars.some((row) => Boolean(row.active_transfer_requests))} onClick={() => void createRequest()}>
+            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || !photographyDate || blockedSelectedCars.length > 0} onClick={() => void createRequest()}>
               <Camera size={18} />{busy ? "جاري الإنشاء..." : "إنشاء طلب التصوير"}
             </button>
           </>
         )}
       >
         <div className="operations-transfer-create marketing-photo-request-create">
+          {blockedSelectedCars.length ? (
+            <div className="marketing-photo-blockers" role="alert">
+              <strong><WarningCircle size={19} /> يوجد {blockedSelectedCars.length.toLocaleString("ar-SA-u-nu-latn")} رقم هيكل مرتبط بطلب نشط</strong>
+              <button type="button" className="secondary marketing-photo-refresh-button" disabled={refreshingRequestLocks || busy} onClick={() => void refreshRequestLocks()}>{refreshingRequestLocks ? "جاري التحديث..." : "تحديث حالة الطلبات"}</button>
+              <p>قد يكون الطلب من نوع النقل داخل سيستم العمليات، أو طلب تصوير أنشأه مستخدم آخر؛ لذلك لن يظهر بالضرورة في قائمة طلبات التصوير الخاصة بك.</p>
+              {blockedSelectedCars.map((row) => (
+                <div className="marketing-photo-blocker-row" key={row.id}>
+                  <span><b dir="ltr">{row.vin}</b> — {blockingRequestDescription(row)}</span>
+                  <button type="button" className="secondary" onClick={() => { setSelectedCars((current) => current.filter((item) => item.id !== row.id)); setRequestError(""); }}>إزالة من الطلب</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <section className="marketing-photo-bulk-picker" aria-label="إضافة عدة أرقام هياكل">
+            <div className="marketing-photo-bulk-heading">
+              <strong>إضافة أرقام هياكل متعددة</strong>
+              <small>يمكن إضافة أكثر من سيارتين في نفس الطلب، من أماكن مختلفة. اكتب الأرقام مفصولة بمسافة أو فاصلة أو سطر.</small>
+            </div>
+            <div className="marketing-photo-bulk-controls">
+              <textarea rows={2} value={vinBatch} onChange={(event) => setVinBatch(event.target.value)} placeholder={"الصق أرقام الهياكل هنا، كل رقم في سطر\nمثال: 12345678901234567"} aria-label="أرقام الهياكل" />
+              <button type="button" className="secondary" disabled={busy || !vinBatch.trim()} onClick={addCarsByVin}>إضافة السيارات</button>
+            </div>
+          </section>
           <div className="operations-transfer-controls">
             <OperationsVehiclePicker
               search={pickerSearch}
@@ -670,6 +766,7 @@ export function StockPage() {
               <div className="operations-selection-summary">
                 <strong>{selectedCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة داخل الطلب</strong>
                 <span>{destination ? <>المكان المستهدف: <b>{destination.name}</b></> : "حدد المكان المستهدف"}</span>
+                <button type="button" className="secondary marketing-photo-clear-button" disabled={busy} onClick={() => { setSelectedCars([]); setRequestError(""); }}>تفريغ السيارات</button>
               </div>
               <ResizableOperationsTable<StockVehicleRow>
                 rows={selectedCars}
@@ -687,10 +784,6 @@ export function StockPage() {
             <span>ملاحظات الطلب</span>
             <textarea rows={3} value={requestNote} onChange={(event) => setRequestNote(event.target.value)} placeholder="ملاحظة اختيارية على طلب التصوير" />
           </label>
-
-          {selectedCars.some((row) => row.active_transfer_requests) ? (
-            <div className="operations-alert error"><WarningCircle size={18} />إحدى السيارات مرتبطة بطلب نشط.</div>
-          ) : null}
         </div>
       </Modal>
     </MarketingPage>

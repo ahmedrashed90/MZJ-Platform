@@ -1353,6 +1353,32 @@
 .marketing-photo-request-modal { width: min(1260px, 100%); }
 .marketing-photo-request-create { display: grid; gap: 14px; }
 .marketing-photo-request-table input { min-height: 40px; }
+.marketing-photo-bulk-picker {
+  display: grid; gap: 10px; padding: 15px 17px;
+  border: 1px solid var(--line); border-radius: 13px; background: #faf8f7;
+}
+.marketing-photo-bulk-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 5px 15px; }
+.marketing-photo-bulk-heading strong { color: var(--brand); font-size: 14px; }
+.marketing-photo-bulk-heading small { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.marketing-photo-bulk-controls { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px; }
+.marketing-photo-bulk-controls textarea { min-height: 66px; width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 10px 13px; font: inherit; direction: ltr; text-align: right; background: #fff; }
+.marketing-photo-bulk-controls button { min-height: 44px; }
+.marketing-photo-clear-button { min-height: 32px; font-size: 12px; }
+.marketing-photo-request-modal .mzj-modal-footer { align-items: center; }
+.marketing-photo-dialog-error {
+  flex: 1 0 100%; display: flex; align-items: center; gap: 9px;
+  margin: 0; padding: 10px 13px; line-height: 1.7; overflow-wrap: anywhere;
+  background: #fff0f0; border: 1px solid #efc8c8; color: #9c2831; border-radius: 10px;
+}
+.marketing-photo-blockers { display: grid; gap: 9px; padding: 14px 16px; border: 1px solid #e9bcbc; background: #fff5f5; border-radius: 12px; }
+.marketing-photo-blockers > strong { display: flex; align-items: center; gap: 8px; color: #9c2831; }
+.marketing-photo-blockers p { margin: 0; color: #775b5a; font-size: 12px; line-height: 1.8; }
+.marketing-photo-blocker-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-top: 9px; border-top: 1px solid #f0d1d1; font-size: 13px; }
+.marketing-photo-blocker-row button { min-height: 32px; }
+@media (max-width: 760px) {
+  .marketing-photo-bulk-controls { grid-template-columns: 1fr; }
+  .marketing-photo-bulk-controls button { width: 100%; }
+}
 
 /* Campaign and agenda assignment controls */
 .marketing-user-picker { display: grid; gap: 9px; }
@@ -6120,3 +6146,4 @@
 .marketing-posts-panel .marketing-engagement-filter-note { grid-column: 1/-1; }
 @media (max-width: 1280px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: minmax(220px,1.2fr) minmax(155px,.8fr); } }
 @media (max-width: 850px) { .marketing-posts-panel .marketing-engagement-control-panel { grid-template-columns: 1fr; } }
+.marketing-photo-refresh-button { justify-self: start; min-height: 34px; font-size: 12px; }

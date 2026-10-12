@@ -33,6 +33,11 @@ export type StockCar = {
   financial_approved?: boolean;
   administrative_approved?: boolean;
   active_transfer_requests?: number;
+  active_request_details?: Array<{
+    requestNo: string;
+    requestKind: string;
+    status: string;
+  }>;
   content_usage?: any[];
 };
 export type MarketingMeta = {
