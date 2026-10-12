@@ -509,12 +509,19 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
     left join lateral (
       select count(*)::int as active_requests,
         coalesce(json_agg(json_build_object(
+          'requestId',r.id::text,
           'requestNo',r.request_no,
           'requestKind',r.request_kind,
-          'status',r.status
+          'status',r.status,
+          'requestedAt',r.requested_at,
+          'requestedByName',r.requested_by_name,
+          'sourceLocationName',request_source.name,
+          'destinationLocationName',request_destination.name
         ) order by r.requested_at desc),'[]'::json) as active_request_details
       from operations.transfer_request_vehicles rv
       join operations.transfer_requests r on r.id=rv.transfer_request_id
+      left join operations.locations request_source on request_source.id=r.source_location_id
+      left join operations.locations request_destination on request_destination.id=r.destination_location_id
       where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
     ) req on true
     left join marketing.stock_vehicle_state ms on ms.vehicle_id=v.id
@@ -3951,7 +3958,7 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
     `,
     sql<any[]>`select id::text,code,name,branch_code from operations.locations where is_active=true order by sort_order,name`,
   ]);
-  return{ok:true,cars,requests,locations};
+  return{ok:true,cars,requests,locations,canViewOperationsTransfers:hasPermission(user,"system.operations.access") && hasPermission(user,"operations.transfers.view")};
 }
 
 async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){

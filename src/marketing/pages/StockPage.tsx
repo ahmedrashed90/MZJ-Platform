@@ -7,6 +7,7 @@ import type { VehicleRow } from "../../operations/types";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { marketingDate, marketingFetch } from "../api";
 import type { MarketingLocation, StockCar } from "../types";
+import { collectLinkedActiveRequests, searchLinkedActiveRequests, type LinkedActiveRequest } from "../linkedStockRequests";
 
 type PhotoRequestVehicle = {
   vehicleId: string;
@@ -49,6 +50,7 @@ type StockPayload = {
   cars: StockCar[];
   requests: PhotoRequestRow[];
   locations: MarketingLocation[];
+  canViewOperationsTransfers?: boolean;
 };
 
 type StockVehicleRow = StockCar & {
@@ -123,8 +125,10 @@ function toVehicleRow(row: StockVehicleRow): VehicleRow {
 export function StockPage() {
   const [data, setData] = useState<StockPayload | null>(null);
   const [pageTab, setPageTab] = useState<"stock" | "all" | "requests">("stock");
-  const [requestTab, setRequestTab] = useState<"active" | "completed">("active");
+  const [requestTab, setRequestTab] = useState<"active" | "completed" | "linked">("active");
   const [selectedRequest, setSelectedRequest] = useState<PhotoRequestRow | null>(null);
+  const [selectedLinkedRequest, setSelectedLinkedRequest] = useState<LinkedActiveRequest | null>(null);
+  const [linkedRequestSearch, setLinkedRequestSearch] = useState("");
   const [filters, setFilters] = useState({
     search: "",
     car: "",
@@ -253,7 +257,24 @@ export function StockPage() {
     [data?.requests],
   );
   const visibleRequests = requestTab === "active" ? activeRequests : completedRequests;
+  // Show read-only active blockers in stock, including transport requests not listed
+  // in the photo-only follow-up tab. No changes to request permissions or lifecycle.
+  const linkedActiveRequests = useMemo(() => collectLinkedActiveRequests(stockRows), [stockRows]);
+  const visibleLinkedRequests = useMemo(
+    () => searchLinkedActiveRequests(linkedActiveRequests, linkedRequestSearch),
+    [linkedActiveRequests, linkedRequestSearch],
+  );
   const blockedSelectedCars = selectedCars.filter((row) => Number(row.active_transfer_requests || 0) > 0);
+
+  function viewLinkedRequest(requestNo = "") {
+    // Close the creation dialog before switching the underlying tab, so errors
+    // never appear behind overlapping modals.
+    resetRequest();
+    setLinkedRequestSearch(requestNo);
+    setSelectedLinkedRequest(null);
+    setRequestTab("linked");
+    setPageTab("requests");
+  }
 
   const destination = useMemo(
     () => data?.locations.find((item) => item.id === destinationLocationId),
@@ -583,8 +604,46 @@ export function StockPage() {
           <div className="operations-subtabs marketing-photo-followup-tabs">
             <button type="button" className={requestTab === "active" ? "active" : ""} onClick={() => setRequestTab("active")}>متابعة الطلبات</button>
             <button type="button" className={requestTab === "completed" ? "active" : ""} onClick={() => setRequestTab("completed")}>الطلبات المكتملة</button>
+            <button type="button" className={requestTab === "linked" ? "active" : ""} onClick={() => setRequestTab("linked")}>الطلبات المرتبطة بالسيارات ({linkedActiveRequests.length.toLocaleString("ar-SA-u-nu-latn")})</button>
           </div>
 
+          {requestTab === "active" && !activeRequests.length && linkedActiveRequests.length ? (
+            <div className="marketing-linked-requests-hint">
+              <div><strong>لا توجد طلبات تصوير نشطة في هذه القائمة.</strong><small>لكن توجد {linkedActiveRequests.length.toLocaleString("ar-SA-u-nu-latn")} طلبات نشطة مرتبطة بسيارات الاستوك، قد تكون طلبات نقل أو طلبات تصوير لدى مستخدم آخر.</small></div>
+              <button type="button" className="secondary" onClick={() => setRequestTab("linked")}>عرض الطلبات المرتبطة</button>
+            </div>
+          ) : null}
+          {requestTab === "linked" ? (
+            <section className="marketing-card marketing-linked-requests-section">
+              <div className="marketing-linked-requests-header">
+                <div>
+                  <strong>الطلبات النشطة المرتبطة بالسيارات</strong>
+                  <small>تعرض طلبات النقل والتصوير التي تمنع إنشاء طلب جديد لأي سيارة في الاستوك. تفاصيل للمتابعة فقط؛ إنهاء أو إلغاء طلب النقل يتم من سيستم العمليات.</small>
+                </div>
+                <label className="marketing-linked-requests-search"><MagnifyingGlass size={18} /><input value={linkedRequestSearch} onChange={(event) => setLinkedRequestSearch(event.target.value)} placeholder="بحث برقم الطلب أو الهيكل أو المنشئ" aria-label="البحث في الطلبات المرتبطة" /></label>
+              </div>
+              <div className="marketing-table-wrap">
+                <table>
+                  <thead><tr><th>رقم الطلب</th><th>النوع</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>المنشئ</th><th>المكان المصدر</th><th>المكان المستهدف</th><th>السيارات</th><th>الإجراء</th></tr></thead>
+                  <tbody>
+                    {visibleLinkedRequests.length ? visibleLinkedRequests.map((request) => (
+                      <tr key={request.id}>
+                        <td><strong dir="ltr">{request.requestNo}</strong></td>
+                        <td>{request.requestKind === "transfer" ? "طلب نقل" : "طلب تصوير"}</td>
+                        <td><span className="marketing-status warning">{requestStatusLabels[request.status] || request.status}</span></td>
+                        <td>{request.requestedAt ? marketingDate(request.requestedAt, true) : "—"}</td>
+                        <td>{request.requestedByName || "—"}</td>
+                        <td>{request.sourceLocationName || "—"}</td>
+                        <td>{request.destinationLocationName || "—"}</td>
+                        <td>{request.cars.length.toLocaleString("ar-SA-u-nu-latn")}</td>
+                        <td><button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedLinkedRequest(request)}>عرض التفاصيل</button></td>
+                      </tr>
+                    )) : <tr><td colSpan={9}>لا توجد طلبات نشطة مرتبطة بسيارات الاستوك {linkedRequestSearch ? "تطابق البحث." : "حاليًا."}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : (
           <section className="marketing-card">
             <div className="marketing-table-wrap">
               <table>
@@ -616,8 +675,46 @@ export function StockPage() {
               </table>
             </div>
           </section>
+          )}
         </>
       )}
+
+      <Modal
+        open={Boolean(selectedLinkedRequest)}
+        title={selectedLinkedRequest ? `تفاصيل الطلب المرتبط — ${selectedLinkedRequest.requestNo}` : "تفاصيل الطلب المرتبط"}
+        subtitle={selectedLinkedRequest ? `${selectedLinkedRequest.requestKind === "transfer" ? "طلب نقل" : "طلب تصوير"} · ${requestStatusLabels[selectedLinkedRequest.status] || selectedLinkedRequest.status}` : undefined}
+        onClose={() => setSelectedLinkedRequest(null)}
+        className="operations-request-detail-modal marketing-photo-followup-modal"
+      >
+        {selectedLinkedRequest ? (
+          <div className="operations-transfer-detail marketing-linked-request-detail">
+            <div className="operations-request-summary-grid">
+              <div><small>رقم الطلب</small><strong dir="ltr">{selectedLinkedRequest.requestNo}</strong></div>
+              <div><small>نوع الطلب</small><strong>{selectedLinkedRequest.requestKind === "transfer" ? "طلب نقل" : "طلب تصوير"}</strong></div>
+              <div><small>الحالة</small><strong>{requestStatusLabels[selectedLinkedRequest.status] || selectedLinkedRequest.status}</strong></div>
+              <div><small>المنشئ</small><strong>{selectedLinkedRequest.requestedByName || "—"}</strong></div>
+              <div><small>تاريخ الإنشاء</small><strong>{selectedLinkedRequest.requestedAt ? marketingDate(selectedLinkedRequest.requestedAt, true) : "—"}</strong></div>
+              <div><small>المكان المصدر</small><strong>{selectedLinkedRequest.sourceLocationName || "—"}</strong></div>
+              <div><small>المكان المستهدف</small><strong>{selectedLinkedRequest.destinationLocationName || "—"}</strong></div>
+            </div>
+            <div className="marketing-table-wrap">
+              <table>
+                <thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>المكان الحالي</th></tr></thead>
+                <tbody>{selectedLinkedRequest.cars.map((car) => (
+                  <tr key={car.id}><td dir="ltr">{car.vin}</td><td>{car.carName || "—"}</td><td>{car.locationName || "—"}</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="marketing-linked-request-note">
+              <WarningCircle size={18} />
+              <span>هذا الطلب ما زال نشطًا، لذلك يمنع إنشاء طلب جديد لنفس رقم الهيكل. {selectedLinkedRequest.requestKind === "transfer" ? "متابعته وإنهاؤه من العمليات ← الطلبات." : "متابعته من طلبات التصوير لدى المنشئ أو المسؤول."}</span>
+            </div>
+            {data?.canViewOperationsTransfers && selectedLinkedRequest.requestKind === "transfer" ? (
+              <div className="operations-detail-actions"><a className="secondary marketing-linked-operations-link" href="/operations/transfers">الانتقال إلى طلبات العمليات</a></div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         open={Boolean(selectedRequest)}
@@ -705,10 +802,16 @@ export function StockPage() {
               {blockedSelectedCars.map((row) => (
                 <div className="marketing-photo-blocker-row" key={row.id}>
                   <span><b dir="ltr">{row.vin}</b> — {blockingRequestDescription(row)}</span>
-                  <button type="button" className="secondary" onClick={() => { setSelectedCars((current) => current.filter((item) => item.id !== row.id)); setRequestError(""); }}>إزالة من الطلب</button>
+              <div className="marketing-inline-actions">
+                <button type="button" className="secondary" onClick={() => viewLinkedRequest(row.active_request_details?.[0]?.requestNo || "")}>عرض الطلب المرتبط</button>
+                <button type="button" className="secondary" onClick={() => { setSelectedCars((current) => current.filter((item) => item.id !== row.id)); setRequestError(""); }}>إزالة من الطلب</button>
+              </div>
                 </div>
               ))}
             </div>
+          ) : null}
+          {requestError.includes("طلبات نشطة") || requestError.includes("مرتبطة بطلب") ? (
+            <button type="button" className="secondary marketing-linked-requests-shortcut" onClick={() => viewLinkedRequest()}>عرض الطلبات المرتبطة بالسيارات</button>
           ) : null}
           <section className="marketing-photo-bulk-picker" aria-label="إضافة عدة أرقام هياكل">
             <div className="marketing-photo-bulk-heading">

@@ -34,9 +34,14 @@ export type StockCar = {
   administrative_approved?: boolean;
   active_transfer_requests?: number;
   active_request_details?: Array<{
+    requestId?: string;
     requestNo: string;
     requestKind: string;
     status: string;
+    requestedAt?: string | null;
+    requestedByName?: string | null;
+    sourceLocationName?: string | null;
+    destinationLocationName?: string | null;
   }>;
   content_usage?: any[];
 };
