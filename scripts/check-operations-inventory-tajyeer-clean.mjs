@@ -29,7 +29,7 @@ const assertChecks = [
   ['Tajyeer filter applied to totals and rows', (server.match(/v\.is_tajyeer=\(\$\{tajyeer\}='yes'\)/g) || []).length === 2],
   ['Tajyeer update action rejects non-booleans', server.includes('typeof body.isTajyeer !== "boolean"')],
   ['Tajyeer update route checks granular permission', server.includes('requireOperationsPermission(user, "operations.inventory.tajyeer.update", response)')],
-  ['Tajyeer update locks the correct VIN row within scope', server.includes('for update of v') && server.includes('const statusScope = vehicleStatusScope(tx as ReturnType<typeof getSql>, user)')],
+  ['Tajyeer update locks the correct VIN row within scope', server.includes('for update of v') && server.includes('const statusScope = vehicleStatusScope(tx, user)') && !server.includes('tx as ReturnType<typeof getSql>')],
   ['Tajyeer changes create durable audit record', server.includes("'vehicle_tajyeer_updated'") && server.includes('isTajyeer: Boolean(before.is_tajyeer)')],
   ['Explicit visibility denials override inventory-view defaults', catalog.includes('deniedPermissions?.includes(fieldPermission)') && catalog.includes('operations.inventory.view')],
   ['Stock shows colored interactive badges', table.includes('operations-tajyeer-badge') && table.includes('onTajyeer(row)')],

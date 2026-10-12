@@ -1,5 +1,6 @@
 import { vehicleImportStateNote } from "../../shared/operations-vehicle-import.js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import type { TransactionSql } from "postgres";
 import { getSql } from "../_db.js";
 import { getSystemAccess } from "../_access-control.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
@@ -34,6 +35,11 @@ import {
 
 type QueryRequest = Pick<VercelRequest, "query">;
 
+// Both the pooled SQL client and the transaction-scoped SQL client support
+// tagged queries and interpolated SQL fragments used by the access checks.
+// Do not widen a transaction to the pooled client type: it has no pool methods.
+type OperationsScopeSql = ReturnType<typeof getSql> | TransactionSql;
+
 const AGENCY_INTERIOR_COLORS = new Set(["احمر", "اسود", "برتقالي", "بني غامق", "بيج", "جملي", "رمادي"]);
 
 function pageValues(request: QueryRequest) {
@@ -53,7 +59,7 @@ function actor(user: Awaited<ReturnType<typeof requireOperationsUser>>) {
   };
 }
 
-function accessScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
+function accessScope(sql: OperationsScopeSql, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
   const access = getSystemAccess(user, "operations");
   if (access.dataScope === "all") return sql`true`;
   if (!access.branchCodes.length) return sql`false`;
@@ -100,7 +106,7 @@ function assertVehicleStatusAccess(
   if (!hasVehicleStatusAccess(user, statusCode)) throw new OperationError(403, "FORBIDDEN", message);
 }
 
-function vehicleStatusScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, target: "vehicle" | "movement" = "vehicle") {
+function vehicleStatusScope(sql: OperationsScopeSql, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, target: "vehicle" | "movement" = "vehicle") {
   const allowed = allowedVehicleStatusCodes(user);
   if (!allowed.length) return sql`true`;
   return target === "movement" ? sql`movement_state.new_status in ${sql(allowed)}` : sql`v.status_code in ${sql(allowed)}`;
@@ -265,8 +271,8 @@ async function updateVehicleTajyeer(sql: ReturnType<typeof getSql>, body: Record
   }
   const who = actor(user);
   return sql.begin(async (tx) => {
-    const scope = accessScope(tx as ReturnType<typeof getSql>, user, "l");
-    const statusScope = vehicleStatusScope(tx as ReturnType<typeof getSql>, user);
+    const scope = accessScope(tx, user, "l");
+    const statusScope = vehicleStatusScope(tx, user);
     const [before] = await tx<any[]>`
       select v.*,v.id::text from operations.vehicles v
       left join operations.locations l on l.id=v.location_id
