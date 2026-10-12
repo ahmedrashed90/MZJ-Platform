@@ -10,6 +10,7 @@ export const OPERATIONS_INVENTORY_FIELDS = [
   { key: "batch", label: "اسم الدفعة", permission: "operations.inventory.column.batch" },
   { key: "location", label: "المكان", permission: "operations.inventory.column.location" },
   { key: "status", label: "الحالة", permission: "operations.inventory.column.status" },
+  { key: "notes", label: "ملاحظات", permission: "operations.inventory.column.notes" },
   { key: "tajyeer", label: "التجيير", permission: "operations.inventory.column.tajyeer" },
   { key: "checks", label: "التشييك", permission: "operations.inventory.column.checks" },
   { key: "financialApproval", label: "الموافقة المالية", permission: "operations.inventory.column.financialApproval" },

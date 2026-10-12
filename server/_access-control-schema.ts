@@ -15,6 +15,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
   ('operations.inventory.column.batch','إظهار اسم الدفعة','operations','inventory','batch','إظهار اسم الدفعة','إظهار عمود اسم الدفعة بمخزون السيارات','action',false,8558,true),
   ('operations.inventory.column.location','إظهار المكان','operations','inventory','location','إظهار المكان','إظهار عمود المكان بمخزون السيارات','action',false,8559,true),
   ('operations.inventory.column.status','إظهار الحالة','operations','inventory','status','إظهار الحالة','إظهار عمود الحالة بمخزون السيارات','action',false,8560,true),
+  ('operations.inventory.column.notes','إظهار ملاحظات','operations','inventory','notes','إظهار ملاحظات','إظهار عمود ملاحظات بمخزون السيارات','action',false,8566,true),
   ('operations.inventory.column.tajyeer','إظهار التجيير','operations','inventory','tajyeer','إظهار التجيير','إظهار عمود التجيير بمخزون السيارات','action',false,8561,true),
   ('operations.inventory.column.checks','إظهار التشييك','operations','inventory','checks','إظهار التشييك','إظهار عمود التشييك بمخزون السيارات','action',false,8562,true),
   ('operations.inventory.column.financialApproval','إظهار الموافقة المالية','operations','inventory','financialApproval','إظهار الموافقة المالية','إظهار عمود الموافقة المالية بمخزون السيارات','action',false,8563,true),
@@ -879,12 +880,12 @@ async function ensureOperationsInventoryPermissionCatalog() {
   if (!operationsInventoryAccessPromise) {
     operationsInventoryAccessPromise = (async () => {
       const sql = getSql();
-      const [row] = await sql<{ total: number }[]>`
-        select count(*)::int as total from core.permissions
+      const [row] = await sql<{ total: number; notes_ready: boolean | null }[]>`
+        select count(*)::int as total, bool_or(code='operations.inventory.column.notes') as notes_ready from core.permissions
         where system_code='operations' and page_code='inventory'
           and is_active=true and (code='operations.inventory.tajyeer.update' or code like 'operations.inventory.column.%')
       `;
-      if (Number(row?.total || 0) >= 16) return;
+      if (Number(row?.total || 0) >= 17 && row?.notes_ready === true) return;
       await withDatabaseAdvisoryLock('mzj:operations-inventory-fields:v1', async () => {
         await runSqlScript(OPERATIONS_INVENTORY_ACCESS_SQL);
       });

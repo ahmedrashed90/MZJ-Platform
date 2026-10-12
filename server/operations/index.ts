@@ -250,7 +250,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
     const responseFields: Record<string, string[]> = {
       car: ["car_name"], statement: ["statement"], agent: ["agent_name"], interior: ["interior_color"],
       exterior: ["exterior_color"], model: ["model_year"], plate: ["plate_no"], batch: ["batch_no"],
-      location: ["location_name"], status: ["status_name"], checks: ["check_values"],
+      location: ["location_name"], status: ["status_name"], notes: ["state_note", "notes", "shortage_note"], checks: ["check_values"],
       tajyeer: ["is_tajyeer", "tajyeer_updated_by_name", "tajyeer_updated_at"],
       financialApproval: ["financial_approved", "financial_note"],
       administrativeApproval: ["administrative_approved", "administrative_note"],

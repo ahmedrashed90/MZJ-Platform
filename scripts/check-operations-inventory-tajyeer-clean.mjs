@@ -19,7 +19,7 @@ const assertChecks = [
   ['Schema stores tajyeer author and timestamp', /tajyeer_updated_at timestamptz/.test(inventorySchema) && /tajyeer_updated_by uuid references core\.users/.test(inventorySchema)],
   ['Permissions migrations live only in central access schema', !inventorySchema.includes('operations.inventory.column.car') && accessSchema.includes('OPERATIONS_INVENTORY_ACCESS_SQL')],
   ['Dedicated tajyeer edit permission exists', permissionCatalog.includes('operations.inventory.tajyeer.update') && accessSchema.includes("'operations.inventory.tajyeer.update'")],
-  ['Visibility catalog contains 15 columns', (catalog.match(/permission: "operations\.inventory\.column\./g) || []).length === 15],
+  ['Visibility catalog contains 16 columns', (catalog.match(/permission: "operations\.inventory\.column\./g) || []).length === 16],
   ['Existing viewers inherit column visibility by default', accessSchema.includes("base.code='operations.inventory.view'") && accessSchema.includes("col.code like 'operations.inventory.column.%'")],
   ['Tajyeer modification is not granted to all users', accessSchema.includes("where r.code in ('admin','system_admin')")],
   ['User permissions select inventory columns', users.includes('OPERATIONS_INVENTORY_FIELDS.map((field)') && users.includes('access-inventory-column-grid')],

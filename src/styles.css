@@ -6696,6 +6696,23 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   white-space: nowrap;
 }
 
+.operations-inventory-list-page .operations-table td > .operations-inventory-note {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #5d4035;
+  font-weight: 500;
+  cursor: help;
+}
+
+.operations-inventory-list-page .operations-table td > .operations-inventory-note.empty {
+  color: #9c918b;
+  font-weight: 400;
+  cursor: default;
+}
+
 .operations-vehicle-table th:first-child,
 .operations-vehicle-table td:first-child {
   position: sticky;

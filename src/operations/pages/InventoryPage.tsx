@@ -68,6 +68,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
         { key: "batch", label: "اسم الدفعة بالتاريخ", read: (row) => row.batch_no },
         { key: "location", label: "المكان", read: (row) => row.location_name },
         { key: "status", label: "الحالة", read: (row) => row.status_name },
+        { key: "notes", label: "ملاحظات", read: (row) => row.state_note || "" },
         { key: "tajyeer", label: "التجيير", read: (row) => row.is_tajyeer ? "نعم" : "لا" },
         ...(["mats", "extinguisher", "safety_bag", "spare_tire", "remote", "screen", "radio", "ac", "camera", "sensor"] as const).map((code, index) => ({ key: "checks", label: ["فرشات", "طفاية", "شنطة", "اسبير", "ريموت", "شاشة", "مسجل", "مكيف", "كاميرا", "حساس"][index], read: (row: VehicleRow) => checkValue(row, code) })),
         { key: "financialApproval", label: "الموافقة المالية", read: (row) => row.financial_approved ? "نعم" : "لا" },

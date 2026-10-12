@@ -53,6 +53,7 @@ const allColumns: Column[] = [
   { key: "batch", label: "اسم الدفعة بالتاريخ", width: 125, min: 105, max: 270, value: (row) => row.batch_no, render: (row) => row.batch_no || "—" },
   { key: "location", label: "المكان", width: 95, min: 82, max: 200, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
   { key: "status", label: "الحالة", width: 125, min: 105, max: 240, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
+  { key: "notes", label: "ملاحظات", width: 210, min: 140, max: 440, value: (row) => row.state_note || "", render: (row) => <span className={`operations-inventory-note${row.state_note?.trim() ? "" : " empty"}`} title={row.state_note?.trim() || "لا توجد ملاحظات"}>{row.state_note?.trim() || "—"}</span> },
   { key: "tajyeer", label: "التجيير", width: 120, min: 100, max: 175, value: (row) => row.is_tajyeer ? "نعم" : "لا", render: (row, _onOpen, onTajyeer) => {
     const content = <>{row.is_tajyeer ? <CheckCircle size={16} weight="fill" /> : <XCircle size={16} weight="fill" />}{row.is_tajyeer ? "نعم" : "لا"}</>;
     const title = row.tajyeer_updated_by_name ? `آخر تعديل: ${row.tajyeer_updated_by_name}` : "لم يتم تعديل التجيير";
