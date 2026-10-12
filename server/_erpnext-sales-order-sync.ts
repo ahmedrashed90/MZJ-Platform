@@ -301,6 +301,30 @@ function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
   };
 }
 
+// An ERPNext Customer may be a finance company while the vehicle is sold to a
+// different end user. Never use the company's unique CRM contact key for a
+// different person solely because both appear in the same Sales Order.
+function erpCrmContactIdentity(normalized: NormalizedErpNextSalesOrder) {
+  const accountingIdentity = erpCustomerIdentity(normalized);
+  const phone = clean(normalized.actualCustomerPhoneNormalized);
+  const actualName = normalizeComparable(normalized.actualCustomerName);
+  const accountingName = normalizeComparable(normalized.accountingCustomerName);
+  const endUserIsDistinct = Boolean(phone && actualName && accountingName && actualName !== accountingName);
+  return endUserIsDistinct ? {
+    contactKey: `erpnext:user-phone:${phone}`,
+    externalId: `user-phone:${phone}`,
+  } : {
+    contactKey: accountingIdentity.contactKey,
+    externalId: accountingIdentity.externalId,
+  };
+}
+
+function sameCrmContactPhone(left: unknown, right: unknown) {
+  const first = clean(left).replace(/\D/g, "");
+  const second = clean(right).replace(/\D/g, "");
+  return Boolean(first && second && (first === second || (first.length >= 9 && second.length >= 9 && first.slice(-9) === second.slice(-9))));
+}
+
 async function ensureCrmContact(
   tx: any,
   input: {
@@ -313,8 +337,14 @@ async function ensureCrmContact(
   const { normalized, name, orderNo } = input;
   const phone = clean(normalized.actualCustomerPhone);
   const phoneNormalized = clean(normalized.actualCustomerPhoneNormalized);
-  const identity = erpCustomerIdentity(normalized);
+  const accountingIdentity = erpCustomerIdentity(normalized);
+  const endUserIdentity = {
+    contactKey: `erpnext:user-phone:${phoneNormalized}`,
+    externalId: `user-phone:${phoneNormalized}`,
+  };
+  let contactIdentity = erpCrmContactIdentity(normalized);
   let contact: any = null;
+  let inserted = false;
 
   if (clean(input.existingContactId)) {
     [contact] = await tx`
@@ -326,33 +356,55 @@ async function ensureCrmContact(
       select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1 for update
     `;
   }
+  // ERP customer identity can only be a fallback without an end-user phone.
   if (!contact && !phoneNormalized) {
     [contact] = await tx`
       select c.*,c.id::text
       from crm.contact_identities ci
       join crm.contacts c on c.id=ci.contact_id
-      where ci.channel_code='erpnext' and ci.external_id=${identity.externalId}
+      where ci.channel_code='erpnext' and ci.external_id=${accountingIdentity.externalId}
       limit 1 for update of c
-    `;
-  }
-  if (!contact && !phoneNormalized) {
-    [contact] = await tx`
-      select *,id::text from crm.contacts where contact_key=${identity.contactKey} limit 1 for update
     `;
   }
 
   const metadata = {
     origin: "erpnext",
-    erpCustomerId: identity.raw,
+    erpCustomerId: accountingIdentity.raw,
     lastSalesOrderNo: orderNo,
   };
+
+  // A phone match must not be overridden by an ERP company contact key.
+  // Check the preferred key even when a phone was provided, and use a stable
+  // end-user key if the company key belongs to a different phone. DO NOTHING
+  // handles a concurrent insert of the same key without leaking a 23505 error.
   if (!contact) {
-    [contact] = await tx`
-      insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
-      values(${identity.contactKey},${name || "عميل NEXT ERP"},${phone||null},${phoneNormalized||null},${tx.json(metadata)})
-      returning *,id::text
-    `;
-  } else {
+    for (let attempt = 0; attempt < 3 && !contact; attempt += 1) {
+      const [byKey] = await tx`
+        select *,id::text from crm.contacts where contact_key=${contactIdentity.contactKey} limit 1 for update
+      `;
+      if (byKey) {
+        const registeredPhone = clean(byKey.primary_phone_normalized) || clean(byKey.primary_phone);
+        if (!phoneNormalized || !registeredPhone || sameCrmContactPhone(registeredPhone, phoneNormalized)) {
+          contact = byKey;
+        } else if (contactIdentity.contactKey !== endUserIdentity.contactKey) {
+          contactIdentity = endUserIdentity;
+        } else {
+          throw new Error(`تعارض رقم جوال جهة اتصال ERPNext للمفتاح ${contactIdentity.contactKey}`);
+        }
+      } else {
+        [contact] = await tx`
+          insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
+          values(${contactIdentity.contactKey},${name || "عميل NEXT ERP"},${phone||null},${phoneNormalized||null},${tx.json(metadata)})
+          on conflict(contact_key) do nothing
+          returning *,id::text
+        `;
+        inserted = Boolean(contact);
+      }
+    }
+    if (!contact) throw new Error("تعذر تحديد جهة اتصال ERPNext بعد معالجة تعارض مفتاح العميل");
+  }
+
+  if (!inserted) {
     [contact] = await tx`
       update crm.contacts set
         display_name=coalesce(nullif(${name},''),display_name),
@@ -365,11 +417,32 @@ async function ensureCrmContact(
     `;
   }
 
+  // A repeat may find the newly created user contact by phone before reaching
+  // the key-collision fallback above. In that case keep the previous user
+  // identity instead of silently claiming the company's external identity.
+  if (phoneNormalized && contactIdentity.contactKey === accountingIdentity.contactKey) {
+    const [accountKeyContact] = await tx`
+      select id::text from crm.contacts where contact_key=${accountingIdentity.contactKey} limit 1 for update
+    `;
+    const [accountIdentityContact] = await tx`
+      select contact_id::text from crm.contact_identities
+      where channel_code='erpnext' and external_id=${accountingIdentity.externalId} limit 1
+    `;
+    if (clean(contact.contact_key) === endUserIdentity.contactKey
+      || (accountKeyContact && clean(accountKeyContact.id) !== clean(contact.id))
+      || (accountIdentityContact && clean(accountIdentityContact.contact_id) !== clean(contact.id))) {
+      contactIdentity = endUserIdentity;
+    }
+  }
+
+  // Keep the accounting-company identity distinct from a named end user.
+  // A future order from the same company can then have a different user phone
+  // without reassigning the company's identity to the last vehicle buyer.
   await tx`
     insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,display_name,metadata)
     values(
-      ${contact.id}::uuid,'erpnext',${identity.externalId},${identity.raw||phoneNormalized||normalized.sourceInstanceKey},
-      ${name||null},${tx.json({ erpCustomerId: identity.raw, lastSalesOrderNo: orderNo })}
+      ${contact.id}::uuid,'erpnext',${contactIdentity.externalId},${accountingIdentity.raw||phoneNormalized||normalized.sourceInstanceKey},
+      ${name||null},${tx.json({ erpCustomerId: accountingIdentity.raw, lastSalesOrderNo: orderNo })}
     )
     on conflict(channel_code,external_id) do update set
       contact_id=excluded.contact_id,participant_id=excluded.participant_id,
@@ -413,6 +486,12 @@ async function linkCrmCustomer(input: {
   };
 
   return sql.begin(async (tx: any) => {
+    // Serialize CRM linking for the same phone (or phone-less ERP customer),
+    // so retrying a webhook cannot race another insert of the same lead.
+    const contactLockKey = normalized.actualCustomerPhoneNormalized
+      ? `erpnext-crm-phone:${normalized.actualCustomerPhoneNormalized}`
+      : `erpnext-crm-customer:${erpCustomerIdentity(normalized).contactKey}`;
+    await tx`select pg_advisory_xact_lock(hashtext(${contactLockKey}))`;
     const [integrationState] = await tx`
       select
         so.crm_lead_id::text,so.crm_created_by_integration,so.crm_previous_state,
