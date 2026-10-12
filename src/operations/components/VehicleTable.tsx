@@ -43,6 +43,11 @@ function checkSummary(row: VehicleRow) {
 
 const allColumns: Column[] = [
   { key: "vin", label: "الهيكل (VIN)", width: 155, min: 125, max: 320, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
+  { key: "tajyeer", label: "التجيير", width: 120, min: 100, max: 175, value: (row) => row.is_tajyeer ? "نعم" : "لا", render: (row, _onOpen, onTajyeer) => {
+    const content = <>{row.is_tajyeer ? <CheckCircle size={16} weight="fill" /> : <XCircle size={16} weight="fill" />}{row.is_tajyeer ? "نعم" : "لا"}</>;
+    const title = row.tajyeer_updated_by_name ? `آخر تعديل: ${row.tajyeer_updated_by_name}` : "لم يتم تعديل التجيير";
+    return onTajyeer ? <button className={`operations-tajyeer-badge ${row.is_tajyeer ? "yes" : "no"} editable`} type="button" title={title} onClick={() => onTajyeer(row)}>{content}</button> : <span className={`operations-tajyeer-badge ${row.is_tajyeer ? "yes" : "no"}`} title={title}>{content}</span>;
+  } },
   { key: "car", label: "السيارة", width: 120, min: 95, max: 260, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
   { key: "statement", label: "البيان", width: 130, min: 100, max: 300, value: (row) => row.statement, render: (row) => row.statement || "—" },
   { key: "agent", label: "الوكيل", width: 105, min: 85, max: 220, value: (row) => row.agent_name, render: (row) => row.agent_name || "—" },
@@ -50,15 +55,9 @@ const allColumns: Column[] = [
   { key: "exterior", label: "اللون الخارجي", width: 105, min: 85, max: 200, value: (row) => row.exterior_color, render: (row) => row.exterior_color || "—" },
   { key: "model", label: "موديل", width: 80, min: 70, max: 150, value: (row) => row.model_year, render: (row) => row.model_year || "—" },
   { key: "plate", label: "اللوحة", width: 90, min: 78, max: 180, value: (row) => row.plate_no, render: (row) => row.plate_no || "—" },
-  { key: "batch", label: "اسم الدفعة بالتاريخ", width: 125, min: 105, max: 270, value: (row) => row.batch_no, render: (row) => row.batch_no || "—" },
   { key: "location", label: "المكان", width: 95, min: 82, max: 200, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
   { key: "status", label: "الحالة", width: 125, min: 105, max: 240, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
   { key: "notes", label: "ملاحظات", width: 210, min: 140, max: 440, value: (row) => row.state_note || "", render: (row) => <span className={`operations-inventory-note${row.state_note?.trim() ? "" : " empty"}`} title={row.state_note?.trim() || "لا توجد ملاحظات"}>{row.state_note?.trim() || "—"}</span> },
-  { key: "tajyeer", label: "التجيير", width: 120, min: 100, max: 175, value: (row) => row.is_tajyeer ? "نعم" : "لا", render: (row, _onOpen, onTajyeer) => {
-    const content = <>{row.is_tajyeer ? <CheckCircle size={16} weight="fill" /> : <XCircle size={16} weight="fill" />}{row.is_tajyeer ? "نعم" : "لا"}</>;
-    const title = row.tajyeer_updated_by_name ? `آخر تعديل: ${row.tajyeer_updated_by_name}` : "لم يتم تعديل التجيير";
-    return onTajyeer ? <button className={`operations-tajyeer-badge ${row.is_tajyeer ? "yes" : "no"} editable`} type="button" title={title} onClick={() => onTajyeer(row)}>{content}</button> : <span className={`operations-tajyeer-badge ${row.is_tajyeer ? "yes" : "no"}`} title={title}>{content}</span>;
-  } },
   { key: "checks", label: "التشييك", width: 90, min: 78, max: 150, value: () => "عرض", render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link operations-check-view-button" title={summary.details.join("\n")} onClick={() => onOpen(row.id, "checks")}>عرض</button>; } },
   { key: "financialApproval", label: "الموافقة المالية", width: 115, min: 100, max: 200, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
   { key: "administrativeApproval", label: "الموافقة الادارية", width: 125, min: 105, max: 210, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
@@ -141,7 +140,7 @@ export function VehicleTable({ rows, onOpen, onTajyeer, visibleColumns, emptyTex
           <thead><tr>{columns.map((column) => <th key={column.key} style={{ width: widths[column.key] || column.width }}><span>{column.label}</span><span className="operations-column-resizer" role="separator" aria-orientation="vertical" aria-label={`اسحب لتغيير عرض عمود ${column.label}`} title="اسحب يمينًا أو يسارًا لتغيير العرض — ضغطتان للضبط التلقائي" onPointerDown={(event) => beginResize(event, column)} onDoubleClick={() => autoFit(column)} /></th>)}</tr></thead>
           <tbody>
             {!rows.length ? <tr><td colSpan={columns.length} className="table-empty">{emptyText}</td></tr> : rows.map((row) => (
-              <tr key={row.id}>{columns.map((column) => <td key={column.key}>{column.render(row, onOpen, onTajyeer)}</td>)}</tr>
+              <tr key={row.id} className={row.is_tajyeer ? undefined : "operations-tajyeer-pending"}>{columns.map((column) => <td key={column.key}>{column.render(row, onOpen, onTajyeer)}</td>)}</tr>
             ))}
           </tbody>
         </table>

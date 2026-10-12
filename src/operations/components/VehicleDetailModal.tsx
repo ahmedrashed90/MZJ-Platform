@@ -74,9 +74,9 @@ export function VehicleDetailModal({ id, meta, initialTab = "details", onClose, 
             {tab === "details" ? (
               <div className="operations-detail-grid">
                 {[
-                  ["رقم الهيكل", vehicle.vin], ["السيارة", vehicle.car_name], ["البيان", vehicle.statement], ["الوكيل", vehicle.agent_name],
+                  ["رقم الهيكل", vehicle.vin], ["التجيير", vehicle.is_tajyeer ? "نعم" : "لا"], ["السيارة", vehicle.car_name], ["البيان", vehicle.statement], ["الوكيل", vehicle.agent_name],
                   ["اللون الداخلي", vehicle.interior_color], ["اللون الخارجي", vehicle.exterior_color], ["الموديل", vehicle.model_year], ["اللوحة", vehicle.plate_no],
-                  ["اسم الدفعة", vehicle.batch_no], ["المكان الحالي", vehicle.location_name], ["الحالة الحالية", vehicle.status_name], ["ملاحظات", vehicle.state_note], ["التجيير", vehicle.is_tajyeer ? "نعم" : "لا"], ["آخر تعديل للتجيير", vehicle.tajyeer_updated_by_name], ["المنشئ", vehicle.created_by_name], ["آخر تعديل", formatOperationsDate(vehicle.updated_at)],
+                  ["اسم الدفعة", vehicle.batch_no], ["المكان الحالي", vehicle.location_name], ["الحالة الحالية", vehicle.status_name], ["ملاحظات", vehicle.state_note], ["آخر تعديل للتجيير", vehicle.tajyeer_updated_by_name], ["المنشئ", vehicle.created_by_name], ["آخر تعديل", formatOperationsDate(vehicle.updated_at)],
                 ].map(([label, value]) => <div key={label}><small>{label}</small><strong>{value || "—"}</strong></div>)}
               </div>
             ) : null}

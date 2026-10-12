@@ -58,6 +58,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
       const checkValue = (row: VehicleRow, code: string) => row.check_values?.[code] === "ok" ? "نعم" : row.check_values?.[code] === "missing" ? "لا" : "";
       const columnList: Array<{ key: string; label: string; read: (row: VehicleRow) => unknown }> = [
         { key: "vin", label: "الهيكل (VIN)", read: (row) => row.vin },
+        { key: "tajyeer", label: "التجيير", read: (row) => row.is_tajyeer ? "نعم" : "لا" },
         { key: "car", label: "السيارة", read: (row) => row.car_name },
         { key: "statement", label: "البيان", read: (row) => row.statement },
         { key: "agent", label: "الوكيل", read: (row) => row.agent_name },
@@ -69,7 +70,6 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
         { key: "location", label: "المكان", read: (row) => row.location_name },
         { key: "status", label: "الحالة", read: (row) => row.status_name },
         { key: "notes", label: "ملاحظات", read: (row) => row.state_note || "" },
-        { key: "tajyeer", label: "التجيير", read: (row) => row.is_tajyeer ? "نعم" : "لا" },
         ...(["mats", "extinguisher", "safety_bag", "spare_tire", "remote", "screen", "radio", "ac", "camera", "sensor"] as const).map((code, index) => ({ key: "checks", label: ["فرشات", "طفاية", "شنطة", "اسبير", "ريموت", "شاشة", "مسجل", "مكيف", "كاميرا", "حساس"][index], read: (row: VehicleRow) => checkValue(row, code) })),
         { key: "financialApproval", label: "الموافقة المالية", read: (row) => row.financial_approved ? "نعم" : "لا" },
         { key: "administrativeApproval", label: "الموافقة الإدارية", read: (row) => row.administrative_approved ? "نعم" : "لا" },

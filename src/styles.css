@@ -6740,6 +6740,20 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   background: #fff8f4;
 }
 
+
+/* Inventory-only highlight: vehicles with tajyeer = no (not a change of vehicle status). */
+.operations-inventory-list-page .operations-vehicle-table tbody tr.operations-tajyeer-pending > td {
+  background: #fff1f2;
+}
+.operations-inventory-list-page .operations-vehicle-table tbody tr.operations-tajyeer-pending > td:first-child {
+  background: #fff1f2;
+  border-right: 3px solid #cf4051;
+}
+.operations-inventory-list-page .operations-vehicle-table tbody tr.operations-tajyeer-pending:hover > td,
+.operations-inventory-list-page .operations-vehicle-table tbody tr.operations-tajyeer-pending:hover > td:first-child {
+  background: #ffe6e9;
+}
+
 .operations-inventory-list-page .operations-vin-link {
   color: #b94f30;
   text-decoration: none;
