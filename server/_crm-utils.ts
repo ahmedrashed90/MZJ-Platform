@@ -37,6 +37,10 @@ export function distributionSourceCode(value: unknown) {
   const source = clean(value).toLowerCase();
   if (source === "facebook_post") return "facebook";
   if (source === "instagram_post") return "instagram";
+  if (source === "facebook_lead" || source === "fb") return "facebook";
+  if (source === "instagram_lead" || source === "ig") return "instagram";
+  if (source === "snapchat_lead") return "snapchat";
+  if (source === "tiktok_lead") return "tiktok";
   return source;
 }
 
@@ -370,8 +374,71 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
 // Only for external finance imports: choose among the CRM's active finance rules
 // without forcing the online branch. Keep all other assignment paths unchanged.
 export async function chooseFinanceImportAssignment(sourceCode: string) {
-  return (await chooseFromConfiguredRule("finance_sales", "", sourceCode))
-    || { assignedTo: null, assignedName: "", branchCode: branchForDepartment("finance") };
+  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode);
+  if (configured?.assignedTo) return configured;
+
+  // Import-only fallback. Use the actual active CRM finance representatives and
+  // their CRM branches, never force an online branch or an unrelated department.
+  // Other assignment pathways continue to use their existing configured rules.
+  const sql = getSql();
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (select b.code from core.user_system_branches usb
+         join core.branches b on b.id=usb.branch_id and b.is_active=true
+         where usb.user_id=u.id and usb.system_code='crm'
+         order by usb.is_primary desc,b.sort_order,b.name limit 1),
+        (select b.code from core.user_branches ub
+         join core.branches b on b.id=ub.branch_id and b.is_active=true
+         where ub.user_id=u.id
+           and not exists (select 1 from core.user_system_branches usb0
+                           where usb0.user_id=u.id and usb0.system_code='crm')
+         order by ub.is_primary desc,b.sort_order,b.name limit 1)
+      ) as branch_code
+    from core.users u
+    where u.is_active=true and u.can_receive_leads=true
+      and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+      and (
+        exists (select 1 from core.user_system_departments usd
+                join core.departments d on d.id=usd.department_id
+                  and d.system_code='crm' and d.is_active=true
+                where usd.user_id=u.id and usd.system_code='crm' and d.code='finance_sales')
+        or (
+          not exists (select 1 from core.user_system_departments usd0
+                      where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (select 1 from core.user_departments ud
+                      join core.departments d on d.id=ud.department_id and d.is_active=true
+                      where ud.user_id=u.id and d.code='finance_sales')
+        )
+      )
+    order by u.full_name,u.id::text
+  `;
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code) && clean(candidate.branch_code) !== 'website');
+  if (!eligible.length) {
+    console.error('Finance lead import has no eligible active finance representative', { sourceCode });
+    return { assignedTo: null, assignedName: "", branchCode: "" };
+  }
+
+  const poolKey = 'finance_import:finance_sales:all_branches';
+  const [state] = await sql<any[]>`
+    select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1
+  `;
+  const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];
+  const selectedBranch = clean(selected.branch_code);
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch},now())
+    on conflict (pool_key) do update set last_user_id=excluded.last_user_id,
+      last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action)
+    values (null,'finance_sales',${selectedBranch},${sourceCode},${selected.user_id}::uuid,
+      ${selected.full_name},'round_robin','finance_import_fallback')
+  `;
+  return { assignedTo: selected.user_id, assignedName: selected.full_name,
+           branchCode: selectedBranch, ruleId: null, ruleName: 'Finance import fallback' };
 }
 
 export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
