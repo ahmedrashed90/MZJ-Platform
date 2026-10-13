@@ -111,6 +111,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
       task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view", subscriptions: "marketing.subscriptions.view", subscription_settings: "marketing.subscriptions.manage", subscription_history: "marketing.subscriptions.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
+      work_schema_status: "system.marketing.access",
     };
     return req(map[resource] || "system.marketing.access", "marketing", resource, "view");
   }
@@ -125,7 +126,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
     save_subscription: "marketing.subscriptions.manage", delete_subscription: "marketing.subscriptions.manage", renew_subscription: "marketing.subscriptions.renew",
-    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin",
+    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin", work_upgrade_schema: "platform.superadmin",
   };
   if (action === "prepare_upload" || action === "mark_file_ready") {
     const category = clean(payload.category);

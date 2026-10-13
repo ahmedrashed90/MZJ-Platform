@@ -478,3 +478,7 @@
 .mkw-detail-view .mkw-item-detail-grid { grid-template-columns:minmax(0,1fr); }
 @media (max-width:950px) { .mkw-detail-view .mkw-execution-quick-row { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:550px) { .mkw-detail-view .mkw-execution-quick-row { grid-template-columns:minmax(0,1fr); } }
+
+/* Marketing schema upgrades are manual and restricted to platform superadmins. */
+.mkw-schema-upgrade { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border:1px solid #d7a38e; background:#fff8f4; padding:14px 18px; border-radius:12px; margin:14px 0; color:#754334; }
+.mkw-schema-upgrade button { flex-shrink:0; }

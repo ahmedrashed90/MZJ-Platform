@@ -69,14 +69,17 @@ create table if not exists marketing.work_plans (
   id uuid primary key default gen_random_uuid(), request_key uuid not null, plan_number bigint not null default nextval('marketing.work_plan_number_seq'),
   plan_no text not null unique, kind text not null check(kind in ('agenda','campaign')), name text not null,
   created_by uuid not null references core.users(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  is_deleted boolean not null default false, activated_at timestamptz,
+  activated_by uuid references core.users(id), deleted_at timestamptz, deleted_by uuid references core.users(id),
   unique(created_by,request_key)
 );
 create table if not exists marketing.work_plan_items (
   id uuid primary key default gen_random_uuid(), plan_id uuid not null references marketing.work_plans(id) on delete cascade,
   product_id uuid not null references marketing.work_items(id), scheduled_on date not null,
+  is_deleted boolean not null default false, post_type_id uuid references marketing.platform_post_types(id),
+  budget_amount numeric(15,2) not null default 0,
   caption text not null default '', hashtags text not null default '', version integer not null default 1,
-  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
-  unique(plan_id,product_id,scheduled_on)
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 create index if not exists work_plan_items_date on marketing.work_plan_items(scheduled_on,plan_id);
 create table if not exists marketing.work_publish_targets (
@@ -140,6 +143,75 @@ create unique index if not exists work_plan_unique_entry
 insert into marketing.workflow_migrations(code) values('schema-4') on conflict do nothing;
 commit;`;
 
+/**
+ * Marketing V2 plan columns were introduced after many installations already
+ * had work_plans and work_plan_items. Read the actual catalog, not only the
+ * schema-4 marker, so an older database can never be reported as ready.
+ * This inspection is strictly read-only and safe on dashboard requests.
+ */
+const PLAN_SCHEDULE_COLUMNS = [
+  ['work_plans', 'is_deleted'], ['work_plans', 'activated_at'],
+  ['work_plans', 'activated_by'], ['work_plans', 'deleted_at'],
+  ['work_plans', 'deleted_by'], ['work_plan_items', 'is_deleted'],
+  ['work_plan_items', 'post_type_id'], ['work_plan_items', 'budget_amount'],
+] as const;
+
+export async function marketingPlanScheduleSchemaStatus(sql = getSql()) {
+  const [relations] = await sql<{ plans: boolean; lines: boolean; migrations: boolean; unique_index: boolean }[]>`
+    select to_regclass('marketing.work_plans') is not null as plans,
+      to_regclass('marketing.work_plan_items') is not null as lines,
+      to_regclass('marketing.workflow_migrations') is not null as migrations,
+      to_regclass('marketing.work_plan_unique_entry') is not null as unique_index
+  `;
+  const baseReady = Boolean(relations?.plans && relations?.lines && relations?.migrations);
+  if (!baseReady) return { ready: false, baseReady: false, missing: ['marketing.work_plans / marketing.work_plan_items'] };
+  const [columns, migrations] = await Promise.all([
+    sql<{ table_name: string; column_name: string }[]>`
+      select table_name,column_name from information_schema.columns
+      where table_schema='marketing'
+        and table_name in ('work_plans','work_plan_items')
+    `,
+    sql<{ code: string }[]>`select code from marketing.workflow_migrations where code='schema-4'`,
+  ]);
+  const present = new Set(columns.map(column => `${column.table_name}.${column.column_name}`));
+  const missing = PLAN_SCHEDULE_COLUMNS
+    .map(([table, column]) => `${table}.${column}`)
+    .filter(column => !present.has(column));
+  if (!relations.unique_index) missing.push('work_plan_unique_entry');
+  if (!migrations.length) missing.push('schema-4');
+  return { ready: !missing.length, baseReady: true, missing };
+}
+
+/**
+ * Only a platform superadmin may invoke this explicit additive upgrade.
+ * Ordinary GET requests NEVER acquire DDL locks or change the database.
+ * A shared advisory lock + short lock/statement timeouts make concurrent
+ * Vercel invocations safe. The SQL migration is atomic and idempotent.
+ */
+export async function upgradeMarketingPlanScheduleSchema() {
+  const sql = getSql();
+  const current = await marketingPlanScheduleSchemaStatus(sql);
+  if (!current.baseReady) {
+    const error = new Error('يجب تهيئة قاعدة بيانات التسويق الأساسية أولًا قبل تحديث جداول النشر');
+    (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
+    throw error;
+  }
+  if (current.ready) return { ready: true, alreadyApplied: true };
+  const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
+    if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) {
+      await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
+    }
+  });
+  if (!acquired) {
+    const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
+    (error as Error & { code?: string }).code = 'MARKETING_MIGRATION_BUSY';
+    throw error;
+  }
+  const upgraded = await marketingPlanScheduleSchemaStatus(sql);
+  if (!upgraded.ready) throw new Error('لم يكتمل تحديث قاعدة بيانات التسويق؛ يرجى مراجعة صلاحيات قاعدة البيانات');
+  return { ready: true, alreadyApplied: false };
+}
+
 let ready: Promise<void> | null = null;
 export function ensureMarketingWorkflowSchema() {
   if (!ready) ready = (async () => {
@@ -150,7 +222,7 @@ export function ensureMarketingWorkflowSchema() {
       const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4')`;
       return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4') };
     };
-    if ((await flags()).current) return;
+    if ((await flags()).current && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -158,7 +230,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!state.base) await runSqlScript(MARKETING_WORKFLOW_SQL);
       if (!(await flags()).hasTaskDeletion) await runSqlScript(MARKETING_WORKFLOW_TASK_DELETE_SQL);
       if (!(await flags()).hasDrafts) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
-      if (!(await flags()).current) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
+      if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
@@ -190,6 +262,12 @@ export function assertMarketingWorkflowReady(sql = getSql()) {
       if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files) {
         const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
         (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
+        throw error;
+      }
+      const planSchema = await marketingPlanScheduleSchemaStatus(sql);
+      if (!planSchema.ready) {
+        const error = new Error('قاعدة بيانات التسويق تحتاج تحديث جداول النشر. اطلب من مدير النظام تنفيذ تحديث قاعدة البيانات من الداش بورد.');
+        (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_UPGRADE_REQUIRED';
         throw error;
       }
     })().catch(error => { workflowStructureReady = null; throw error; });

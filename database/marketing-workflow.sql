@@ -59,14 +59,17 @@ create table if not exists marketing.work_plans (
   id uuid primary key default gen_random_uuid(), request_key uuid not null, plan_number bigint not null default nextval('marketing.work_plan_number_seq'),
   plan_no text not null unique, kind text not null check(kind in ('agenda','campaign')), name text not null,
   created_by uuid not null references core.users(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  is_deleted boolean not null default false, activated_at timestamptz,
+  activated_by uuid references core.users(id), deleted_at timestamptz, deleted_by uuid references core.users(id),
   unique(created_by,request_key)
 );
 create table if not exists marketing.work_plan_items (
   id uuid primary key default gen_random_uuid(), plan_id uuid not null references marketing.work_plans(id) on delete cascade,
   product_id uuid not null references marketing.work_items(id), scheduled_on date not null,
+  is_deleted boolean not null default false, post_type_id uuid references marketing.platform_post_types(id),
+  budget_amount numeric(15,2) not null default 0,
   caption text not null default '', hashtags text not null default '', version integer not null default 1,
-  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
-  unique(plan_id,product_id,scheduled_on)
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 create index if not exists work_plan_items_date on marketing.work_plan_items(scheduled_on,plan_id);
 create table if not exists marketing.work_publish_targets (

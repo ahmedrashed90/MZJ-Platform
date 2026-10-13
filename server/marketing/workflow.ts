@@ -4,7 +4,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { loadUserProfile, type SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
+import { assertMarketingWorkflowReady, marketingPlanScheduleSchemaStatus, upgradeMarketingPlanScheduleSchema } from '../_marketing-workflow-schema.js';
 import { createNotification } from '../_notifications.js';
 import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketingStorageKey } from '../_media-storage.js';
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
@@ -1048,6 +1048,19 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
   const resource = text(request.query.resource), body = request.method === 'POST' ? queryBody(request) : {};
   const action = text(body.action);
   if (!resource.startsWith('work_') && !action.startsWith('work_')) return false;
+  // Catalog checks are read-only. The only DDL path is an explicit, protected
+  // superadmin action, never a dashboard load or a normal publishing request.
+  if (request.method === 'GET' && resource === 'work_schema_status') {
+    const status = await marketingPlanScheduleSchemaStatus(sql);
+    response.status(200).json({ ok: true, ...status, canUpgrade: hasPermission(user, 'platform.superadmin') });
+    return true;
+  }
+  if (request.method === 'POST' && action === 'work_upgrade_schema') {
+    requirePermission(user, 'platform.superadmin');
+    const upgraded = await upgradeMarketingPlanScheduleSchema();
+    response.status(200).json({ ok: true, ...upgraded, message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
+    return true;
+  }
   await assertMarketingWorkflowReady(sql);
   let result: any;
   if (request.method === 'GET') {

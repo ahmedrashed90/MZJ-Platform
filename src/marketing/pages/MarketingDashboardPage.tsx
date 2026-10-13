@@ -17,6 +17,18 @@ export function MarketingDashboardPage() {
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities }>('dashboard');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; canUpgrade: boolean }>('schema_status');
+  const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
+  async function upgradeSchema() {
+    if (schemaUpgrading || !schema.data?.canUpgrade || !schema.data?.baseReady) return;
+    setSchemaUpgrading(true); setSchemaError('');
+    try {
+      await workPost('upgrade_schema', {});
+      await schema.reload();
+      await query.reload();
+    } catch (error) { setSchemaError(error instanceof Error ? error.message : W.invalid); }
+    finally { setSchemaUpgrading(false); }
+  }
   const taskId = params.get('task') || '';
   const term = search.trim().toLocaleLowerCase();
   const tasks = (query.data?.tasks || []).filter(task => `${task.name} ${task.task_no} ${task.type_name}`.toLocaleLowerCase().includes(term));
@@ -34,7 +46,12 @@ export function MarketingDashboardPage() {
   }
   const budgetLines = groups.get(budgetId) || [];
   const chooserLines = groups.get(selectPlan) || [];
-  return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
+  return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
+    {schema.data && !schema.data.ready && <div className="mkw-schema-upgrade" role="alert">
+      <span>{schema.data.baseReady ? 'تحتاج قاعدة بيانات التسويق إلى تحديث الجداول حتى تظهر بيانات التنفيذ والنشر الحالية.' : 'قاعدة بيانات التسويق تحتاج إلى التهيئة الأساسية.'}</span>
+      {schema.data.baseReady && schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
+      {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
+    </div>}
     <div className="mkw-toolbar mkw-dashboard-search"><Search value={search} onChange={setSearch}/></div>
     <div className="mkw-board mkw-dashboard-board">
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>

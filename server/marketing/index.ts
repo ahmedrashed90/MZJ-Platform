@@ -4588,11 +4588,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     console.error('Marketing API failed', { code: error?.code, message: error?.message, resource: clean(request.query.resource) || null });
     const message=clean(error?.message)||"تعذر تنفيذ العملية";
     const databaseWait = ['55P03', '57014', '53300', 'MARKETING_MIGRATION_BUSY'].includes(String(error?.code || ''));
-    const status=error?.code==='MARKETING_SCHEMA_NOT_READY'?503:databaseWait?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
+    const status=error?.code==='MARKETING_SCHEMA_NOT_READY'?503:error?.code==='MARKETING_SCHEMA_UPGRADE_REQUIRED'?409:databaseWait?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
     if (status===503) response.setHeader('Retry-After','2');
     return response.status(status).json({
       ok:false,
-      code: databaseWait ? 'MARKETING_DB_BUSY' : error?.code === 'MARKETING_SCHEMA_NOT_READY' ? 'MARKETING_SCHEMA_NOT_READY' : undefined,
+      code: databaseWait ? 'MARKETING_DB_BUSY' : ['MARKETING_SCHEMA_NOT_READY','MARKETING_SCHEMA_UPGRADE_REQUIRED'].includes(String(error?.code)) ? error.code : undefined,
       error: databaseWait ? 'تعذر الوصول إلى بيانات التسويق بسبب انشغال قاعدة البيانات مؤقتًا.' : message,
     });
   }
