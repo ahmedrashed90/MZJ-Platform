@@ -123,15 +123,32 @@ create table if not exists marketing.work_product_drafts (
 insert into marketing.workflow_migrations(code) values('schema-3') on conflict do nothing;
 commit;`;
 
+export const MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+alter table marketing.work_plans add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_plans add column if not exists activated_at timestamptz;
+alter table marketing.work_plans add column if not exists activated_by uuid references core.users(id);
+alter table marketing.work_plans add column if not exists deleted_at timestamptz;
+alter table marketing.work_plans add column if not exists deleted_by uuid references core.users(id);
+alter table marketing.work_plan_items add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_plan_items add column if not exists post_type_id uuid references marketing.platform_post_types(id);
+alter table marketing.work_plan_items add column if not exists budget_amount numeric(15,2) not null default 0;
+alter table marketing.work_plan_items drop constraint if exists work_plan_items_plan_id_product_id_scheduled_on_key;
+create unique index if not exists work_plan_unique_entry
+  on marketing.work_plan_items(plan_id,product_id,scheduled_on,(coalesce(post_type_id,'00000000-0000-0000-0000-000000000000'::uuid)));
+insert into marketing.workflow_migrations(code) values('schema-4') on conflict do nothing;
+commit;`;
+
 let ready: Promise<void> | null = null;
 export function ensureMarketingWorkflowSchema() {
   if (!ready) ready = (async () => {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, current: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), current: rows.some(x => x.code === 'schema-3') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4') };
     };
     if ((await flags()).current) return;
     // Avoid waiting behind a second cold-start migration. The first request
@@ -140,7 +157,8 @@ export function ensureMarketingWorkflowSchema() {
       const state = await flags();
       if (!state.base) await runSqlScript(MARKETING_WORKFLOW_SQL);
       if (!(await flags()).hasTaskDeletion) await runSqlScript(MARKETING_WORKFLOW_TASK_DELETE_SQL);
-      if (!(await flags()).current) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
+      if (!(await flags()).hasDrafts) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
+      if (!(await flags()).current) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

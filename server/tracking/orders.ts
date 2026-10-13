@@ -207,20 +207,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json(result);
     }
 
-    const vehicleId = clean(body.vehicleId);
+    // A single-vehicle action affects that VIN only. A bulk completion uses
+    // exactly the selected vehicles, never all siblings of the sales order.
+    const bulk = action === "complete_stage_bulk";
+    const requestedIds = bulk ? body.vehicleIds : [body.vehicleId];
+    const vehicleIds = Array.isArray(requestedIds) ? [...new Set(requestedIds.map(clean))] : [];
     const stageId = clean(body.stageId);
-    if (!["complete_stage", "revert_stage"].includes(action)) {
+    if (!["complete_stage", "complete_stage_bulk", "revert_stage"].includes(action)) {
       return response.status(400).json({ ok: false, error: "الإجراء غير مدعوم" });
     }
-    if (!vehicleId || !stageId) return response.status(400).json({ ok: false, error: "السيارة والمرحلة مطلوبتان" });
-
+    if (!stageId || !vehicleIds.length || vehicleIds.length > 100 ||
+        vehicleIds.some(value => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stageId)) {
+      return response.status(400).json({ ok: false, error: "حدد سيارات صحيحة ومرحلة واحدة" });
+    }
     const [row] = await sql<any[]>`
       select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.is_cancelled,o.branch,o.assigned_to::text
       from tracking.vehicle_stages vs
       join tracking.order_vehicles v on v.id=vs.vehicle_id
       join tracking.orders o on o.id=v.order_id
-      join tracking.stages s on s.id=vs.stage_id
-      where vs.vehicle_id=${vehicleId}::uuid and vs.stage_id=${stageId}::uuid
+      join tracking.stages s on s.id=vs.stage_id and s.is_active=true
+      where vs.vehicle_id=${vehicleIds[0]}::uuid and vs.stage_id=${stageId}::uuid
     `;
     if (!row) return response.status(404).json({ ok: false, error: "مرحلة السيارة غير موجودة" });
     const workflowAssigned = scope.workflowAssignedOnly
@@ -232,64 +239,61 @@ export default async function handler(request: VercelRequest, response: VercelRe
       || (scope.branchScoped && branches.includes(clean(row.branch)));
     if (!canAccessOrder) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });
     const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
-    const permissionCode = action === "complete_stage" ? `tracking.stage.${stageNo}.complete` : `tracking.stage.${stageNo}.rollback`;
+    const permissionCode = action === "revert_stage" ? `tracking.stage.${stageNo}.rollback` : `tracking.stage.${stageNo}.complete`;
     if (!hasPermission(user, permissionCode)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه المرحلة", permission: permissionCode });
     if (action === "revert_stage" && !clean(body.note)) return response.status(400).json({ ok: false, error: "سبب التراجع مطلوب" });
     if (row.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن تعديل مراحله" });
     if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن تعديل مراحله" });
 
-    const siblingVehicles = await sql<any[]>`
-      select id::text from tracking.order_vehicles where order_id=${row.order_id}::uuid order by created_at,id
+    const belonging = await sql<any[]>`
+      select id::text from tracking.order_vehicles where order_id=${row.order_id}::uuid and id=any(${vehicleIds}::uuid[])
     `;
-    for (const sibling of siblingVehicles) await ensureVehicleStageRows(sibling.id);
+    if (belonging.length !== vehicleIds.length) return response.status(400).json({ ok: false, error: "بعض السيارات ليست ضمن هذا الطلب" });
+    for (const vehicleId of vehicleIds) await ensureVehicleStageRows(vehicleId);
 
     let affectedCount = 0;
     await sql.begin(async (tx) => {
-      if (action === "complete_stage") {
-        const updated = await tx<any[]>`
-          update tracking.vehicle_stages vs set
-            status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
-          from tracking.order_vehicles ov
-          where vs.vehicle_id=ov.id and ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status<>'completed'
-          returning vs.vehicle_id::text
-        `;
-        affectedCount = updated.length;
-        for (const target of updated) {
-          await tx`
-            insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
-            values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,'completed',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
-          `;
-          await tryArchiveVehicleForTrackingRecord(tx, target.vehicle_id, { id: user.id, name: user.fullName });
-        }
-      } else {
-        const updated = await tx<any[]>`
-          update tracking.vehicle_stages vs set
+      // Hold row locks during the entire selected-vehicles operation. A second
+      // concurrent request cannot double-complete or double-log these VINs.
+      const selectedStages = await tx<any[]>`
+        select vs.id from tracking.vehicle_stages vs
+        join tracking.order_vehicles v on v.id=vs.vehicle_id
+        where v.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid
+          and vs.vehicle_id=any(${vehicleIds}::uuid[]) for update of vs
+      `;
+      if (selectedStages.length !== vehicleIds.length) throw new Error("مرحلة غير متاحة لإحدى السيارات المختارة");
+      const targets = action === "revert_stage"
+        ? await tx<any[]>`update tracking.vehicle_stages set
             status='pending',reverted_by=${user.id}::uuid,reverted_at=now(),completed_by=null,completed_at=null,updated_at=now()
-          from tracking.order_vehicles ov
-          where vs.vehicle_id=ov.id and ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status='completed'
-          returning vs.vehicle_id::text
+            where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status='completed'
+            returning vehicle_id::text`
+        : await tx<any[]>`update tracking.vehicle_stages set
+            status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
+            where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status<>'completed'
+            returning vehicle_id::text`;
+      affectedCount = targets.length;
+      for (const target of targets) {
+        await tx`
+          insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
+          values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,${action === "revert_stage" ? "reverted" : "completed"},${user.id}::uuid,${user.fullName},${clean(body.note)||null})
         `;
-        affectedCount = updated.length;
-        for (const target of updated) {
-          await tx`
-            insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
-            values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,'reverted',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
-          `;
-        }
+        if (action !== "revert_stage") await tryArchiveVehicleForTrackingRecord(tx, target.vehicle_id, { id: user.id, name: user.fullName });
       }
     });
 
     await recalculateTrackingOrder(row.order_id);
     const detail = await getOrderDetail(row.order_id, user);
-    const vehicleWord = siblingVehicles.length > 1 ? " لجميع سيارات الطلب" : "";
+    const vehicleWord = bulk ? ` للسيارات المحددة (${affectedCount} من ${vehicleIds.length})` : " للسيارة المحددة";
     const result = {
       ok: true,
       order: detail,
       orderId: row.order_id,
       affectedVehicles: affectedCount,
-      message: action === "complete_stage" ? `تم إنهاء المرحلة${vehicleWord}` : `تم التراجع عن المرحلة${vehicleWord}`,
+      selectedVehicles: vehicleIds.length,
+      skippedVehicles: vehicleIds.length - affectedCount,
+      message: action === "revert_stage" ? `تم التراجع عن المرحلة${vehicleWord}` : `تم إنهاء المرحلة${vehicleWord}`,
     };
-    await emitTrackingNotification(user, action, { ...body, orderId: row.order_id, stageNo }, result).catch((error) => console.error("Tracking stage notification failed", error));
+    if (affectedCount > 0) await emitTrackingNotification(user, bulk ? "complete_stage" : action, { ...body, orderId: row.order_id, stageNo, vehicleIds }, result).catch((error) => console.error("Tracking stage notification failed", error));
     return response.status(200).json(result);
   }
 

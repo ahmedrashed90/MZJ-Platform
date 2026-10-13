@@ -9104,3 +9104,17 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .access-inventory-column-grid label { display: flex; align-items: center; justify-content: flex-start; gap: 8px; border: 1px solid #ede2dc; background: #fff; border-radius: 9px; padding: 9px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
 .access-inventory-column-grid label:has(input:checked) { border-color: #bba69b; background: #faf3ee; }
 .access-inventory-column-grid input { accent-color: #763a30; width: 15px; height: 15px; flex: none; }
+
+/* Tracking: one stage for a selected set of VINs; never silently all siblings. */
+.tracking-vehicle-multi-toolbar { display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:12px 0 9px;color:var(--brand);font-size:12px;font-weight:800; }
+.tracking-vehicle-select-all { display:inline-flex;align-items:center;gap:9px;cursor:pointer; }
+.tracking-vehicle-select-all input,.tracking-vehicle-select-item>input { width:17px;height:17px;accent-color:var(--brand);cursor:pointer;flex:none; }
+.tracking-vehicle-select-item { display:flex;align-items:center;gap:7px;flex:none;border:1px solid var(--line);border-radius:12px;padding:5px 7px;background:#fff; }
+.tracking-vehicle-select-item.active { background:#fff7f2;border-color:var(--brand-2); }
+.tracking-vehicle-select-item>button { border:0;min-width:102px;min-height:46px;box-shadow:none; }
+.tracking-stage-bulk-toolbar { display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin:15px 0 7px;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--surface-soft); }
+.tracking-stage-bulk-toolbar label { font-weight:800;font-size:13px; }
+.tracking-stage-bulk-toolbar select { min-width:190px;max-width:100%;min-height:39px;border:1px solid var(--line);border-radius:9px;background:#fff;padding:5px 10px;flex:1; }
+.tracking-stage-bulk-toolbar button { display:flex;gap:8px;align-items:center;justify-content:center;border-radius:9px;min-height:40px;padding:8px 15px;border:1px solid var(--brand);background:var(--brand);color:#fff;font-weight:800; }
+.tracking-stage-bulk-toolbar button:disabled { opacity:.5;cursor:not-allowed; }
+@media(max-width:600px) { .tracking-stage-bulk-toolbar select,.tracking-stage-bulk-toolbar button { width:100%; } }

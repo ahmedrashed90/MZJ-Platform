@@ -9,6 +9,7 @@ import {
   Car,
   ChatText,
   CheckCircle,
+  CheckSquare,
   Clock,
   Copy,
   CurrencyCircleDollar,
@@ -57,6 +58,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [selected, setSelected] = useState<TrackingOrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeVehicleId, setActiveVehicleId] = useState("");
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
+  const [bulkStageId, setBulkStageId] = useState("");
   const [actionKey, setActionKey] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -93,6 +96,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
       const payload = await trackingFetch<DetailResponse>(`/api/tracking/orders?id=${encodeURIComponent(id)}`);
       setSelected(payload.order);
       setActiveVehicleId(payload.order.vehicles[0]?.id || "");
+      setSelectedVehicleIds([]);
+      setBulkStageId("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر فتح طلب التتبع");
     } finally {
@@ -134,6 +139,24 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     } finally {
       setActionKey("");
     }
+  }
+
+  async function completeSelectedStage() {
+    if (!selected || !bulkStageId || !selectedVehicleIds.length || actionKey ||
+      !window.confirm(`تأكيد تم الانتهاء للمرحلة المحددة على ${selectedVehicleIds.length} سيارة؟`)) return;
+    setActionKey('complete_stage_bulk'); setError(''); setMessage('');
+    try {
+      const result = await trackingFetch<DetailResponse & { affectedVehicles: number; skippedVehicles: number }>("/api/tracking/orders", {
+        method: 'POST', body: JSON.stringify({ action: 'complete_stage_bulk', vehicleIds: selectedVehicleIds, stageId: bulkStageId }),
+      });
+      setSelected(result.order);
+      setMessage(`${result.message || 'تم إنهاء المرحلة'}${result.skippedVehicles ? ` — ${result.skippedVehicles} مكتملة مسبقًا` : ''}`);
+      await loadOrders();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر إنهاء المرحلة للسيارات المحددة'); }
+    finally { setActionKey(''); }
+  }
+  function toggleSelectedVehicle(id: string, checked: boolean) {
+    setSelectedVehicleIds(current => checked ? [...new Set([...current, id])] : current.filter(value => value !== id));
   }
 
   async function sendSms(vehicle: TrackingVehicle, stage: TrackingStage) {
@@ -339,13 +362,27 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
                 <section className="tracking-overview-card tracking-vehicle-summary-card">
                   <div className="tracking-section-heading"><div><Car size={20} /><h3>السيارات في الطلب</h3></div><span>{selected.vehicles.length}</span></div>
+                  <div className="tracking-vehicle-multi-toolbar">
+                    <label className="tracking-vehicle-select-all"><input type="checkbox" disabled={Boolean(actionKey) || selected.is_archived || selected.is_cancelled} checked={!!selected.vehicles.length && selectedVehicleIds.length === selected.vehicles.length} onChange={event => setSelectedVehicleIds(event.target.checked ? selected.vehicles.map(vehicle => vehicle.id) : [])} />تحديد الكل</label>
+                    <span>المحدد: {selectedVehicleIds.length} من {selected.vehicles.length}</span>
+                  </div>
                   <div className="tracking-vehicle-tabs">
                     {selected.vehicles.map((vehicle, index) => (
-                      <button key={vehicle.id} type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>
-                        سيارة {index + 1}<small>{visibleVin(vehicle)}</small>
-                      </button>
+                      <div key={vehicle.id} className={`tracking-vehicle-select-item ${activeVehicle?.id === vehicle.id ? "active" : ""}`}>
+                        <input aria-label={`تحديد سيارة ${index + 1} ${visibleVin(vehicle)}`} type="checkbox" disabled={Boolean(actionKey) || selected.is_archived || selected.is_cancelled} checked={selectedVehicleIds.includes(vehicle.id)} onChange={event => toggleSelectedVehicle(vehicle.id, event.target.checked)} />
+                        <button type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>سيارة {index + 1}<small>{visibleVin(vehicle)}</small></button>
+                      </div>
                     ))}
                   </div>
+                  {!selected.is_archived && !selected.is_cancelled && <div className="tracking-stage-bulk-toolbar">
+                    <label htmlFor="tracking-bulk-stage">المرحلة</label>
+                    <select id="tracking-bulk-stage" value={bulkStageId} disabled={Boolean(actionKey)} onChange={event => setBulkStageId(event.target.value)}>
+                      <option value="">اختر المرحلة</option>
+                      {activeVehicle?.stages.filter(stage => hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.complete`)).map(stage => <option key={stage.stage_id} value={stage.stage_id}>{stage.sort_order} - {stage.name}</option>)}
+                    </select>
+                    <button type="button" disabled={Boolean(actionKey) || !selectedVehicleIds.length || !bulkStageId} onClick={() => void completeSelectedStage()}><CheckSquare size={19} />{actionKey === 'complete_stage_bulk' ? 'جاري إنهاء المراحل...' : `تم الانتهاء للمحدد (${selectedVehicleIds.length})`}</button>
+                  </div>}
+
                   {activeVehicle ? <div className="tracking-car-details">
                     <div className="tracking-car-name"><small>السيارة</small><strong>{activeVehicle.car_name || [activeVehicle.item_type, activeVehicle.item_category, activeVehicle.item_model].filter(Boolean).join(" ") || "—"}</strong></div>
                     <div><small>رقم الهيكل</small><strong>{visibleVin(activeVehicle)}</strong></div>

@@ -16,7 +16,7 @@ const stubs = {
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
 };
-const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft'];
+const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
 const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
@@ -70,7 +70,7 @@ test('Staging final upload holds task and item locks atomically',async()=>{const
 test('Removing an unrelated file is denied',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([step('select * from marketing.work_uploads',[{file_id:file.id,item_id:uid(99),created_by:uid(3)}]),itemRead([row]),taskLock(),step('select status,assigned_to',[row]),itemRead([row]),step('select 1 from marketing.work_item_files')]);await assert.rejects(()=>api.removeUpload(db,{itemId:item.id,fileId:file.id},worker));db.assertDone();});
 test('Products require whole-task completion and newest-first order',async()=>{const db=scriptedSql([step("where t.is_deleted=false and t.status='completed' and i.status='approved'",[],(v,q)=>{assert(q.includes('order by t.completed_at desc,i.approved_at desc'));})]);assert.deepEqual(await api.products(db,admin),[]);db.assertDone();});
 test('Unreleased products cannot be selected by ID',async()=>{const db=scriptedSql([step("and t.status='completed'",[])]);await assert.rejects(()=>api.productVisible(db,admin,item.id));db.assertDone();});
-function publishingDb(status,kind='agenda',extra=[]){return scriptedSql([step('select target.line_id,p.kind',[{line_id:uid(61),kind}]),step('from marketing.work_plan_items l',[{id:uid(61)}]),...(kind==='campaign'?[]:[step('for update of s',[{id:uid(71),status,platform_code:'instagram',caption:'Tucson',hashtags:'#MZJ',publish_result:{id:'remote-1'}}])]),...extra]);}
+function publishingDb(status,kind='agenda',extra=[]){return scriptedSql([step('select target.line_id,p.kind',[{line_id:uid(61),kind}]),step('from marketing.work_plan_items l',[{id:uid(61)}]),...(kind==='campaign'?[]:[step('for update of s',[{id:uid(71),status,platform_code:'instagram',caption:'Tucson',hashtags:'#MZJ',publish_result:{id:'remote-1'}}]), ...(['waiting','failed'].includes(status)?[step('join marketing.work_plans plan',[{ok:1}])]:[])]),...extra]);}
 const services={validatePublishItem:async()=>{},publishItem:async()=>({})};
 test('Funding plan never triggers organic publication or spend',async()=>{const db=publishingDb('waiting','campaign');await assert.rejects(()=>api.publishTarget(db,admin,{scheduleId:uid(71)},services));db.assertDone();});
 test('Already published target is idempotent',async()=>{let calls=0;const db=publishingDb('published');const r=await api.publishTarget(db,admin,{scheduleId:uid(71)},{...services,publishItem:async()=>{calls++;}});assert.equal(r.alreadyPublished,true);assert.equal(calls,0);db.assertDone();});
@@ -95,7 +95,55 @@ test('Executor has no permission to prepare a product draft',async()=>{await ass
 test('Publishing preparation is inside the product view with format, caption and hashtags',()=>{const s=read('src/marketing/workflow/PublishPage.tsx');assert(s.includes('ProductDraftEditor'));assert(s.includes("workPost('save_product_draft'"));assert(s.includes('W.platforms'));assert(s.includes('W.caption'));assert(s.includes('W.hashtags'));});
 test('Prepared drafts persist on the product and copy into a plan at creation',()=>{const s=read('server/marketing/workflow.ts');assert(s.includes('async function saveProductDraft('));assert(s.includes("requirePermission(user, 'marketing.publish_prep.manage')"));assert(s.includes('where product_id=any('));assert(s.includes('coalesce(draft.caption'));assert(s.includes('work_save_product_draft'));});
 test('Task opens full screen without legacy assignment checkboxes',()=>{const css=read('src/marketing/workflow/workflow.css'),detail=read('src/marketing/workflow/TaskDetail.tsx');assert(css.includes('.mzj-modal-card.mkw-fullscreen'));assert(css.includes('height:100dvh'));assert(detail.includes('className="mkw-fullscreen"'));assert(!detail.includes('toggleAction'));});
-test('Task creator selects executor in one department-grouped control',()=>{const page=read('src/marketing/workflow/CreatePage.tsx');assert(page.includes('<optgroup key={department.id} label={department.name}>'));assert(page.includes("changeAssignee(assignee.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' })"));});
+test('Task creator assigns executor per horizontal requirement with one add button',()=>{const page=read('src/marketing/workflow/CreatePage.tsx');assert(page.includes('<optgroup key={department.id} label={department.name}>'));assert(page.includes("changeItem(item.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' })"));assert(page.includes('className="mkw-horizontal-row"'));assert(page.includes('W.addItem'));assert(!page.includes('W.addAssignee'));});
 test('New marketing navigation is centered in the workflow stylesheet',()=>{const css=read('src/marketing/workflow/workflow.css');assert(css.includes('.marketing-shell .marketing-nav { justify-content:center'));});
+test('Deleting a task atomically removes every related campaign/agenda schedule, not sibling source tasks',async()=>{
+  const taskId=uid(50),p1=uid(61),p2=uid(62),l1=uid(71),l2=uid(72),l3=uid(73);
+  const db=scriptedSql([
+    step('select id,name,task_no,is_deleted,created_by',[{id:taskId,is_deleted:false,created_by:admin.id}]),
+    step('select distinct l.plan_id::text',[{plan_id:p1},{plan_id:p2}]),
+    step('select id from marketing.work_plans',[],v=>assert.deepEqual(v[0],[p1,p2])),
+    step('select id::text from marketing.work_plan_items',[{id:l1},{id:l2},{id:l3}]),
+    step("s.status in('processing','verification_required')",[]),
+    step('from marketing.work_uploads upload',[]),
+    step('update marketing.publish_schedule s',[],v=>assert.deepEqual(v[0],[l1,l2,l3])),
+    step('update marketing.work_plan_items',[],v=>assert.deepEqual(v[0],[l1,l2,l3])),
+    step('update marketing.work_plans',[],v=>assert.deepEqual(v[1],[p1,p2])),
+    step('update marketing.campaigns',[],v=>assert.deepEqual(v[0],[p1,p2])),
+    step('update marketing.agendas',[],v=>assert.deepEqual(v[1],[p1,p2])),
+    step('update marketing.work_tasks',[],v=>assert.equal(v[1],taskId)),
+    step('insert into marketing.work_history'),
+  ]);
+  const result=await api.deleteWorkflowTask(db,admin,taskId);
+  assert.equal(result.deletedPlans,2);assert.equal(result.affectedLines,3);db.assertDone();
+});
+test('Task deletion refuses provider operations that may already be in flight',async()=>{
+  const db=scriptedSql([
+    step('select id,name,task_no,is_deleted,created_by',[{id:item.task_id,is_deleted:false,created_by:admin.id}]),
+    step('select distinct l.plan_id::text',[{plan_id:uid(61)}]),
+    step('select id from marketing.work_plans'),
+    step('select id::text from marketing.work_plan_items',[{id:uid(71)}]),
+    step("s.status in('processing','verification_required')",[{exists:1}]),
+  ]);
+  await assert.rejects(()=>api.deleteWorkflowTask(db,admin,item.task_id),/عملية نشر|نشر جار/);db.assertDone();
+});
+test('Scheduled publisher is protected and respects plan activation',()=>{
+  const schedule=read('server/marketing/workflow.ts'),route=read('server/internal/marketing-publish-tick.ts'),vercel=read('vercel.json');
+  assert(schedule.includes('plan.activated_at is not null'));
+  assert(schedule.includes('p.activated_at is not null'));
+  assert(schedule.includes('coalesce(p.activated_by,p.created_by)::text as publisher_id'));
+  assert(schedule.includes("s.status='waiting'"));
+  assert(route.includes('safeSecretEquals'));assert(route.includes('CRON_SECRET'));
+  assert(vercel.includes('/api/internal/marketing-publish-tick'));
+});
+test('Bulk tracking stages update only selected vehicle IDs and log each changed VIN',()=>{
+  const orders=read('server/tracking/orders.ts'),page=read('src/tracking/pages/TrackingOrdersPage.tsx');
+  assert(orders.includes('complete_stage_bulk'));
+  assert(orders.includes('vs.vehicle_id=any(${vehicleIds}::uuid[])'));
+  assert(orders.includes('vehicle_id=any(${vehicleIds}::uuid[])'));
+  assert(orders.includes('for (const target of targets)'));
+  assert(orders.includes('if (affectedCount > 0)'));
+  assert(page.includes('تحديد الكل'));assert(page.includes('تم الانتهاء للمحدد'));
+});
 test('Only permitted campaign deletions show an admin confirmation',()=>{const page=read('src/marketing/pages/MarketingDatabasePage.tsx');assert(page.includes("hasPermission(user, 'marketing.campaign.delete')"));assert(page.includes("row.kind === 'campaign' && canDeleteCampaign"));assert(page.includes('className="mkw-confirm-delete"'));});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS: '+name);}catch(e){failed++;console.error('FAIL: '+name+'\n'+e.stack);}}console.log(`${tests.length-failed}/${tests.length} workflow checks passed (domain + mocked SQL boundary; no live DB/provider).`);process.exitCode=failed?1:0;})();

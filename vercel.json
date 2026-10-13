@@ -34,6 +34,10 @@
     {
       "path": "/api/internal/meta-engagement-sync",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/internal/marketing-publish-tick",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

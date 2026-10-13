@@ -577,13 +577,18 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     await tx`select pg_advisory_xact_lock(hashtext(${`work-plan:${user.id}:${requestKey}`}))`;
     const [existing] = await tx<any[]>`select id from marketing.work_plans where created_by=${user.id}::uuid and request_key=${requestKey}::uuid`;
     if (existing) return { ok: true, id: existing.id, message: W.saved };
-    const normalized: { productId: string; date: string }[] = [], seen = new Set<string>();
+    const normalized: { productId: string; date: string; postTypeId: string; budget: number }[] = [], seen = new Set<string>();
     for (const entry of entries) {
       const productId = id(entry.productId), date = text(entry.date, 10);
       if (!isWorkDate(date)) throw new Error(W.dateInvalid);
-      const key = `${date}:${productId}`;
-      if (seen.has(key)) continue;
-      seen.add(key); await productVisible(tx, user, productId); normalized.push({ productId, date });
+      const postTypeId = id(entry.postTypeId);
+      const budget = kind === 'campaign' ? Number(entry.budget) : 0;
+      if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.round(budget * 100) / 100 !== budget) throw new Error(W.invalid);
+      const product = await productVisible(tx, user, productId);
+      if (!list(product.formats).some((format: WorkFormat) => format.id === postTypeId)) throw new Error(W.selectFormats);
+      const key = `${date}:${productId}:${postTypeId}`;
+      if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
+      seen.add(key); normalized.push({ productId, date, postTypeId, budget });
     }
     let seq: any, planNo = '';
     do {
@@ -604,8 +609,8 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
       values(${planId}::uuid,${name},${start.slice(0, 7)},${start}::date,${end}::date,'publishing',${payload},100,${user.id}::uuid)`;
     else await tx`insert into marketing.campaigns(id,campaign_code,name,campaign_date,publish_start,publish_end,status,payload,progress,created_by)
       values(${planId}::uuid,${planNo},${name},current_date,${start}::date,${end}::date,'publishing',${payload},100,${user.id}::uuid)`;
-    for (const entry of normalized) await tx`insert into marketing.work_plan_items(plan_id,product_id,scheduled_on,caption,hashtags)
-      select ${planId}::uuid,${entry.productId}::uuid,${entry.date}::date,
+    for (const entry of normalized) await tx`insert into marketing.work_plan_items(plan_id,product_id,scheduled_on,post_type_id,budget_amount,caption,hashtags)
+      select ${planId}::uuid,${entry.productId}::uuid,${entry.date}::date,${entry.postTypeId}::uuid,${entry.budget},
         coalesce(draft.caption,''),coalesce(draft.hashtags,'')
       from (select 1) as seed left join marketing.work_product_drafts draft
         on draft.product_id=${entry.productId}::uuid`;
@@ -614,7 +619,8 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
 }
 async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
-  const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_by,
+  const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_by,p.activated_at,
+    pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
     i.idea_name,i.media_kind,t.task_no,t.name as task_name,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
@@ -622,7 +628,9 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id
-    where t.is_deleted=false and (${planId}='' or p.id=nullif(${planId},'')::uuid)
+    left join marketing.platform_post_types pt on pt.id=l.post_type_id
+    left join marketing.platforms pf on pf.id=pt.platform_id
+    where t.is_deleted=false and p.is_deleted=false and l.is_deleted=false and (${planId}='' or p.id=nullif(${planId},'')::uuid)
       and (p.kind<>'campaign' or exists (
         select 1 from marketing.campaigns campaign
         where campaign.id=p.id and campaign.is_deleted=false
@@ -667,33 +675,61 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   if (!lines.length) throw new Error(W.notFound);
   return { ok: true, plan: { id: planId, plan_no: lines[0].plan_no, name: lines[0].name, kind: lines[0].kind, created_at: lines[0].created_at }, lines };
 }
-/** Hide a new-workflow task without destroying historical files or audit rows.
- * A task already used in an agenda/campaign cannot be deleted because it may
- * have externally published content and downstream engagement references.
- */
+/** One confirmed task deletion removes every linked campaign/agenda plan and all its
+ * future publication rows, even if that plan also references a product from another
+ * task. Those other source tasks and their files remain intact. Published posts and
+ * history stay as historical evidence and are never remotely deleted. */
 async function deleteWorkflowTask(sql: Sql, user: SessionUser, taskId: string) {
   requirePermission(user, 'marketing.task.delete');
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
-    const [task] = await tx<any[]>`select id,name,task_no,is_deleted from marketing.work_tasks
+    const [task] = await tx<any[]>`select id,name,task_no,is_deleted,created_by from marketing.work_tasks
       where id=${taskId}::uuid for update`;
     if (!task || task.is_deleted) throw new Error(W.notFound);
-    const [linked] = await tx<any[]>`select 1 from marketing.work_plan_items plan_item
-      join marketing.work_items item on item.id=plan_item.product_id
-      where item.task_id=${taskId}::uuid limit 1`;
-    if (linked) throw new Error(W.taskHasPlans);
+    if (!isManager(user) && task.created_by !== user.id) throw new Error(W.denied);
+    const referencedPlans = await tx<any[]>`select distinct l.plan_id::text from marketing.work_plan_items l
+      join marketing.work_items item on item.id=l.product_id
+      where item.task_id=${taskId}::uuid and l.is_deleted=false`;
+    const planIds = referencedPlans.map(plan => plan.plan_id);
+    if (planIds.length) await tx`select id from marketing.work_plans
+      where id=any(${planIds}::uuid[]) for update`;
+    const lines = planIds.length ? await tx<any[]>`select id::text from marketing.work_plan_items
+      where plan_id=any(${planIds}::uuid[]) and is_deleted=false for update` : [];
+    const lineIds = lines.map(line => line.id);
+    const [sending] = await tx<any[]>`select 1 from marketing.work_publish_targets target
+      join marketing.publish_schedule s on s.id=target.schedule_id
+      where target.line_id=any(${lineIds}::uuid[]) and s.status in('processing','verification_required') limit 1`;
+    if (sending) throw new Error('هناك نشر جارٍ أو يحتاج للتحقق؛ لا يمكن حذف التاسك أثناء تنفيذ النشر');
     const [pending] = await tx<any[]>`select 1 from marketing.work_uploads upload
       join marketing.work_items item on item.id=upload.item_id
       join marketing.files file on file.id=upload.file_id
       where item.task_id=${taskId}::uuid and upload.cancelled_at is null
         and upload.committed_at is null and file.status='uploading' limit 1`;
     if (pending) throw new Error(W.taskHasUploads);
-    await tx`update marketing.work_tasks
-      set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now(),version=version+1
+    // Cancel only unpublished provider work. Historic published outputs must
+    // retain immutable records and never cause a delete on Meta/TikTok/etc.
+    if (lineIds.length) {
+      await tx`update marketing.publish_schedule s set status='cancelled',updated_at=now()
+        where s.id in (select target.schedule_id from marketing.work_publish_targets target
+          where target.line_id=any(${lineIds}::uuid[])) and s.status in('waiting','failed')`;
+      await tx`update marketing.work_plan_items set is_deleted=true,updated_at=now()
+        where id=any(${lineIds}::uuid[]) and is_deleted=false`;
+    }
+    if (planIds.length) {
+      await tx`update marketing.work_plans set is_deleted=true,activated_at=null,
+        deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now()
+        where id=any(${planIds}::uuid[]) and is_deleted=false`;
+      await tx`update marketing.campaigns set is_deleted=true,updated_at=now()
+        where id=any(${planIds}::uuid[]) and is_deleted=false`;
+      await tx`update marketing.agendas set status='archived',archived_at=coalesce(archived_at,now()),
+        archived_by=${user.id}::uuid,updated_at=now() where id=any(${planIds}::uuid[])`;
+    }
+    await tx`update marketing.work_tasks set is_deleted=true,deleted_at=now(),
+      deleted_by=${user.id}::uuid,updated_at=now(),version=version+1
       where id=${taskId}::uuid and is_deleted=false`;
-    await history(tx, user, taskId, null, 'task_deleted');
-    return { ok: true, id: taskId, message: W.saved };
+    await history(tx, user, taskId, null, 'task_deleted', '', { removedPlanLines: lineIds.length, deletedPlans: planIds.length });
+    return { ok: true, id: taskId, affectedLines: lineIds.length, deletedPlans: planIds.length, message: W.saved };
   });
 }
 
@@ -753,6 +789,7 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   const selected = [...new Set(list(body.formatIds).map(value => id(value)))];
   const formats = list(product.formats) as WorkFormat[];
   if (!selected.length || selected.some(formatId => !formats.some(format => format.id === formatId))) throw new Error(W.selectFormats);
+  if (visible.post_type_id && (selected.length !== 1 || selected[0] !== visible.post_type_id)) throw new Error('نوع النشر يجب أن يطابق جدول النشر المحفوظ');
   const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
   if (!caption || !hashtags) throw new Error(W.requiredFields);
   const defaults = await services.youtubeDefaults(sql);
@@ -761,7 +798,7 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
     const [line] = await tx<any[]>`select l.*,p.kind,p.created_by from marketing.work_plan_items l
-      join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid for update of l`;
+      join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid and p.is_deleted=false and l.is_deleted=false for update of l`;
     if (!line || Number(body.version) !== Number(line.version)) throw new Error(W.conflict);
     // Recheck approval in the same transaction. A prepared file is never a draft upload.
     const [released] = await tx<any[]>`select i.id from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
@@ -849,8 +886,8 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
     join marketing.work_plan_items l on l.id=target.line_id join marketing.work_plans p on p.id=l.plan_id
     where target.schedule_id=${scheduleId}::uuid`;
   if (!target || !(await planLines(sql, user)).some(line => line.id === target.line_id)) throw new Error(W.notFound);
-  // Planning finance never starts an organic post or spends an ad budget.
-  if (target.kind === 'campaign') throw new Error(W.fundingPlan);
+  // Publishing a campaign posts organically on supported connected accounts;
+  // the campaign budget is a plan only and NEVER triggers paid ad spending.
   return withDatabaseAdvisoryLock(`mzj:marketing:work-publish:${scheduleId}`, async () => {
     // The snapshot and claim are atomic with the preparation editor. A save
     // cannot change caption/files between the read and the provider request.
@@ -865,8 +902,17 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
       if (schedule.status === 'published') return { alreadyPublished: true, schedule };
       if (['processing', 'verification_required'].includes(schedule.status)) throw new Error(W.unpublishedOnly);
       if (!['waiting','failed'].includes(schedule.status)) throw new Error(W.immutable);
+      const [activePlan] = await tx<any[]>`select 1 from marketing.work_publish_targets target
+        join marketing.work_plan_items line on line.id=target.line_id
+        join marketing.work_plans plan on plan.id=line.plan_id
+        join marketing.work_items item on item.id=line.product_id
+        join marketing.work_tasks task on task.id=item.task_id
+        where target.schedule_id=${scheduleId}::uuid and plan.activated_at is not null
+          and plan.is_deleted=false and line.is_deleted=false and task.is_deleted=false`;
+      if (!activePlan) throw new Error('النشر غير مفعل أو تم إلغاء جدول النشر');
       if (!['facebook', 'instagram', 'youtube'].includes(schedule.platform_code)) throw new Error(W.invalid);
       if (!text(schedule.caption) || !text(schedule.hashtags)) throw new Error(W.requiredFields);
+      if (workDate(schedule.publish_date) > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Riyadh' })) throw new Error('موعد النشر لم يحن بعد');
       await services.validatePublishItem(tx as any, schedule);
       await tx`update marketing.publish_schedule set status='processing',updated_at=now()
         where id=${scheduleId}::uuid and status in('waiting','failed')`;
@@ -907,6 +953,63 @@ async function resetPublicationAfterCheck(sql: Sql, user: SessionUser, body: Row
       from marketing.platforms where id=${changed.platform_id}::uuid`;
     return { ok: true, message: W.saved };
   });
+}
+
+
+async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row) {
+  requirePermission(user, 'marketing.publish.now');
+  requirePermission(user, 'marketing.publish_prep.view');
+  const planId = id(body.planId);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const [plan] = await tx<any[]>`select id,created_by,activated_at from marketing.work_plans
+      where id=${planId}::uuid and is_deleted=false for update`;
+    if (!plan) throw new Error(W.notFound);
+    const visible = await planLines(tx as unknown as Sql, user, planId);
+    if (!visible.length) throw new Error(W.notFound);
+    const unfinished = visible.find(line => !line.prepared_count || line.failed_count || line.prepared_count !== 1);
+    if (unfinished) throw new Error('أكمل تجهيز النشر وحفظ الكابشن والهاشتاج لكل صف في جدول النشر أولًا');
+    const [unsupported] = await tx<any[]>`select 1 from marketing.work_publish_targets target
+      join marketing.work_plan_items line on line.id=target.line_id
+      join marketing.publish_schedule s on s.id=target.schedule_id
+      join marketing.platforms p on p.id=s.platform_id
+      where line.plan_id=${planId}::uuid and line.is_deleted=false
+        and (p.code not in ('facebook','instagram','youtube') or s.status='cancelled') limit 1`;
+    if (unsupported) throw new Error('المنصة المحددة لا تدعم النشر التلقائي عبر الربط الحالي');
+    await tx`update marketing.work_plans set activated_at=coalesce(activated_at,now()),
+      activated_by=${user.id}::uuid,updated_at=now() where id=${planId}::uuid`;
+    return { ok: true, id: planId, message: 'تم تفعيل النشر حسب تواريخ جدول النشر' };
+  });
+}
+
+/** Invoked by protected cron only. A pending scheduled post is attempted once;
+ * ambiguous provider responses must remain verification_required, not retried. */
+export async function runDueWorkflowPublications(sql: Sql, services: WorkflowServices) {
+  await assertMarketingWorkflowReady(sql);
+  const due = await sql<any[]>`select target.schedule_id::text,coalesce(p.activated_by,p.created_by)::text as publisher_id
+    from marketing.work_publish_targets target
+    join marketing.work_plan_items line on line.id=target.line_id
+    join marketing.work_plans p on p.id=line.plan_id
+    join marketing.work_items item on item.id=line.product_id
+    join marketing.work_tasks task on task.id=item.task_id
+    join marketing.publish_schedule s on s.id=target.schedule_id
+    where p.activated_at is not null and p.is_deleted=false and line.is_deleted=false
+      and task.is_deleted=false and s.status='waiting'
+      and s.publish_date <= (now() at time zone 'Asia/Riyadh')::date
+    order by s.publish_date,s.created_at,s.id limit 12`;
+  const results: { scheduleId: string; ok: boolean; error?: string }[] = [];
+  for (const target of due) {
+    try {
+      const owner = await loadUserProfile(target.publisher_id);
+      if (!owner) throw new Error('مستخدم تفعيل النشر غير نشط');
+      await publishTarget(sql, owner, { scheduleId: target.schedule_id }, services);
+      results.push({ scheduleId: target.schedule_id, ok: true });
+    } catch (failure) {
+      results.push({ scheduleId: target.schedule_id, ok: false, error: failure instanceof Error ? failure.message : W.failed });
+    }
+  }
+  return { ok: true, checked: due.length, published: results.filter(r => r.ok).length, errors: results.filter(r => !r.ok).length };
 }
 
 /** Old native endpoints must not mutate records owned by the rebuilt workflow. */
@@ -996,6 +1099,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_commit_upload') result = await commitUpload(sql, body, user);
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
+    else if (action === 'work_activate_plan') result = await activateWorkflowPlan(sql, user, body);
     else if (action === 'work_delete_campaign') result = await deleteWorkflowCampaign(sql, user, id(body.id));
     else if (action === 'work_delete_task') result = await deleteWorkflowTask(sql, user, id(body.id));
     else if (action === 'work_save_product_draft') result = await saveProductDraft(sql, user, body);

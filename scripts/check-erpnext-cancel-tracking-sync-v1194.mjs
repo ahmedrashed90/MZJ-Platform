@@ -25,7 +25,7 @@ expect("Operations returns only eligible under-delivery vehicles", contains("ser
 expect("Approval cycles created for the cancelled order are deleted", contains("server/_erpnext-sales-order-sync.ts", "delete from operations.approval_events", "delete from operations.vehicle_approvals"));
 expect("CRM previous state including sold fields is stored and restored", contains("server/_erpnext-sales-order-sync.ts", "crm_previous_state", "soldQuantity", "soldAt", "restored_previous_state", "erpnext_sales_order_cancelled"));
 expect("Multiple CRM sales orders inherit the original pre-sale state", contains("server/_erpnext-sales-order-sync.ts", "originIntegrationState", "inheritedPreviousState", "historicalOrigin"));
-expect("Tracking stage action updates all order vehicles", contains("server/tracking/orders.ts", "from tracking.order_vehicles ov", "ov.order_id=${row.order_id}::uuid", "لجميع سيارات الطلب"));
+expect("Tracking stage action updates selected vehicles only", contains("server/tracking/orders.ts", "vs.vehicle_id=any(${vehicleIds}::uuid[])", "vehicleIds", "complete_stage_bulk"));
 expect("SMS sent state is persisted per order stage", contains("server/tracking/orders.ts", "tracking.sms_messages", "sm.order_id=${id}::uuid", "as sms_sent"));
 expect("SMS button has persistent green state", contains("src/tracking/pages/TrackingOrdersPage.tsx", "stage.sms_sent ? \"sent\"", "تم إرسال SMS+ لهذه المرحلة") && contains("src/styles.css", ".tracking-stage-actions button.sms.sent", "#218c5a"));
 expect("Cancellation retry reconciles earlier partial cancellation", contains("server/_erpnext-sales-order-sync.ts", "const alreadyCancelled = Boolean(order.is_cancelled)", "cancelled_at=coalesce(cancelled_at,now())"));

@@ -82,5 +82,30 @@ alter table marketing.tasks add column if not exists workflow_product_id uuid re
 alter table marketing.assignment_actions add column if not exists is_final_approval boolean not null default false;
 update marketing.assignment_actions set is_final_approval=true,admin_only=true
  where regexp_replace(name,'[[:space:]_-]+','','g')=regexp_replace('اعتماد - المنتج 100%','[[:space:]_-]+','','g');
-insert into marketing.workflow_migrations(code) values('schema-1') on conflict do nothing;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_product_drafts (
+  product_id uuid primary key references marketing.work_items(id) on delete cascade,
+  format_ids jsonb not null default '[]'::jsonb,
+  caption text not null default '',
+  hashtags text not null default '',
+  updated_by uuid references core.users(id),
+  updated_at timestamptz not null default now(),
+  constraint work_product_drafts_format_array check(jsonb_typeof(format_ids)='array')
+);
+alter table marketing.work_tasks add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_tasks add column if not exists deleted_at timestamptz;
+alter table marketing.work_tasks add column if not exists deleted_by uuid references core.users(id);
+alter table marketing.work_plans add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_plans add column if not exists activated_at timestamptz;
+alter table marketing.work_plans add column if not exists activated_by uuid references core.users(id);
+alter table marketing.work_plans add column if not exists deleted_at timestamptz;
+alter table marketing.work_plans add column if not exists deleted_by uuid references core.users(id);
+alter table marketing.work_plan_items add column if not exists is_deleted boolean not null default false;
+alter table marketing.work_plan_items add column if not exists post_type_id uuid references marketing.platform_post_types(id);
+alter table marketing.work_plan_items add column if not exists budget_amount numeric(15,2) not null default 0;
+alter table marketing.work_plan_items drop constraint if exists work_plan_items_plan_id_product_id_scheduled_on_key;
+create unique index if not exists work_plan_unique_entry
+  on marketing.work_plan_items(plan_id,product_id,scheduled_on,(coalesce(post_type_id,'00000000-0000-0000-0000-000000000000'::uuid)));
+insert into marketing.workflow_migrations(code) values('schema-1'),('schema-2'),('schema-3'),('schema-4') on conflict do nothing;
 commit;

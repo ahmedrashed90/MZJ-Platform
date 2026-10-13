@@ -40,6 +40,7 @@ import crmSalesHandler from "../server/crm/sales.js";
 import internalAutomationJobHandler from "../server/internal/automation-job.js";
 import internalAttendanceTickHandler from "../server/internal/attendance-tick.js";
 import internalMetaEngagementSyncHandler from "../server/internal/meta-engagement-sync.js";
+import internalMarketingPublishTickHandler from "../server/internal/marketing-publish-tick.js";
 import attendanceHandler from "../server/attendance.js";
 import deviceAgentHandler from "../server/device-agent.js";
 import trackingOrdersHandler from "../server/tracking/orders.js";
@@ -122,6 +123,7 @@ const routes = new Map<string, ApiHandler>([
   ["internal/automation-job", internalAutomationJobHandler],
   ["internal/attendance-tick", internalAttendanceTickHandler],
   ["internal/meta-engagement-sync", internalMetaEngagementSyncHandler],
+  ["internal/marketing-publish-tick", internalMarketingPublishTickHandler],
   ["attendance", attendanceHandler],
   ["device-agent", deviceAgentHandler],
   ["tracking/orders", trackingOrdersHandler],

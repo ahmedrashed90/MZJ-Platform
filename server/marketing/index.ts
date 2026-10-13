@@ -1,4 +1,4 @@
-import { handleMarketingWorkflow, assertWorkflowFileAccess, workflowScheduleFiles, assertLegacyMarketingTarget } from './workflow.js';
+import { handleMarketingWorkflow, assertWorkflowFileAccess, workflowScheduleFiles, assertLegacyMarketingTarget, runDueWorkflowPublications } from './workflow.js';
 import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
 import { isTerminalApproval } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
@@ -4423,6 +4423,20 @@ async function createRawFolders(sql:ReturnType<typeof getSql>,body:any,user:Sess
     campaignFolderUrl:clean(campaignFolder.webViewLink)||googleDriveFolderUrl(campaignFolder.id),
     rawFolders,
   };
+}
+
+/** Protected scheduled publisher. Shares the exact native platform engine and authorization
+ * path used by the interactive marketing action; no independent publisher or spending. */
+export async function runMarketingScheduledPublishing() {
+  const sql = getSql();
+  return runDueWorkflowPublications(sql, {
+    meta: marketingMeta,
+    streamFile: streamMarketingFileDownload,
+    publishItem: publishScheduleItem,
+    youtubeDefaults: getYouTubePublishSettings,
+    legacyDatabase: databaseRows,
+    validatePublishItem: validateWorkflowPublication,
+  });
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
