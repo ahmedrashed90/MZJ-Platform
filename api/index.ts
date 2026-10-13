@@ -13,6 +13,7 @@ import meHandler from "../server/auth/me.js";
 import setupStatusHandler from "../server/setup/status.js";
 import setupInitializeHandler from "../server/setup/initialize.js";
 import integrationHandler from "../server/integrations/[source].js";
+import leadSourcesIntegrationHandler from "../server/integrations/lead-sources.js";
 import integrationMediaHandler from "../server/integrations/media.js";
 import crmMetaHandler from "../server/crm/meta.js";
 import crmDashboardHandler from "../server/crm/dashboard.js";
@@ -117,6 +118,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/contacts", crmContactsHandler],
   ["crm/sales", crmSalesHandler],
   ["integrations/media", integrationMediaHandler],
+  ["integrations/lead-sources", leadSourcesIntegrationHandler],
   ["internal/automation-job", internalAutomationJobHandler],
   ["internal/attendance-tick", internalAttendanceTickHandler],
   ["internal/meta-engagement-sync", internalMetaEngagementSyncHandler],
@@ -193,6 +195,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return zohoIntegrationHandler(request, response);
   }
 
+  if (route === "integrations/lead-sources") return leadSourcesIntegrationHandler(request, response);
   if (route.startsWith("integrations/")) {
     const source = route.slice("integrations/".length).split("/")[0];
     request.query.source = source;

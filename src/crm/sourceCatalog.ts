@@ -103,7 +103,7 @@ export function sourceLabel(value?: string | null, fallback?: string | null) {
     if (key.includes("unified") || key.includes("رقم_الموحد")) return "اتصال الرقم الموحد";
     if (key.includes("manual") || key.includes("ادخال_يدوي")) return "إدخال يدوي";
   }
-  return raw || fallbackRaw || "غير محدد";
+  return fallbackRaw || raw || "غير محدد";
 }
 
 export type MessagePolicy = {

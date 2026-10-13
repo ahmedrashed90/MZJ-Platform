@@ -44,6 +44,9 @@ function sourceCodeForImport(routeSource: string, payload: any) {
   if (declared.includes("snap")) return "snapchat_lead";
   if (declared.includes("instagram")) return "instagram_lead";
   if (declared.includes("facebook")) return "facebook_lead";
+  if (declared === "meta_lead") return "meta_lead";
+  if (/^[a-z][a-z0-9_]{2,47}$/.test(declared)) return declared;
+  if (declared) throw new Error("Invalid lead source code");
   return "tiktok_lead";
 }
 
@@ -189,6 +192,19 @@ export function isLeadImportEvent(routeSource: string, payload: any) {
 export async function processLeadImportEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
   const sourceCode = sourceCodeForImport(routeSource, payload);
+  if (sourceCode === "meta_lead") {
+    await sql`insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group)
+      values('meta_lead','ميتا ليد',65,true,array['crm'],'whatsapp',false,'digital') on conflict(code) do nothing`;
+    await sql`insert into crm.sources(code,name,sort_order,is_active)
+      values('meta_lead','ميتا ليد',65,true) on conflict(code) do nothing`;
+  }
+  // Verify custom sources against the real CRM catalog before saving a lead.
+  // Preserve historical built-in imports without changing their existing assignment logic.
+  const builtIn = new Set(["installment_calculator","facebook_lead","instagram_lead","snapchat_lead","tiktok_lead"]);
+  if (!builtIn.has(sourceCode)) {
+    const [registered] = await sql<{code:string}[]>`select code from core.sources where code=${sourceCode} and is_active=true and 'crm'=any(system_codes) limit 1`;
+    if (!registered) throw new Error("Lead source is not registered in CRM: " + sourceCode);
+  }
   const sourceName = await resolveSourceName(sourceCode);
   const occurredAt = dateValue(payload);
   const data = importedData(payload);
