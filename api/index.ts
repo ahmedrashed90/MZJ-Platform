@@ -21,6 +21,7 @@ import crmLeadsHandler from "../server/crm/leads.js";
 import crmHistoryHandler from "../server/crm/history.js";
 import crmConversationsHandler from "../server/crm/conversations.js";
 import crmManualLeadsHandler from "../server/crm/manual-leads.js";
+import crmSheetLeadsHandler from "../server/crm/sheet-leads.js";
 import crmReportsHandler from "../server/crm/reports.js";
 import crmDataReviewHandler from "../server/crm/data-review.js";
 import crmKpiHandler from "../server/crm/kpi.js";
@@ -102,6 +103,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/history", crmHistoryHandler],
   ["crm/conversations", crmConversationsHandler],
   ["crm/manual-leads", crmManualLeadsHandler],
+  ["crm/sheet-leads", crmSheetLeadsHandler],
   ["crm/reports", crmReportsHandler],
   ["crm/data-review", crmDataReviewHandler],
   ["crm/kpi", crmKpiHandler],

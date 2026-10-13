@@ -42,6 +42,7 @@ const SOURCE_LABELS: Record<string, string> = {
   "unified-number": "اتصال الرقم الموحد",
   manual: "إدخال يدوي",
   manual_entry: "إدخال يدوي",
+  sheet_lead: "ليد - استيراد شيت",
   "manual-entry": "إدخال يدوي",
   qr: "QR",
   cash_qr: "QR",

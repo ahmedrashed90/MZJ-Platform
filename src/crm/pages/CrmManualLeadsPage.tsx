@@ -4,6 +4,8 @@ import { useAuth } from "../../auth/AuthContext";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import { hasPermission } from "../../systemAccess";
+import { CrmSheetLeadsImport } from "../components/CrmSheetLeadsImport";
 import type { CrmMeta } from "../types";
 
 const initialForm = {
@@ -22,7 +24,7 @@ const initialForm = {
 
 export function CrmManualLeadsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"add" | "list">("add");
+  const [tab, setTab] = useState<"add" | "list" | "lead">("add");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState("");
@@ -61,6 +63,7 @@ export function CrmManualLeadsPage() {
     }
   }
 
+  const canImportSheetLeads = hasPermission(user, "platform.superadmin");
   const currentUserService = user?.departmentCodes.includes("finance_sales") ? "finance" : user?.departmentCodes.includes("customer_service") ? "service" : user?.departmentCodes.includes("cash_sales") ? "cash" : "";
   const activeServiceKey = editingId ? form.serviceKey : currentUserService;
   const approvalAgents = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
@@ -142,12 +145,13 @@ export function CrmManualLeadsPage() {
 
   return (
     <div className="crm-page crm-manual-leads-page">
-      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
-        <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
-      </button></div>
+      {tab !== "lead" ? <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
+        <ArrowClockwise size={18} />{tab === "add" ? "تفريغ الحقول" : "تحديث"}
+      </button></div> : null}
 
       <div className="crm-department-tabs crm-inner-page-tabs">
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button>
+        {canImportSheetLeads ? <button className={tab === "lead" ? "active" : ""} onClick={() => setTab("lead")}><PlusCircle size={18} />إضافة ليد</button> : null}
         <button className={tab === "list" ? "active" : ""} onClick={() => { setTab("list"); void loadRows(); }}><UsersThree size={18} />عرض العملاء المسجلة</button>
       </div>
 
@@ -174,6 +178,8 @@ export function CrmManualLeadsPage() {
           </div>
         </section>
       ) : null}
+
+      {tab === "lead" && canImportSheetLeads ? <CrmSheetLeadsImport /> : null}
 
       {tab === "list" ? (
         <section className="crm-panel crm-list-panel crm-manual-list-panel">
