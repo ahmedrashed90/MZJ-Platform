@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CaretDown, PaperPlaneTilt } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
@@ -6,12 +6,12 @@ import { YouTubeOptionsFields } from '../components/YouTubeOptionsFields';
 import { marketingFetch, marketingQuery } from '../api';
 import { W, Empty, Field, FormatSelector, MediaLabel, ProductViewButton, Search, Status, WorkAlert, WorkHeader } from './components';
 import { fileUrl, showDate, useWorkQuery, workPost } from './api';
-import type { WorkCapabilities, WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
+import type { WorkCapabilities, WorkPlanLine, WorkProduct, WorkFormat } from '../../../shared/marketing-workflow';
 import { normalizeYouTubePublishOptions, YOUTUBE_CATEGORY_FALLBACKS, type YouTubePublishOptions, type YouTubePublishSettings, type YouTubeOptionItem } from '../../../shared/youtube-publishing';
 const ManualPublishPage = lazy(() => import('../pages/ManualPublishPage').then(module => ({ default: module.ManualPublishPage })));
 
 type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions } };
-type PrepData = { draftFormatIds?: string[]; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities };
+type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities };
 type ProductDraft = { product_id: string; format_ids: string[]; caption: string; hashtags: string; updated_at: string };
 type PublishingData = { products: WorkProduct[]; lines: WorkPlanLine[]; drafts: ProductDraft[]; capabilities: WorkCapabilities };
 
@@ -26,7 +26,6 @@ export function PublishPage() {
     `${product.task_name} ${product.idea_name} ${product.task_no} ${product.statement}`.toLocaleLowerCase().includes(term));
   const groups = new Map<string, WorkProduct[]>();
   for (const product of products) groups.set(product.task_id, [...(groups.get(product.task_id) || []), product]);
-  const firstId = products[0]?.id;
   const plannedCount = (query.data?.lines || []).length;
   const draftCount = (query.data?.drafts || []).filter(d => d.caption || d.hashtags).length;
 
@@ -42,32 +41,36 @@ export function PublishPage() {
         <div><small>{W.agenda} / {W.campaign}</small><strong>{query.data ? plannedCount : '—'}</strong></div>
       </div>
       <div className="mkw-toolbar mkw-publish-toolbar"><Search value={search} onChange={setSearch} /></div>
-      {!query.data ? <div className="mkw-panel mkw-loading-panel"><strong>{query.loading ? W.loading : query.error || W.noData}</strong><button className="secondary" type="button" disabled={query.loading} onClick={() => void query.reload()}>{W.refresh}</button></div> : null}
+      {!query.data ? <section className="mkw-panel mkw-loading-panel"><strong>{query.loading ? W.loading : query.error || W.noData}</strong><button className="secondary" type="button" disabled={query.loading} onClick={() => void query.reload()}>{W.refresh}</button></section> : null}
       {query.data && !groups.size && <Empty>{W.noData}</Empty>}
-      {[...groups.entries()].map(([taskId, items]) => <section key={taskId} className="mkw-publish-group">
-        <header className="mkw-publish-group-header"><div><span className="mkw-code">{items[0].task_no}</span><h2>{items[0].task_name}</h2></div><span className="mkw-publish-count">{W.productCount}: {items.length}</span></header>
-        <div className="mkw-publish-products">{items.map(product => {
-          const open = (expandedProduct || firstId) === product.id;
-          const draft = query.data?.drafts.find(row => row.product_id === product.id);
-          const plans = (query.data?.lines || []).filter(line => line.product_id === product.id);
-          return <article key={product.id} className={`mkw-publish-product ${open ? 'expanded' : ''}`}>
-            <div className="mkw-publish-product-head"><div className="mkw-publish-product-heading">
-              <MediaLabel kind={product.media_kind} /><div><small>{W.statement}</small><h3>{product.idea_name || product.statement}</h3><span className="mkw-muted">{product.assignee_name} · {W.sizes}: {product.formats.length}</span></div>
-            </div><div className="mkw-publish-product-actions"><ProductViewButton id={product.id} />
-              <button type="button" className={open ? 'primary' : 'secondary'} aria-expanded={open} onClick={() => setExpandedProduct(open ? '_none' : product.id)}><PaperPlaneTilt size={18}/>{W.prepare}<CaretDown size={16} className={open ? 'mkw-publish-up' : ''}/></button>
-            </div></div>
-            {open && <div className="mkw-publish-product-body">
-              <ProductDraftEditor product={product} draft={draft} canSave={!!query.data?.capabilities.prepare} onSaved={() => void query.reload()} />
+      {[...groups.entries()].map(([taskId, items]) => <details key={taskId} className="mkw-publish-group mkw-publish-table-group">
+        <summary className="mkw-publish-group-header"><div><span className="mkw-code">{items[0].task_no}</span><h2>{items[0].task_name}</h2></div><span className="mkw-publish-count">{W.productCount}: {items.length}</span><CaretDown size={18} className="mkw-publish-group-caret" /></summary>
+        <div className="mkw-publish-table-scroll"><table className="mkw-publish-list-table"><thead><tr><th>#</th><th>{W.ideaName}</th><th>{W.type}</th><th>{W.sizes}</th><th>{W.assignee}</th><th>{W.agenda} / {W.campaign}</th><th>{W.status}</th><th>{W.view}</th></tr></thead><tbody>
+          {items.map((product, index) => {
+            const open = expandedProduct === product.id;
+            const draft = query.data?.drafts.find(row => row.product_id === product.id);
+            const plans = (query.data?.lines || []).filter(line => line.product_id === product.id);
+            return <Fragment key={product.id}><tr className={open ? 'mkw-publish-expanded-row' : ''}>
+              <td className="mkw-publish-numeric">{index + 1}</td>
+              <td className="mkw-publish-product-title"><strong>{product.idea_name || product.statement}</strong></td>
+              <td><MediaLabel kind={product.media_kind} /></td>
+              <td><span className="mkw-muted">{product.formats.length} {W.sizes}</span></td>
+              <td className="mkw-publish-assignee">{product.assignee_name || '—'}</td>
+              <td><span className="mkw-publish-count">{plans.length}</span></td>
+              <td><span className={`mkw-publish-draft-state ${draft?.caption && draft?.hashtags ? 'is-ready' : ''}`}>{draft?.caption && draft?.hashtags ? 'تم حفظ التجهيز' : 'بانتظار التجهيز'}</span></td>
+              <td><div className="mkw-publish-row-actions"><ProductViewButton id={product.id} /><button type="button" className="secondary" aria-expanded={open} onClick={() => setExpandedProduct(open ? '' : product.id)}>{open ? 'إغلاق' : W.open}<CaretDown size={15} className={open ? 'mkw-publish-up' : ''}/></button></div></td>
+            </tr>{open && <tr className="mkw-publish-detail-row"><td colSpan={8}><div className="mkw-publish-product-body">
+              <ProductDraftEditor product={product} draft={draft} canSave={!!query.data?.capabilities.prepare} onSaved={() => void query.reload()}/>
               <div className="mkw-publish-plans"><header><h4>{W.agenda} / {W.campaign}</h4><div className="mkw-actions">
                 {query.data?.capabilities.createAgenda && <Link className="mkw-link-button" to={`/marketing/create?mode=agenda&product=${encodeURIComponent(product.id)}`}>{W.createAgenda}</Link>}
                 {query.data?.capabilities.createCampaign && <Link className="mkw-link-button" to={`/marketing/create?mode=campaign&product=${encodeURIComponent(product.id)}`}>{W.createCampaign}</Link>}
               </div></header>
-              {plans.length ? plans.map(line => <div key={line.id} className="mkw-publish-plan-row"><div><strong>{line.name}</strong><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span></div><Status value={line.status}/><button type="button" className="secondary" onClick={() => setParams({ line: line.id })}>{W.prepare}</button></div>) : <p className="mkw-muted">اختر المنتج في {W.createAgenda} أو {W.createCampaign} لتحديد تاريخ النشر أو التمويل.</p>}
+                {plans.length ? plans.map(line => <div key={line.id} className="mkw-publish-plan-row"><div><strong>{line.name}</strong><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)} · {[line.platform_name,line.post_type_name].filter(Boolean).join(' / ')}</span></div><Status value={line.status}/><button type="button" className="secondary" onClick={() => setParams({ line: line.id })}>{W.prepare}</button></div>) : <p className="mkw-muted">اختر المنتج في {W.createAgenda} أو {W.createCampaign} لتحديد تاريخ النشر أو التمويل.</p>}
               </div>
-            </div>}
-          </article>;
-        })}</div>
-      </section>)}
+            </div></td></tr>}</Fragment>;
+          })}
+        </tbody></table></div>
+      </details>)}
     </>}
     {selectedLine && <PreparationModal id={selectedLine} onClose={() => setParams({})} onChanged={() => void query.reload()} />}
   </div>;
@@ -124,13 +127,15 @@ export function PreparationModal({ id, onClose, onChanged }: { id: string; onClo
 function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => Promise<void> }) {
   const plannedIds = data.line.post_type_id ? [data.line.post_type_id] : [];
   const initialSelected = plannedIds.length ? plannedIds : data.targets.filter(target => target.status !== 'cancelled').map(target => target.post_type_id);
+  const availableFormats = data.plannedFormat && !data.product.formats.some(format => format.id === data.plannedFormat?.id)
+    ? [...data.product.formats, data.plannedFormat] : data.product.formats;
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
   const originalYouTube = normalizeYouTubePublishOptions(data.targets.find(target => target.platform_code === 'youtube')?.publish_options?.youtube || {}, data.youtubeDefaults, { title: data.line.caption, description: [data.line.caption, data.line.hashtags].filter(Boolean).join('\n\n') });
   const [youtube, setYouTube] = useState(originalYouTube);
   const [categories, setCategories] = useState<YouTubeOptionItem[]>(YOUTUBE_CATEGORY_FALLBACKS), [playlists, setPlaylists] = useState<YouTubeOptionItem[]>([]);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
-  const isYouTube = data.product.formats.some(format => format.platform_code === 'youtube' && formatIds.includes(format.id));
+  const isYouTube = availableFormats.some(format => format.platform_code === 'youtube' && formatIds.includes(format.id));
   const locked = data.targets.some(target => ['published', 'processing', 'verification_required'].includes(target.status));
   useEffect(() => {
     if (!isYouTube) return;
@@ -153,11 +158,12 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     finally { setBusy(false); }
   }
   return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>{W.ideaName}</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
-    <FormatSelector formats={data.line.post_type_id ? data.product.formats.filter(format => format.id === data.line.post_type_id) : data.product.formats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
+    <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
     <Field label={W.caption}><textarea required value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field><Field label={W.hashtags}><textarea required value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field>
     {isYouTube && <fieldset disabled={busy || !data.capabilities.prepare || locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><YouTubeOptionsFields value={youtube} onChange={setYouTube} categories={categories} playlists={playlists} loading={false} /></fieldset>}
     {data.capabilities.prepare && !locked && <footer className="mkw-form-footer"><button type="submit" className="primary" disabled={busy}>{busy ? W.loading : W.save}</button></footer>}
     {data.line.kind === 'campaign' && <div className="mkw-muted">{W.fundingPlan}</div>}
+    {data.line.platform_code && !['facebook', 'instagram', 'youtube'].includes(data.line.platform_code) && <WorkAlert>يمكن حفظ التجهيز لهذه المنصة، لكن النشر التلقائي غير متاح لها عبر الربط الحالي. لا يُعتبر تجهيز المحتوى نشرًا فعليًا.</WorkAlert>}
     <div className="mkw-upload-section">{data.targets.filter(target => target.status !== 'cancelled').map(target => <article className="mkw-upload-format" key={target.id}><div className="mkw-section-title"><strong>{target.platform_name} - {target.post_type_name}</strong><Status value={target.status} /></div>{target.publish_result?.error && <WorkAlert>{target.publish_result.error}</WorkAlert>}{data.capabilities.publish && data.capabilities.prepare && (target.status === 'verification_required' || (target.status === 'processing' && !!target.updated_at && Date.now() - new Date(target.updated_at).getTime() > 900000)) && <button type="button" className="secondary" disabled={busy} onClick={() => void resetAfterCheck(target)}>{W.resetAfterCheck}</button>}</article>)}</div>
   </form>;
 }

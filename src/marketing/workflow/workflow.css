@@ -312,24 +312,33 @@
 .mkw-publish-summary small { font-size:13px; font-weight:700; color:var(--muted); }
 .mkw-publish-summary strong { font-size:23px; line-height:1; color:var(--brand); font-variant-numeric:tabular-nums; }
 .mkw-publish-toolbar { min-height:64px; display:flex; align-items:center; padding-inline:17px; box-shadow:var(--shadow); }
-.mkw-publish-group { overflow:hidden; border:1px solid var(--line-strong); border-radius:16px; background:var(--surface); box-shadow:var(--shadow); }
-.mkw-publish-group-header { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:19px 23px; border-bottom:1px solid var(--line); background:var(--surface-soft); }
-.mkw-publish-group-header>div { display:grid; gap:6px; min-width:0; }
-.mkw-publish-group-header h2 { margin:0; font-size:18px; line-height:1.6; color:var(--brand); overflow-wrap:anywhere; }
-.mkw-publish-count { padding:7px 12px; border-radius:999px; border:1px solid var(--line); background:var(--surface); font-size:12px; font-weight:800; white-space:nowrap; color:var(--brand); }
-.mkw-publish-products { padding:16px; display:grid; gap:13px; }
-.mkw-publish-product { border:1px solid var(--line); border-radius:13px; background:var(--surface); overflow:hidden; }
-.mkw-publish-product.expanded { border-color:var(--line-strong); box-shadow:0 10px 24px rgba(81,44,34,.06); }
-.mkw-publish-product-head { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:17px 18px; }
-.mkw-publish-product-heading { display:flex; align-items:center; gap:16px; min-width:0; }
-.mkw-publish-product-heading>div { display:grid; gap:3px; }
-.mkw-publish-product-heading h3 { margin:0; font-size:16px; color:var(--ink); overflow-wrap:anywhere; }
-.mkw-publish-product-heading small { font-size:11px; color:var(--muted); }
-.mkw-publish-product-head .mkw-media-label { padding:9px 13px; border:1px solid var(--line); background:var(--surface-soft); border-radius:10px; flex-shrink:0; }
-.mkw-publish-product-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; flex-shrink:0; }
-.mkw-publish-product-actions button { min-height:40px; }
+/* One collapsed task per row; one compact product table per task. */
+.mkw-publish-group { overflow:hidden; border:1px solid var(--line-strong); border-radius:14px; background:var(--surface); box-shadow:var(--shadow); }
+.mkw-publish-group-header { display:flex; align-items:center; gap:14px; padding:14px 18px; background:var(--surface-soft); cursor:pointer; list-style:none; border-top:3px solid var(--brand); }
+.mkw-publish-group-header::-webkit-details-marker { display:none; }
+.mkw-publish-group-header>div { display:flex; align-items:center; flex:1; gap:16px; min-width:0; }
+.mkw-publish-group-header h2 { margin:0; font-size:15px; line-height:1.6; color:var(--brand); overflow-wrap:anywhere; }
+.mkw-publish-group[open]>.mkw-publish-group-header { border-bottom:1px solid var(--line); }
+.mkw-publish-group-caret { transition:transform .15s ease; color:var(--brand); }
+.mkw-publish-group[open] .mkw-publish-group-caret { transform:rotate(180deg); }
+.mkw-publish-count { display:inline-flex; justify-content:center; align-items:center; padding:5px 10px; border-radius:999px; border:1px solid var(--line); background:var(--surface); font-size:12px; font-weight:800; white-space:nowrap; color:var(--brand); }
+.mkw-publish-table-scroll { overflow-x:auto; max-width:100%; }
+.mkw .mkw-publish-list-table { border-collapse:collapse; width:100%; min-width:950px; }
+.mkw-publish-list-table th,.mkw-publish-list-table td { text-align:right; border-bottom:1px solid var(--line); padding:11px 12px; vertical-align:middle; }
+.mkw-publish-list-table td { font-size:12px; }
+.mkw-publish-list-table th { white-space:nowrap; background:var(--surface-soft); }
+.mkw-publish-list-table tr:last-child td { border-bottom:0; }
+.mkw-publish-product-title { min-width:185px; max-width:300px; overflow-wrap:anywhere; }
+.mkw-publish-numeric { width:28px; color:var(--muted); }
+.mkw-publish-assignee { max-width:150px; overflow-wrap:anywhere; }
+.mkw-publish-draft-state { display:inline-flex; padding:6px 10px; border:1px solid var(--line); border-radius:20px; color:var(--muted); white-space:nowrap; background:var(--surface-soft); }
+.mkw-publish-draft-state.is-ready { color:var(--green); border-color:currentColor; background:var(--surface); }
+.mkw-publish-row-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.mkw-publish-row-actions .secondary { min-height:34px; padding:6px 9px; font-size:12px; }
 .mkw-publish-up { transform:rotate(180deg); }
-.mkw-publish-product-body { display:grid; gap:17px; padding:0 19px 20px; }
+.mkw .mkw-publish-expanded-row { background:var(--surface-soft); }
+.mkw .mkw-publish-detail-row>td { padding:16px; background:var(--bg); }
+.mkw-publish-product-body { display:grid; gap:16px; min-width:0; }
 .mkw-publish-draft { display:grid; gap:17px; padding:19px; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
 .mkw-publish-draft-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
 .mkw-publish-draft h4,.mkw-publish-plans h4 { font-size:15px; color:var(--brand); margin:0; }
@@ -358,8 +367,8 @@
 .mkw-publish-plans>header { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
 .mkw-publish-plan-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:15px; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--surface-soft); }
 .mkw-publish-plan-row>div { display:grid; gap:6px; }
-@media(max-width:850px) { .mkw-publish-copy { grid-template-columns:1fr; }.mkw-publish-product-head { align-items:flex-start; flex-wrap:wrap; }.mkw-publish-summary>div { padding:13px; }.mkw-publish-plans>header .mkw-actions { flex-wrap:wrap; } }
-@media(max-width:580px) { .mkw-publish-summary { gap:7px; }.mkw-publish-summary>div { align-items:flex-start; flex-direction:column; }.mkw-publish-summary small { font-size:11px; }.mkw-publish-product-body { padding-inline:11px; }.mkw-publish-draft { padding:12px; }.mkw-publish-product-heading { flex-wrap:wrap; }.mkw-publish-plan-row { grid-template-columns:1fr; }.mkw-publish-group-header { padding:14px; }.mkw-publish-product-head { padding:13px; } }
+@media(max-width:850px) { .mkw-publish-copy { grid-template-columns:1fr; }.mkw-publish-summary>div { padding:13px; }.mkw-publish-plans>header .mkw-actions { flex-wrap:wrap; } }
+@media(max-width:580px) { .mkw-publish-summary { gap:7px; }.mkw-publish-summary>div { align-items:flex-start; flex-direction:column; }.mkw-publish-summary small { font-size:11px; }.mkw-publish-product-body { padding-inline:11px; }.mkw-publish-draft { padding:12px; }.mkw-publish-plan-row { grid-template-columns:1fr; }.mkw-publish-group-header { padding:14px; } }
 
 /* MZJ Marketing V2: cohesive production presentation. Existing brand tokens only. */
 .mkw { width:100%; min-width:0; gap:20px; }
@@ -393,15 +402,11 @@
 .mkw .mkw-assignee>header { border-bottom:1px solid var(--line); }
 .mkw .mkw-publish-summary>div { border-top:3px solid var(--brand); min-height:73px; }
 .mkw .mkw-publish-group { border-color:var(--line-strong); }
-.mkw .mkw-publish-group-header { border-top:3px solid var(--brand); }
-.mkw .mkw-publish-product { border-color:var(--line-strong); }
-.mkw .mkw-publish-product-head { padding-block:19px; }
-.mkw .mkw-publish-product.expanded>.mkw-publish-product-head { border-bottom:1px solid var(--line); background:var(--surface-soft); }
-.mkw .mkw-publish-product-body { padding-top:19px; }
 .mkw .mkw-publish-platform { border-color:var(--line-strong); }
 .mkw .mkw-publish-platform>header strong { color:var(--brand); }
 .mkw .mkw-publish-format { min-height:43px; background:var(--surface); }
 .mkw .mkw-publish-format.selected { box-shadow:inset 0 0 0 1px var(--brand); }
+.mkw-publishing-support-note { padding:10px 14px; color:var(--muted); border-top:1px solid var(--line); font-size:12px; line-height:1.8; }
 .mkw .mkw-publish-copy textarea { background:var(--surface); min-height:140px; }
 .mkw .mkw-publish-draft-footer { position:sticky; bottom:0; background:var(--bg); padding-bottom:4px; }
 @media(max-width:850px){

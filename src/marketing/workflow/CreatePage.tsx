@@ -25,7 +25,7 @@ export function MarketingCreatePage() {
   return <div className="mkw"><WorkHeader title={W.create} /><WorkAlert>{query.error}</WorkAlert>
     <div className="mkw-create-tabs" role="tablist" aria-label={W.create}>{choices.map(choice => <button key={choice.key} type="button" role="tab" aria-selected={mode === choice.key} className={mode === choice.key ? 'active' : ''} disabled={!!query.data && !choice.allowed} onClick={() => setParams({ mode: choice.key })}><choice.icon size={21} />{choice.label}</button>)}</div>
     {!query.data ? <section className="mkw-panel mkw-loading-panel"><div className="mkw-loading-indicator" aria-hidden="true" /><strong>{query.loading ? W.loading : W.noData}</strong>{!query.loading && <button type="button" className="secondary" onClick={() => void query.reload()}>{W.refresh}</button>}</section> : !choices.find(choice => choice.key === mode)?.allowed ? <WorkAlert>{W.denied}</WorkAlert> : mode === 'task'
-      ? <TaskComposer meta={query.data} /> : <PlanComposer key={mode} kind={mode as 'campaign' | 'agenda'} initialProduct={params.get('product') || ''} />}
+      ? <TaskComposer meta={query.data} /> : <PlanComposer key={mode} kind={mode as 'campaign' | 'agenda'} initialProduct={params.get('product') || ''} meta={query.data} />}
   </div>;
 }
 
@@ -110,7 +110,7 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
   </form>;
 }
 
-function PlanComposer({ kind, initialProduct }: { kind: 'agenda' | 'campaign'; initialProduct: string }) {
+function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campaign'; initialProduct: string; meta: WorkMeta }) {
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const [name, setName] = useState('');
@@ -118,6 +118,8 @@ function PlanComposer({ kind, initialProduct }: { kind: 'agenda' | 'campaign'; i
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const dateLabel = kind === 'agenda' ? W.publishDate : W.fundingDate;
   const label = kind === 'agenda' ? W.agenda : W.campaign;
+  // The publishing catalog is controlled in marketing settings, not by a task's requested formats.
+  const activePlatforms = meta.platforms.filter(platform => meta.postTypes.some(type => type.platform_id === platform.id));
   function updateEntry(key: string, patch: Partial<PlanEntry>) { setEntries(current => current.map(row => row.key === key ? { ...row, ...patch } : row)); }
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
@@ -132,8 +134,8 @@ function PlanComposer({ kind, initialProduct }: { kind: 'agenda' | 'campaign'; i
     {productsQuery.loading && !productsQuery.data ? <Empty>{W.loading}</Empty> : <div className="mkw-horizontal-scroll"><div className={`mkw-plan-table ${kind === 'agenda' ? 'agenda' : ''}`}><div className="mkw-plan-heading"><span>{dateLabel}</span><span>{W.selectProduct}</span><span>المنصة</span><span>نوع النشر</span>{kind === 'campaign' && <span>الميزانية</span>}<span>{W.remove}</span></div>
       {entries.map(entry => {
         const product = productsQuery.data?.rows.find(product => product.id === entry.productId);
-        const platforms = [...new Map((product?.formats || []).map(format => [format.platform_id, { id: format.platform_id, name: format.platform_name }])).values()];
-        const postTypes = product?.formats.filter(format => format.platform_id === entry.platformId) || [];
+        const platforms = activePlatforms.filter(platform => meta.postTypes.some(type => type.platform_id === platform.id && (!product || supportsWorkMedia(product.media_kind, type.name))));
+        const postTypes = meta.postTypes.filter(type => type.platform_id === entry.platformId && (!product || supportsWorkMedia(product.media_kind, type.name)));
         return <div className="mkw-plan-table-row" key={entry.key}>
           <input aria-label={dateLabel} type="date" required value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
           <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platformId: '', postTypeId: '' })}><option value="">{W.choose}</option>{productsQuery.data?.rows.map(product => <option key={product.id} value={product.id}>{product.idea_name} - {product.task_no}</option>)}</select>

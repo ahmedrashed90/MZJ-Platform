@@ -10,7 +10,7 @@ import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketin
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
 import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishing.js';
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
-import { finalCoverage, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
+import { finalCoverage, matchingWorkflowPublishFiles, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 
 type Sql = ReturnType<typeof getSql>;
@@ -585,7 +585,9 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
       const budget = kind === 'campaign' ? Number(entry.budget) : 0;
       if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.round(budget * 100) / 100 !== budget) throw new Error(W.invalid);
       const product = await productVisible(tx, user, productId);
-      if (!list(product.formats).some((format: WorkFormat) => format.id === postTypeId)) throw new Error(W.selectFormats);
+      // A plan may use any active post type appropriate to the product media,
+      // even if that post type was not part of the original execution task.
+      await validateFormats(tx, product.media_kind, [postTypeId]);
       const key = `${date}:${productId}:${postTypeId}`;
       if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
       seen.add(key); normalized.push({ productId, date, postTypeId, budget });
@@ -777,7 +779,9 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
     join marketing.platforms p on p.id=s.platform_id join marketing.platform_post_types pt on pt.id=s.post_type_id
     where target.line_id=${lineId}::uuid order by p.name,pt.name`;
   const [draft] = await sql<any[]>`select format_ids from marketing.work_product_drafts where product_id=${product.id}::uuid`;
-  return { ok: true, line, product, targets, draftFormatIds: list(draft?.format_ids), youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user) };
+  const [plannedFormat] = line.post_type_id ? await sql<any[]>`select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,p.name as platform_name,p.code as platform_code
+    from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id where pt.id=${line.post_type_id}::uuid` : [];
+  return { ok: true, line, product, targets, plannedFormat: plannedFormat || null, draftFormatIds: list(draft?.format_ids), youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user) };
 }
 
 async function savePreparation(sql: Sql, user: SessionUser, body: Row, services: WorkflowServices) {
@@ -787,7 +791,9 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   if (!visible) throw new Error(W.notFound);
   const product = await productVisible(sql, user, visible.product_id);
   const selected = [...new Set(list(body.formatIds).map(value => id(value)))];
-  const formats = list(product.formats) as WorkFormat[];
+  const taskFormats = list(product.formats) as WorkFormat[];
+  const plannedFormats = visible.post_type_id ? await validateFormats(sql, product.media_kind, [visible.post_type_id]) : [];
+  const formats = [...taskFormats, ...plannedFormats.filter(format => !taskFormats.some(original => original.id === format.id))];
   if (!selected.length || selected.some(formatId => !formats.some(format => format.id === formatId))) throw new Error(W.selectFormats);
   if (visible.post_type_id && (selected.length !== 1 || selected[0] !== visible.post_type_id)) throw new Error('نوع النشر يجب أن يطابق جدول النشر المحفوظ');
   const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
@@ -829,8 +835,11 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     }
     for (const formatId of selected) {
       const format = formats.find(f => f.id === formatId)!;
-      const files = product.files.filter((file: any) => file.category === 'final' && file.format_id === formatId && file.status === 'ready');
-      if (!files.length || (product.media_kind === 'video' && files.length !== 1)) throw new Error(W.incompleteFiles);
+      // Deliberate, media-safe cross-platform reuse of existing approved outputs.
+      const files = matchingWorkflowPublishFiles(product.files, taskFormats, format, product.media_kind);
+      if (!files.length || (product.media_kind === 'video' && files.length !== 1) ||
+        (normalizeMarketingPublishFormat(format.name) === 'carousel' && files.length < 2))
+        throw new Error('لا توجد ملفات نهائية معتمدة متوافقة مع نوع النشر والمقاس المحددين. اختر نوع نشر بمقاس الملفات المسلّمة في التاسك.');
       const [currentFormat] = await tx<any[]>`select pt.id from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id
         where pt.id=${formatId}::uuid and pt.platform_id=${format.platform_id}::uuid and pt.is_active=true and p.is_active=true`;
       if (!currentFormat) throw new Error(W.selectFormats);
@@ -872,7 +881,14 @@ export async function workflowScheduleFiles(sql: Sql, schedule: Row): Promise<an
     join marketing.work_plan_items l on l.id=target.line_id join marketing.work_items i on i.id=l.product_id
     join marketing.work_tasks t on t.id=i.task_id
     where link.schedule_id=${schedule.id}::uuid and f.status='ready' and i.status='approved' and t.status='completed' and t.is_deleted=false
-      and exists(select 1 from marketing.work_item_files jf where jf.item_id=i.id and jf.file_id=f.id and jf.category='final' and jf.format_id=target.post_type_id::text)
+      and exists(select 1 from marketing.work_item_files jf
+        left join marketing.platform_post_types source_format on source_format.id::text=jf.format_id
+        join marketing.platform_post_types destination_format on destination_format.id=target.post_type_id
+        where jf.item_id=i.id and jf.file_id=f.id and jf.category='final' and
+          (jf.format_id=target.post_type_id::text or
+           (source_format.width is not null and source_format.height is not null and
+            destination_format.width is not null and destination_format.height is not null and
+            source_format.width=destination_format.width and source_format.height=destination_format.height)))
     order by link.sort_order,f.created_at,f.id`;
   if (!rows.length) throw new Error(W.productUnavailable);
   return rows;
@@ -1080,7 +1096,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       result = { ...meta, users: [], departments: meta.departments.map((department: any) => ({ ...department, users: department.users.filter((member: any) => enabled.has(member.id)) })), capabilities: workflowCapabilities(user), userId: user.id };
     } else if (resource === 'work_dashboard') {
       requirePermission(user, 'marketing.dashboard.view');
-      result = { ok: true, tasks: await taskList(sql, user, true), lines: await planLines(sql, user), capabilities: workflowCapabilities(user) };
+      result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user) };
     } else if (resource === 'work_task') {
       if (!hasPermission(user, 'marketing.task.view_assigned') && !hasPermission(user, 'marketing.task.view_all') && !hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.task.review')) throw new Error(W.denied);
       result = await taskSummary(sql, user, id(request.query.id));

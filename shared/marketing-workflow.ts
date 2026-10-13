@@ -48,6 +48,29 @@ export function finalCoverage(item: Pick<WorkItem, 'formats' | 'files'> & Partia
     return !item.media_kind || files.every(file => workFileMatches(item.media_kind!, file.name, file.mime_type));
   });
 }
+/** Reuse an approved final file for another platform only when its media
+ * kind and exact configured output dimensions agree. Keep task files intact. */
+export function matchingWorkflowPublishFiles(
+  files: WorkFile[], taskFormats: WorkFormat[], target: WorkFormat, kind: WorkMediaKind,
+): WorkFile[] {
+  // Prefer precisely the requested type. When reusing from another platform,
+  // select ONE compatible source format, never mix unrelated images/videos
+  // from several task formats merely because their dimensions agree.
+  const matchingFiles = (formatId: string) => files.filter(file => file.category === 'final' &&
+    file.status === 'ready' && file.format_id === formatId &&
+    workFileMatches(kind, file.name, file.mime_type));
+  const exact = matchingFiles(target.id);
+  if (exact.length) return exact;
+  for (const source of taskFormats) {
+    if (source.width != null && source.height != null && target.width != null && target.height != null &&
+      Number(source.width) === Number(target.width) && Number(source.height) === Number(target.height)) {
+      const compatible = matchingFiles(source.id);
+      if (compatible.length) return compatible;
+    }
+  }
+  return [];
+}
+
 export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>>) {
   const total = items.length;
   const approved = items.filter(item => item.status === 'approved' && finalCoverage(item)).length;

@@ -71,15 +71,15 @@ export function MarketingDashboardPage() {
       <section className="mkw-column"><header><div className="mkw-column-title"><PaperPlaneTilt size={21}/><h2>{W.publishingSection}</h2></div><span>{groups.size}</span></header>
         <div className="mkw-column-body">{!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
           {[...groups.entries()].map(([id, group]) => {
-            const supported = group.every(line => !line.platform_code || ['facebook', 'instagram', 'youtube'].includes(line.platform_code));
-            const prepared = group.every(line => line.prepared_count > 0 && !line.failed_count);
+            const supported = group.every(line => ['facebook', 'instagram', 'youtube'].includes(line.platform_code));
+            const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
             const activated = !!group[0].activated_at;
             return <details className="mkw-plan-group mkw-dashboard-plan" key={id} open={lines.length < 18}><summary><div><span className="mkw-code">{group[0].plan_no}</span><h3>{group[0].name}</h3><span className="mkw-muted">{group[0].kind === 'agenda' ? W.agenda : W.campaign} · {W.productCount}: {group.length}</span></div><CaretDown size={18}/></summary>
               <div className="mkw-plan-lines">{group.map(line => <article key={line.id} className="mkw-plan-line mkw-dashboard-line"><div className="mkw-plan-row"><div><strong>{line.idea_name}</strong><span className="mkw-muted">{line.task_name}</span></div><MediaLabel kind={line.media_kind}/></div><div className="mkw-plan-row"><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span><span>{[line.platform_name,line.post_type_name].filter(Boolean).join(' · ')}</span><Status value={line.status}/></div></article>)}</div>
               <div className="mkw-dashboard-publish-actions"><button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>جدول النشر</button>{group[0].kind === 'campaign' && <button type="button" className="secondary" onClick={() => setBudgetId(id)}><Wallet size={17}/>جدول الميزانية</button>}
                 <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
                 <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy)} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>
-              </div>{activated && <div className="mkw-publishing-activated"><CheckCircle size={17}/>تم تفعيل النشر حسب الجدول</div>}
+              </div>{!supported && <div className="mkw-publishing-support-note" role="status">يمكن حفظ تجهيز النشر، لكن النشر التلقائي غير متاح للمنصة المحددة عبر الربط الحالي. استخدم منصة متصلة ومدعومة للنشر التلقائي.</div>}{activated && <div className="mkw-publishing-activated"><CheckCircle size={17}/>تم تفعيل النشر حسب الجدول</div>}
             </details>;
           })}
         </div>

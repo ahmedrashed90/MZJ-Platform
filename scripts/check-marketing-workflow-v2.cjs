@@ -39,6 +39,50 @@ test('Wrong image/video file type is rejected',()=>assert.equal(domain.finalCove
 test('Carousel requires at least two images',()=>assert.equal(domain.finalCoverage({...item,formats:[{...format,name:'carousel'}]}),false));
 test('Two-image carousel final coverage',()=>assert.equal(domain.finalCoverage({...item,formats:[{...format,name:'carousel'}],files:[file,{...file,id:uid(81)}]}),true));
 test('Video requires exactly one final file per format',()=>assert.equal(domain.finalCoverage({...item,media_kind:'video',files:[{...file,name:'video.mp4',mime_type:'video/mp4'},{...file,id:uid(81),name:'two.mp4',mime_type:'video/mp4'}]}),false));
+test('Final media can be reused across platforms only for an identical output size',()=>{
+  const matching={...format,id:uid(11),platform_id:uid(21),platform_name:'Facebook'};
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file],[format],matching,'image'),[file]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file],[format],{...matching,width:1080,height:1920},'image'),[]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file],[format],matching,'video'),[]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file],[format],{...matching,width:null,height:null},'image'),[]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file],[format],format,'image'),[file]);
+});
+test('Cross-platform reuse does not mix the assets of unrelated task formats',()=>{
+  const otherFormat={...format,id:uid(15)};
+  const sameSizeOnThirdPlatform={...format,id:uid(16),platform_id:uid(22)};
+  const otherFile={...file,id:uid(82),format_id:otherFormat.id,name:'another.jpg'};
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file,otherFile],[format,otherFormat],sameSizeOnThirdPlatform,'image'),[file]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file,otherFile],[otherFormat,format],sameSizeOnThirdPlatform,'image'),[otherFile]);
+  assert.deepEqual(domain.matchingWorkflowPublishFiles([file,otherFile],[format,otherFormat],otherFormat,'image'),[otherFile]);
+});
+test('Dashboard includes completed tasks and orders by newest creation first',()=>{
+  const s=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
+  assert(s.includes('tasks: await taskList(sql, user), lines:'));
+  assert(s.includes('order by t.created_at desc,t.task_number desc'));
+  assert(s.includes('where t.is_deleted=false'));
+});
+test('Campaign and agenda platform choices come from active marketing catalog, not task formats',()=>{
+  const front=fs.readFileSync(path.join(root,'src/marketing/workflow/CreatePage.tsx'),'utf8');
+  const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
+  assert(front.includes('meta.postTypes.filter(type => type.platform_id === entry.platformId'));
+  assert(front.includes('activePlatforms.filter(platform =>'));
+  assert(api.includes('await validateFormats(tx, product.media_kind, [postTypeId])'));
+  assert(!api.includes('if (!list(product.formats).some((format: WorkFormat) => format.id === postTypeId))'));
+});
+test('Scheduled preparation checks cross-platform media links against approved final assets',()=>{
+  const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
+  assert(api.includes('matchingWorkflowPublishFiles(product.files, taskFormats, format, product.media_kind)'));
+  assert(api.includes('join marketing.platform_post_types destination_format'));
+  assert(api.includes('source_format.width=destination_format.width'));
+  assert(api.includes("and jf.category='final'"));
+});
+test('Publishing page starts collapsed with a compact row table',()=>{
+  const source=fs.readFileSync(path.join(root,'src/marketing/workflow/PublishPage.tsx'),'utf8');
+  assert(source.includes('<details key={taskId} className="mkw-publish-group mkw-publish-table-group">'));
+  assert(source.includes('<table className="mkw-publish-list-table">'));
+  assert(source.includes("setExpandedProduct(open ? '' : product.id)"));
+  assert(!source.includes('(expandedProduct || firstId)'));
+});
 test('Deletion shrinks the readiness denominator',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'}]),{total:1,approved:1,percent:100,complete:true}));
 test('An empty task is never 100 percent complete',()=>assert.deepEqual(domain.workReadiness([]),{total:0,approved:0,percent:0,complete:false}));
 test('Rounding is stable',()=>assert.equal(domain.workReadiness([{...item,status:'approved'},item,item]).percent,33.3));
