@@ -28,6 +28,13 @@ export type WorkPlanLine = {
 };
 export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };
 
+/** Whether the selected platform has an implemented automatic-publishing adapter.
+ * Work plans created before platform selection may not contain platform_code.
+ * Such plans remain editable but cannot be activated for automatic publishing. */
+export function workPlatformSupportsAutoPublish(platformCode: WorkPlanLine['platform_code']): boolean {
+  return typeof platformCode === 'string' && ['facebook', 'instagram', 'youtube'].includes(platformCode);
+}
+
 export function supportsWorkMedia(kind: WorkMediaKind, postTypeName: string): boolean {
   const text = String(postTypeName || '').toLowerCase();
   const explicitVideo = /video|\u0641\u064a\u062f\u064a\u0648/.test(text);

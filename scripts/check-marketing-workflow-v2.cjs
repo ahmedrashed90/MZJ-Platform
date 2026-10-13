@@ -55,6 +55,15 @@ test('Cross-platform reuse does not mix the assets of unrelated task formats',()
   assert.deepEqual(domain.matchingWorkflowPublishFiles([file,otherFile],[otherFormat,format],sameSizeOnThirdPlatform,'image'),[otherFile]);
   assert.deepEqual(domain.matchingWorkflowPublishFiles([file,otherFile],[format,otherFormat],otherFormat,'image'),[otherFile]);
 });
+test('Auto-publishing rejects missing, null, unsupported platform codes safely',()=>{
+  for (const code of ['facebook','instagram','youtube']) assert.equal(domain.workPlatformSupportsAutoPublish(code),true);
+  for (const code of [undefined,null,'','snapchat','tiktok','FACEBOOK']) assert.equal(domain.workPlatformSupportsAutoPublish(code),false);
+});
+test('Marketing dashboard uses the safe auto-publishing platform check',()=>{
+  const source=fs.readFileSync(path.join(root,'src/marketing/pages/MarketingDashboardPage.tsx'),'utf8');
+  assert(source.includes('group.every(line => workPlatformSupportsAutoPublish(line.platform_code))'));
+  assert(!source.includes('includes(line.platform_code)'));
+});
 test('Dashboard includes completed tasks and orders by newest creation first',()=>{
   const s=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
   assert(s.includes('tasks: await taskList(sql, user), lines:'));

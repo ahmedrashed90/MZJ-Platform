@@ -8,6 +8,7 @@ import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
 import { PlanDetail } from '../workflow/PlanDetail';
+import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
 export function MarketingDashboardPage() {
@@ -71,7 +72,7 @@ export function MarketingDashboardPage() {
       <section className="mkw-column"><header><div className="mkw-column-title"><PaperPlaneTilt size={21}/><h2>{W.publishingSection}</h2></div><span>{groups.size}</span></header>
         <div className="mkw-column-body">{!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
           {[...groups.entries()].map(([id, group]) => {
-            const supported = group.every(line => ['facebook', 'instagram', 'youtube'].includes(line.platform_code));
+            const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
             const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
             const activated = !!group[0].activated_at;
             return <details className="mkw-plan-group mkw-dashboard-plan" key={id} open={lines.length < 18}><summary><div><span className="mkw-code">{group[0].plan_no}</span><h3>{group[0].name}</h3><span className="mkw-muted">{group[0].kind === 'agenda' ? W.agenda : W.campaign} · {W.productCount}: {group.length}</span></div><CaretDown size={18}/></summary>
