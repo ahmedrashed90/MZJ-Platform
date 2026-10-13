@@ -4,15 +4,17 @@ import { audit, chooseSheetImportAssignment, clean, normalizePhone } from "./_cr
 import { calculateLeadCompletion, getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "./_notifications.js";
+import { DEFAULT_SHEET_LEAD_SOURCE, resolveSheetLeadSource, type SheetLeadSource } from "../shared/crm-sheet-sources.js";
 
 export const CRM_SHEET_SOURCE = "sheet_lead";
-export type SheetLeadInput = { rowNumber: number; customerName: string; phone: string };
+export type SheetLeadInput = { rowNumber: number; customerName: string; phone: string; source: string };
 export type SheetLeadStatus = "created" | "existing" | "duplicate_in_file" | "invalid" | "failed";
 export type SheetLeadResult = SheetLeadInput & {
   status: SheetLeadStatus;
   assignedName?: string;
   branchCode?: string;
   leadId?: string;
+  storedSource?: string;
   reason?: string;
 };
 
@@ -22,6 +24,7 @@ export function normalizeSheetLeadRow(value: unknown, index: number): SheetLeadI
     rowNumber: Number.isInteger(Number(data.rowNumber)) ? Math.max(1, Math.min(100000, Number(data.rowNumber))) : index + 2,
     customerName: clean(data.customerName).slice(0, 250),
     phone: clean(data.phone).slice(0, 70),
+    source: clean(data.source).slice(0, 120),
   };
 }
 
@@ -29,6 +32,7 @@ export function sheetLeadValidation(row: SheetLeadInput) {
   const phoneNormalized = normalizePhone(row.phone);
   if (!row.customerName) return { phoneNormalized, reason: "اسم العميل غير موجود" };
   if (!phoneNormalized) return { phoneNormalized, reason: "رقم الجوال غير صالح" };
+  if (!resolveSheetLeadSource(row.source)) return { phoneNormalized, reason: "\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u0639\u0631\u0648\u0641: \u0627\u062e\u062a\u0631 \u0645\u0635\u062f\u0631\u064b\u0627 \u0645\u0646 \u0627\u0644\u0642\u0627\u0626\u0645\u0629" };
   return { phoneNormalized, reason: "" };
 }
 
@@ -43,16 +47,16 @@ export function summarizeSheetResults(rows: SheetLeadResult[]) {
   };
 }
 
-async function ensureSheetSource() {
+async function ensureSheetSource(source: SheetLeadSource = DEFAULT_SHEET_LEAD_SOURCE) {
   const sql = getSql();
   await sql`
     insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group)
-    values (${CRM_SHEET_SOURCE},'ليد - استيراد شيت',68,true,array['crm'],'whatsapp',false,'digital')
+    values (${source.code},${source.name},68,true,array['crm'],'whatsapp',false,${source.reportGroup})
     on conflict(code) do nothing
   `;
   await sql`
     insert into crm.sources(code,name,sort_order,is_active)
-    values (${CRM_SHEET_SOURCE},'ليد - استيراد شيت',68,true)
+    values (${source.code},${source.name},68,true)
     on conflict(code) do nothing
   `;
 }
@@ -62,10 +66,10 @@ async function findExistingPhone(phone: string) {
   // Saudi mobile numbers already stored in legacy 05/5/9665 notation count as the same customer.
   const saMobile = /^9665\d{8}$/.test(phone);
   const [row] = await sql<any[]>`
-    select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,u.full_name as assigned_name
+    select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,l.source_code,l.source_name,u.full_name as assigned_name
     from crm.leads l left join core.users u on u.id=l.assigned_to
     where l.phone_normalized=${phone}
-      or (${saMobile}::boolean and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'[^0-9]','','g'),9)=right(${phone},9))
+      or (${saMobile}::boolean and right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9)=right(${phone},9))
     order by l.is_deleted asc,l.created_at asc limit 1
   `;
   return row || null;
@@ -82,10 +86,11 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
     await ensureSheetSource();
     const definitions = await getCustomerFieldDefinitions();
     const seenPhones = new Set<string>();
+    const registeredSources = new Set<string>([CRM_SHEET_SOURCE]);
     const results: SheetLeadResult[] = [];
     for (const row of rows) {
       const check = sheetLeadValidation(row);
-      if (check.reason) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
+      if (!check.phoneNormalized) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
       if (seenPhones.has(check.phoneNormalized)) {
         results.push({ ...row, status: "duplicate_in_file", reason: "نفس رقم الجوال تكرر داخل الدفعة" });
         continue;
@@ -94,8 +99,14 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
       try {
         const existing = await findExistingPhone(check.phoneNormalized);
         if (existing) {
-          results.push({ ...row, status: "existing", leadId: existing.id, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "", reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
+          results.push({ ...row, status: "existing", leadId: existing.id, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "", storedSource: existing.source_name || existing.source_code || "", reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
           continue;
+        }
+        if (check.reason) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
+        const leadSource = resolveSheetLeadSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE;
+        if (!registeredSources.has(leadSource.code)) {
+          await ensureSheetSource(leadSource);
+          registeredSources.add(leadSource.code);
         }
         const assignment = await chooseSheetImportAssignment(serviceKey);
         if (!assignment.assignedTo || !assignment.branchCode) {
@@ -105,7 +116,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
         const departmentCode = serviceKey === "finance" ? "finance_sales" : "cash_sales";
         const paymentType = serviceKey === "finance" ? "تمويل" : "كاش";
         const completion = calculateLeadCompletion({
-          customerName: row.customerName, phone: check.phoneNormalized, sourceCode: CRM_SHEET_SOURCE,
+          customerName: row.customerName, phone: check.phoneNormalized, sourceCode: leadSource.code,
           statusLabel: "عميل جديد", serviceKey,
         }, definitions);
         const [created] = await sql.begin(async (tx) => {
@@ -113,7 +124,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
             insert into crm.leads(customer_name,phone,phone_normalized,source_code,source_name,service_key,
               department_code,branch_code,status_label,payment_type,campaign_name,assigned_to,created_by,updated_by,
               registered_at,completion_percent,responsible_name_snapshot)
-            values(${row.customerName},${row.phone},${check.phoneNormalized},${CRM_SHEET_SOURCE},'ليد - استيراد شيت',${serviceKey},
+            values(${row.customerName},${row.phone},${check.phoneNormalized},${leadSource.code},${leadSource.name},${serviceKey},
               ${departmentCode},${assignment.branchCode},'عميل جديد',${paymentType},${campaignName || null},${assignment.assignedTo}::uuid,
               ${actor.id}::uuid,${actor.id}::uuid,now(),${completion},${assignment.assignedName || null})
             returning *,id::text,assigned_to::text
@@ -130,7 +141,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
         let linkageError = "";
         try { await attachLeadToContactAndOpenRequest({ leadId: created.id, actor, classificationMethod: "sheet_import" }); }
         catch (error) { linkageError = error instanceof Error ? error.message : "تعذر ربط طلب خدمة العميل"; }
-        await audit(actor, "sheet_lead_imported", "lead", created.id, { phoneNormalized: check.phoneNormalized, assignedTo: assignment.assignedTo, branchCode: assignment.branchCode });
+        await audit(actor, "sheet_lead_imported", "lead", created.id, { phoneNormalized: check.phoneNormalized, sheetImport: true, sourceCode: leadSource.code, assignedTo: assignment.assignedTo, branchCode: assignment.branchCode });
         await emitCrmLeadNotification(actor, "created", created).catch((error) => console.error("CRM sheet lead notification failed", error));
         results.push({ ...row, status: "created", leadId: created.id, assignedName: assignment.assignedName, branchCode: assignment.branchCode, reason: linkageError ? `تم حفظ العميل وتوزيعه، لكن تعذر ربط الطلب: ${linkageError}` : "" });
       } catch (error) {

@@ -23,12 +23,18 @@ try {
   assert.equal(parser.parseDelimitedSheet('اسم العميل\tرقم الجوال\nأحمد\t0501234567\n')[1][1], '0501234567');
   assert.equal(parser.parseDelimitedSheet('Name;Mobile\nAhmed;0501234567\n')[1][0], 'Ahmed');
   assert.equal(parser.extractSheetLeads([{ Name: 'Ahmed', Mobile: '0501234567' }])[0].customerName, 'Ahmed');
+  assert.equal(parser.extractSheetLeads([{ 'Full Name': 'Ahmed', 'Phone Number': '0501234567', Source: 'Facebook' }])[0].source, 'Facebook');
+  assert.equal(parser.extractSheetLeads([{ '\u0627\u0633\u0645 \u0627\u0644\u0639\u0645\u064a\u0644': 'Ahmed', '\u0631\u0642\u0645 \u0627\u0644\u062c\u0648\u0627\u0644': '0501234567', '\u0627\u0644\u0645\u0635\u062f\u0631': 'TikTok' }])[0].source, 'TikTok');
   assert.throws(() => parser.extractSheetLeads([{اسم_العميل: 'أحمد'}]), /رقم الجوال/);
   console.log('PASS: Excel/CSV/TSV header detection and escaped/quoted phone columns');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 
+const sourceCatalog = read('shared/crm-sheet-sources.ts');
+assert(sourceCatalog.includes('resolveSheetLeadSource') && sourceCatalog.includes('facebook_lead'));
 const handler = read('server/crm/sheet-leads.ts');
 const service = read('server/_crm-sheet-import.ts');
+assert(service.includes('sourceCode: leadSource.code') && service.includes('values(${row.customerName},${row.phone},${check.phoneNormalized},${leadSource.code},${leadSource.name}'));
+assert(service.includes('storedSource: existing.source_name')); 
 const routing = read('server/_crm-utils.ts');
 const page = read('src/crm/pages/CrmManualLeadsPage.tsx');
 const component = read('src/crm/components/CrmSheetLeadsImport.tsx');
