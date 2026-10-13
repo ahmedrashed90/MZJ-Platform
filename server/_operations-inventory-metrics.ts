@@ -4,6 +4,7 @@ type Sql = ReturnType<typeof getSql>;
 
 export type OperationsInventoryMetric =
   | "active_inventory"
+  | "agency_inventory"
   | "actual_total"
   | "available_for_sale"
   | "reserved"
@@ -13,6 +14,7 @@ export type OperationsInventoryMetric =
 
 const inventoryMetrics = new Set<OperationsInventoryMetric>([
   "active_inventory",
+  "agency_inventory",
   "actual_total",
   "available_for_sale",
   "reserved",
@@ -39,6 +41,9 @@ export function operationsInventoryMetricCondition(sql: Sql, metric: OperationsI
     and v.is_inventory_active=true
   `;
 
+  if (metric === "agency_inventory") {
+    return sql`${activeInventory} and v.status_code in ('available_for_sale','under_delivery','reserved','has_notes')`;
+  }
   if (metric === "actual_total") {
     return sql`${activeInventory} and coalesce(v.status_code,'') not in ('under_delivery','delivered')`;
   }

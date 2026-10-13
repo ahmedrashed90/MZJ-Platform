@@ -1,8 +1,9 @@
-# تعديل كارت إجمالي المخزون - الداشبورد الرئيسية
+# Dashboard Agency Inventory — CLEAN complete release
 
-- الحفاظ على رقم شارة إجمالي المخزون كما يُحتسب حاليًا (231 في المثال).
-- حساب رقم الوكالة من الحالات الأربع: متاح للبيع + مباع تحت التسليم + حجز + بها ملاحظات، مع شروط المخزون النشط والصلاحيات المعتادة.
-- عرض الإجمالي الفعلي داخل كارت إجمالي المخزون بعد طرح عدد «مباع تحت التسليم» الموجود في كارت الوكالة فقط من الرقم السابق؛ مثال: 231 - 1 = 230.
-- لا تعديل على حالة السيارات أو تحديث بياناتها، ولا تغيير منطق كروت الفروع الأخرى أو الأنظمة الأخرى.
-
-تنبيه تقني: قاعدة العد الحالية لمعيار actual_total تستبعد حالة under_delivery بالفعل. لذا رقم الإجمالي الفعلي المعدّل هنا تعريف عرض خاص بالكارت حسب الطلب، وليس تعديلًا لمعيار actual_total المشترك في التقارير والنوافذ التفصيلية.
+- Badge inventory: branch actual stock plus agency inventory in the four statuses: available_for_sale, under_delivery, reserved, has_notes.
+- Primary actual total display: inventory badge less agency under-delivery count.
+- Agency drilldown: shares the same canonical `agency_inventory` status predicate as its counter.
+- Existing non-agency actual-total predicate remains unchanged.
+- Updated the two existing dashboard checks to verify this intentional agency-specific rule instead of their obsolete assumption.
+- Local checks passed: operations dashboard inventory/PDF (11/11), dashboard card calculations (7/7), dashboard operations, conflict markers, and API imports.
+- Full `pnpm run build` was NOT executable in this environment: pnpm/dependencies are not installed and package registry access failed. Please verify build on Vercel.

@@ -26,12 +26,18 @@ expect(
   !operationsBlock.includes("(v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date"),
 );
 expect(
-  "Actual inventory excludes under-delivery and delivered through one canonical card/drilldown predicate",
+  "Inventory keeps branch actual totals, includes four agency statuses, and matches agency drill-down",
   inventoryMetrics.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')")
-    && dashboardData.includes('operationsInventoryMetricCondition(sql, "actual_total")')
-    && dashboardData.includes("operationsInventoryMetricCondition(sql, \"actual_total\")} and l.code='agency'")
+    && inventoryMetrics.includes('if (metric === "agency_inventory")')
+    && inventoryMetrics.includes("v.status_code in ('available_for_sale','under_delivery','reserved','has_notes')")
+    && dashboardData.includes(`operationsInventoryMetricCondition(sql, "actual_total")} and coalesce(l.code,'')<>'agency'`) 
+    && dashboardData.includes(`operationsInventoryMetricCondition(sql, "agency_inventory")} and l.code='agency'`)
+    && dashboardData.includes('actualTotal: branchActualTotal + agencyActualTotal')
+    && dashboardPage.includes('operations.inventory.actualTotal - agencyUnderDelivery')
+    && dashboardPage.includes('locationCode: "agency", locationName: "الوكالة", metric: "agency_inventory"')
     && operationsApi.includes("const condition = operationsInventoryMetricCondition(sql, metricKey)"),
 );
+
 expect(
   "Dashboard inventory counts use both canonical branch and vehicle-status scopes",
   dashboardData.includes("l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)}")
