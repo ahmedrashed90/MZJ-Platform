@@ -598,6 +598,8 @@ export function DashboardPage() {
   const marketing = current?.marketing;
   const tracking = current?.tracking;
   const operations = current?.operations;
+  const agencyUnderDelivery = operations?.locations.find((location) => location.key === "agency")?.underDelivery ?? 0;
+  const dashboardActualTotal = operations?.inventory.actualTotal == null ? null : Math.max(0, operations.inventory.actualTotal - agencyUnderDelivery);
   const rangeInvalid = !draftRange.from || !draftRange.to || draftRange.from > draftRange.to;
 
   function applyDashboardRange() {
@@ -862,7 +864,7 @@ export function DashboardPage() {
             {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" badge={operations?.inventory.actualTotal ?? null} className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
-                <Value value={operations?.inventory.actualTotal ?? null} />
+                <Value value={dashboardActualTotal} />
               </div>
               <div className="inventory-tags">
                 <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "actual_total", metricName: "الإجمالي الفعلي" })} />

@@ -176,7 +176,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         group by l.code,l.name,l.sort_order order by l.sort_order`,
       sql<any[]>`select
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and coalesce(l.code,'')<>'agency')::int as branch_actual_total,
-        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and l.code='agency')::int as agency,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "active_inventory")} and l.code='agency' and v.status_code in ('available_for_sale','under_delivery','reserved','has_notes'))::int as agency,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")} and coalesce(l.code,'')<>'agency')::int as available_for_sale,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")} and coalesce(l.code,'')<>'agency')::int as reserved,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
