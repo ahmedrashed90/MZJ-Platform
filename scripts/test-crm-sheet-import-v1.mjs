@@ -60,7 +60,7 @@ const normalizePhone = (raw) => {
 const deps = {
   '../shared/crm-sheet-sources.js': sourceModule.exports,
   '../shared/crm-sheet-phone.js': phoneModule.exports,
-  './_db.js': { getSql: () => tag, withDatabaseAdvisoryLock: async (_key, work) => work() },
+  './_db.js': { getSql: () => tag, withDatabaseAdvisoryLock: async (_key, work) => work(), tryWithDatabaseAdvisoryLock: async (_key, work) => ({ acquired: true, result: await work() }) },
   './_crm-utils.js': {
     audit: async () => undefined, clean: (v) => String(v ?? '').trim(), normalizePhone,
     chooseSheetImportAssignment: async (serviceKey) => {

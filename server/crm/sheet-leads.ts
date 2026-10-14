@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasPermission } from "../_access-control.js";
 import { requireCrmUser, parseBody, clean } from "../_crm-utils.js";
-import { importCrmSheetBatch, normalizePreviouslyImportedSheetPhones, listPreviouslyImportedSheetPhoneIssues } from "../_crm-sheet-import.js";
+import { SheetImportBusyError, importCrmSheetBatch, normalizePreviouslyImportedSheetPhones, listPreviouslyImportedSheetPhoneIssues } from "../_crm-sheet-import.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
@@ -31,6 +31,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const result = await importCrmSheetBatch(user, body.rows, body.serviceKey, clean(body.campaignName).slice(0, 200));
     return response.status(200).json({ ok: true, ...result });
   } catch (error) {
+    if (error instanceof SheetImportBusyError) {
+      response.setHeader("Retry-After", "2");
+      return response.status(423).json({ ok: false, code: error.code, error: error.message });
+    }
+    console.error("CRM sheet import failed", error);
     return response.status(500).json({ ok: false, error: error instanceof Error ? error.message : "تعذر استيراد الليدز" });
   }
 }

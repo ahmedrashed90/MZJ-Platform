@@ -1,5 +1,5 @@
 import type { SessionUser } from "./_auth.js";
-import { withDatabaseAdvisoryLock, getSql } from "./_db.js";
+import { tryWithDatabaseAdvisoryLock, withDatabaseAdvisoryLock, getSql } from "./_db.js";
 import { audit, chooseSheetImportAssignment, clean } from "./_crm-utils.js";
 import { checkSheetLeadPhone } from "../shared/crm-sheet-phone.js";
 import { calculateLeadCompletion, getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
@@ -8,6 +8,14 @@ import { emitCrmLeadNotification } from "./_notifications.js";
 import { DEFAULT_SHEET_LEAD_SOURCE, resolveSheetLeadSource, type SheetLeadSource } from "../shared/crm-sheet-sources.js";
 
 export const CRM_SHEET_SOURCE = "sheet_lead";
+
+export class SheetImportBusyError extends Error {
+  readonly code = "CRM_SHEET_IMPORT_BUSY";
+  constructor() {
+    super("عملية استيراد أخرى ما زالت تُحدّث توزيع CRM. ستتم إعادة المحاولة تلقائيًا دون تكرار العملاء.");
+  }
+}
+
 export type SheetLeadInput = { rowNumber: number; customerName: string; phone: string; source: string };
 export type SheetLeadStatus = "created" | "existing" | "duplicate_in_file" | "invalid" | "failed";
 export type SheetLeadResult = SheetLeadInput & {
@@ -63,18 +71,49 @@ async function ensureSheetSource(source: SheetLeadSource = DEFAULT_SHEET_LEAD_SO
   `;
 }
 
-async function findExistingPhone(phone: string) {
+type LegacySheetPhoneCache = { suffixes: string[]; matched?: Map<string, any> };
+
+async function findExistingPhone(phone: string, legacyCache?: LegacySheetPhoneCache) {
   const sql = getSql();
   // Saudi mobile numbers already stored in legacy 05/5/9665 notation count as the same customer.
   const saMobile = /^9665\d{8}$/.test(phone);
-  const [row] = await sql<any[]>`
+  // Fast indexed lookup for the canonical phone, including previously imported rows.
+  // The legacy cleanup fallback is only needed when the indexed lookup misses:
+  // an OR in the same query forced a full-table phone scan on EVERY row.
+  const [exact] = await sql<any[]>`
     select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,l.source_code,l.source_name,u.full_name as assigned_name
     from crm.leads l left join core.users u on u.id=l.assigned_to
     where l.phone_normalized=${phone}
-      or (${saMobile}::boolean and right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9)=right(${phone},9))
     order by l.is_deleted asc,l.created_at asc limit 1
   `;
-  return row || null;
+  if (exact || !saMobile) return exact || null;
+  if (legacyCache) {
+    // One legacy-format scan for the entire 1-3-row batch, never one scan per
+    // new lead. The primary indexed lookup above still catches new CRM rows.
+    if (!legacyCache.matched) {
+      const legacyRows = await sql<any[]>`
+        select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,l.source_code,l.source_name,
+          u.full_name as assigned_name,
+          right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9) as phone_suffix
+        from crm.leads l left join core.users u on u.id=l.assigned_to
+        where right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9) = any(${legacyCache.suffixes}::text[])
+        order by l.is_deleted asc,l.created_at asc
+      `;
+      const matched = new Map<string, any>();
+      for (const row of legacyRows) {
+        if (!matched.has(String(row.phone_suffix))) matched.set(String(row.phone_suffix), row);
+      }
+      legacyCache.matched = matched;
+    }
+    return legacyCache.matched.get(phone.slice(-9)) || null;
+  }
+  const [legacy] = await sql<any[]>`
+    select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,l.source_code,l.source_name,u.full_name as assigned_name
+    from crm.leads l left join core.users u on u.id=l.assigned_to
+    where right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9)=right(${phone},9)
+    order by l.is_deleted asc,l.created_at asc limit 1
+  `;
+  return legacy || null;
 }
 
 export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[], serviceKey: "cash" | "finance", campaignName: string) {
@@ -82,14 +121,24 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
   if (!(["cash", "finance"] as string[]).includes(serviceKey)) throw new Error("حدد قسم التوزيع: الكاش أو التمويل");
   const sql = getSql();
   const rows = rawRows.map(normalizeSheetLeadRow);
-  // Serialize all sheet imports before duplicate lookup AND the real CRM routing counters.
-  // A repeat import never calls a routing function for an existing phone.
-  return withDatabaseAdvisoryLock("crm:sheet-lead-bulk-import", async () => {
+  // A blocked session advisory lock could previously wait until Vercel timed out.
+  // Try once and let the bounded browser transport retry instead of hanging forever.
+  // Hold this lock only for duplicate checks, routing and durable lead creation;
+  // lifecycle linking and notifications run after releasing it.
+  const acquired = await tryWithDatabaseAdvisoryLock("crm:sheet-lead-bulk-import", async () => {
     await ensureSheetSource();
     const definitions = await getCustomerFieldDefinitions();
     const seenPhones = new Set<string>();
+    const legacyCache: LegacySheetPhoneCache = {
+      suffixes: Array.from(new Set(rows.map((row) => sheetLeadValidation(row).phoneNormalized)
+        .filter((phone) => /^9665\d{8}$/.test(phone)).map((phone) => phone.slice(-9)))),
+    };
     const registeredSources = new Set<string>([CRM_SHEET_SOURCE]);
     const results: SheetLeadResult[] = [];
+    const createdLeads: Array<{
+      created: any; resultIndex: number; phoneNormalized: string;
+      sourceCode: string; assignedTo: string; branchCode: string;
+    }> = [];
     for (const row of rows) {
       const check = sheetLeadValidation(row);
       if (!check.phoneNormalized) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
@@ -99,7 +148,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
       }
       seenPhones.add(check.phoneNormalized);
       try {
-        const existing = await findExistingPhone(check.phoneNormalized);
+        const existing = await findExistingPhone(check.phoneNormalized, legacyCache);
         if (existing) {
           results.push({ ...row, phone: check.phoneNormalized, status: "existing", leadId: existing.id, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "", storedSource: existing.source_name || existing.source_code || "", reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
           continue;
@@ -138,20 +187,46 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
           `;
           return [lead];
         });
-        // Link to CRM contact/request using the same existing manual creation flow.
-        // A link failure must not undo an already-created and assigned lead.
-        let linkageError = "";
-        try { await attachLeadToContactAndOpenRequest({ leadId: created.id, actor, classificationMethod: "sheet_import" }); }
-        catch (error) { linkageError = error instanceof Error ? error.message : "تعذر ربط طلب خدمة العميل"; }
-        await audit(actor, "sheet_lead_imported", "lead", created.id, { phoneNormalized: check.phoneNormalized, sheetImport: true, sourceCode: leadSource.code, assignedTo: assignment.assignedTo, branchCode: assignment.branchCode });
-        await emitCrmLeadNotification(actor, "created", created).catch((error) => console.error("CRM sheet lead notification failed", error));
-        results.push({ ...row, phone: check.phoneNormalized, status: "created", leadId: created.id, assignedName: assignment.assignedName, branchCode: assignment.branchCode, reason: linkageError ? `تم حفظ العميل وتوزيعه، لكن تعذر ربط الطلب: ${linkageError}` : "" });
+        createdLeads.push({ created, resultIndex: results.length, phoneNormalized: check.phoneNormalized,
+          sourceCode: leadSource.code, assignedTo: assignment.assignedTo, branchCode: assignment.branchCode });
+        results.push({ ...row, phone: check.phoneNormalized, status: "created", leadId: created.id, assignedName: assignment.assignedName, branchCode: assignment.branchCode });
       } catch (error) {
+        // Another CRM entry point may insert the same phone concurrently.
+        // A unique phone conflict must be treated as existing, never re-routed.
+        if ((error as { code?: string })?.code === "23505") {
+          const existing = await findExistingPhone(check.phoneNormalized);
+          if (existing) {
+            results.push({ ...row, phone: check.phoneNormalized, status: "existing", leadId: existing.id,
+              assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "",
+              storedSource: existing.source_name || existing.source_code || "",
+              reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
+            continue;
+          }
+        }
         results.push({ ...row, status: "failed", reason: error instanceof Error ? error.message : "تعذر إنشاء العميل" });
       }
     }
-    return { rows: results, summary: summarizeSheetResults(results) };
+    return { rows: results, createdLeads };
   });
+  if (!acquired.acquired || !acquired.result) throw new SheetImportBusyError();
+  const { rows: results, createdLeads } = acquired.result;
+  // Do not hold the routing lock while CRM contact linking or notification
+  // writes run. Errors after a committed lead never turn it into 'failed'.
+  for (const item of createdLeads) {
+    let linkageError = "";
+    try { await attachLeadToContactAndOpenRequest({ leadId: item.created.id, actor, classificationMethod: "sheet_import" }); }
+    catch (error) { linkageError = error instanceof Error ? error.message : "تعذر ربط طلب خدمة العميل"; }
+    if (linkageError) results[item.resultIndex].reason = `تم حفظ العميل وتوزيعه، لكن تعذر ربط الطلب: ${linkageError}`;
+    try {
+      await audit(actor, "sheet_lead_imported", "lead", item.created.id, {
+        phoneNormalized: item.phoneNormalized, sheetImport: true, sourceCode: item.sourceCode,
+        assignedTo: item.assignedTo, branchCode: item.branchCode,
+      });
+    } catch (error) { console.error("CRM sheet lead audit failed after save", error); }
+    try { await emitCrmLeadNotification(actor, "created", item.created); }
+    catch (error) { console.error("CRM sheet lead notification failed after save", error); }
+  }
+  return { rows: results, summary: summarizeSheetResults(results) };
 }
 
 

@@ -4,32 +4,11 @@ import { downloadCsv } from "../api";
 import { readSheetLeads, type SheetLeadRow } from "../sheetLeadParser";
 import { SHEET_LEAD_SOURCES } from "../../../shared/crm-sheet-sources";
 import { checkSheetLeadPhone } from "../../../shared/crm-sheet-phone";
+import { postSheetLeadRequest, retrySheetLeadRequest, SheetLeadTransportError } from "../sheetLeadImportTransport";
 
-// Dedicated transport: an HTML 504/502 response from Vercel must never be
-// misreported as a CRM validation error. Include a request ID for support.
-async function sheetLeadsRequest<T>(body: Record<string, unknown>): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch("/api/crm/sheet-leads", {
-      method: "POST", credentials: "include", cache: "no-store",
-      headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    });
-  } catch {
-    throw new Error("تعذر الاتصال بخادم CRM. تحقق من الشبكة، ثم استكمل الدفعة؛ العملاء الذين تم حفظهم بالفعل لن يُعاد توزيعهم.");
-  }
-  const payload = await response.json().catch(() => null) as (T & { ok?: boolean; error?: string; message?: string }) | null;
-  if (!response.ok || !payload || payload.ok === false) {
-    const code = response.status;
-    const reference = response.headers.get("x-vercel-id") || response.headers.get("x-request-id");
-    const reason = payload?.error || payload?.message || (code === 504 || code === 502 || code === 503
-      ? "خادم الاستيراد لم يستجب في الوقت المحدد" : `تعذر الاستيراد من الخادم (HTTP ${code})`);
-    throw new Error(`${reason} (HTTP ${code}${reference ? `، مرجع: ${reference}` : ""})`);
-  }
-  return payload;
-}
-
-// Each CRM lead can trigger routing, contact linking, audit and notifications.
-// Small bounded requests avoid a 25-row operation hitting the Vercel deadline.
+// Bound every request and retry transient HTTP/connection failures automatically.
+// The backend uses normalized-phone uniqueness; timeouts may have saved a lead,
+// so retrying always performs the existing-phone check before assignment.
 export const SHEET_LEAD_BATCH_SIZE = 3;
 
 type RowStatus = "created" | "existing" | "duplicate_in_file" | "invalid" | "failed";
@@ -72,9 +51,10 @@ export function CrmSheetLeadsImport() {
   const [results, setResults] = useState<RowResult[]>([]);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [resumeFrom, setResumeFrom] = useState<number | null>(null);
+  const [importProgress, setImportProgress] = useState("");
 
   async function readFile(file?: File) {
-    setError(""); setSummary(null); setResults([]); setDone(0); setResumeFrom(null); setRows([]); setFileName(file?.name || "");
+    setError(""); setSummary(null); setResults([]); setDone(0); setResumeFrom(null); setRows([]); setImportProgress(""); setFileName(file?.name || "");
     if (!file) return;
     setParsing(true);
     try {
@@ -92,7 +72,7 @@ export function CrmSheetLeadsImport() {
     if (!window.confirm("تصحيح صيغة عرض أرقام الليد المستوردة سابقًا فقط؟ لن يتم تغيير المندوب أو الفرع أو مصدر العميل، ولن تُخمن الأرقام التي فقدت خاناتها.")) return;
     setNormalizing(true); setError(""); setNormalizationResult("");
     try {
-      const result = await sheetLeadsRequest<{ ok: boolean; corrected: number; contactPhonesCorrected: number; requiresReview: number; suspiciousPhones: number }>({ action: "normalize_existing_phones", confirm: true });
+      const result = await postSheetLeadRequest<{ ok: boolean; corrected: number; contactPhonesCorrected: number; requiresReview: number; suspiciousPhones: number }>({ action: "normalize_existing_phones", confirm: true });
       setNormalizationResult(`تم تصحيح صيغة ${result.corrected} عميل و${result.contactPhonesCorrected} جهة اتصال. تحتاج ${result.requiresReview} صيغة غير متطابقة و${result.suspiciousPhones} رقمًا مشتبهًا في نقصه لمراجعة يدوية؛ لم تتغير التوزيعات.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "تعذر تصحيح الصيغ القديمة");
@@ -104,7 +84,7 @@ export function CrmSheetLeadsImport() {
     setReviewing(true); setError("");
     try {
       type Issue = { leadId: string; customerName: string; phone: string; normalizedKey: string; branchCode: string; sourceName: string; assignedName: string; reviewReason: string };
-      const response = await sheetLeadsRequest<{ ok: boolean; rows: Issue[]; total: number; limitedTo: number }>({ action: "review_existing_phones" });
+      const response = await postSheetLeadRequest<{ ok: boolean; rows: Issue[]; total: number; limitedTo: number }>({ action: "review_existing_phones" });
       if (!response.rows.length) { setNormalizationResult("لم يتم العثور على أرقام ليد مستوردة تحتاج تصحيحًا أو مراجعة في النطاق المفحوص."); return; }
       downloadCsv("crm-sheet-import-phone-review.csv", response.rows.map((row) => ({
         "رقم العميل في CRM": row.leadId, "اسم العميل": row.customerName,
@@ -136,29 +116,63 @@ export function CrmSheetLeadsImport() {
     let totals: ImportSummary = startIndex > 0 && summary ? { ...summary }
       : { ...EMPTY, total: inFileDuplicates.length, duplicateInFile: inFileDuplicates.length };
     if (startIndex === 0) { setResults(all); setSummary(totals); setDone(inFileDuplicates.length); }
+    // Retry bounded transient failures, then isolate a failed three-row batch
+    // to identify a bad row without blocking the rest of the sheet.
+    let index = startIndex;
+    let batchSize = SHEET_LEAD_BATCH_SIZE;
+    let consecutiveFailures = 0;
+    const mergeBatch = (batchRows: RowResult[], batchSummary: ImportSummary) => {
+      all = all.concat(batchRows);
+      totals = mergeSummaries(totals, batchSummary);
+      setDone(Math.min(rows.length, totals.total));
+      setSummary({ ...totals });
+      setResults([...all].sort((a, b) => a.rowNumber - b.rowNumber));
+    };
     try {
-      for (let index = startIndex; index < unique.length; index += SHEET_LEAD_BATCH_SIZE) {
-        const batch = unique.slice(index, index + SHEET_LEAD_BATCH_SIZE);
-        let response: { ok: boolean; rows: RowResult[]; summary: ImportSummary };
+      while (index < unique.length) {
+        const batch = unique.slice(index, index + batchSize);
+        const first = batch[0]?.rowNumber;
+        const last = batch[batch.length - 1]?.rowNumber;
+        setImportProgress(`جاري معالجة الصفوف ${first}${first === last ? "" : `–${last}`} من الشيت`);
         try {
-          response = await sheetLeadsRequest<{ ok: boolean; rows: RowResult[]; summary: ImportSummary }>({ serviceKey, campaignName, rows: batch });
-          if (!Array.isArray(response.rows) || !response.summary || typeof response.summary.total !== "number") {
-            throw new Error("استجابة خادم الاستيراد غير مكتملة، يلزم استكمال هذه الدفعة بعد التحقق.");
+          const response = await retrySheetLeadRequest<{ ok: boolean; rows: RowResult[]; summary: ImportSummary }>(
+            { serviceKey, campaignName, rows: batch },
+            { maxAttempts: 2, onRetry: (attempt, maxAttempts, failure) =>
+              setImportProgress(`إعادة محاولة الصفوف ${first}${first === last ? "" : `–${last}`} (${attempt}/${maxAttempts}): ${failure.message}`) },
+          );
+          if (!Array.isArray(response.rows) || !response.summary || response.summary.total !== batch.length ||
+            response.rows.length !== batch.length ||
+            !batch.every((row) => response.rows.some((result) => result.rowNumber === row.rowNumber))) {
+            throw new SheetLeadTransportError("استجابة خادم الاستيراد غير مكتملة؛ يلزم إعادة التحقق من الدفعة.", true);
           }
+          mergeBatch(response.rows, response.summary);
+          index += batch.length;
+          batchSize = SHEET_LEAD_BATCH_SIZE;
+          consecutiveFailures = 0;
+          setResumeFrom(index < unique.length ? index : null);
         } catch (failure) {
+          const reason = failure instanceof Error ? failure.message : "تعذر الاتصال";
+          const transient = failure instanceof SheetLeadTransportError && failure.retryable;
+          if (batch.length > 1 && !transient) {
+            batchSize = 1;
+            setImportProgress(`تعذرت معالجة مجموعة الصفوف ${first}–${last}، جاري تحديد الصف المتسبب دون إيقاف بقية الشيت.`);
+            continue;
+          }
+          if (batch.length === 1 && !transient) {
+            mergeBatch([{ ...batch[0], status: "failed", reason }],
+              { ...EMPTY, total: 1, failed: 1 });
+            index += 1;
+            consecutiveFailures += 1;
+            if (consecutiveFailures < 3) { batchSize = SHEET_LEAD_BATCH_SIZE; continue; }
+          }
+          // Connection loss / timeout / busy database: never silently skip
+          // unknown rows or falsely report a successful import.
           setResumeFrom(index);
-          const first = batch[0]?.rowNumber;
-          const last = batch[batch.length - 1]?.rowNumber;
-          const detail = failure instanceof Error ? failure.message : "تعذر الاستيراد";
-          throw new Error(`توقف الاستيراد عند صفوف ${first}–${last}: ${detail}`);
+          throw new Error(`توقف مؤقت عند صفوف ${first}${first === last ? "" : `–${last}`}: ${reason}`);
         }
-        all = all.concat(response.rows || []);
-        totals = mergeSummaries(totals, response.summary);
-        setDone(Math.min(rows.length, totals.total));
-        setSummary({ ...totals });
-        setResults([...all].sort((a, b) => a.rowNumber - b.rowNumber));
       }
       setResumeFrom(null);
+      setImportProgress(totals.failed > 0 ? `انتهت مراجعة الشيت مع ${totals.failed} صفوف تحتاج إعادة محاولة.` : "تم فحص جميع صفوف الشيت.");
     } catch (reason) {
       setError(`${reason instanceof Error ? reason.message : "فشل الاستيراد"}. النتائج المحفوظة ظاهرة أدناه؛ استكمل الدفعة المتوقفة دون إعادة توزيع العملاء السابقين.`);
     } finally { setImporting(false); }
@@ -188,7 +202,8 @@ export function CrmSheetLeadsImport() {
       </div>
       {normalizationResult ? <div className="crm-inline-notice" role="status">{normalizationResult}</div> : null}
       {error ? <div className="crm-inline-notice" role="alert">{error}</div> : null}
-      {resumeFrom !== null && <div className="crm-inline-notice" role="status">النتائج السابقة محفوظة في التقرير بالأسفل. اضغط «استكمال الاستيراد» لإعادة التحقق من الدفعة المتوقفة فقط؛ أرقام CRM الموجودة لن تتغير.</div>}
+      {importProgress && <div className="crm-inline-notice" role="status" aria-live="polite">{importProgress}</div>}
+      {resumeFrom !== null && !importing && <div className="crm-inline-notice" role="status">النتائج السابقة محفوظة في التقرير بالأسفل. اضغط «استكمال الاستيراد» لإعادة التحقق من الدفعة المتوقفة فقط؛ أرقام CRM الموجودة لن تتغير.</div>}
       {invalidPhones > 0 ? <div className="crm-inline-notice" role="alert">
         <strong>تم إيقاف الاستيراد للحماية:</strong> يوجد {invalidPhones} رقم جوال غير صالح أو يبدو ناقصًا داخل الشيت. صحح الصفوف من مصدرها الأصلي أو ارفع ملفًا يحتوي على الأرقام السليمة فقط. لن نخمن خانات ناقصة ولن نوزع أرقامًا تالفة.
         <button type="button" className="crm-secondary-button" onClick={() => downloadCsv("crm-sheet-invalid-phones.csv", invalidPhoneRows.map((row) => ({ "رقم الصف": row.rowNumber, "اسم العميل": row.customerName, "رقم الجوال الأصلي": row.phone, "المصدر": row.source, "سبب الرفض": row.error })))}>تحميل تقرير الأرقام المرفوضة</button>
@@ -203,12 +218,12 @@ export function CrmSheetLeadsImport() {
         <div className="crm-sheet-leads-controls">
           <span>العميل الموجود مسبقًا يظل على مندوبه وفرعه وحالته دون أي تغيير. التوزيع يخص الأرقام الجديدة فقط.</span>
           <button type="button" className="crm-primary-button" onClick={() => void importRows(resumeFrom ?? 0)} disabled={!serviceKey || importing || parsing || normalizing || invalidPhones > 0}>
-            {importing ? <ArrowClockwise size={18} className="crm-spin" /> : <UsersThree size={18}/>} {importing ? `جاري الاستيراد ${done} / ${rows.length}` : resumeFrom !== null ? "استكمال الاستيراد من الصف المتوقف" : "استيراد وتوزيع العملاء الجدد"}
+            {importing ? <ArrowClockwise size={18} className="crm-spin" /> : <UsersThree size={18}/>} {importing ? `جاري الاستيراد: تم فحص ${done} من ${rows.length}` : resumeFrom !== null ? "استكمال الاستيراد من الصف المتوقف" : summary?.failed ? "إعادة التحقق من الشيت والمتعذرين" : "استيراد وتوزيع العملاء الجدد"}
           </button>
         </div>
       </> : <div className="crm-sheet-leads-empty"><FileArrowUp size={30}/><span>{parsing ? "جاري قراءة الشيت..." : "اختر ملف الشيت لمعاينة العملاء قبل التوزيع"}</span></div>}
       {summary ? <section className="crm-sheet-leads-results">
-        <header><h2>نتيجة الاستيراد</h2><div className="crm-sheet-results-actions"><span>{done} / {rows.length}</span><button type="button" className="crm-secondary-button" onClick={() => downloadCsv("crm-sheet-leads-import-results.csv", results.map((row) => ({ "رقم الصف": row.rowNumber, "اسم العميل": row.customerName, "رقم الجوال": row.phone, "مصدر الشيت": row.source || "ليد - استيراد شيت", "المصدر المحفوظ": row.status === "existing" ? row.storedSource || "—" : row.source || "ليد - استيراد شيت", "النتيجة": statusText[row.status], "المندوب": row.assignedName || "", "الفرع": row.branchCode || "", "ملاحظات": row.reason || "" })))}>تصدير نتيجة الاستيراد</button></div></header>
+        <header><h2>نتيجة الاستيراد</h2><div className="crm-sheet-results-actions"><span>{`تم فحص ${done} من ${rows.length}`}</span><button type="button" className="crm-secondary-button" onClick={() => downloadCsv("crm-sheet-leads-import-results.csv", results.map((row) => ({ "رقم الصف": row.rowNumber, "اسم العميل": row.customerName, "رقم الجوال": row.phone, "مصدر الشيت": row.source || "ليد - استيراد شيت", "المصدر المحفوظ": row.status === "existing" ? row.storedSource || "—" : row.source || "ليد - استيراد شيت", "النتيجة": statusText[row.status], "المندوب": row.assignedName || "", "الفرع": row.branchCode || "", "ملاحظات": row.reason || "" })))}>تصدير نتيجة الاستيراد</button></div></header>
         <div className="crm-sheet-stat-grid">
           <div><span>تم توزيعهم الآن</span><strong>{summary.created}</strong></div>
           <div><span>موجودون مسبقًا (بدون تغيير)</span><strong>{summary.existing}</strong></div>
