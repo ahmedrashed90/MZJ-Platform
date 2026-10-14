@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent, syncLeadConversationContext } from "../_crm-lifecycle.js";
@@ -143,6 +143,8 @@ function leadPayload(body: Record<string, any>) {
 async function list(request: VercelRequest, response: VercelResponse, user: any) {
   const sql = getSql();
   const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
+  const liveBranch = currentCrmLeadBranchSql(sql);
   const q = clean(request.query.q);
   const source = clean(request.query.source);
   const status = clean(request.query.status);
@@ -172,7 +174,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
     left join core.users cc on cc.id = l.call_center_assigned_to
-    left join core.branches b on b.code = l.branch_code
+    left join core.branches b on b.code = ${liveBranch}
     left join lateral (
       select * from crm.conversations cx where cx.lead_id = l.id order by cx.last_message_at desc nulls last limit 1
     ) c on true
@@ -182,17 +184,12 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
     ) sale_summary on true
     where l.is_deleted = false
-      and (
-        ${scope.all}::boolean
-        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
-        or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
-      )
+      and ${leadScope}
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
-      and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to = ${callCenter || null}::uuid)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
@@ -207,17 +204,12 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from crm.leads l
     where l.is_deleted = false
-      and (
-        ${scope.all}::boolean
-        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
-        or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
-      )
+      and ${leadScope}
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
-      and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to = ${callCenter || null}::uuid)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
@@ -254,7 +246,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   let assignment = { assignedTo: input.assignedTo, assignedName: "", branchCode: input.branchCode };
   if (!input.assignedTo) assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
   let callCenter = { assignedTo: input.callCenterAssignedTo, assignedName: "" };
-  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode);
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
@@ -301,8 +293,11 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const id = clean(body.id || request.query.id);
   if (!id) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
 
+  const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
   const [before] = await sql<any[]>`
     select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
+      ${leadScope} as can_view,
       sales.full_name as assigned_name,
       cc.full_name as call_center_name
     from crm.leads l
@@ -312,11 +307,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   `;
   if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
 
-  const scope = userScope(user);
-  const canEdit = scope.all
-    || before.assigned_to === user.id
-    || before.call_center_assigned_to === user.id
-    || (scope.departmentCodes.includes(before.department_code) && (!scope.branchCodes.length || scope.branchCodes.includes(before.branch_code)));
+  // Access is validated by the very same CURRENT-branch SQL used for listing.
+  // An old l.branch_code snapshot cannot grant a transferred manager edit rights.
+  const canEdit = Boolean(before.can_view);
   if (!canEdit) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل هذا العميل" });
 
   const input = leadPayload({ ...before, ...body });
@@ -516,7 +509,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     assignedName = assignment.assignedName;
 
     if (input.serviceKey === "finance") {
-      const callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+      const callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode);
       callCenterAssignedTo = callCenter.assignedTo;
       callCenterName = callCenter.assignedName;
     } else {
@@ -693,8 +686,10 @@ async function remove(request: VercelRequest, response: VercelResponse, user: an
   const sql = getSql();
   const body = parseBody(request);
   const id = clean(body.id || request.query.id);
-  const [before] = await sql<any[]>`select *, id::text from crm.leads where id=${id}::uuid and is_deleted=false`;
-  if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
+  const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
+  const [before] = await sql<any[]>`select l.*, l.id::text from crm.leads l where l.id=${id}::uuid and l.is_deleted=false and ${leadScope}`;
+  if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود أو غير متاح في فرعك الحالي" });
   await sql`update crm.leads set is_deleted=true, deleted_by=${user.id}::uuid, deleted_at=now(), updated_at=now() where id=${id}::uuid`;
   await audit(user, "lead_deleted", "lead", id, { isDeleted: true }, before);
   return response.status(200).json({ ok: true });

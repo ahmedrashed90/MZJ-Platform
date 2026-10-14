@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
@@ -16,6 +16,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!user) return;
   const sql = getSql();
   const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
+  const liveBranch = currentCrmLeadBranchSql(sql);
   const department = departmentKey(request.query.department || "cash");
   const q = clean(request.query.q);
   const branch = clean(request.query.branch);
@@ -28,6 +30,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if ((requestedFrom && !from) || (requestedTo && !to)) return response.status(400).json({ ok: false, error: "صيغة التاريخ غير صحيحة" });
   if (from && to && from > to) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
   const includeClosed = ["1", "true", "yes"].includes(clean(request.query.includeClosed).toLowerCase());
+  const registrationOnly = clean(request.query.dateBasis) === "registered";
 
   const customerFields = await getCustomerFieldDefinitions();
 
@@ -78,32 +81,43 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (${to || null}::date is null or (st.sale_at at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     ) period_sale on true
     where l.is_deleted = false
-      and (
-        ${scope.all}::boolean
-        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
-        or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
-      )
+      and ${leadScope}
       and (
         (${department} = 'cash' and l.department_code in ('cash_sales','wholesale','wholesale_sales')) or
         (${department} = 'finance' and l.department_code in ('finance_sales','call_center')) or
         (${department} = 'service' and l.department_code = 'customer_service')
       )
       and (
-        ${includeClosed || showSoldStatus}::boolean
+        ${includeClosed || showSoldStatus || registrationOnly}::boolean
         or not (
           (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label='تم البيع')
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )
       and (
-        l.status_label='تم البيع'
-          and ((${from || null}::date is null and ${to || null}::date is null) or period_sale.sale_at is not null)
-        or l.status_label<>'تم البيع'
-          and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-          and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+        (${registrationOnly}::boolean and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+          and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
+        or (not ${registrationOnly}::boolean and (
+        (l.status_label='تم البيع'
+          and (((${from || null}::date is null and ${to || null}::date is null) or period_sale.sale_at is not null)))
+        or (l.status_label<>'تم البيع'
+          and (${from || null}::date is null or (
+            case when l.status_label='غير مؤهل' then
+              coalesce((select max(e.created_at) from crm.lead_events e
+                where e.lead_id=l.id and e.new_status='غير مؤهل'
+                  and e.event_type in ('status_change','department_transfer','manual_status_change')), l.updated_at,l.registered_at,l.created_at)
+            else coalesce(l.registered_at,l.created_at) end
+          at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+          and (${to || null}::date is null or (
+            case when l.status_label='غير مؤهل' then
+              coalesce((select max(e.created_at) from crm.lead_events e
+                where e.lead_id=l.id and e.new_status='غير مؤهل'
+                  and e.event_type in ('status_change','department_transfer','manual_status_change')), l.updated_at,l.registered_at,l.created_at)
+            else coalesce(l.registered_at,l.created_at) end
+          at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
       )
-      and (${branch || null}::text is null or l.branch_code = ${branch || null})
+        ))
+      and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})

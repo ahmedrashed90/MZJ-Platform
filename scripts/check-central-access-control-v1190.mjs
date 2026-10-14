@@ -88,7 +88,7 @@ expect("Integrations are protected by gateway secrets", contains("server/integra
 expect("Automation scheduler is protected by a secret", contains("server/internal/automation-job.ts", "AUTOMATION_SCHEDULER_SECRET", "safeSecretEquals"));
 expect("ERPNext webhook is protected by a key", contains("server/integrations/erpnext-sales-order.ts", "ERPNEXT_WEBHOOK_KEY", "safeSecretEquals"));
 
-expect("CRM lists are filtered in SQL by scope", contains("server/crm/leads.ts", "scope.includeAssigned", "scope.departmentCodes", "scope.branchCodes"));
+expect("CRM lists are filtered in SQL by current branch scope", contains("server/crm/leads.ts", "crmLeadScopeSql(sql, scope)", "currentCrmLeadBranchSql(sql)") && contains("server/_crm-utils.ts", "scope.includeAssigned", "scope.departmentCodes", "scope.branchCodes", "scope.branchRestricted", "core.user_system_branches"));
 expect("CRM data review has exact permission checks", contains("server/crm/data-review.ts", "crm.data_review.execute", "crm.data_review.view"));
 expect("CRM data review applies server-side scope", contains("server/crm/data-review.ts", "scope.callCenterOnly", "l.department_code=any(${scope.departmentCodes}"));
 expect("CRM data review locks rows before correction", contains("server/crm/data-review.ts", "for update"));

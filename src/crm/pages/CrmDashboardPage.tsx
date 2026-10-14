@@ -96,6 +96,16 @@ function riyadhDateKey(value: unknown) {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+function currentRiyadhMonth() { return riyadhDateKey(new Date()).slice(0, 7); }
+function monthDates(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month)) return { from: "", to: "" };
+  const [year, part] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, part, 0)).getUTCDate();
+  const end = `${month}-${String(lastDay).padStart(2, "0")}`;
+  const today = riyadhDateKey(new Date());
+  return { from: `${month}-01`, to: month === today.slice(0, 7) ? today : end };
+}
+
 type FollowUpState = "none" | "today" | "overdue";
 
 function leadFollowUpState(lead: CrmLead, department: string): FollowUpState {
@@ -124,6 +134,12 @@ export function CrmDashboardPage() {
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [department, setDepartment] = useState(() => initialDepartment(requestedDepartment));
   const [q, setQ] = useState("");
+  const [dateMode, setDateMode] = useState<"month" | "range">("month");
+  const [month, setMonth] = useState(currentRiyadhMonth);
+  const [fromDate, setFromDate] = useState(() => monthDates(currentRiyadhMonth()).from);
+  const [toDate, setToDate] = useState(() => monthDates(currentRiyadhMonth()).to);
+  const activeDates = dateMode === "month" ? monthDates(month) : { from: fromDate, to: toDate };
+  const datesValid = !activeDates.from || !activeDates.to || activeDates.from <= activeDates.to;
   const [branch, setBranch] = useState("");
   const [agent, setAgent] = useState("");
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
@@ -148,21 +164,19 @@ export function CrmDashboardPage() {
   }, [requestedDepartment, department]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadDashboard();
-      void loadReportSummary();
+      if (datesValid) { void loadDashboard(); void loadReportSummary(); }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [department, q, branch, agent]);
+  }, [department, q, branch, agent, dateMode, month, fromDate, toDate]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        void loadDashboard(true);
-        void loadReportSummary(true);
+        if (datesValid) { void loadDashboard(true); void loadReportSummary(true); }
       }
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [department, q, branch, agent]);
+  }, [department, q, branch, agent, dateMode, month, fromDate, toDate]);
 
   useEffect(() => {
     if (!requestedLeadId || loading || openedRequestedLead.current === requestedLeadId) return;
@@ -188,7 +202,7 @@ export function CrmDashboardPage() {
     if (!silent) setError("");
     try {
       const result = await crmFetch<{ ok: boolean; statuses: CrmStatus[]; leads: CrmLead[] }>(
-        `/api/crm/dashboard${queryString({ department, q, branch, agent })}`,
+        `/api/crm/dashboard${queryString({ department, q, branch, agent, from: department === "service" ? undefined : activeDates.from, to: department === "service" ? undefined : activeDates.to })}`,
       );
       setStatuses(result.statuses || []);
       setLeads(result.leads || []);
@@ -207,7 +221,7 @@ export function CrmDashboardPage() {
     }
     try {
       const result = await crmFetch<DashboardReportSummary>(
-        `/api/crm/reports${queryString({ department, q, branch, agent, summaryOnly: 1 })}`,
+        `/api/crm/reports${queryString({ department, q, branch, agent, from: activeDates.from, to: activeDates.to, dashboardPeriod: 1, summaryOnly: 1 })}`,
       );
       setReportSummary(result);
     } catch (failure) {
@@ -297,14 +311,14 @@ export function CrmDashboardPage() {
 
   const visibleBranches = useMemo(() => {
     const all = meta?.branches || [];
-    if (department === "finance") return all.filter((item) => item.code === "online" || item.name.includes("اونلاين") || item.name.includes("أونلاين"));
+    if (department === "finance") return all.filter((item) => item.code !== "online" && item.code !== "customer_service");
     if (department === "service") return all.filter((item) => item.code === "customer_service" || item.name.includes("خدمة"));
     return all.filter((item) => item.code !== "online" && item.code !== "customer_service");
   }, [meta, department]);
 
   const visibleAgents = useMemo(() => {
     const departmentCodes = department === "finance"
-      ? new Set(["finance_sales"])
+      ? new Set(["cash_sales", "finance_sales"])
       : department === "service"
         ? new Set(["customer_service"])
         : new Set(["cash_sales", "wholesale", "wholesale_sales"]);
@@ -333,6 +347,13 @@ export function CrmDashboardPage() {
           </button>
         ))}
       </div>
+
+      {department !== "service" && <div className="crm-toolbar crm-dashboard-date-toolbar" role="group" aria-label="فلتر تاريخ مبيعات CRM">
+        <label><span>نوع الفترة</span><select aria-label="نوع الفترة" value={dateMode} onChange={event => setDateMode(event.target.value as "month" | "range")}><option value="month">حسب الشهر</option><option value="range">من تاريخ إلى تاريخ</option></select></label>
+        {dateMode === "month" ? <label><span>الشهر</span><input aria-label="الشهر" type="month" value={month} onChange={event => setMonth(event.target.value)} /></label> : <><label><span>من تاريخ</span><input aria-label="من تاريخ" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} /></label><label><span>إلى تاريخ</span><input aria-label="إلى تاريخ" type="date" value={toDate} onChange={event => setToDate(event.target.value)} /></label></>}
+        <span className="crm-dashboard-date-range">{activeDates.from} — {activeDates.to}</span>
+        {!datesValid && <small className="crm-error">تاريخ البداية يجب ألا يكون بعد تاريخ النهاية.</small>}
+      </div>}
 
       {department === "service" ? (
         <section className="crm-dashboard-summary-grid">

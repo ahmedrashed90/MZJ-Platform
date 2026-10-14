@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, isCrmManager, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, isCrmManager, parseBody, requireCrmUser, userScope, crmLeadScopeSql } from "../_crm-utils.js";
 import { classifyConversationService } from "../_crm-lifecycle.js";
 import { getSql } from "../_db.js";
 
@@ -10,6 +10,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "GET") {
     const scope = userScope(user);
+    const leadScope = crmLeadScopeSql(sql, scope);
     const manager = isCrmManager(user);
     const state = clean(request.query.state);
     const channel = clean(request.query.channel);
@@ -35,10 +36,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (${channel}='' or c.channel_code=${channel})
         and (${search}='' or concat_ws(' ',c.customer_name,ct.display_name,ct.primary_phone,ct.primary_phone_normalized,c.preview_text) ilike ${like})
         and (
-          ${manager}::boolean
-          or ${scope.all}::boolean
-          or c.assigned_to=${user.id}::uuid
-          or c.call_center_assigned_to=${user.id}::uuid
+          ${scope.all}::boolean
+          or (${manager}::boolean and not ${scope.branchRestricted}::boolean)
+          or (${scope.branchRestricted}::boolean and
+              ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[]))))
+          or (not ${scope.branchRestricted}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
         )
       order by coalesce(c.last_customer_message_at,c.last_message_at,c.updated_at) desc nulls last
       limit 300
@@ -51,12 +53,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
         count(*) filter(where c.classification_state='awaiting_service')::int as awaiting_count,
         count(*) filter(where coalesce(c.unread_count,0)>0)::int as unread_count
       from crm.conversations c
+      left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
       where c.service_request_id is null
         and (
           c.classification_state in ('new','awaiting_service')
           or (c.classification_state='closed' and c.last_customer_message_at is not null and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz))
         )
-        and (${manager}::boolean or ${scope.all}::boolean or c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid)
+        and (
+          ${scope.all}::boolean
+          or (${manager}::boolean and not ${scope.branchRestricted}::boolean)
+          or (${scope.branchRestricted}::boolean and ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[]))))
+          or (not ${scope.branchRestricted}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
+        )
     `;
 
     return response.status(200).json({ ok: true, rows, summary: summary || {}, canClassify: manager });
@@ -68,6 +76,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const conversationId = clean(body.conversationId);
     const serviceKey = clean(body.serviceKey);
     if (!conversationId || !serviceKey) return response.status(400).json({ ok: false, error: "المحادثة والخدمة مطلوبتان" });
+    const scope = userScope(user);
+    if (scope.branchRestricted && !scope.all) {
+      const leadScope = crmLeadScopeSql(sql, scope);
+      const [allowed] = await sql<any[]>`
+        select c.id::text from crm.conversations c
+        left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
+        where c.id=${conversationId}::uuid
+          and ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[])))
+        limit 1
+      `;
+      if (!allowed) return response.status(403).json({ ok: false, error: "المحادثة ليست ضمن فرعك الحالي" });
+    }
     const result = await classifyConversationService({
       conversationId,
       serviceKey,

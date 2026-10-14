@@ -109,17 +109,28 @@ function addClockMinutes(value: string, minutesToAdd: number) {
 }
 
 function earlyDepartureText(row: ReportRow) {
-  if (row.earlyDeparturePermission) {
-    return `تم الإذن ${row.earlyDeparturePermission.fromText} - ${row.earlyDeparturePermission.toText}`;
-  }
-  const authorized = row.periods.find((period) => period?.checkoutSource === "authorized");
-  if (authorized) {
-    const range = authorized.earlyDepartureFromText && authorized.earlyDepartureToText
-      ? ` ${authorized.earlyDepartureFromText} - ${authorized.earlyDepartureToText}`
-      : "";
-    return `تم الإذن${range}`;
-  }
-  return "—";
+  // The permission times remain in the record and export; the visible state is "إجازة".
+  return row.earlyDeparturePermission || row.periods.some((period) => period?.checkoutSource === "authorized") ? "إجازة" : "—";
+}
+
+function scheduledMinutes(period: ReportPeriod | null) {
+  if (!period?.startTime || !period?.endTime) return 0;
+  const from = clockMinutes(period.startTime), to = clockMinutes(period.endTime);
+  return from >= 0 && to >= 0 ? (to >= from ? to - from : 24 * 60 - from + to) : 0;
+}
+
+function attendanceHourTotals(rows: ReportRow[]) {
+  return rows.reduce((total, row) => {
+    const periods = row.periods.filter((period): period is ReportPeriod => Boolean(period));
+    total.expected += periods.reduce((sum, period) => sum + scheduledMinutes(period), 0);
+    total.actual += periods.reduce((sum, period) => sum + Math.max(0, Number(period.workMinutes || 0)), 0);
+    return total;
+  }, { expected: 0, actual: 0 });
+}
+
+function hourMinuteText(minutes: number) {
+  const rounded = Math.max(0, Math.round(minutes));
+  return `${Math.floor(rounded / 60)} ساعة و ${String(rounded % 60).padStart(2, "0")} دقيقة`;
 }
 
 function groupReportRows(rows: ReportRow[]) {
@@ -207,6 +218,7 @@ function exportAbsence(period: ReportPeriod | undefined) {
 
 function exportResult(period: ReportPeriod | undefined) {
   if (!period) return "—";
+  if (period.checkoutSource === "authorized") return "إجازة";
   if (period.checkIn) return exportDelay(period);
   return missingResultLabel(period.result);
 }
@@ -259,6 +271,12 @@ function buildAttendancePdf(payload: ReportPayload) {
     const [first, second] = exportPeriods(row);
     return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td></tr>`;
   }).join("");
+  const hoursByEmployee = exportRowsByEmployee(payload).map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) }));
+  const grandHours = attendanceHourTotals(payload.rows);
+  const hoursTableRows = hoursByEmployee.map(employee =>
+    `<tr><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(employee.branch)}</td><td>${htmlEscape(hourMinuteText(employee.expected))}</td><td>${htmlEscape(hourMinuteText(employee.actual))}</td><td>${employee.actual < employee.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(employee.actual - employee.expected)))}</td></tr>`
+  ).join('') + `<tr><th colspan="2">الإجمالي</th><th>${htmlEscape(hourMinuteText(grandHours.expected))}</th><th>${htmlEscape(hourMinuteText(grandHours.actual))}</th><th>${grandHours.actual < grandHours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(grandHours.actual - grandHours.expected)))}</th></tr>`;
+  const hourHeaders = ["الموظف", "الفرع", "ساعات الدوام المفترضة", "الساعات الفعلية", "الفرق"];
   const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
   const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
 
@@ -272,6 +290,7 @@ table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table
 </style></head><body>
 <section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_SUMMARY_HEADERS, summaryRows)}</section>
 <section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - تقرير تفصيلي</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_DETAILS_HEADERS, detailRows)}</section>
+<section class="report-section"><div class="head"><h1>ملخص ساعات العمل حسب الموظف</h1><p>${periodLabel}</p></div>${table(hourHeaders, hoursTableRows)}</section>
 <script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`;
 }
 
@@ -328,6 +347,17 @@ function buildExcelDocument(payload: ReportPayload) {
     ].join("")}</Row>`;
   }).join("");
 
+  const hoursByEmployee = exportRowsByEmployee(payload).map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) }));
+  const grandHours = attendanceHourTotals(payload.rows);
+  const hourHeaders = ["الموظف", "الفرع", "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق"];
+  const hourRows = hoursByEmployee.map(employee => `<Row>${[
+    cell(employee.name), cell(employee.branch), cell(hourMinuteText(employee.expected)), cell(hourMinuteText(employee.actual)),
+    cell(`${employee.actual < employee.expected ? '−' : '+'}${hourMinuteText(Math.abs(employee.actual - employee.expected))}`),
+  ].join('')}</Row>`).join('') + `<Row>${[
+    cell('الإجمالي'), cell(''), cell(hourMinuteText(grandHours.expected)), cell(hourMinuteText(grandHours.actual)),
+    cell(`${grandHours.actual < grandHours.expected ? '−' : '+'}${hourMinuteText(Math.abs(grandHours.actual - grandHours.expected))}`),
+  ].join('')}</Row>`;
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
@@ -340,6 +370,7 @@ function buildExcelDocument(payload: ReportPayload) {
  </Styles>
  ${worksheet("ملخص الفترة", ATTENDANCE_SUMMARY_HEADERS, summaryRows)}
  ${worksheet("تقرير تفصيلي", ATTENDANCE_DETAILS_HEADERS, detailRows)}
+ ${worksheet("ملخص الساعات", hourHeaders, hourRows)}
 </Workbook>`;
 }
 
@@ -375,6 +406,8 @@ export function AttendancePage() {
 
   const groupedRows = useMemo(() => groupReportRows(report?.rows || []), [report?.rows]);
   const employeeGroups = useMemo(() => groupReportRowsByEmployee(report?.rows || []), [report?.rows]);
+  const hourSummaries = useMemo(() => employeeGroups.map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) })), [employeeGroups]);
+  const totalHours = useMemo(() => attendanceHourTotals(report?.rows || []), [report?.rows]);
   const showEmployeeBlocks = employeeIds.length > 1;
 
   async function loadAdminUsers() {
@@ -703,7 +736,7 @@ export function AttendancePage() {
                               {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                             </td>,
                             <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                              {hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                              {period?.checkoutSource === "authorized" ? <strong>إجازة</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
                             </td>,
                           ];
                         })}
@@ -780,7 +813,7 @@ export function AttendancePage() {
                                   {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                                  {hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                                  {period?.checkoutSource === "authorized" ? <strong>إجازة</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
                                 </td>,
                               ];
                             })}
@@ -793,6 +826,13 @@ export function AttendancePage() {
               </section>
             );
           })}
+          {!reportLoading && (report?.rows?.length || 0) > 0 && <section className="attendance-hours-summary panel">
+            <h3>ملخص ساعات العمل حسب الموظف — {report?.from} إلى {report?.to}</h3>
+            <div className="attendance-hours-summary-wrap"><table><thead><tr><th>الموظف</th><th>الفرع</th><th>ساعات الدوام المفترضة</th><th>ساعات العمل الفعلية</th><th>الفرق (فعلي − مفترض)</th></tr></thead><tbody>
+              {hourSummaries.map(employee => <tr key={employee.userId}><td>{employee.name}</td><td>{employee.branch}</td><td>{hourMinuteText(employee.expected)}</td><td>{hourMinuteText(employee.actual)}</td><td>{employee.actual < employee.expected ? '−' : '+'}{hourMinuteText(Math.abs(employee.actual - employee.expected))}</td></tr>)}
+              <tr className="attendance-hours-summary-total"><th colSpan={2}>الإجمالي</th><th>{hourMinuteText(totalHours.expected)}</th><th>{hourMinuteText(totalHours.actual)}</th><th>{totalHours.actual < totalHours.expected ? '−' : '+'}{hourMinuteText(Math.abs(totalHours.actual - totalHours.expected))}</th></tr>
+            </tbody></table></div>
+          </section>}
           {!reportLoading && !report?.rows?.length ? (
             <div className="attendance-empty-report" style={{ gridColumn: "1 / -1" }}>لا توجد نتائج مطابقة للفلاتر.</div>
           ) : null}

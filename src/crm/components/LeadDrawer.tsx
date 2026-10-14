@@ -150,7 +150,7 @@ function departmentCodeFor(key: ServiceKey) {
 }
 
 function branchCodeFor(key: ServiceKey) {
-  if (key === "finance") return "online";
+  if (key === "finance") return "";
   if (key === "service") return "customer_service";
   return "";
 }
@@ -375,7 +375,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
       }
       if (userBranchCodes.size) return userBranchCodes.has(branch.code) || branch.code === currentBranch;
-      if (department === "finance") return branch.code === "online" || branch.code === currentBranch;
+      if (department === "finance") return branch.code !== "online" && branch.code !== "customer_service" || branch.code === currentBranch;
       if (department === "service") return branch.code === "customer_service" || branch.code === currentBranch;
       return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
     });
@@ -545,7 +545,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
           return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
         }
         if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code) || branch.code === current.branchCode;
-        if (nextServiceKey === "finance") return branch.code === "online" || branch.code === current.branchCode;
+        if (nextServiceKey === "finance") return branch.code !== "online" && branch.code !== "customer_service" || branch.code === current.branchCode;
         if (nextServiceKey === "service") return branch.code === "customer_service" || branch.code === current.branchCode;
         return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
       });

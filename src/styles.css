@@ -9141,3 +9141,16 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 @media (max-width:800px) { .crm-sheet-stat-grid { grid-template-columns:repeat(2,minmax(110px,1fr)); } .crm-sheet-leads-controls button { width:100%; justify-content:center; } }
 
 .crm-sheet-results-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
+/* Attendance report actual vs planned hours, using assigned schedules (including the one Friday evening shift). */
+.attendance-hours-summary{margin-top:14px;padding:18px;border:1px solid #e9d6cc;border-radius:15px;background:white;grid-column:1/-1}
+.attendance-hours-summary h3{margin:0 0 12px;color:#64352a;font-size:17px}
+.attendance-hours-summary-wrap{overflow-x:auto}
+.attendance-hours-summary table{width:100%;min-width:750px;border-collapse:collapse;text-align:center;font-size:13px}
+.attendance-hours-summary th,.attendance-hours-summary td{border:1px solid #e8d9d1;padding:10px 12px}
+.attendance-hours-summary thead th,.attendance-hours-summary-total{background:#faf2ed;color:#63352a;font-weight:800}
+
+.crm-dashboard-date-toolbar{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:13px;padding:13px 15px;border:1px solid #e6d6cc;border-radius:14px;background:#fffaf7}
+.crm-dashboard-date-toolbar label{display:flex;flex-direction:column;gap:5px;min-width:158px;color:#673b2c;font-weight:700;font-size:12px}
+.crm-dashboard-date-toolbar input,.crm-dashboard-date-toolbar select{height:39px;border:1px solid #e6d6cc;border-radius:9px;background:#fff;padding:7px 11px;font:inherit}
+.crm-dashboard-date-range{color:#80675f;margin-inline-start:auto;font-size:13px}

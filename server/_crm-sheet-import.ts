@@ -121,19 +121,44 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
   if (!(["cash", "finance"] as string[]).includes(serviceKey)) throw new Error("حدد قسم التوزيع: الكاش أو التمويل");
   const sql = getSql();
   const rows = rawRows.map(normalizeSheetLeadRow);
+  // Expensive source registration, field metadata reads and the legacy phone
+  // scan must happen BEFORE the routing lock. The locked phase only checks the
+  // indexed identity again, selects the actual rep, and commits new leads.
+  await ensureSheetSource();
+  const definitions = await getCustomerFieldDefinitions();
+  const registeredSources = new Set<string>([CRM_SHEET_SOURCE]);
+  for (const source of new Set(rows.filter(row => !sheetLeadValidation(row).reason)
+    .map(row => resolveSheetLeadSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE))) {
+    if (!registeredSources.has(source.code)) {
+      await ensureSheetSource(source);
+      registeredSources.add(source.code);
+    }
+  }
+  const legacyCache: LegacySheetPhoneCache = {
+    suffixes: Array.from(new Set(rows.map(row => sheetLeadValidation(row).phoneNormalized)
+      .filter(phone => /^9665\d{8}$/.test(phone)).map(phone => phone.slice(-9)))),
+    matched: new Map<string, any>(),
+  };
+  // The suffix scan is for historic 05 / p:+966 values only. Canonical phone
+  // equality is ALWAYS rechecked inside the lock; a stale scan cannot assign
+  // the same number twice when concurrent imports save a canonical lead.
+  if (legacyCache.suffixes.length) {
+    const legacyRows = await sql<any[]>`
+      select l.id::text,l.customer_name,l.assigned_to::text,l.branch_code,l.source_code,l.source_name,
+        u.full_name as assigned_name,
+        right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9) as phone_suffix
+      from crm.leads l left join core.users u on u.id=l.assigned_to
+      where right(regexp_replace(translate(coalesce(nullif(l.phone_normalized,''),l.phone,''),'٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹','01234567890123456789'),'[^0-9]','','g'),9) = any(${legacyCache.suffixes}::text[])
+      order by l.is_deleted asc,l.created_at asc
+    `;
+    for (const row of legacyRows) if (!legacyCache.matched!.has(String(row.phone_suffix))) legacyCache.matched!.set(String(row.phone_suffix), row);
+  }
   // A blocked session advisory lock could previously wait until Vercel timed out.
   // Try once and let the bounded browser transport retry instead of hanging forever.
   // Hold this lock only for duplicate checks, routing and durable lead creation;
   // lifecycle linking and notifications run after releasing it.
   const acquired = await tryWithDatabaseAdvisoryLock("crm:sheet-lead-bulk-import", async () => {
-    await ensureSheetSource();
-    const definitions = await getCustomerFieldDefinitions();
     const seenPhones = new Set<string>();
-    const legacyCache: LegacySheetPhoneCache = {
-      suffixes: Array.from(new Set(rows.map((row) => sheetLeadValidation(row).phoneNormalized)
-        .filter((phone) => /^9665\d{8}$/.test(phone)).map((phone) => phone.slice(-9)))),
-    };
-    const registeredSources = new Set<string>([CRM_SHEET_SOURCE]);
     const results: SheetLeadResult[] = [];
     const createdLeads: Array<{
       created: any; resultIndex: number; phoneNormalized: string;
@@ -155,10 +180,6 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
         }
         if (check.reason) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
         const leadSource = resolveSheetLeadSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE;
-        if (!registeredSources.has(leadSource.code)) {
-          await ensureSheetSource(leadSource);
-          registeredSources.add(leadSource.code);
-        }
         const assignment = await chooseSheetImportAssignment(serviceKey);
         if (!assignment.assignedTo || !assignment.branchCode) {
           results.push({ ...row, status: "failed", reason: "لا يوجد مندوب مؤهل بفرع فعلي في قسم التوزيع المحدد" });

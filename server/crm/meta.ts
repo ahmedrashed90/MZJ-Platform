@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
-import { getSystemAccess } from "../_access-control.js";
+import { getSystemAccess, hasPermission } from "../_access-control.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
@@ -76,14 +76,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const crmAccess = getSystemAccess(user, "crm");
   const managerPrimaryBranchCode = String(crmAccess.branchCodes[0] || "").trim();
   const primaryBranchManagerScope = (
-    (crmAccess.roleCode === "branch_manager" || user.roleCodes.includes("branch_manager"))
-    && crmAccess.dataScope === "branch"
+    !hasPermission(user, "platform.superadmin")
+    && (crmAccess.roleCode === "branch_manager" || user.roleCodes.includes("branch_manager"))
     && Boolean(managerPrimaryBranchCode)
   );
   const visibleUsers = primaryBranchManagerScope
     ? users.filter((row: any) => String(row.primary_branch_code || "").trim() === managerPrimaryBranchCode)
     : users;
+  const visibleBranches = primaryBranchManagerScope
+    ? branches.filter((row: any) => String(row.code || "").trim() === managerPrimaryBranchCode)
+    : branches;
 
   response.setHeader("Cache-Control", "no-store");
-  return response.status(200).json({ ok: true, statuses, branches, users: visibleUsers, sources, quality: quality[0] || null, endpoints, templates, mappings, customerFields });
+  return response.status(200).json({ ok: true, statuses, branches: visibleBranches, users: visibleUsers, sources, quality: quality[0] || null, endpoints, templates, mappings, customerFields });
 }

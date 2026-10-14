@@ -55,7 +55,7 @@ const MAIN_DASHBOARD_WIDGETS = [
   { id: "kpi:no-answer", label: "لم يتم الرد" },
   { id: "kpi:sold", label: "تم البيع" },
   { id: "analytics:new-customers", label: "العملاء الجدد" },
-  { id: "analytics:recent-conversations", label: "آخر المحادثات" },
+  { id: "analytics:representatives", label: "المناديب" },
   { id: "analytics:distribution", label: "توزيع العملاء حسب القسم" },
   { id: "summary:departments", label: "ملخص الإدارات" },
 ] as const;
@@ -78,7 +78,7 @@ const OPERATION_DASHBOARD_WIDGET_IDS = [
 
 const DEFAULT_DASHBOARD_WIDGET_ORDER = [...DEFAULT_MAIN_WIDGET_ORDER, ...OPERATION_DASHBOARD_WIDGET_IDS];
 
-const DASHBOARD_LAYOUT_STORAGE_VERSION = "v3";
+const DASHBOARD_LAYOUT_STORAGE_VERSION = "v4";
 type StoredDashboardLayout = { widgetOrder: string[]; hiddenMainWidgets: string[]; updatedAt: number };
 
 function normalizeDashboardWidgetOrder(value: unknown) {
@@ -86,7 +86,8 @@ function normalizeDashboardWidgetOrder(value: unknown) {
   const next: string[] = [];
   if (Array.isArray(value)) {
     for (const item of value) {
-      const id = String(item || "").trim();
+      const oldId = String(item || "").trim();
+      const id = oldId === "analytics:recent-conversations" ? "analytics:representatives" : oldId;
       if (allowed.has(id) && !next.includes(id)) next.push(id);
     }
   }
@@ -516,6 +517,7 @@ export function DashboardPage() {
       { name: "مبيعات الكاش", value: current.crm.cashSales ?? 0 },
       { name: "مبيعات التمويل", value: current.crm.financeSales ?? 0 },
       { name: "خدمة العملاء", value: current.crm.customerService ?? 0 },
+      { name: "غير مصنف", value: current.crm.otherCustomers ?? 0 },
     ].filter((item) => item.value > 0);
   }, [current]);
 
@@ -524,11 +526,20 @@ export function DashboardPage() {
   async function allVisibleCrmLeads() {
     const departments = ["cash", "finance", "service"] as const;
     const results = await Promise.all(departments.map((department) => {
-      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1" });
+      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1", dateBasis: "registered" });
       return crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?${params.toString()}`);
     }));
+    // Match the dashboard snapshot: each real customer phone contributes once,
+    // even if historic CRM records carry distinct IDs for the same phone.
+    const sorted = results.flatMap((result) => result.leads || []).sort((a, b) =>
+      String(b.registered_at || b.created_at || '').localeCompare(String(a.registered_at || a.created_at || '')));
     const unique = new Map<string, CrmLead>();
-    results.flatMap((result) => result.leads || []).forEach((lead) => unique.set(lead.id, lead));
+    for (const lead of sorted) {
+      const normalized = String(lead.phone_normalized || lead.phone || '').replace(/\D/g, '');
+      const phone = normalized.length >= 9 ? normalized.slice(-9) : '';
+      const key = phone || lead.id;
+      if (!unique.has(key)) unique.set(key, lead);
+    }
     return [...unique.values()];
   }
 
@@ -789,19 +800,19 @@ export function DashboardPage() {
             ) : <EmptyChart label="العملاء الجدد" />}
           </article>)}
 
-          {customizableMainWidget("analytics:recent-conversations", <article className="panel conversations-panel">
-            <h2>آخر المحادثات</h2>
-            {current?.connected && (crm?.recentConversations.length ?? 0) > 0 ? (
-              <div className="conversation-list">
-                {crm?.recentConversations.map((conversation) => (
-                  <button type="button" className="conversation-row" key={conversation.id} onClick={() => navigate(`/crm?department=${conversation.department}&lead=${encodeURIComponent(conversation.leadId || conversation.id)}`)}>
+          {customizableMainWidget("analytics:representatives", <article className="panel conversations-panel">
+            <h2>المناديب</h2>
+            {current?.connected && (crm?.representatives.length ?? 0) > 0 ? (
+              <div className="conversation-list dashboard-representatives-list">
+                {crm?.representatives.map((rep) => (
+                  <button type="button" className="conversation-row" key={rep.id || `unassigned:${rep.branch}`} onClick={() => void openCrmList(`${rep.name} — ${rep.branch}`, "عملاء المندوب ضمن فترة الداش بورد", lead => rep.id ? lead.assigned_to === rep.id : !lead.assigned_to)}>
                     <div className="conversation-avatar"><UserCircle size={27} weight="duotone" /></div>
-                    <div className="conversation-copy"><strong>{conversation.customerName}</strong><span>{conversation.preview || "بدون نص"}</span></div>
-                    <div className="conversation-meta"><span>{conversation.time}</span>{conversation.unreadCount > 0 ? <b>{conversation.unreadCount}</b> : null}</div>
+                    <div className="conversation-copy"><strong>{rep.name}</strong><span>{rep.branch}</span></div>
+                    <div className="conversation-meta"><strong>{numberFormatter.format(rep.customers)}</strong><span>عميل</span></div>
                   </button>
                 ))}
               </div>
-            ) : <EmptyChart label="آخر المحادثات" />}
+            ) : <EmptyChart label="المناديب" />}
           </article>)}
 
           {customizableMainWidget("analytics:distribution", <article className="panel distribution-panel">
@@ -812,7 +823,7 @@ export function DashboardPage() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={pieData} dataKey="value" nameKey="name" innerRadius="57%" outerRadius="88%" paddingAngle={1}>
-                        {pieData.map((entry, index) => <Cell key={entry.name} fill={["#5b291f", "#e88b63", "#c3a28d"][index]} />)}
+                        {pieData.map((entry, index) => <Cell key={entry.name} fill={["#5b291f", "#e88b63", "#c3a28d", "#ae937e"][index]} />)}
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
@@ -820,8 +831,8 @@ export function DashboardPage() {
                 </div>
                 <div className="distribution-legend">
                   {pieData.map((entry, index) => (
-                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name}`, (lead) => dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash"))}>
-                      <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d"][index] }} />
+                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name}`, (lead) => (entry.name === "غير مصنف" ? !["cash_sales","wholesale","wholesale_sales","finance_sales","call_center","customer_service"].includes(String(lead.department_code || "")) : dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash")))}>
+                      <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d", "#ae937e"][index] }} />
                       <span>{entry.name}</span>
                       <strong>{numberFormatter.format(entry.value)}</strong>
                     </button>

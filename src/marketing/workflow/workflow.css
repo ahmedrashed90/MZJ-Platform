@@ -532,3 +532,9 @@
 .mkw-plan-product-view { display:flex; }
 .mkw-plan-product-view>.secondary { font-size:11px; padding:5px 8px; min-height:29px; }
 @media(max-width:850px) { .mkw-publish-copy { grid-template-columns:1fr; } .mkw-requirement-review-toggle { gap:7px; } }
+
+/* Plan preview shares the canonical campaign/agenda data without a separate publishing model. */
+.mkw-plan-preview-table{border-collapse:collapse;min-width:920px;width:100%;font-size:13px;direction:rtl}
+.mkw-plan-preview-table th,.mkw-plan-preview-table td{border:1px solid var(--line);padding:11px 10px;text-align:right;vertical-align:top;white-space:normal;overflow-wrap:anywhere}
+.mkw-plan-preview-table th{background:var(--surface-soft);color:var(--brand);white-space:nowrap}
+.mkw-preview-ok{color:#16814b;font-weight:700}.mkw-preview-missing{color:#b13b27;font-weight:700}

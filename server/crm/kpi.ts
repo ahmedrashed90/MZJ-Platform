@@ -203,7 +203,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
   const scope = userScope(user);
   const permissions = await resolveKpiAccess(sql, user);
-  const kpiScopeAll = scope.all || hasPermission(user, "crm.kpi.rate_all");
+  const kpiScopeAll = !scope.branchRestricted && (scope.all || hasPermission(user, "crm.kpi.rate_all"));
   // Sales-department lateral selection is equivalent to requiring primary_department.code in ('cash_sales','finance_sales'), while still finding a valid sales department when another CRM department is marked primary.
 
   if (request.method === "GET") {
@@ -219,8 +219,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         e.user_id::text,
         u.full_name,
         u.employee_no,
-        coalesce(nullif(e.details->>'branchCode',''),primary_branch.code) as branch_code,
-        coalesce(nullif(e.details->>'branchName',''),primary_branch.name) as branch_name,
+        (case when ${scope.branchRestricted}::boolean then primary_branch.code else coalesce(nullif(e.details->>'branchCode',''),primary_branch.code) end) as branch_code,
+        (case when ${scope.branchRestricted}::boolean then primary_branch.name else coalesce(nullif(e.details->>'branchName',''),primary_branch.name) end) as branch_name,
         coalesce(nullif(e.details->>'departmentCode',''),primary_department.code) as department_code,
         coalesce(nullif(e.details->>'departmentName',''),primary_department.name) as department_name,
         u.is_active,
@@ -247,15 +247,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where (${from || null}::date is null or e.period_end >= ${from || null}::date)
         and (${to || null}::date is null or e.period_start <= ${to || null}::date)
         and (${agent || null}::uuid is null or e.user_id=${agent || null}::uuid)
-        and (${branch || null}::text is null or coalesce(nullif(e.details->>'branchCode',''),primary_branch.code)=${branch || null})
+        and (${branch || null}::text is null or (case when ${scope.branchRestricted}::boolean then primary_branch.code else coalesce(nullif(e.details->>'branchCode',''),primary_branch.code) end)=${branch || null})
         and (
           ${kpiScopeAll}::boolean
           or coalesce(nullif(e.details->>'departmentCode',''),primary_department.code)=any(${scope.departmentCodes}::text[])
         )
         and (
           ${kpiScopeAll}::boolean
-          or ${scope.branchCodes.length === 0}::boolean
-          or coalesce(nullif(e.details->>'branchCode',''),primary_branch.code)=any(${scope.branchCodes}::text[])
+          or (not ${scope.branchRestricted}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
         )
       order by e.period_start desc,u.full_name
     `;
@@ -303,7 +302,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
         )
         and (${kpiScopeAll}::boolean or primary_department.code=any(${scope.departmentCodes}::text[]))
-        and (${kpiScopeAll}::boolean or ${scope.branchCodes.length === 0}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
+        and (${kpiScopeAll}::boolean or not ${scope.branchRestricted}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
       order by primary_branch.sort_order,u.full_name
     `;
 
@@ -354,7 +353,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
         )
         and (${kpiScopeAll}::boolean or primary_department.code=any(${scope.departmentCodes}::text[]))
-        and (${kpiScopeAll}::boolean or ${scope.branchCodes.length === 0}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
+        and (${kpiScopeAll}::boolean or not ${scope.branchRestricted}::boolean or primary_branch.code=any(${scope.branchCodes}::text[]))
     `;
     if (!agent) return response.status(404).json({ ok: false, error: "المندوب غير موجود أو خارج صلاحيتك" });
 

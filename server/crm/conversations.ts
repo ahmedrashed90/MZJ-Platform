@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmUser, userScope, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishBackgroundEvent } from "../_crm-background-jobs.js";
 import { getSql } from "../_db.js";
@@ -69,7 +69,7 @@ async function loadAccessibleLead(sql: any, scope: any, leadId: string) {
     where l.id=${leadId}::uuid and l.is_deleted=false
       and (
         ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-        or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+        or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
       )
     limit 1
   `;
@@ -216,7 +216,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         where c.id=${conversationId}::uuid
           and (
             ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+            or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
           )
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
@@ -250,7 +250,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where (${leadId || null}::uuid is null or c.lead_id=${leadId || null}::uuid)
         and (
           ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
         )
       order by c.last_message_at desc nulls last,c.updated_at desc
       limit ${limit}
@@ -276,7 +276,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where c.id=${conversationId}::uuid
         and (
           ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
         )
     `;
     if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });

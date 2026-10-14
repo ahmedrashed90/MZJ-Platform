@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, normalizePhone, parseBody, requireCrmUser, userScope, type Scope } from "../_crm-utils.js";
+import { clean, normalizePhone, parseBody, requireCrmUser, userScope, currentCrmLeadBranchSql, type Scope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { hasPermission } from "../_access-control.js";
 
@@ -84,7 +84,7 @@ async function validateCorrections(rows: unknown[], sql: ReturnType<typeof getSq
           ${scope.all}::boolean
           or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
           or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
         )
     ` : Promise.resolve([]),
     sql<any[]>`select code,name from core.departments where is_active=true`,
@@ -220,7 +220,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
               or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-              or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+              or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
             )
           for update
         `;
@@ -283,7 +283,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           ${scope.all}::boolean
           or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
           or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
         )
       group by l.id,assigned.id
       order by coalesce(l.registered_at,l.created_at) desc

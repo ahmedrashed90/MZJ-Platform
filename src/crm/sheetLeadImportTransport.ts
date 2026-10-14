@@ -65,7 +65,7 @@ export async function retrySheetLeadRequest<T extends { ok?: boolean }>(
   body: Record<string, unknown>,
   options: SheetLeadTransportOptions = {},
 ): Promise<T> {
-  const attempts = Math.max(1, Math.min(4, options.maxAttempts ?? 2));
+  const attempts = Math.max(1, Math.min(6, options.maxAttempts ?? 4));
   for (let index = 0; index < attempts; index += 1) {
     try {
       return await postSheetLeadRequest<T>(body, options);
@@ -74,7 +74,7 @@ export async function retrySheetLeadRequest<T extends { ok?: boolean }>(
         ? error : new SheetLeadTransportError(error instanceof Error ? error.message : "تعذر الاتصال", true);
       if (!failure.retryable || index === attempts - 1) throw failure;
       options.onRetry?.(index + 2, attempts, failure);
-      await (options.sleep || sleep)(Math.min(5_000, 1_200 * (index + 1)));
+      await (options.sleep || sleep)(Math.min(7_000, 1_500 * (index + 1)));
     }
   }
   throw new SheetLeadTransportError("تعذر إكمال دفعة CRM", true);

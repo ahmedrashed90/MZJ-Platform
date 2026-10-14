@@ -28,7 +28,7 @@ export function departmentCodeFromKey(key: string) {
 }
 
 export function branchForDepartment(key: string) {
-  if (key === "finance") return "online";
+  if (key === "finance") return "";
   if (key === "service") return "customer_service";
   return "";
 }
@@ -68,23 +68,66 @@ export type Scope = {
   includeAssigned: boolean;
   departmentCodes: string[];
   branchCodes: string[];
+  branchRestricted: boolean;
   userId: string;
   callCenterOnly: boolean;
 };
 
 export function userScope(user: SessionUser): Scope {
   const access = getSystemAccess(user, "crm");
-  const all = access.dataScope === "all";
-  const includeAssigned = ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
-  const allCrmDepartments = ["cash_sales", "finance_sales", "customer_service", "call_center"];
-  const departmentCodes = ["branch", "branches"].includes(access.dataScope)
+  const isBranchManager = !hasPermission(user, "platform.superadmin") && (
+    access.roleCode === "branch_manager"
+    || (user.roleCodes.includes("branch_manager") && !["admin", "superadmin"].includes(access.roleCode || ""))
+  );
+  // A branch manager's former unrestricted/supplementary scope must never
+  // override the currently assigned PRIMARY CRM branch after a transfer.
+  const all = access.dataScope === "all" && !isBranchManager;
+  const includeAssigned = !isBranchManager && ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
+  const allCrmDepartments = ["cash_sales", "finance_sales", "customer_service", "call_center", "wholesale", "wholesale_sales"];
+  const departmentCodes = isBranchManager || ["branch", "branches"].includes(access.dataScope)
     ? allCrmDepartments
     : ["department", "departments", "branch_and_department"].includes(access.dataScope)
       ? access.departmentCodes
       : [];
-  const branchCodes = ["branch", "branches", "branch_and_department"].includes(access.dataScope) ? access.branchCodes : [];
+  const branchRestricted = isBranchManager || ["branch", "branches", "branch_and_department"].includes(access.dataScope);
+  // The manager's current PRIMARY CRM branch is authoritative. Historical/global
+  // branch assignments must not keep a transferred manager able to view old staff.
+  const branchCodes = branchRestricted ? (isBranchManager ? access.branchCodes.slice(0, 1) : access.branchCodes) : [];
   const callCenterOnly = includeAssigned && access.departmentCodes.includes("call_center") && !access.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
-  return { all, includeAssigned, departmentCodes, branchCodes, userId: user.id, callCenterOnly };
+  return { all, includeAssigned, departmentCodes, branchCodes, branchRestricted, userId: user.id, callCenterOnly };
+}
+
+/** CRM lead access follows the assigned rep's CURRENT primary CRM branch.
+ * Old l.branch_code is a historical snapshot and must not grant managers access.
+ * Unassigned leads use their current stored branch and stay visible to its manager.
+ */
+export function currentCrmLeadBranchSql(sql: ReturnType<typeof getSql>) {
+  return sql`(
+    case when l.assigned_to is null then nullif(l.branch_code,'')
+    else coalesce(
+      (select b.code from core.user_system_branches usb
+       join core.branches b on b.id=usb.branch_id and b.is_active=true
+       where usb.user_id=l.assigned_to and usb.system_code='crm'
+       order by usb.is_primary desc,b.sort_order,b.name limit 1),
+      (select b.code from core.user_branches ub
+       join core.branches b on b.id=ub.branch_id and b.is_active=true
+       where ub.user_id=l.assigned_to and not exists (
+         select 1 from core.user_system_branches usb0
+         where usb0.user_id=l.assigned_to and usb0.system_code='crm'
+       ) order by ub.is_primary desc,b.sort_order,b.name limit 1)
+    ) end
+  )`;
+}
+
+export function crmLeadScopeSql(sql: ReturnType<typeof getSql>, scope: Scope) {
+  const branch = currentCrmLeadBranchSql(sql);
+  return sql`(
+    ${scope.all}::boolean
+    or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+    or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+    or (l.department_code=any(${scope.departmentCodes}::text[])
+        and (not ${scope.branchRestricted}::boolean or ${branch}=any(${scope.branchCodes}::text[])))
+  )`;
 }
 
 export function parseBody(request: VercelRequest): Record<string, any> {
@@ -619,7 +662,7 @@ export async function chooseCashQrAssignment(): Promise<AssignmentResult> {
   };
 }
 
-export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
+export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "") {
   const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
   return configured ? { assignedTo: configured.assignedTo, assignedName: configured.assignedName } : { assignedTo: null, assignedName: "" };
 }

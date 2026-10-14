@@ -33,8 +33,8 @@ assert(dashboardPage.includes('badge !== undefined ? "operation-card-has-badge"'
 assert(styles.includes(".dashboard-operation-widget .operation-card-has-badge .operation-card-head { padding-left: 52px; }"), "Operation total badge is clear of the drag handle");
 
 assert(crmPage.includes('const [agent, setAgent] = useState("");'), "CRM dashboard has a representative filter state");
-assert(crmPage.includes("queryString({ department, q, branch, agent })"), "CRM dashboard lead request includes the representative filter");
-assert(crmPage.includes("queryString({ department, q, branch, agent, summaryOnly: 1 })"), "CRM dashboard summary cards follow the representative filter");
+assert(crmPage.includes("queryString({ department, q, branch, agent, from:") && crmPage.includes("activeDates.from"), "CRM dashboard lead request includes the representative filter");
+assert(crmPage.includes("queryString({ department, q, branch, agent, from: activeDates.from, to: activeDates.to, dashboardPeriod: 1, summaryOnly: 1 })"), "CRM dashboard summary cards follow the representative filter");
 assert(crmPage.includes('<option value="">كل المناديب</option>'), "CRM dashboard renders the representatives dropdown next to branches");
 assert(crmDashboardApi.includes("const agent = clean(request.query.agent);"), "CRM dashboard API reads the representative filter");
 assert(crmDashboardApi.includes("l.assigned_to = ${agent || null}::uuid"), "CRM dashboard API filters customers by their assigned representative");

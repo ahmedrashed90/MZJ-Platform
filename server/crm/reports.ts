@@ -113,6 +113,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const detailPage = boundedInt(request.query.detailPage, 1, 1, 100000);
   const detailPageSize = boundedInt(request.query.detailPageSize, 100, 10, 200);
   const summaryOnly = ["1", "true", "yes"].includes(clean(request.query.summaryOnly).toLowerCase());
+  const dashboardPeriod = ["1", "true", "yes"].includes(clean(request.query.dashboardPeriod).toLowerCase());
 
   /*
    * NEXT ERP sales use the salesperson's primary CRM department/branch as the
@@ -255,7 +256,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ${scope.all}::boolean
       or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
       or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.current_assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-      or (l.current_department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.current_branch_code=any(${scope.branchCodes}::text[])))
+      or (l.current_department_code=any(${scope.departmentCodes}::text[])
+        and (not ${scope.branchRestricted}::boolean or (
+          case when l.current_assigned_to is null then l.current_branch_code
+          else coalesce(
+            (select b.code from core.user_system_branches usb join core.branches b on b.id=usb.branch_id and b.is_active=true
+             where usb.user_id=l.current_assigned_to and usb.system_code='crm'
+             order by usb.is_primary desc,b.sort_order,b.name limit 1),
+            (select b.code from core.user_branches ub join core.branches b on b.id=ub.branch_id and b.is_active=true
+             where ub.user_id=l.current_assigned_to and not exists(
+               select 1 from core.user_system_branches usb0 where usb0.user_id=l.current_assigned_to and usb0.system_code='crm'
+             ) order by ub.is_primary desc,b.sort_order,b.name limit 1)
+          ) end
+        )=any(${scope.branchCodes}::text[])))
     )
   `;
 
@@ -263,6 +276,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
     (
       case
         when l.status_label='تم البيع' then (l.sold_at at time zone 'Asia/Riyadh')::date
+        when ${dashboardPeriod}::boolean and l.status_label='غير مؤهل' then (
+          coalesce((select max(e.created_at) from crm.lead_events e
+            where e.lead_id=l.id and e.new_status='غير مؤهل'
+              and e.event_type in ('status_change','department_transfer','manual_status_change')),
+            l.updated_at,l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
+        when ${dashboardPeriod}::boolean then (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
         else (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date
       end
     )
@@ -354,12 +373,22 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const currentLeadDepartmentCodeSql = sql`
     case when ${currentLeadWholesaleIdentitySql} then 'wholesale' else l.department_code end
   `;
+  // Current branch of the assigned rep is the visibility identity. Historic
+  // lead and sale branch snapshots remain untouched in the database.
   const currentLeadBranchCodeSql = sql`
-    case
-      when ${currentLeadWholesaleIdentitySql} then coalesce(nullif(l.branch_code,''),${wholesaleBranchFallbackSql})
-      else nullif(l.branch_code,'')
-    end
+    case when l.current_assigned_to is null then nullif(l.current_branch_code,'')
+    else coalesce(
+      (select b.code from core.user_system_branches usb join core.branches b on b.id=usb.branch_id and b.is_active=true
+        where usb.user_id=l.current_assigned_to and usb.system_code='crm'
+        order by usb.is_primary desc,b.sort_order,b.name limit 1),
+      (select b.code from core.user_branches ub join core.branches b on b.id=ub.branch_id and b.is_active=true
+        where ub.user_id=l.current_assigned_to and not exists (select 1 from core.user_system_branches usb0
+          where usb0.user_id=l.current_assigned_to and usb0.system_code='crm')
+        order by ub.is_primary desc,b.sort_order,b.name limit 1)) end
   `;
+  // Sale attribution keeps its historical branch for reporting, but who can
+  // view the customer's transactions follows the CURRENT assigned rep.
+  const transactionCurrentBranchCodeSql = currentLeadBranchCodeSql;
 
   const departmentBranchLeadDepartmentCodeSql = sql`
     case
@@ -432,7 +461,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
     and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
     and ${leadDepartmentFilterSql}
-    and (${branch || null}::text is null or l.report_branch_code=${branch || null})
+    and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${currentLeadBranchCodeSql} else l.report_branch_code end)=${branch || null})
     and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
     and (${source || null}::text is null or (${leadReportSourceCodeSql})=${source || null})
@@ -493,10 +522,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
+            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -567,10 +596,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
+            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -656,10 +685,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
+            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -689,7 +718,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
             and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
             and ${currentLeadDepartmentFilterSql}
-            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
+            and (${branch || null}::text is null or ${currentLeadBranchCodeSql}=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${leadReportSourceCodeSql})=${source || null})
@@ -845,10 +874,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-        or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+        or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
       )
       and ${transactionDepartmentFilterSql}
-      and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
+      and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
       and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})

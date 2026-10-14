@@ -19,6 +19,8 @@ export type DashboardData = {
     cashSales: NullableNumber;
     financeSales: NullableNumber;
     customerService: NullableNumber;
+    otherCustomers: NullableNumber;
+    representatives: Array<{ id: string; name: string; branch: string; customers: number }>;
     newToday: NullableNumber;
     newThisWeek: NullableNumber;
     recentConversations: Array<{

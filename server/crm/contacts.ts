@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, clean, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { hasPermission } from "../../shared/access-control.js";
 import { getSql } from "../_db.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
@@ -14,6 +14,7 @@ function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
     userId,
     departmentCodes: scope.departmentCodes,
     branchCodes: scope.branchCodes,
+    branchRestricted: scope.branchRestricted,
   };
 }
 
@@ -288,7 +289,7 @@ async function canAccessContact(contactId: string, user: any) {
               and (
                 (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
                 or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-                or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+                or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
               )
           )
           or exists (
@@ -368,7 +369,7 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
           and (
             (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
             or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+            or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
           )
       )
       or exists (
@@ -399,7 +400,7 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
           and (
             (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
             or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+            or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
           )
       )
       or exists (
@@ -453,7 +454,7 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false and (
           (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
           or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
         )
       )
       or exists (

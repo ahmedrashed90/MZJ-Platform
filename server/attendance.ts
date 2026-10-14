@@ -923,13 +923,16 @@ async function reportData(request: VercelRequest) {
         ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active) && (!assignedPeriodIds.length || assignedPeriodIds.includes(clean(period.id))))
         : [];
       const isFriday = weekdayForDate(day) === 5;
+      // Friday is one evening shift, even for users assigned a morning/evening split.
+      // Keep each employee's Friday start/end settings; do not invent a morning shift.
       if (isFriday && fridayScheduleEnabled && schedulePeriods.length > 1) schedulePeriods = [schedulePeriods[0]];
       const isDayOff = Boolean(assignment)
         && parseWeeklyOffDay(assignment.weekly_off_day) !== null
         && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
 
       const slots: any[] = schedulePeriods.map((period) => {
-        const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
+        const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id))
+          || (isFriday && fridayScheduleEnabled ? visibleDayRecords[0] : null);
         const override = assignmentOverrides[clean(period.id)];
         const resolvedTimes = resolveAssignedPeriodTimes(period, override);
         const recordStartTime = report24HourTime(record?.scheduled_start_at);
@@ -942,17 +945,19 @@ async function reportData(request: VercelRequest) {
           : resolvedTimes.endTime || recordEndTime || clean(period.end_time).slice(0, 5);
         return {
           id: period.id,
-          name: clean(period.name) || "فترة العمل",
+          name: isFriday && fridayScheduleEnabled ? "الفترة المسائية" : (clean(period.name) || "فترة العمل"),
           startTime,
           endTime: configuredEndTime,
           graceMinutes: Number(period.grace_minutes || 0),
-          sortOrder: Number(period.sort_order || 0),
+          sortOrder: isFriday && fridayScheduleEnabled ? 2 : Number(period.sort_order || 0),
           record,
         };
       });
 
       for (const record of visibleDayRecords) {
         if (slots.some((slot) => slot.record?.id === record.id)) continue;
+        // Historical Friday morning/evening records are not a second Friday shift.
+        if (isFriday && fridayScheduleEnabled && slots.length) continue;
         slots.push({
           id: record.period_id || `record:${record.id}`,
           name: clean(record.period_name) || `فترة العمل ${slots.length + 1}`,
@@ -976,7 +981,7 @@ async function reportData(request: VercelRequest) {
           const delayText = delayMinutes > 0 ? `تأخير ${formatMinutes(delayMinutes)}` : "بدون تأخير";
           const departureText = record.checkout_source === "authorized" ? " • إذن انصراف مبكر" : "";
           result = `${statusText} • ${workText} • ${delayText}${departureText}`;
-        } else if (isDayOff) {
+        } else if (isDayOff || earlyDeparturePermission) {
           result = "إجازة";
         } else if (day < today) {
           result = "غائب";
@@ -1074,8 +1079,41 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
     const userMap = new Map<string, string>(users.map((user) => [String(user.id), clean(user.full_name) || "المستخدم"] as [string, string]));
     if (userMap.size !== userIds.length) throw new AttendanceError("USER_NOT_FOUND", "يوجد مستخدم غير موجود ضمن الاختيارات", 404);
 
+    const [settings] = await tx<any[]>`
+      select friday_start_time::text as friday_start_time,friday_end_time::text as friday_end_time
+      from core.attendance_settings where id=1 limit 1
+    `;
+    const fridayFrom = clean(settings?.friday_start_time).slice(0,5);
+    const fridayTo = clean(settings?.friday_end_time).slice(0,5);
+    const isFriday = weekdayForDate(workDate) === 5;
     const saved: Array<{ userId: string; name: string; fromTime: string; toTime: string }> = [];
     for (const item of items) {
+      // An authorization belongs to one of the employee's scheduled shifts,
+      // independent of whether the employee has recorded attendance yet.
+      const [assignment] = await tx<any[]>`
+        select schedule_id::text,coalesce(period_ids,'{}'::uuid[]) as period_ids,
+          coalesce(period_overrides,'{}'::jsonb) as period_overrides
+        from core.attendance_user_schedules
+        where user_id=${item.userId}::uuid and effective_from<=${workDate}::date
+          and (effective_to is null or effective_to>=${workDate}::date)
+        order by effective_from desc,created_at desc limit 1
+      `;
+      if (!assignment) throw new AttendanceError("USER_SCHEDULE_REQUIRED", `حدد مواعيد العمل للمستخدم ${userMap.get(item.userId)} قبل تسجيل إذن الانصراف`);
+      const periods = await tx<any[]>`
+        select id::text,name,start_time::text,end_time::text,sort_order
+        from core.attendance_periods where schedule_id=${assignment.schedule_id}::uuid and is_active=true
+        order by sort_order,start_time
+      `;
+      const assignedIds = normalizedIdList(assignment.period_ids);
+      const selectedPeriods = periods.filter(period => !assignedIds.length || assignedIds.includes(clean(period.id)));
+      const overrides = normalizePeriodOverrides(assignment.period_overrides);
+      const allowedRanges = isFriday && validTime(fridayFrom) && validTime(fridayTo)
+        ? [{ startTime: fridayFrom, endTime: fridayTo }]
+        : selectedPeriods.map(period => resolveAssignedPeriodTimes(period, overrides[clean(period.id)]));
+      const permissionFitsShift = allowedRanges.some(period => validTime(period.startTime) && validTime(period.endTime)
+        && timeMinutes(item.fromTime) >= timeMinutes(period.startTime)
+        && timeMinutes(item.toTime) <= timeMinutes(period.endTime));
+      if (!permissionFitsShift) throw new AttendanceError("EARLY_DEPARTURE_OUTSIDE_SHIFT", `وقت إذن ${userMap.get(item.userId)} خارج فترات الدوام المحددة لهذا اليوم`);
       const [permissionClock] = await tx<any[]>`
         select
           ((${workDate}::date + ${item.fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,
