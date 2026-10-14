@@ -373,22 +373,33 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const currentLeadDepartmentCodeSql = sql`
     case when ${currentLeadWholesaleIdentitySql} then 'wholesale' else l.department_code end
   `;
-  // Current branch of the assigned rep is the visibility identity. Historic
-  // lead and sale branch snapshots remain untouched in the database.
-  const currentLeadBranchCodeSql = sql`
-    case when l.current_assigned_to is null then nullif(l.current_branch_code,'')
-    else coalesce(
-      (select b.code from core.user_system_branches usb join core.branches b on b.id=usb.branch_id and b.is_active=true
-        where usb.user_id=l.current_assigned_to and usb.system_code='crm'
-        order by usb.is_primary desc,b.sort_order,b.name limit 1),
-      (select b.code from core.user_branches ub join core.branches b on b.id=ub.branch_id and b.is_active=true
-        where ub.user_id=l.current_assigned_to and not exists (select 1 from core.user_system_branches usb0
-          where usb0.user_id=l.current_assigned_to and usb0.system_code='crm')
-        order by ub.is_primary desc,b.sort_order,b.name limit 1)) end
-  `;
-  // Sale attribution keeps its historical branch for reporting, but who can
-  // view the customer's transactions follows the CURRENT assigned rep.
-  const transactionCurrentBranchCodeSql = currentLeadBranchCodeSql;
+  // Lead queries read the *effective_leads* CTE, which exposes computed
+  // current_* fields. Sales queries instead join the physical crm.leads table:
+  // it has assigned_to/branch_code, NOT current_assigned_to/current_branch_code.
+  // Reuse the same policy with the real columns of each query context so a
+  // transferred branch manager never sees their former team's customers.
+  const assignedRepBranch = (context: "effective" | "base") => {
+    const assignee = context === "effective" ? sql`l.current_assigned_to` : sql`l.assigned_to`;
+    const fallbackBranch = context === "effective" ? sql`l.current_branch_code` : sql`l.branch_code`;
+    return sql`
+      case when ${assignee} is null then nullif(${fallbackBranch},'')
+      else coalesce(
+        (select b.code from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=${assignee} and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name limit 1),
+        (select b.code from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=${assignee} and not exists (
+            select 1 from core.user_system_branches usb0
+            where usb0.user_id=${assignee} and usb0.system_code='crm'
+          ) order by ub.is_primary desc,b.sort_order,b.name limit 1)) end
+    `;
+  };
+  const currentLeadBranchCodeSql = assignedRepBranch("effective");
+  // Transactions retain their historical department/branch for attribution;
+  // access follows the CURRENT assigned representative from crm.leads.
+  const transactionCurrentBranchCodeSql = assignedRepBranch("base");
 
   const departmentBranchLeadDepartmentCodeSql = sql`
     case
@@ -849,8 +860,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.assigned_to::text as current_assigned_to,
       coalesce(current_sales.full_name,l.responsible_name_snapshot,'غير موزع') as current_assigned_name,
       (${currentLeadDepartmentCodeSql}) as current_department_code,
-      (${currentLeadBranchCodeSql}) as current_branch_code,
-      coalesce(current_branch.name,(${currentLeadBranchCodeSql}),'بدون فرع') as current_branch_name,
+      (${transactionCurrentBranchCodeSql}) as current_branch_code,
+      coalesce(current_branch.name,(${transactionCurrentBranchCodeSql}),'بدون فرع') as current_branch_name,
       false as assigned_is_call_center,
       st.sale_at
     from crm.sales_transactions st
@@ -867,7 +878,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users u on u.id=st.assigned_to
     left join core.branches b on b.code=(${transactionBranchCodeSql})
     left join core.users current_sales on current_sales.id=l.assigned_to
-    left join core.branches current_branch on current_branch.code=(${currentLeadBranchCodeSql})
+    left join core.branches current_branch on current_branch.code=(${transactionCurrentBranchCodeSql})
     where coalesce(st.is_cancelled,false)=false
       and (${from || null}::date is null or ${manualSaleDateSql} >= ${from || null}::date)
       and (${to || null}::date is null or ${manualSaleDateSql} <= ${to || null}::date)
