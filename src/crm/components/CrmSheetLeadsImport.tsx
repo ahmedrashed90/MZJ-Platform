@@ -3,6 +3,7 @@ import { ArrowClockwise, CheckCircle, FileArrowUp, FileXls, UsersThree } from "@
 import { crmFetch, downloadCsv } from "../api";
 import { readSheetLeads, type SheetLeadRow } from "../sheetLeadParser";
 import { SHEET_LEAD_SOURCES } from "../../../shared/crm-sheet-sources";
+import { checkSheetLeadPhone } from "../../../shared/crm-sheet-phone";
 
 type RowStatus = "created" | "existing" | "duplicate_in_file" | "invalid" | "failed";
 type RowResult = SheetLeadRow & { status: RowStatus; assignedName?: string; branchCode?: string; storedSource?: string; reason?: string };
@@ -17,12 +18,7 @@ function mergeSummaries(a: ImportSummary, b: ImportSummary): ImportSummary {
 }
 
 function normalizedPhoneKey(value: string) {
-  let digits = String(value || "").replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
-    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit))).replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (/^05\d{8}$/.test(digits)) digits = `966${digits.slice(1)}`;
-  else if (/^5\d{8}$/.test(digits)) digits = `966${digits}`;
-  return digits;
+  return checkSheetLeadPhone(value).normalized;
 }
 
 const statusText: Record<RowStatus, string> = {
@@ -35,12 +31,17 @@ export function CrmSheetLeadsImport() {
   const [rows, setRows] = useState<SheetLeadRow[]>([]);
   const sourceChoices = SHEET_LEAD_SOURCES.map((option) => option.name).join(" / ");
   const missingSources = rows.filter((row) => !row.source).length;
+  const invalidPhoneRows = rows.map((row) => ({ ...row, error: checkSheetLeadPhone(row.phone).reason })).filter((row) => Boolean(row.error));
+  const invalidPhones = invalidPhoneRows.length;
   const [serviceKey, setServiceKey] = useState<"" | "cash" | "finance">("");
   const [campaignName, setCampaignName] = useState("");
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [done, setDone] = useState(0);
   const [error, setError] = useState("");
+  const [normalizing, setNormalizing] = useState(false);
+  const [normalizationResult, setNormalizationResult] = useState("");
+  const [reviewing, setReviewing] = useState(false);
   const [results, setResults] = useState<RowResult[]>([]);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
 
@@ -58,16 +59,52 @@ export function CrmSheetLeadsImport() {
     } finally { setParsing(false); }
   }
 
+  async function repairExistingPhoneFormats() {
+    if (importing || normalizing) return;
+    if (!window.confirm("تصحيح صيغة عرض أرقام الليد المستوردة سابقًا فقط؟ لن يتم تغيير المندوب أو الفرع أو مصدر العميل، ولن تُخمن الأرقام التي فقدت خاناتها.")) return;
+    setNormalizing(true); setError(""); setNormalizationResult("");
+    try {
+      const result = await crmFetch<{ ok: boolean; corrected: number; contactPhonesCorrected: number; requiresReview: number; suspiciousPhones: number }>("/api/crm/sheet-leads", {
+        method: "POST", body: JSON.stringify({ action: "normalize_existing_phones", confirm: true }),
+      });
+      setNormalizationResult(`تم تصحيح صيغة ${result.corrected} عميل و${result.contactPhonesCorrected} جهة اتصال. تحتاج ${result.requiresReview} صيغة غير متطابقة و${result.suspiciousPhones} رقمًا مشتبهًا في نقصه لمراجعة يدوية؛ لم تتغير التوزيعات.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "تعذر تصحيح الصيغ القديمة");
+    } finally { setNormalizing(false); }
+  }
+
+  async function exportExistingPhoneReview() {
+    if (importing || normalizing || reviewing) return;
+    setReviewing(true); setError("");
+    try {
+      type Issue = { leadId: string; customerName: string; phone: string; normalizedKey: string; branchCode: string; sourceName: string; assignedName: string; reviewReason: string };
+      const response = await crmFetch<{ ok: boolean; rows: Issue[]; total: number; limitedTo: number }>("/api/crm/sheet-leads", {
+        method: "POST", body: JSON.stringify({ action: "review_existing_phones" }),
+      });
+      if (!response.rows.length) { setNormalizationResult("لم يتم العثور على أرقام ليد مستوردة تحتاج تصحيحًا أو مراجعة في النطاق المفحوص."); return; }
+      downloadCsv("crm-sheet-import-phone-review.csv", response.rows.map((row) => ({
+        "رقم العميل في CRM": row.leadId, "اسم العميل": row.customerName,
+        "رقم الجوال المعروض": row.phone, "رقم البحث": row.normalizedKey,
+        "المصدر": row.sourceName, "المندوب": row.assignedName,
+        "الفرع": row.branchCode, "سبب المراجعة": row.reviewReason,
+      })));
+      setNormalizationResult(`تم إعداد تقرير ${response.total} رقم يحتاج مراجعة أو تنسيقًا. لم يتم تعديل أي عميل.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "تعذر تصدير تقرير الأرقام القديمة");
+    } finally { setReviewing(false); }
+  }
+
   async function importRows() {
     if (!serviceKey) { setError("حدد قسم التوزيع قبل الاستيراد: الكاش أو التمويل"); return; }
     if (!rows.length || importing) return;
+    if (invalidPhones > 0) { setError(`يوجد ${invalidPhones} رقم جوال يحتاج تصحيحًا من مصدره الأصلي. حمّل تقرير الأرقام المرفوضة وأعد رفع ملف سليم قبل الاستيراد.`); return; }
     setImporting(true); setError(""); setResults([]); setSummary(null); setDone(0);
     const seen = new Set<string>();
     const unique: SheetLeadRow[] = [];
     const inFileDuplicates: RowResult[] = [];
     for (const row of rows) {
       const phoneKey = normalizedPhoneKey(row.phone);
-      if (phoneKey && seen.has(phoneKey)) inFileDuplicates.push({ ...row, status: "duplicate_in_file", reason: "ظهر نفس رقم الجوال أكثر من مرة في الملف" });
+      if (phoneKey && seen.has(phoneKey)) inFileDuplicates.push({ ...row, phone: phoneKey, status: "duplicate_in_file", reason: "ظهر نفس رقم الجوال أكثر من مرة في الملف" });
       else { if (phoneKey) seen.add(phoneKey); unique.push(row); }
     }
     let all: RowResult[] = [...inFileDuplicates];
@@ -104,17 +141,31 @@ export function CrmSheetLeadsImport() {
           <small>{"\u0627\u0644\u0645\u0635\u062f\u0631 (Source) \u0627\u062e\u062a\u064a\u0627\u0631\u064a \u0644\u0644\u062a\u0648\u0627\u0641\u0642 \u0645\u0639 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0642\u062f\u064a\u0645\u0629"} - {sourceChoices}</small>
         </label>
       </div>
+      <div className="crm-sheet-leads-controls">
+        <span>أرقام مثل p:+966546670570 ستُحفظ بصيغة 966546670570. الأرقام الناقصة لا يمكن استرجاعها بالتخمين.</span>
+        <button type="button" className="crm-secondary-button" disabled={importing || parsing || normalizing} onClick={() => void repairExistingPhoneFormats()}>
+          {normalizing ? "جاري تنسيق الأرقام القديمة..." : "تصحيح صيغ الأرقام القديمة في CRM"}
+        </button>
+        <button type="button" className="crm-secondary-button" disabled={importing || parsing || normalizing || reviewing} onClick={() => void exportExistingPhoneReview()}>
+          {reviewing ? "جاري تجهيز التقرير..." : "تقرير أرقام CRM التي تحتاج مراجعة"}
+        </button>
+      </div>
+      {normalizationResult ? <div className="crm-inline-notice" role="status">{normalizationResult}</div> : null}
       {error ? <div className="crm-inline-notice" role="alert">{error}</div> : null}
+      {invalidPhones > 0 ? <div className="crm-inline-notice" role="alert">
+        <strong>تم إيقاف الاستيراد للحماية:</strong> يوجد {invalidPhones} رقم جوال غير صالح أو يبدو ناقصًا داخل الشيت. صحح الصفوف من مصدرها الأصلي أو ارفع ملفًا يحتوي على الأرقام السليمة فقط. لن نخمن خانات ناقصة ولن نوزع أرقامًا تالفة.
+        <button type="button" className="crm-secondary-button" onClick={() => downloadCsv("crm-sheet-invalid-phones.csv", invalidPhoneRows.map((row) => ({ "رقم الصف": row.rowNumber, "اسم العميل": row.customerName, "رقم الجوال الأصلي": row.phone, "المصدر": row.source, "سبب الرفض": row.error })))}>تحميل تقرير الأرقام المرفوضة</button>
+      </div> : null}
       {rows.length && missingSources ? <div className="crm-inline-notice" role="status">{missingSources} عميل بدون مصدر: سيظهر مصدرهم «ليد - استيراد شيت». أكمل المصادر لتقارير تسويق أدق.</div> : null}
       {rows.length ? <>
         <div className="crm-sheet-leads-summary"><span><FileXls size={18}/> {fileName}</span><strong>{rows.length.toLocaleString("ar-SA-u-nu-latn")} عميل في الملف</strong></div>
         <div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>الصف</th><th>اسم العميل</th><th>رقم الجوال</th><th>المصدر</th></tr></thead>
-          <tbody>{rows.slice(0, 10).map((row) => <tr key={row.rowNumber}><td>{row.rowNumber}</td><td>{row.customerName || "—"}</td><td dir="ltr">{row.phone || "—"}</td><td>{row.source || "ليد - استيراد شيت"}</td></tr>)}</tbody></table>
+          <tbody>{rows.slice(0, 10).map((row) => <tr key={row.rowNumber}><td>{row.rowNumber}</td><td>{row.customerName || "—"}</td><td dir="ltr">{checkSheetLeadPhone(row.phone).normalized || row.phone || "—"}{checkSheetLeadPhone(row.phone).reason ? <small style={{ display: "block", color: "#ad3e34" }}>{checkSheetLeadPhone(row.phone).reason}</small> : null}</td><td>{row.source || "ليد - استيراد شيت"}</td></tr>)}</tbody></table>
           {rows.length > 10 ? <p className="crm-sheet-preview-tail">معاينة أول 10 صفوف من الملف</p> : null}
         </div>
         <div className="crm-sheet-leads-controls">
           <span>العميل الموجود مسبقًا يظل على مندوبه وفرعه وحالته دون أي تغيير. التوزيع يخص الأرقام الجديدة فقط.</span>
-          <button type="button" className="crm-primary-button" onClick={() => void importRows()} disabled={!serviceKey || importing || parsing}>
+          <button type="button" className="crm-primary-button" onClick={() => void importRows()} disabled={!serviceKey || importing || parsing || normalizing || invalidPhones > 0}>
             {importing ? <ArrowClockwise size={18} className="crm-spin" /> : <UsersThree size={18}/>} {importing ? `جاري الاستيراد ${done} / ${rows.length}` : "استيراد وتوزيع العملاء الجدد"}
           </button>
         </div>

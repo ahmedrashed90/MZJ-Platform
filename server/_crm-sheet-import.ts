@@ -1,6 +1,7 @@
 import type { SessionUser } from "./_auth.js";
 import { withDatabaseAdvisoryLock, getSql } from "./_db.js";
-import { audit, chooseSheetImportAssignment, clean, normalizePhone } from "./_crm-utils.js";
+import { audit, chooseSheetImportAssignment, clean } from "./_crm-utils.js";
+import { checkSheetLeadPhone } from "../shared/crm-sheet-phone.js";
 import { calculateLeadCompletion, getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "./_notifications.js";
@@ -29,9 +30,10 @@ export function normalizeSheetLeadRow(value: unknown, index: number): SheetLeadI
 }
 
 export function sheetLeadValidation(row: SheetLeadInput) {
-  const phoneNormalized = normalizePhone(row.phone);
+  const phoneCheck = checkSheetLeadPhone(row.phone);
+  const phoneNormalized = phoneCheck.normalized;
   if (!row.customerName) return { phoneNormalized, reason: "اسم العميل غير موجود" };
-  if (!phoneNormalized) return { phoneNormalized, reason: "رقم الجوال غير صالح" };
+  if (!phoneNormalized) return { phoneNormalized, reason: phoneCheck.reason };
   if (!resolveSheetLeadSource(row.source)) return { phoneNormalized, reason: "\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u0639\u0631\u0648\u0641: \u0627\u062e\u062a\u0631 \u0645\u0635\u062f\u0631\u064b\u0627 \u0645\u0646 \u0627\u0644\u0642\u0627\u0626\u0645\u0629" };
   return { phoneNormalized, reason: "" };
 }
@@ -99,7 +101,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
       try {
         const existing = await findExistingPhone(check.phoneNormalized);
         if (existing) {
-          results.push({ ...row, status: "existing", leadId: existing.id, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "", storedSource: existing.source_name || existing.source_code || "", reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
+          results.push({ ...row, phone: check.phoneNormalized, status: "existing", leadId: existing.id, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || "", storedSource: existing.source_name || existing.source_code || "", reason: "موجود بالفعل؛ لم يتم تغيير المندوب أو الفرع أو البيانات" });
           continue;
         }
         if (check.reason) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
@@ -124,7 +126,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
             insert into crm.leads(customer_name,phone,phone_normalized,source_code,source_name,service_key,
               department_code,branch_code,status_label,payment_type,campaign_name,assigned_to,created_by,updated_by,
               registered_at,completion_percent,responsible_name_snapshot)
-            values(${row.customerName},${row.phone},${check.phoneNormalized},${leadSource.code},${leadSource.name},${serviceKey},
+            values(${row.customerName},${check.phoneNormalized},${check.phoneNormalized},${leadSource.code},${leadSource.name},${serviceKey},
               ${departmentCode},${assignment.branchCode},'عميل جديد',${paymentType},${campaignName || null},${assignment.assignedTo}::uuid,
               ${actor.id}::uuid,${actor.id}::uuid,now(),${completion},${assignment.assignedName || null})
             returning *,id::text,assigned_to::text
@@ -143,11 +145,102 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
         catch (error) { linkageError = error instanceof Error ? error.message : "تعذر ربط طلب خدمة العميل"; }
         await audit(actor, "sheet_lead_imported", "lead", created.id, { phoneNormalized: check.phoneNormalized, sheetImport: true, sourceCode: leadSource.code, assignedTo: assignment.assignedTo, branchCode: assignment.branchCode });
         await emitCrmLeadNotification(actor, "created", created).catch((error) => console.error("CRM sheet lead notification failed", error));
-        results.push({ ...row, status: "created", leadId: created.id, assignedName: assignment.assignedName, branchCode: assignment.branchCode, reason: linkageError ? `تم حفظ العميل وتوزيعه، لكن تعذر ربط الطلب: ${linkageError}` : "" });
+        results.push({ ...row, phone: check.phoneNormalized, status: "created", leadId: created.id, assignedName: assignment.assignedName, branchCode: assignment.branchCode, reason: linkageError ? `تم حفظ العميل وتوزيعه، لكن تعذر ربط الطلب: ${linkageError}` : "" });
       } catch (error) {
         results.push({ ...row, status: "failed", reason: error instanceof Error ? error.message : "تعذر إنشاء العميل" });
       }
     }
     return { rows: results, summary: summarizeSheetResults(results) };
   });
+}
+
+
+/** Correct only presentation formats of previously imported sheet leads.
+ * This never guesses missing digits, touches assignment, or changes the stored identity.
+ * Explicit superadmin authorization is enforced by the API endpoint.
+ */
+export async function normalizePreviouslyImportedSheetPhones(actor: SessionUser) {
+  return withDatabaseAdvisoryLock("crm:sheet-lead-bulk-import", async () => {
+    const sql = getSql();
+    const rows = await sql<any[]>`
+      select l.id::text,l.contact_id::text,l.phone,l.phone_normalized,c.primary_phone,c.primary_phone_normalized
+      from crm.leads l
+      left join crm.contacts c on c.id=l.contact_id
+      where l.is_deleted=false and l.phone is distinct from l.phone_normalized
+        and exists (select 1 from crm.lead_events e where e.lead_id=l.id and e.event_type='sheet_lead_imported')
+      order by l.created_at asc limit 5000
+    `;
+    let corrected = 0;
+    let contactPhonesCorrected = 0;
+    let requiresReview = 0;
+    for (const row of rows) {
+      const check = checkSheetLeadPhone(row.phone);
+      // The already stored normalized phone is immutable here: only fix the displayed formatting.
+      if (!check.normalized || check.normalized !== String(row.phone_normalized || '')) {
+        requiresReview += 1;
+        continue;
+      }
+      const updated = await sql.begin(async (tx) => {
+        const [changed] = await tx<any[]>`
+          update crm.leads set phone=${check.normalized},updated_at=now()
+          where id=${row.id}::uuid and phone=${row.phone} and phone_normalized=${check.normalized}
+          returning id::text
+        `;
+        if (!changed) return { changed: false, contactChanged: false };
+        let contactChanged = false;
+        if (row.contact_id && row.primary_phone === row.phone && row.primary_phone_normalized === check.normalized) {
+          const [contact] = await tx<any[]>`
+            update crm.contacts set primary_phone=${check.normalized},updated_at=now()
+            where id=${row.contact_id}::uuid and primary_phone=${row.phone} and primary_phone_normalized=${check.normalized}
+            returning id::text
+          `;
+          contactChanged = Boolean(contact);
+        }
+        return { changed: true, contactChanged };
+      });
+      if (updated.changed) corrected += 1;
+      if (updated.contactChanged) contactPhonesCorrected += 1;
+    }
+    const [suspicious] = await sql<{ count: number }[]>`
+      select count(*)::int as count from crm.leads l
+      where l.is_deleted=false and l.phone_normalized ~ '0{5,}$'
+        and exists (select 1 from crm.lead_events e where e.lead_id=l.id and e.event_type='sheet_lead_imported')
+    `;
+    await audit(actor, "sheet_lead_phone_format_repaired", "sheet_leads", null, {
+      corrected, contactPhonesCorrected, requiresReview, suspiciousPhones: Number(suspicious?.count || 0),
+    });
+    return {
+      corrected, contactPhonesCorrected, requiresReview,
+      suspiciousPhones: Number(suspicious?.count || 0),
+      note: "تم تعديل صيغة عرض الأرقام القابلة للتحقق فقط. الأرقام الناقصة أو المنتهية بأصفار كثيرة لم يتم تخمينها أو تعديل توزيعها.",
+    };
+  });
+}
+
+/** Read-only review of sheet-import phones. Never infer missing digits from a name. */
+export async function listPreviouslyImportedSheetPhoneIssues() {
+  const sql = getSql();
+  const leads = await sql<any[]>`
+    select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.branch_code,
+      l.source_name,u.full_name as assigned_name
+    from crm.leads l left join core.users u on u.id=l.assigned_to
+    where l.is_deleted=false
+      and exists (select 1 from crm.lead_events e where e.lead_id=l.id and e.event_type='sheet_lead_imported')
+    order by l.created_at desc limit 5000
+  `;
+  const rows = leads.flatMap((lead) => {
+    const original = String(lead.phone || '');
+    const storedKey = String(lead.phone_normalized || '');
+    const result = checkSheetLeadPhone(original);
+    if (!result.reason && result.normalized === storedKey && original === storedKey) return [];
+    return [{
+      leadId: String(lead.id), customerName: String(lead.customer_name || ''),
+      phone: original, normalizedKey: storedKey, branchCode: String(lead.branch_code || ''),
+      sourceName: String(lead.source_name || ''), assignedName: String(lead.assigned_name || ''),
+      reviewReason: result.reason || (result.normalized !== storedKey
+        ? 'رقم البحث لا يطابق الرقم الأصلي؛ يلزم التحقق يدويًا'
+        : 'الصيغة قابلة للتصحيح من زر تنسيق الأرقام القديمة'),
+    }];
+  });
+  return { total: rows.length, rows, limitedTo: 5000 };
 }
