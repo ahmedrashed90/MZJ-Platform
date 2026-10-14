@@ -54,7 +54,9 @@ assert(service.includes('موجود بالفعل؛ لم يتم تغيير الم
 assert(!service.includes('update crm.leads set assigned_to'));
 assert(service.includes('seenPhones.has(check.phoneNormalized)'));
 assert(service.includes('right(regexp_replace'));
-assert(component.includes('for (let index = 0; index < unique.length; index += 25)'));
+assert(component.includes('SHEET_LEAD_BATCH_SIZE = 3') && component.includes('index += SHEET_LEAD_BATCH_SIZE'));
+assert(component.includes('setResumeFrom(index)') && component.includes('استكمال الاستيراد'));
+assert(component.includes('HTTP ${code}') && component.includes('x-vercel-id'));
 console.log('PASS: Duplicate checks run before assignment, imports serialize and are chunked');
 assert(routing.includes('chooseSheetImportAssignment'));
 assert(routing.includes('chooseFromConfiguredRule(departmentCode, "", sourceCode)'));

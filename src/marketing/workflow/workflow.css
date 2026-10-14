@@ -487,3 +487,48 @@
 /* Marketing schema upgrades are manual and restricted to platform superadmins. */
 .mkw-schema-upgrade { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border:1px solid #d7a38e; background:#fff8f4; padding:14px 18px; border-radius:12px; margin:14px 0; color:#754334; }
 .mkw-schema-upgrade button { flex-shrink:0; }
+
+/* Workflow 2026-10: one independent approval and writing state per requirement. */
+.mkw-requirement-review-list { display:grid; gap:11px; }
+.mkw-requirement-review-progress { padding:11px 14px; color:var(--brand); background:var(--surface-soft); border:1px solid var(--line); border-radius:10px; font-size:13px; font-weight:700; }
+.mkw-requirement-review-entry { border:1px solid var(--line-strong); border-radius:12px; background:var(--surface); overflow:hidden; }
+.mkw-requirement-review-toggle { width:100%; display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:14px 16px; background:var(--surface); border:0; color:var(--ink); text-align:right; }
+.mkw-requirement-review-entry.is-open>.mkw-requirement-review-toggle { background:var(--surface-soft); border-bottom:1px solid var(--line); }
+.mkw-requirement-review-identify { min-width:165px; flex:1 1 250px; display:grid; gap:4px; }
+.mkw-requirement-review-identify strong { overflow-wrap:anywhere; font-size:14px; }
+.mkw-requirement-review-identify small { color:var(--muted); font-size:12px; }
+.mkw-requirement-reviewed,.mkw-requirement-waiting { display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:12px; font-weight:800; }
+.mkw-requirement-waiting { color:var(--brand); }
+.mkw-requirement-review-label { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:800; color:var(--brand); }
+.mkw-requirement-review-entry.is-open .mkw-requirement-review-label svg { transform:rotate(180deg); }
+.mkw-requirement-review-entry>.mkw-execution-item { border:0; box-shadow:none; border-radius:0; }
+.mkw-requirement-review-entry>.mkw-execution-item>header { display:none; }
+.mkw-publish-draft-state { display:inline-flex; align-items:center; gap:6px; }
+.mkw-publish-copy-title { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; }
+.mkw-publish-copy-title>div { display:grid; gap:5px; }
+.mkw-publish-copy-title small { color:var(--muted); font-size:12px; }
+.mkw-publish-copy-field { display:grid; gap:8px; min-width:0; }
+.mkw-publish-copy-field .mkw-field>span { display:none; }
+.mkw-publish-field-state { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:13px; }
+.mkw-publish-field-state>span { color:var(--muted); font-size:12px; }
+.mkw-publish-field-state .is-saved { display:inline-flex; align-items:center; gap:5px; color:var(--green); font-weight:800; }
+.mkw-publish-format-details { border:1px solid var(--line); border-radius:11px; overflow:hidden; background:var(--surface); }
+.mkw-publish-format-details>summary { display:flex; align-items:center; justify-content:space-between; padding:12px 15px; cursor:pointer; color:var(--brand); font-size:13px; list-style:none; }
+.mkw-publish-format-details>summary::-webkit-details-marker { display:none; }
+.mkw-publish-format-details>summary span { color:var(--muted); }
+.mkw-publish-format-details>.mkw-publish-platforms,.mkw-publish-format-details>.mkw-format-disclosure { margin:12px; }
+.mkw-publish-format-details>.mkw-publish-draft-head { padding:12px 14px; border-top:1px solid var(--line); }
+.mkw-preparation-copy-status { border:1px solid var(--line); background:var(--surface-soft); border-radius:10px; padding:12px 15px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.mkw-preparation-copy-status>span { font-size:12px; color:var(--muted); }
+.mkw-plan-table { min-width:1220px; }
+.mkw-plan-table.agenda { min-width:1050px; }
+.mkw-plan-heading,.mkw-plan-table-row { grid-template-columns:155px minmax(380px,2.5fr) minmax(150px,1.1fr) minmax(160px,1.2fr) 125px 44px; align-items:start; }
+.mkw-plan-table.agenda .mkw-plan-heading,.mkw-plan-table.agenda .mkw-plan-table-row { grid-template-columns:155px minmax(380px,2.5fr) minmax(160px,1.1fr) minmax(160px,1.2fr) 44px; }
+.mkw-plan-product-picker { display:grid; gap:7px; min-width:0; }
+.mkw .mkw-plan-product-picker>input[type=search] { min-height:34px; font-size:12px; }
+.mkw-plan-product-preview { padding:10px 11px; border:1px solid var(--line); border-radius:10px; background:var(--surface-soft); display:grid; gap:6px; overflow-wrap:anywhere; }
+.mkw-plan-product-preview>strong { font-size:14px; color:var(--brand); }
+.mkw-plan-product-preview>span { font-size:12px; }
+.mkw-plan-product-view { display:flex; }
+.mkw-plan-product-view>.secondary { font-size:11px; padding:5px 8px; min-height:29px; }
+@media(max-width:850px) { .mkw-publish-copy { grid-template-columns:1fr; } .mkw-requirement-review-toggle { gap:7px; } }

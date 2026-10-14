@@ -115,6 +115,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const [name, setName] = useState('');
   const [entries, setEntries] = useState<PlanEntry[]>([newEntry(initialProduct)]);
+  const [productSearch, setProductSearch] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const dateLabel = kind === 'agenda' ? W.publishDate : W.fundingDate;
   const label = kind === 'agenda' ? W.agenda : W.campaign;
@@ -136,9 +137,26 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
         const product = productsQuery.data?.rows.find(product => product.id === entry.productId);
         const platforms = activePlatforms.filter(platform => meta.postTypes.some(type => type.platform_id === platform.id && (!product || supportsWorkMedia(product.media_kind, type.name))));
         const postTypes = meta.postTypes.filter(type => type.platform_id === entry.platformId && (!product || supportsWorkMedia(product.media_kind, type.name)));
+        const searchable = (productSearch[entry.key] || '').trim().toLocaleLowerCase();
+        const matchingProducts = (productsQuery.data?.rows || []).filter(candidate => !searchable ||
+          `${candidate.idea_name} ${candidate.task_name} ${candidate.task_no} ${candidate.assignee_name} ${candidate.media_kind} ${candidate.sort_order}`.toLocaleLowerCase().includes(searchable)).slice(0, 100);
+        const choicesForRow = product && !matchingProducts.some(candidate => candidate.id === product.id) ? [product, ...matchingProducts] : matchingProducts;
         return <div className="mkw-plan-table-row" key={entry.key}>
           <input aria-label={dateLabel} type="date" required value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
-          <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platformId: '', postTypeId: '' })}><option value="">{W.choose}</option>{productsQuery.data?.rows.map(product => <option key={product.id} value={product.id}>{product.idea_name} - {product.task_no}</option>)}</select>
+          <div className="mkw-plan-product-picker">
+            <input type="search" aria-label="بحث عن المنتج والمطلوب" placeholder="ابحث باسم التاسك أو المطلوب أو المنفذ أو رقم التاسك" value={productSearch[entry.key] || ''} disabled={busy} onChange={event => setProductSearch(current => ({ ...current, [entry.key]: event.target.value }))}/>
+            <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platformId: '', postTypeId: '' })}>
+              <option value="">اختر المطلوب / المنتج من التاسك</option>
+              {choicesForRow.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.task_no} · {candidate.task_name} · {candidate.idea_name} · {candidate.media_kind === 'video' ? 'فيديو' : 'صورة'} · {candidate.assignee_name}</option>)}
+            </select>
+            {searchable && !matchingProducts.length && !product && <small>لا يوجد مطلوب مطابق للبحث. جرّب رقم التاسك أو اسم المنفذ.</small>}
+            {product && <div className="mkw-plan-product-preview" role="status">
+              <strong>{product.idea_name}</strong>
+              <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
+              <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
+              <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
+            </div>}
+          </div>
           <select aria-label="المنصة" required value={entry.platformId} disabled={busy || !entry.productId} onChange={event => updateEntry(entry.key, { platformId: event.target.value, postTypeId: '' })}><option value="">{W.choose}</option>{platforms.map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select>
           <select aria-label="نوع النشر" required value={entry.postTypeId} disabled={busy || !entry.platformId} onChange={event => updateEntry(entry.key, { postTypeId: event.target.value })}><option value="">{W.choose}</option>{postTypes.map(format => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
           {kind === 'campaign' && <input aria-label="الميزانية" type="number" min="0" step="0.01" max="100000000" required value={entry.budget} disabled={busy} onChange={event => updateEntry(entry.key, { budget: event.target.value })} placeholder="ر.س"/>}

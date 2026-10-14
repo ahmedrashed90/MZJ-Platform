@@ -1,6 +1,6 @@
 import { Fragment, lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CaretDown, PaperPlaneTilt } from '@phosphor-icons/react';
+import { CaretDown, CheckCircle, PaperPlaneTilt } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { YouTubeOptionsFields } from '../components/YouTubeOptionsFields';
 import { marketingFetch, marketingQuery } from '../api';
@@ -27,7 +27,7 @@ export function PublishPage() {
   const groups = new Map<string, WorkProduct[]>();
   for (const product of products) groups.set(product.task_id, [...(groups.get(product.task_id) || []), product]);
   const plannedCount = (query.data?.lines || []).length;
-  const draftCount = (query.data?.drafts || []).filter(d => d.caption || d.hashtags).length;
+  const draftCount = (query.data?.drafts || []).filter(d => String(d.caption || '').trim() && String(d.hashtags || '').trim()).length;
 
   return <div className="mkw mkw-publishing-page">
     <WorkHeader title={W.publishing} onRefresh={() => void query.reload()} loading={query.loading}>
@@ -57,7 +57,9 @@ export function PublishPage() {
               <td><span className="mkw-muted">{product.formats.length} {W.sizes}</span></td>
               <td className="mkw-publish-assignee">{product.assignee_name || '—'}</td>
               <td><span className="mkw-publish-count">{plans.length}</span></td>
-              <td><span className={`mkw-publish-draft-state ${draft?.caption && draft?.hashtags ? 'is-ready' : ''}`}>{draft?.caption && draft?.hashtags ? 'تم حفظ التجهيز' : 'بانتظار التجهيز'}</span></td>
+              <td><span className={`mkw-publish-draft-state ${draft?.caption?.trim() && draft?.hashtags?.trim() ? 'is-ready' : ''}`}>
+                {draft?.caption?.trim() && draft?.hashtags?.trim() ? <><CheckCircle size={16} weight="fill"/>تم حفظ الكابشن والهاشتاج</> : !draft?.caption?.trim() ? 'الكابشن لم يُحفظ' : 'الهاشتاج لم يُحفظ'}
+              </span></td>
               <td><div className="mkw-publish-row-actions"><ProductViewButton id={product.id} /><button type="button" className="secondary" aria-expanded={open} onClick={() => setExpandedProduct(open ? '' : product.id)}>{open ? 'إغلاق' : W.open}<CaretDown size={15} className={open ? 'mkw-publish-up' : ''}/></button></div></td>
             </tr>{open && <tr className="mkw-publish-detail-row"><td colSpan={8}><div className="mkw-publish-product-body">
               <ProductDraftEditor product={product} draft={draft} canSave={!!query.data?.capabilities.prepare} onSaved={() => void query.reload()}/>
@@ -102,6 +104,15 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
     finally { setBusy(false); }
   }
   return <form className="mkw-publish-draft" onSubmit={save}>
+    <div className="mkw-publish-copy-title"><div><h4>{W.required}: {product.idea_name || product.statement}</h4><small>{product.task_no} · {product.task_name} · {product.assignee_name}</small></div>
+      <span className={`mkw-publish-draft-state ${draft?.caption?.trim() && draft?.hashtags?.trim() ? 'is-ready' : ''}`}>
+        {draft?.caption?.trim() && draft?.hashtags?.trim() ? <><CheckCircle size={17} weight="fill"/>تم حفظ النصوص</> : 'أكمل النصوص واحفظها'}
+      </span>
+    </div>
+    <p className="mkw-muted">كل مطلوب له كابشن وهاشتاج مستقلان. اكتب النصين واضغط حفظ؛ بعدها تظهر علامة صح للمطلوب في الجدول.</p>
+    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{draft?.caption?.trim() && caption === draft.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{caption.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field></div>
+      <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{draft?.hashtags?.trim() && hashtags === draft.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{hashtags.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div></div>
+    <details className="mkw-publish-format-details"><summary><strong>المنصات والمقاسات الخاصة بالمطلوب</strong><span>{selected.length} / {product.formats.length} ▾</span></summary>
     <header className="mkw-publish-draft-head"><h4>{W.platforms}</h4><div className="mkw-actions"><span className="mkw-muted">{selected.length} / {product.formats.length}</span>
       <label className="mkw-checkbox"><input type="checkbox" disabled={!canSave || busy || !product.formats.length} checked={!!product.formats.length && product.formats.every(f => selected.includes(f.id))} onChange={event => setSelected(event.target.checked ? product.formats.map(f => f.id) : [])}/>{W.selectAll}</label>
     </div></header>
@@ -112,8 +123,7 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
         <span>{format.name}{format.width && format.height ? <small dir="ltr">{format.width} × {format.height}</small> : null}</span>
       </label>)}</div>
     </section>)}</div>
-    <div className="mkw-publish-copy"><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field>
-      <Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div>
+    </details>
     <div className="mkw-publish-files"><strong>{W.finalFiles}</strong><div>{product.files.filter(file => file.category === 'final' && file.status === 'ready').map(file => <a key={file.id} className="mkw-publish-file" href={fileUrl(file.id, true)} target="_blank" rel="noreferrer">{file.name}</a>)}</div></div>
     <div className="mkw-publish-draft-footer"><div><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert></div>{canSave && <button type="submit" className="primary" disabled={busy || !selected.length}>{busy ? W.loading : W.save}</button>}</div>
   </form>;
@@ -158,8 +168,12 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     finally { setBusy(false); }
   }
   return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>{W.ideaName}</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
+    <div className="mkw-preparation-copy-status"><strong>مطلوب: {data.product.idea_name}</strong><span>{data.line.platform_name} · {data.line.post_type_name}</span></div>
+    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{data.line.caption?.trim() && caption === data.line.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.caption}><textarea required value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field></div>
+    <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{data.line.hashtags?.trim() && hashtags === data.line.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.hashtags}><textarea required value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field></div></div>
+    <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
-    <Field label={W.caption}><textarea required value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field><Field label={W.hashtags}><textarea required value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field>
+    </details>
     {isYouTube && <fieldset disabled={busy || !data.capabilities.prepare || locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><YouTubeOptionsFields value={youtube} onChange={setYouTube} categories={categories} playlists={playlists} loading={false} /></fieldset>}
     {data.capabilities.prepare && !locked && <footer className="mkw-form-footer"><button type="submit" className="primary" disabled={busy}>{busy ? W.loading : W.save}</button></footer>}
     {data.line.kind === 'campaign' && <div className="mkw-muted">{W.fundingPlan}</div>}

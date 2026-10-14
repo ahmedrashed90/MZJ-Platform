@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X } from '@phosphor-icons/react';
+import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
@@ -17,6 +17,7 @@ function submittedDayInRiyadh(value: string | null | undefined) {
 type Detail = { task: WorkTask & { items: WorkItem[] }; events: { id: string; action: string; note: string; actor_name: string; created_at: string; item_id: string | null }[]; capabilities: WorkCapabilities };
 export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
   const query = useWorkQuery<Detail>('task', { id });
+  const [openedRequirementId, setOpenedRequirementId] = useState('');
   const task = query.data?.task;
   const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter)) || [];
   async function refresh() { await query.reload(); onChanged?.(); }
@@ -30,7 +31,22 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
           <Readiness value={task.readiness} />
         </section>
         <section className="mkw-detail-items"><div className="mkw-section-title"><h2>{deliveryFilter === 'on_time' ? W.deliveryOnTime : deliveryFilter === 'late' ? W.deliveryLate : W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></div>
-          {!items.length ? <Empty>{W.emptyTask}</Empty> : items.map((item, index) => <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities} refresh={refresh} />)}
+          {!items.length ? <Empty>{W.emptyTask}</Empty> : <div className="mkw-requirement-review-list">
+            <div className="mkw-requirement-review-progress" role="status">تم اعتماد {items.filter(item => item.status === 'approved').length} من {items.length} مطلوب — الاعتماد مستقل لكل مطلوب</div>
+            {items.map((item, index) => {
+              const opened = openedRequirementId === item.id;
+              return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''}`}>
+                <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
+                  <span className="mkw-item-number">{index + 1}</span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name}</strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
+                  <Status value={item.status}/>
+                  {item.status === 'approved' ? <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>تم اعتماد المطلوب</span> : item.status === 'submitted' ? <span className="mkw-requirement-waiting">بانتظار اعتماد المطلوب</span> : null}
+                  <span className="mkw-requirement-review-label">{opened ? 'إغلاق' : item.status === 'submitted' && query.data!.capabilities.review ? 'فتح واعتماد' : 'فتح المطلوب'}<CaretDown size={16}/></span>
+                </button>
+                {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities} refresh={refresh} />}
+              </section>;
+            })}
+          </div>}
         </section>
         <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
       </>}
