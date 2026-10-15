@@ -832,7 +832,7 @@ async function reportData(request: VercelRequest) {
       order by coalesce(check_in,scheduled_start_at),user_id,period_sort_order nulls last
     `,
     sql<any[]>`
-      select id::text,user_id::text,work_date::text as work_date,from_at,to_at,authorized_at,authorized_by::text as authorized_by
+      select id::text,user_id::text,work_date::text as work_date,from_at,to_at,permission_type,reason,period_id,authorized_at,authorized_by::text as authorized_by
       from core.attendance_early_departure_permissions
       where user_id::text in ${sql(userIds)}
         and work_date between ${from}::date and ${to}::date
@@ -981,8 +981,8 @@ async function reportData(request: VercelRequest) {
           const delayText = delayMinutes > 0 ? `تأخير ${formatMinutes(delayMinutes)}` : "بدون تأخير";
           const departureText = record.checkout_source === "authorized" ? " • إذن انصراف مبكر" : "";
           result = `${statusText} • ${workText} • ${delayText}${departureText}`;
-        } else if (isDayOff || earlyDeparturePermission) {
-          result = "إجازة";
+        } else if (isDayOff || (earlyDeparturePermission && (!earlyDeparturePermission.period_id || earlyDeparturePermission.period_id === (isFriday && fridayScheduleEnabled ? 'friday' : slot.id)))) {
+          result = isDayOff || earlyDeparturePermission?.permission_type !== 'departure' ? "إجازة" : "إذن انصراف";
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {
@@ -1030,6 +1030,9 @@ async function reportData(request: VercelRequest) {
           fromText: reportClock(earlyDeparturePermission.from_at),
           toText: reportClock(earlyDeparturePermission.to_at),
           authorizedAt: earlyDeparturePermission.authorized_at,
+          permissionType: earlyDeparturePermission.permission_type || 'vacation',
+          reason: earlyDeparturePermission.reason || '',
+          periodId: earlyDeparturePermission.period_id || '',
         } : null,
         periodsByKey,
       });
@@ -1055,7 +1058,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
   if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ إذن الانصراف غير صحيح");
 
   const rawItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
-  const itemMap = new Map<string, { userId: string; periodId: string; fromTime: string; toTime: string }>();
+  const itemMap = new Map<string, { userId: string; periodId: string; fromTime: string; toTime: string; permissionType: "departure" | "vacation"; reason: string }>();
   for (const raw of rawItems) {
     const source = raw && typeof raw === "object" ? raw as Record<string, any> : {};
     const userId = clean(source.userId);
@@ -1066,7 +1069,11 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
     if (periodId !== "friday" && !validUuid(periodId)) throw new AttendanceError("EARLY_DEPARTURE_PERIOD_REQUIRED", "اختر فترة الدوام التي يخصها إذن الانصراف");
     if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف لكل مستخدم");
     if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
-    itemMap.set(userId, { userId, periodId, fromTime, toTime });
+    const permissionType = clean(source.permissionType);
+    if (permissionType !== 'departure' && permissionType !== 'vacation') throw new AttendanceError('PERMISSION_TYPE_REQUIRED','حدد نوع الإذن: إذن انصراف أو إجازة');
+    const reason = clean(source.reason).slice(0, 1000);
+    if (!reason) throw new AttendanceError('PERMISSION_REASON_REQUIRED','اكتب سبب الإذن أو الإجازة');
+    itemMap.set(userId, { userId, periodId, fromTime, toTime, permissionType, reason });
   }
   const items = [...itemMap.values()];
   if (!items.length) throw new AttendanceError("USERS_REQUIRED", "اختر مستخدمًا واحدًا على الأقل");
@@ -1135,16 +1142,36 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       const toAt = permissionClock?.to_at;
       if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
 
+      const [previousPermission] = await tx<any[]>`
+        select from_at,to_at from core.attendance_early_departure_permissions
+        where user_id=${item.userId}::uuid and work_date=${workDate}::date for update
+      `;
+      if (previousPermission && (new Date(previousPermission.from_at).getTime() !== new Date(fromAt).getTime()
+        || new Date(previousPermission.to_at).getTime() !== new Date(toAt).getTime())) {
+        await tx`
+          update core.attendance_records set
+            check_out=null, checkout_source=null, work_minutes=0,
+            early_departure_authorized_at=null, early_departure_authorized_by=null,
+            early_departure_from_at=null, early_departure_to_at=null,updated_at=now()
+          where user_id=${item.userId}::uuid and work_date=${workDate}::date
+            and checkout_source='authorized'
+            and early_departure_from_at=${previousPermission.from_at}::timestamptz
+            and early_departure_to_at=${previousPermission.to_at}::timestamptz
+        `;
+      }
       await tx`
         insert into core.attendance_early_departure_permissions(
-          user_id,work_date,from_at,to_at,authorized_by,authorized_at,created_at,updated_at
+          user_id,work_date,from_at,to_at,authorized_by,permission_type,reason,period_id,authorized_at,created_at,updated_at
         ) values (
-          ${item.userId}::uuid,${workDate}::date,${fromAt}::timestamptz,${toAt}::timestamptz,${adminId}::uuid,now(),now(),now()
+          ${item.userId}::uuid,${workDate}::date,${fromAt}::timestamptz,${toAt}::timestamptz,${adminId}::uuid,${item.permissionType},${item.reason},${item.periodId},now(),now(),now()
         )
         on conflict(user_id,work_date) do update set
           from_at=excluded.from_at,
           to_at=excluded.to_at,
           authorized_by=excluded.authorized_by,
+          permission_type=excluded.permission_type,
+          reason=excluded.reason,
+          period_id=excluded.period_id,
           authorized_at=now(),
           updated_at=now()
       `;
@@ -1181,6 +1208,35 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
         ? `تم حفظ إذن الانصراف المبكر لـ ${saved[0].name} (${saved[0].periodName}) من ${saved[0].fromTime} إلى ${saved[0].toTime}`
         : `تم حفظ أذونات الانصراف المبكر لـ ${saved.length} مستخدمين`,
     };
+  });
+}
+
+async function deleteEarlyDeparturePermission(body: Record<string, any>) {
+  const permissionId = clean(body.permissionId);
+  if (!validUuid(permissionId)) throw new AttendanceError('PERMISSION_REQUIRED','حدد الإذن المطلوب حذفه');
+  const sql = getSql();
+  return sql.begin(async (tx) => {
+    const [permission] = await tx<any[]>`
+      select id::text,user_id::text,work_date::text,from_at,to_at
+      from core.attendance_early_departure_permissions
+      where id=${permissionId}::uuid for update
+    `;
+    if (!permission) throw new AttendanceError('PERMISSION_NOT_FOUND','الإذن غير موجود أو سبق حذفه',404);
+    // Revert only departures created by this exact authorization. Existing
+    // manual or automatic check-outs never satisfy checkout_source='authorized'.
+    await tx`
+      update core.attendance_records set
+        check_out=null,checkout_source=null,work_minutes=0,
+        early_departure_authorized_at=null,early_departure_authorized_by=null,
+        early_departure_from_at=null,early_departure_to_at=null,updated_at=now()
+      where user_id=${permission.user_id}::uuid
+        and work_date=${permission.work_date}::date
+        and checkout_source='authorized'
+        and early_departure_from_at=${permission.from_at}::timestamptz
+        and early_departure_to_at=${permission.to_at}::timestamptz
+    `;
+    await tx`delete from core.attendance_early_departure_permissions where id=${permissionId}::uuid`;
+    return { ok:true, message:'تم حذف الإذن وإلغاء أثره على الانصراف المسجل بواسطته فقط' };
   });
 }
 
@@ -1236,6 +1292,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!admin) return;
     let result: any;
     if (action === "authorize_early_departure") result = await authorizeEarlyDeparture(body, admin.id);
+    else if (action === "delete_early_departure_permission") result = await deleteEarlyDeparturePermission(body);
     else if (action === "save_settings") result = await saveSettings(body, admin.id);
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);
     else if (action === "delete_schedule") result = await deleteSchedule(body, admin.id);

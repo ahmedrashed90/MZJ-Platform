@@ -720,19 +720,12 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
             <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`qualified-${status}`}><input type="checkbox" checked={quality.qualifiedStatuses.includes(status)} onChange={() => toggleQuality("qualifiedStatuses", status)} />{status}</label>)}</div>
           </section>
 
-          {["marketing", "sales"].map((type) => {
-            const marketing = type === "marketing";
-            const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses";
-            const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses";
-            const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode";
-            return <section className="crm-panel quality-card crm-quality-formula-card" key={type}>
-              <header><div><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><p>النسبة = عدد العملاء الموجودين في {marketing ? "حالات البسط" : "حالات البيع المختارة"} ÷ المقام المحدد × 100.</p></div></header>
-              <strong>{marketing ? "حالات البسط" : "حالات البيع المختارة"}</strong>
-              <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-num-${status}`}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div>
-              <label className="crm-form-label crm-quality-mode-field"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
-              {(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-den-${status}`}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}
-            </section>;
-          })}
+          <section className="crm-panel quality-card crm-quality-formula-card">
+            <header><div><h2>جودة التسويق</h2><p>جودة التسويق = (مؤهل + تم البيع) ÷ إجمالي العملاء × 100. «مؤهل» مجموعة الحالات المحددة بالأعلى، و«تم البيع» من عمليات البيع بتاريخها الفعلي.</p></div></header>
+          </section>
+          <section className="crm-panel quality-card crm-quality-formula-card">
+            <header><div><h2>جودة المبيعات</h2><p>جودة المبيعات = تم البيع ÷ إجمالي العملاء × 100. لا تدخل مبيعات الشهور السابقة عند اختيار شهر جديد.</p></div></header>
+          </section>
 
           <section className="crm-panel quality-card">
             <h2>ترتيب وإظهار كروت النتائج</h2>

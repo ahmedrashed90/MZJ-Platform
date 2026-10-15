@@ -37,12 +37,12 @@ export function normalizeSheetLeadRow(value: unknown, index: number): SheetLeadI
   };
 }
 
-export function sheetLeadValidation(row: SheetLeadInput) {
+export function sheetLeadValidation(row: SheetLeadInput, resolveSource: (value: unknown) => SheetLeadSource | null = resolveSheetLeadSource) {
   const phoneCheck = checkSheetLeadPhone(row.phone);
   const phoneNormalized = phoneCheck.normalized;
   if (!row.customerName) return { phoneNormalized, reason: "اسم العميل غير موجود" };
   if (!phoneNormalized) return { phoneNormalized, reason: phoneCheck.reason };
-  if (!resolveSheetLeadSource(row.source)) return { phoneNormalized, reason: "\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u0639\u0631\u0648\u0641: \u0627\u062e\u062a\u0631 \u0645\u0635\u062f\u0631\u064b\u0627 \u0645\u0646 \u0627\u0644\u0642\u0627\u0626\u0645\u0629" };
+  if (!resolveSource(row.source)) return { phoneNormalized, reason: "\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u0639\u0631\u0648\u0641: \u0627\u062e\u062a\u0631 \u0645\u0635\u062f\u0631\u064b\u0627 \u0645\u0646 \u0627\u0644\u0642\u0627\u0626\u0645\u0629" };
   return { phoneNormalized, reason: "" };
 }
 
@@ -121,21 +121,37 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
   if (!(["cash", "finance"] as string[]).includes(serviceKey)) throw new Error("حدد قسم التوزيع: الكاش أو التمويل");
   const sql = getSql();
   const rows = rawRows.map(normalizeSheetLeadRow);
+  // Use sources configured in CRM, not just a hard-coded list. The source's
+  // original code/report group is preserved for reporting and attribution.
+  const configuredSources = await sql<{ code: string; name: string; report_group: string }[]>`
+    select code,name,report_group from core.sources
+    where is_active=true and ('crm'=any(system_codes) or coalesce(array_length(system_codes,1),0)=0)
+  `;
+  const sourceKey = (input: unknown) => String(input ?? '').normalize('NFKC').trim().toLocaleLowerCase('ar')
+    .replace(/[\u064b-\u065f\u0670\u200b-\u200d]/g, '').replace(/[\u0623\u0625\u0622]/g, '\u0627').replace(/[^a-z0-9\u0621-\u064a]/g, '');
+  const resolveSource = (value: unknown): SheetLeadSource | null => {
+    if (!clean(value)) return DEFAULT_SHEET_LEAD_SOURCE;
+    const key = sourceKey(value);
+    const configured = configuredSources.find(source => key === sourceKey(source.code) || key === sourceKey(source.name));
+    return configured ? { code: configured.code, name: configured.name,
+      reportGroup: ['digital','direct','other'].includes(configured.report_group) ? configured.report_group as SheetLeadSource['reportGroup'] : 'other' }
+      : resolveSheetLeadSource(value);
+  };
   // Expensive source registration, field metadata reads and the legacy phone
   // scan must happen BEFORE the routing lock. The locked phase only checks the
   // indexed identity again, selects the actual rep, and commits new leads.
   await ensureSheetSource();
   const definitions = await getCustomerFieldDefinitions();
   const registeredSources = new Set<string>([CRM_SHEET_SOURCE]);
-  for (const source of new Set(rows.filter(row => !sheetLeadValidation(row).reason)
-    .map(row => resolveSheetLeadSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE))) {
+  for (const source of new Set(rows.filter(row => !sheetLeadValidation(row, resolveSource).reason)
+    .map(row => resolveSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE))) {
     if (!registeredSources.has(source.code)) {
       await ensureSheetSource(source);
       registeredSources.add(source.code);
     }
   }
   const legacyCache: LegacySheetPhoneCache = {
-    suffixes: Array.from(new Set(rows.map(row => sheetLeadValidation(row).phoneNormalized)
+    suffixes: Array.from(new Set(rows.map(row => sheetLeadValidation(row, resolveSource).phoneNormalized)
       .filter(phone => /^9665\d{8}$/.test(phone)).map(phone => phone.slice(-9)))),
     matched: new Map<string, any>(),
   };
@@ -165,7 +181,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
       sourceCode: string; assignedTo: string; branchCode: string;
     }> = [];
     for (const row of rows) {
-      const check = sheetLeadValidation(row);
+      const check = sheetLeadValidation(row, resolveSource);
       if (!check.phoneNormalized) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
       if (seenPhones.has(check.phoneNormalized)) {
         results.push({ ...row, status: "duplicate_in_file", reason: "نفس رقم الجوال تكرر داخل الدفعة" });
@@ -179,7 +195,7 @@ export async function importCrmSheetBatch(actor: SessionUser, rawRows: unknown[]
           continue;
         }
         if (check.reason) { results.push({ ...row, status: "invalid", reason: check.reason }); continue; }
-        const leadSource = resolveSheetLeadSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE;
+        const leadSource = resolveSource(row.source) || DEFAULT_SHEET_LEAD_SOURCE;
         const assignment = await chooseSheetImportAssignment(serviceKey);
         if (!assignment.assignedTo || !assignment.branchCode) {
           results.push({ ...row, status: "failed", reason: "لا يوجد مندوب مؤهل بفرع فعلي في قسم التوزيع المحدد" });

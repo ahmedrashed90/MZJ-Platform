@@ -38,7 +38,7 @@ const dashboardReportCards = [
 
 type DashboardReportSummary = {
   totals: Record<string, number>;
-  quality?: { summary_cards?: string[] };
+  quality?: { summary_cards?: string[]; qualified_statuses?: string[] };
 };
 
 function initialDepartment(requestedDepartment: string) {
@@ -309,6 +309,21 @@ export function CrmDashboardPage() {
     return { total: leads.length, newCount, unread, assigned, completed };
   }, [leads]);
 
+  const dashboardTotals = useMemo(() => {
+    const sold = Number(reportSummary?.totals?.sold || 0);
+    const qualifiedStatuses = new Set((reportSummary?.quality?.qualified_statuses || ['مؤهل']).map((label: string) => label.trim()).filter(Boolean));
+    qualifiedStatuses.delete('تم البيع');
+    const qualified = leads.filter(lead => qualifiedStatuses.has(leadStatus(lead))).length;
+    const total = leads.length;
+    const percentage = (value: number) => total ? Math.round((value / total) * 10000) / 100 : 0;
+    return {
+      total, sold, qualified, notQualified: leads.filter(lead => leadStatus(lead) === 'غير مؤهل').length,
+      potential: leads.filter(lead => leadStatus(lead) === 'لم يتم الرد').length,
+      notContacted: Number(reportSummary?.totals?.notContacted ?? leads.filter(lead => leadStatus(lead) === 'عميل جديد').length),
+      marketingQuality: percentage(qualified + sold), salesQuality: percentage(sold),
+    };
+  }, [leads, reportSummary]);
+
   const visibleBranches = useMemo(() => {
     const all = meta?.branches || [];
     if (department === "finance") return all.filter((item) => item.code !== "online" && item.code !== "customer_service");
@@ -369,7 +384,7 @@ export function CrmDashboardPage() {
           {configuredDashboardReportCards.map((card) => (
             <article key={card.key}>
               <span>{card.label}</span>
-              <strong>{Number(reportSummary?.totals?.[card.field] || 0).toLocaleString("ar-SA-u-nu-latn")}{card.suffix}</strong>
+              <strong>{Number(dashboardTotals[card.field as keyof typeof dashboardTotals] ?? 0).toLocaleString("ar-SA-u-nu-latn")}{card.suffix}</strong>
             </article>
           ))}
         </section>

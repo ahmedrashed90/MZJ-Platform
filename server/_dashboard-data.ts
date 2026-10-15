@@ -23,7 +23,7 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     generatedAt: new Date().toISOString(),
     range,
     sectionErrors: {},
-    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, otherCustomers: null, representatives: [], recentConversations: [], newCustomersSeries: [] },
+    crm: { totalCustomers: null, uniqueCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, newInRange: null, otherCustomers: null, representatives: [], recentConversations: [], newCustomersSeries: [] },
     marketing: { campaigns: null, agendas: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
@@ -102,7 +102,13 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           group by d.day order by d.day
         )
         select
-          count(*)::int as total_customers,
+          (
+            (select count(*) from crm.conversations c join scoped_leads lc on lc.id=c.lead_id
+              where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed')
+            + count(*) filter(where status_label='لم يتم الرد')
+            + coalesce((select sum(quantity) from scoped_sold),0)
+          )::int as total_customers,
+          count(*)::int as unique_customers,
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
           coalesce((select sum(quantity) from scoped_sold),0)::int as sold,
           coalesce((select sum(quantity) from scoped_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
@@ -113,6 +119,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           count(*) filter(where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null)::int as other_customers,
           count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as new_today,
           count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date)::int as new_this_week,
+          count(*)::int as new_in_range,
           (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed')::int as open_conversations,
           (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and l.department_code in ('cash_sales','wholesale','wholesale_sales'))::int as open_cash_conversations,
           (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and l.department_code in ('finance_sales','call_center'))::int as open_finance_conversations,
@@ -122,12 +129,12 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         from scoped_leads
       `;
       data.crm = {
-        totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations),
+        totalCustomers: asNumber(row?.total_customers), uniqueCustomers: asNumber(row?.unique_customers), openConversations: asNumber(row?.open_conversations),
         openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations),
         openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers),
         sold: asNumber(row?.sold), cashSold: asNumber(row?.cash_sold), financeSold: asNumber(row?.finance_sold),
         cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service),
-        otherCustomers: asNumber(row?.other_customers), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
+        otherCustomers: asNumber(row?.other_customers), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week), newInRange: asNumber(row?.new_in_range),
         representatives: Array.isArray(row?.representatives) ? row.representatives.map((rep: any) => ({ id: String(rep.id || ''), name: String(rep.name || 'غير موزع'), branch: String(rep.branch || 'بدون فرع'), customers: asNumber(rep.customers) })) : [],
         recentConversations: [],
         newCustomersSeries: Array.isArray(row?.daily_series) ? row.daily_series.map((item: any) => ({ label: String(item.label || ''), value: asNumber(item.value) })) : [],

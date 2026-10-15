@@ -18,6 +18,7 @@ export const SHEET_LEAD_SOURCES: readonly SheetSourceOption[] = [
   { code: "google_ads", name: "\u0625\u0639\u0644\u0627\u0646\u0627\u062a \u062c\u0648\u062c\u0644", reportGroup: "digital", aliases: ["google", "googleads", "googleadwords", "googlelead", "googleleads"] },
   { code: "whatsapp", name: "\u0648\u0627\u062a\u0633\u0627\u0628", reportGroup: "digital", aliases: ["whatsapp", "wa", "whatsappbusiness"] },
   { code: "website", name: "\u0627\u0644\u0645\u0648\u0642\u0639 \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a", reportGroup: "digital", aliases: ["website", "web", "site", "websitelead", "landingpage"] },
+  { code: "open_market", name: "السوق المفتوح", reportGroup: "direct", aliases: ["opensooq", "openmarket", "open souq", "السوق المفتوح"] },
   { code: "haraj", name: "\u0645\u0648\u0642\u0639 \u062d\u0631\u0627\u062c", reportGroup: "direct", aliases: ["haraj"] },
   { code: "sheet_other", name: "\u0645\u0635\u062f\u0631 \u0622\u062e\u0631", reportGroup: "other", aliases: ["other", "others", "otherlead", "misc"] },
 ];

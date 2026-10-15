@@ -32,10 +32,10 @@ const statusText: Record<RowStatus, string> = {
   invalid: "بيانات غير صالحة", failed: "تعذر التوزيع",
 };
 
-export function CrmSheetLeadsImport() {
+export function CrmSheetLeadsImport({ sourceNames = [] }: { sourceNames?: string[] }) {
   const [fileName, setFileName] = useState("");
   const [rows, setRows] = useState<SheetLeadRow[]>([]);
-  const sourceChoices = SHEET_LEAD_SOURCES.map((option) => option.name).join(" / ");
+  const sourceChoices = Array.from(new Set([...sourceNames, ...SHEET_LEAD_SOURCES.map(option => option.name)])).join(" / ");
   const missingSources = rows.filter((row) => !row.source).length;
   const invalidPhoneRows = rows.map((row) => ({ ...row, error: checkSheetLeadPhone(row.phone).reason })).filter((row) => Boolean(row.error));
   const invalidPhones = invalidPhoneRows.length;

@@ -414,22 +414,24 @@ function riyadhDateKey(value: unknown) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
-function riyadhWeekStartKey() {
-  const todayKey = riyadhDateKey(new Date());
-  const [year, month, day] = todayKey.split("-").map(Number);
-  if (!year || !month || !day) return "";
-  const riyadhNoonAsUtc = new Date(Date.UTC(year, month - 1, day, 9));
-  const daysSinceMonday = (riyadhNoonAsUtc.getUTCDay() + 6) % 7;
-  riyadhNoonAsUtc.setUTCDate(riyadhNoonAsUtc.getUTCDate() - daysSinceMonday);
-  return riyadhNoonAsUtc.toISOString().slice(0, 10);
-}
-
 function isToday(value: unknown) {
   return riyadhDateKey(value) === riyadhDateKey(new Date());
 }
 
 function defaultDashboardRange() {
   return { from: riyadhDateKey(new Date(Date.now() - 6 * 86400000)), to: riyadhDateKey(new Date()) };
+}
+
+function dashboardRangeIsMonthly(range: { from: string; to: string }) {
+  if (!/^\d{4}-\d{2}-01$/.test(range.from) || range.to.slice(0, 7) !== range.from.slice(0, 7)) return false;
+  const lastDay = new Date(Date.UTC(Number(range.from.slice(0,4)), Number(range.from.slice(5,7)), 0)).getUTCDate();
+  return Number(range.to.slice(-2)) === lastDay;
+}
+
+function dashboardRangeIsWeekly(range: { from: string; to: string }) {
+  const start = Date.parse(`${range.from}T00:00:00Z`);
+  const end = Date.parse(`${range.to}T00:00:00Z`);
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start <= 6 * 86400000;
 }
 
 function dashboardRangeLabel(range: { from: string; to: string }) {
@@ -766,7 +768,7 @@ export function DashboardPage() {
         ) : null}
 
         <DashboardUnifiedGrid order={effectiveWidgetOrder}>
-          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />)}
+          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("العملاء الفريدون", "إجمالي العملاء في المؤشر مجموع المحادثات المفتوحة + لم يتم الرد + تم البيع؛ وقد تتداخل الحالات. القائمة تعرض العملاء الفريدين", () => true)} />)}
           {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
           {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
           {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => leadStatus(lead) === "تم البيع")} />)}
@@ -793,7 +795,7 @@ export function DashboardPage() {
                   </ResponsiveContainer>
                 </div>
                 <div className="chart-summary">
-                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => void openCrmList("جدد هذا الأسبوع", "العملاء المسجلون منذ بداية الأسبوع الحالي", (lead) => riyadhDateKey(lead.registered_at || lead.created_at) >= riyadhWeekStartKey())} />
+                  <SmallMetric label={dashboardRangeIsMonthly(appliedRange) ? "جدد هذا الشهر" : dashboardRangeIsWeekly(appliedRange) ? "جدد هذا الأسبوع" : "جدد خلال الفترة"} value={crm?.newInRange ?? null} onClick={() => void openCrmList(dashboardRangeIsMonthly(appliedRange) ? "جدد هذا الشهر" : dashboardRangeIsWeekly(appliedRange) ? "جدد هذا الأسبوع" : "جدد خلال الفترة", "العملاء الجدد المسجلون داخل الفترة المختارة", (lead) => { const day = riyadhDateKey(lead.registered_at || lead.created_at); return day >= appliedRange.from && day <= appliedRange.to; })} />
                   <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => void openCrmList("جدد اليوم", "العملاء المسجلون اليوم", (lead) => isToday(lead.registered_at || lead.created_at))} />
                 </div>
               </>
@@ -827,7 +829,7 @@ export function DashboardPage() {
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="pie-center"><Value value={crm?.totalCustomers ?? null} /><span>إجمالي العملاء</span></div>
+                  <div className="pie-center"><Value value={crm?.uniqueCustomers ?? null} /><span>عملاء فريدون</span></div>
                 </div>
                 <div className="distribution-legend">
                   {pieData.map((entry, index) => (

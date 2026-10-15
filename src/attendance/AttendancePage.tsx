@@ -54,12 +54,15 @@ type ReportRow = {
     fromText: string;
     toText: string;
     authorizedAt: string;
+    permissionType: 'departure' | 'vacation';
+    reason: string;
+    periodId: string;
   } | null;
   periods: Array<ReportPeriod | null>;
 };
 
 type PermissionShift = { periodId: string; name: string; startTime: string; endTime: string };
-type PermissionEntry = { periodId: string; fromTime: string; toTime: string };
+type PermissionEntry = { periodId: string; fromTime: string; toTime: string; permissionType: "departure" | "vacation" | ""; reason: string };
 
 type ReportPayload = {
   ok: true;
@@ -107,8 +110,8 @@ function clockMinutes(value: string) {
 }
 
 function earlyDepartureText(row: ReportRow) {
-  // The permission times remain in the record and export; the visible state is "إجازة".
-  return row.earlyDeparturePermission || row.periods.some((period) => period?.checkoutSource === "authorized") ? "إجازة" : "—";
+  if (row.earlyDeparturePermission) return row.earlyDeparturePermission.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة';
+  return row.periods.some((period) => period?.checkoutSource === 'authorized') ? 'إذن انصراف' : '—';
 }
 
 function scheduledMinutes(period: ReportPeriod | null) {
@@ -239,6 +242,7 @@ const ATTENDANCE_SUMMARY_HEADERS = [
   "انصراف الفترة الثانية",
   "تأخير الفترة الثانية",
   "غياب الفترة الثانية",
+  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (فعلي − مفترض)",
 ] as const;
 
 const ATTENDANCE_DETAILS_HEADERS = [
@@ -257,24 +261,21 @@ const ATTENDANCE_DETAILS_HEADERS = [
   "تأخير الفترة الثانية",
   "غياب الفترة الثانية",
   "نتيجة الفترة الثانية",
+  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (فعلي − مفترض)",
 ] as const;
 
 function buildAttendancePdf(payload: ReportPayload) {
   const flatRows = exportFlatRows(payload);
   const summaryRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td></tr>`;
+    const hours = attendanceHourTotals([row]);
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(hourMinuteText(hours.expected))}</td><td>${htmlEscape(hourMinuteText(hours.actual))}</td><td>${hours.actual < hours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(hours.actual-hours.expected)))}</td></tr>`;
   }).join("");
   const detailRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td></tr>`;
+    const hours = attendanceHourTotals([row]);
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td><td>${htmlEscape(hourMinuteText(hours.expected))}</td><td>${htmlEscape(hourMinuteText(hours.actual))}</td><td>${hours.actual < hours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(hours.actual-hours.expected)))}</td></tr>`;
   }).join("");
-  const hoursByEmployee = exportRowsByEmployee(payload).map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) }));
-  const grandHours = attendanceHourTotals(payload.rows);
-  const hoursTableRows = hoursByEmployee.map(employee =>
-    `<tr><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(employee.branch)}</td><td>${htmlEscape(hourMinuteText(employee.expected))}</td><td>${htmlEscape(hourMinuteText(employee.actual))}</td><td>${employee.actual < employee.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(employee.actual - employee.expected)))}</td></tr>`
-  ).join('') + `<tr><th colspan="2">الإجمالي</th><th>${htmlEscape(hourMinuteText(grandHours.expected))}</th><th>${htmlEscape(hourMinuteText(grandHours.actual))}</th><th>${grandHours.actual < grandHours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(grandHours.actual - grandHours.expected)))}</th></tr>`;
-  const hourHeaders = ["الموظف", "الفرع", "ساعات الدوام المفترضة", "الساعات الفعلية", "الفرق"];
   const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
   const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
 
@@ -288,7 +289,6 @@ table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table
 </style></head><body>
 <section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_SUMMARY_HEADERS, summaryRows)}</section>
 <section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - تقرير تفصيلي</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_DETAILS_HEADERS, detailRows)}</section>
-<section class="report-section"><div class="head"><h1>ملخص ساعات العمل حسب الموظف</h1><p>${periodLabel}</p></div>${table(hourHeaders, hoursTableRows)}</section>
 <script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`;
 }
 
@@ -307,6 +307,7 @@ function buildExcelDocument(payload: ReportPayload) {
 
   const summaryRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
+    const hours = attendanceHourTotals([row]);
     return `<Row>${[
       cell(index + 1),
       cell(employee.branch || "—"),
@@ -321,11 +322,14 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(exportCheckOut(second)),
       cell(exportDelay(second)),
       cell(exportAbsence(second)),
+      cell(hourMinuteText(hours.expected)), cell(hourMinuteText(hours.actual)),
+      cell(`${hours.actual < hours.expected ? '−' : '+'}${hourMinuteText(Math.abs(hours.actual - hours.expected))}`),
     ].join("")}</Row>`;
   }).join("");
 
   const detailRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
+    const hours = attendanceHourTotals([row]);
     return `<Row>${[
       cell(index + 1),
       cell(employee.branch || "—"),
@@ -342,19 +346,10 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(exportDelay(second)),
       cell(exportAbsence(second)),
       cell(exportResult(second)),
+      cell(hourMinuteText(hours.expected)), cell(hourMinuteText(hours.actual)),
+      cell(`${hours.actual < hours.expected ? '−' : '+'}${hourMinuteText(Math.abs(hours.actual - hours.expected))}`),
     ].join("")}</Row>`;
   }).join("");
-
-  const hoursByEmployee = exportRowsByEmployee(payload).map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) }));
-  const grandHours = attendanceHourTotals(payload.rows);
-  const hourHeaders = ["الموظف", "الفرع", "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق"];
-  const hourRows = hoursByEmployee.map(employee => `<Row>${[
-    cell(employee.name), cell(employee.branch), cell(hourMinuteText(employee.expected)), cell(hourMinuteText(employee.actual)),
-    cell(`${employee.actual < employee.expected ? '−' : '+'}${hourMinuteText(Math.abs(employee.actual - employee.expected))}`),
-  ].join('')}</Row>`).join('') + `<Row>${[
-    cell('الإجمالي'), cell(''), cell(hourMinuteText(grandHours.expected)), cell(hourMinuteText(grandHours.actual)),
-    cell(`${grandHours.actual < grandHours.expected ? '−' : '+'}${hourMinuteText(Math.abs(grandHours.actual - grandHours.expected))}`),
-  ].join('')}</Row>`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
@@ -368,7 +363,7 @@ function buildExcelDocument(payload: ReportPayload) {
  </Styles>
  ${worksheet("ملخص الفترة", ATTENDANCE_SUMMARY_HEADERS, summaryRows)}
  ${worksheet("تقرير تفصيلي", ATTENDANCE_DETAILS_HEADERS, detailRows)}
- ${worksheet("ملخص الساعات", hourHeaders, hourRows)}
+ 
 </Workbook>`;
 }
 
@@ -407,8 +402,6 @@ export function AttendancePage() {
 
   const groupedRows = useMemo(() => groupReportRows(report?.rows || []), [report?.rows]);
   const employeeGroups = useMemo(() => groupReportRowsByEmployee(report?.rows || []), [report?.rows]);
-  const hourSummaries = useMemo(() => employeeGroups.map(employee => ({ ...employee, ...attendanceHourTotals(employee.rows) })), [employeeGroups]);
-  const totalHours = useMemo(() => attendanceHourTotals(report?.rows || []), [report?.rows]);
   const showEmployeeBlocks = employeeIds.length > 1;
 
   async function loadAdminUsers() {
@@ -505,7 +498,7 @@ export function AttendancePage() {
       if (!current) return current;
       const entries = { ...current.entries };
       if (entries[userId]) delete entries[userId];
-      else entries[userId] = { periodId: "", fromTime: "", toTime: "" };
+      else entries[userId] = { periodId: "", fromTime: "", toTime: "", permissionType: "", reason: "" };
       return { ...current, entries };
     });
   }
@@ -523,7 +516,7 @@ export function AttendancePage() {
       } } } : current);
   }
 
-  function updateEarlyDepartureEntry(userId: string, field: "fromTime" | "toTime", value: string) {
+  function updateEarlyDepartureEntry(userId: string, field: "fromTime" | "toTime" | "permissionType" | "reason", value: string) {
     setEarlyDepartureDialog((current) => current && current.entries[userId]
       ? { ...current, entries: { ...current.entries, [userId]: { ...current.entries[userId], [field]: value } } }
       : current);
@@ -539,6 +532,9 @@ export function AttendancePage() {
     if (permissionShiftsLoading || permissionShiftsError || items.some((item) => !(permissionShifts[item.userId] || []).some((shift) => shift.periodId === item.periodId))) {
       setError("اختر فترة الدوام الصحيحة لكل موظف بعد تحميل فترات اليوم");
       return;
+    }
+    if (items.some(item => !item.permissionType || !item.reason.trim())) {
+      setError('حدد نوع الإذن واكتب السبب لكل موظف'); return;
     }
     if (items.some((item) => {
       const shift = (permissionShifts[item.userId] || []).find((option) => option.periodId === item.periodId);
@@ -565,6 +561,19 @@ export function AttendancePage() {
     } finally {
       setEarlyDepartureSaving(false);
     }
+  }
+
+  async function deletePermission(permissionId: string) {
+    if (!isAdmin || earlyDepartureSaving || !window.confirm('حذف الإذن المسجل؟ سيتم إلغاء أي انصراف تلقائي مرتبط بهذا الإذن فقط.')) return;
+    setEarlyDepartureSaving(true); setError(''); setMessage('');
+    try {
+      const result = await attendanceFetch<{ ok: true; message: string }>('/api/attendance', {
+        method: 'POST',body: JSON.stringify({ action: 'delete_early_departure_permission', permissionId }),
+      });
+      setMessage(result.message || 'تم حذف الإذن');
+      await loadReport();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر حذف الإذن'); }
+    finally { setEarlyDepartureSaving(false); }
   }
 
   async function exportExcel() {
@@ -739,7 +748,7 @@ export function AttendancePage() {
                     <col className="attendance-col-index" />
                     <col className="attendance-col-day" />
                     <col className="attendance-col-date" />
-                    <col className="attendance-col-action" />
+                    <col className="attendance-col-action" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
                     {periodHeaders.flatMap((header) => [
                       <col key={`${employee.userId}-${header}-col-in`} className="attendance-col-period-time" />,
                       <col key={`${employee.userId}-${header}-col-out`} className="attendance-col-period-time" />,
@@ -752,6 +761,9 @@ export function AttendancePage() {
                       <th rowSpan={2}>اليوم</th>
                       <th rowSpan={2}>التاريخ</th>
                       <th rowSpan={2}>إذن الانصراف</th>
+                      <th rowSpan={2}>ساعات الدوام المفترضة</th>
+                      <th rowSpan={2}>ساعات العمل الفعلية</th>
+                      <th rowSpan={2}>الفرق (فعلي − مفترض)</th>
                       {periodHeaders.map((header) => <th key={`${employee.userId}-${header}-group`} colSpan={3}>{header}</th>)}
                     </tr>
                     <tr className="attendance-sub-head-row">
@@ -769,8 +781,10 @@ export function AttendancePage() {
                         <td>{formatAttendanceDay(row.date)}</td>
                         <td>{formatAttendanceDate(row.date)}</td>
                         <td className="attendance-early-departure-cell">
-                          <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"}>{earlyDepartureText(row)}</span>
+                          <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
+                          {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                         </td>
+                        {(() => { const hours = attendanceHourTotals([row]); return <><td>{hourMinuteText(hours.expected)}</td><td>{hourMinuteText(hours.actual)}</td><td>{hours.actual < hours.expected ? '−' : '+'}{hourMinuteText(Math.abs(hours.actual - hours.expected))}</td></>; })()}
                         {periodHeaders.flatMap((_, periodIndex) => {
                           const period = row.periods[periodIndex];
                           const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -784,13 +798,14 @@ export function AttendancePage() {
                               {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                             </td>,
                             <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                              {period?.checkoutSource === "authorized" ? <strong>إجازة</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                              {period?.checkoutSource === "authorized" ? <strong>{row.earlyDeparturePermission?.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة'}</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
                             </td>,
                           ];
                         })}
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4}>إجمالي ساعات الموظف</th><th>{hourMinuteText(attendanceHourTotals(employee.rows).expected)}</th><th>{hourMinuteText(attendanceHourTotals(employee.rows).actual)}</th><th>{attendanceHourTotals(employee.rows).actual < attendanceHourTotals(employee.rows).expected ? '−' : '+'}{hourMinuteText(Math.abs(attendanceHourTotals(employee.rows).actual - attendanceHourTotals(employee.rows).expected))}</th><th colSpan={Math.max(1, periodHeaders.length * 3)}>—</th></tr></tfoot>
                 </table>
               </div>
             </section>
@@ -816,7 +831,7 @@ export function AttendancePage() {
                         <col className="attendance-col-index" />
                         <col className="attendance-col-branch" />
                         <col className="attendance-col-name" />
-                        <col className="attendance-col-action" />
+                        <col className="attendance-col-action" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
                         {periodHeaders.flatMap((header) => [
                           <col key={`${group.date}-${header}-col-in`} className="attendance-col-period-time" />,
                           <col key={`${group.date}-${header}-col-out`} className="attendance-col-period-time" />,
@@ -829,6 +844,9 @@ export function AttendancePage() {
                           <th rowSpan={2}>الفرع</th>
                           <th rowSpan={2}>الاسم</th>
                           <th rowSpan={2}>إذن الانصراف</th>
+                      <th rowSpan={2}>ساعات الدوام المفترضة</th>
+                      <th rowSpan={2}>ساعات العمل الفعلية</th>
+                      <th rowSpan={2}>الفرق (فعلي − مفترض)</th>
                           {periodHeaders.map((header) => <th key={`${group.date}-${header}-group`} colSpan={3}>{header}</th>)}
                         </tr>
                         <tr className="attendance-sub-head-row">
@@ -846,8 +864,10 @@ export function AttendancePage() {
                             <td>{row.branch}</td>
                             <td className="attendance-name-cell"><strong>{row.name}</strong></td>
                             <td className="attendance-early-departure-cell">
-                              <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"}>{earlyDepartureText(row)}</span>
+                              <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
+                          {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                             </td>
+                            {(() => { const hours = attendanceHourTotals([row]); return <><td>{hourMinuteText(hours.expected)}</td><td>{hourMinuteText(hours.actual)}</td><td>{hours.actual < hours.expected ? '−' : '+'}{hourMinuteText(Math.abs(hours.actual - hours.expected))}</td></>; })()}
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -861,7 +881,7 @@ export function AttendancePage() {
                                   {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                                  {period?.checkoutSource === "authorized" ? <strong>إجازة</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                                  {period?.checkoutSource === "authorized" ? <strong>{row.earlyDeparturePermission?.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة'}</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
                                 </td>,
                               ];
                             })}
@@ -874,13 +894,6 @@ export function AttendancePage() {
               </section>
             );
           })}
-          {!reportLoading && (report?.rows?.length || 0) > 0 && <section className="attendance-hours-summary panel">
-            <h3>ملخص ساعات العمل حسب الموظف — {report?.from} إلى {report?.to}</h3>
-            <div className="attendance-hours-summary-wrap"><table><thead><tr><th>الموظف</th><th>الفرع</th><th>ساعات الدوام المفترضة</th><th>ساعات العمل الفعلية</th><th>الفرق (فعلي − مفترض)</th></tr></thead><tbody>
-              {hourSummaries.map(employee => <tr key={employee.userId}><td>{employee.name}</td><td>{employee.branch}</td><td>{hourMinuteText(employee.expected)}</td><td>{hourMinuteText(employee.actual)}</td><td>{employee.actual < employee.expected ? '−' : '+'}{hourMinuteText(Math.abs(employee.actual - employee.expected))}</td></tr>)}
-              <tr className="attendance-hours-summary-total"><th colSpan={2}>الإجمالي</th><th>{hourMinuteText(totalHours.expected)}</th><th>{hourMinuteText(totalHours.actual)}</th><th>{totalHours.actual < totalHours.expected ? '−' : '+'}{hourMinuteText(Math.abs(totalHours.actual - totalHours.expected))}</th></tr>
-            </tbody></table></div>
-          </section>}
           {!reportLoading && !report?.rows?.length ? (
             <div className="attendance-empty-report" style={{ gridColumn: "1 / -1" }}>لا توجد نتائج مطابقة للفلاتر.</div>
           ) : null}
@@ -891,7 +904,7 @@ export function AttendancePage() {
         <div className="attendance-permission-backdrop" onMouseDown={() => !earlyDepartureSaving && setEarlyDepartureDialog(null)}>
           <div className="attendance-permission-dialog attendance-permission-dialog-wide" onMouseDown={(event) => event.stopPropagation()}>
             <header>
-              <div><h2>إذن انصراف مبكر</h2><p>اختر الموظف ثم فترة دوامه وتوقيت الإذن داخلها. لا يشترط وجود تسجيل حضور مسبق.</p></div>
+              <div><h2>إذن مبكر / إجازة</h2><p>حدد نوع الإذن والسبب، ثم فترة دوام الموظف وتوقيت الإذن داخلها.</p></div>
               <button type="button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>×</button>
             </header>
             <div className="attendance-permission-date-row">
@@ -919,6 +932,9 @@ export function AttendancePage() {
                   <section className="attendance-permission-user-block" key={userId}>
                     <header><div><strong>{employee?.full_name || "المستخدم"}</strong><small>{employee?.branch_name || "—"}</small></div><button type="button" onClick={() => toggleEarlyDepartureUser(userId)} disabled={earlyDepartureSaving}>إزالة</button></header>
                     <div className="attendance-permission-times attendance-permission-shift-times">
+                      <label><span>نوع الإذن</span><select aria-label={`نوع الإذن ${employee?.full_name || 'الموظف'}`} required value={entry.permissionType} disabled={earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, 'permissionType', event.target.value)}>
+                        <option value="">حدد نوع الإذن</option><option value="departure">إذن انصراف</option><option value="vacation">إجازة</option>
+                      </select></label>
                       <label><span>فترة الدوام</span><select aria-label={`فترة دوام ${employee?.full_name || "الموظف"}`} value={entry.periodId} onChange={(event) => selectEarlyDeparturePeriod(userId, event.target.value)} disabled={permissionShiftsLoading || earlyDepartureSaving || !shifts.length}>
                         <option value="">{permissionShiftsLoading ? "جاري تحميل الفترات..." : "اختر الفترة"}</option>
                         {shifts.map((shift) => <option key={shift.periodId} value={shift.periodId}>{shift.name} ({shift.startTime} - {shift.endTime})</option>)}
@@ -926,6 +942,7 @@ export function AttendancePage() {
                       <label><span>من الساعة</span><input type="time" value={entry.fromTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "fromTime", event.target.value)} /></label>
                       <label><span>إلى الساعة</span><input type="time" value={entry.toTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "toTime", event.target.value)} /></label>
                     </div>
+                    <label className="attendance-permission-reason"><span>سبب الإذن</span><textarea rows={2} maxLength={1000} required value={entry.reason} disabled={earlyDepartureSaving} placeholder="اكتب سبب الإذن أو الإجازة" onChange={(event) => updateEarlyDepartureEntry(userId, 'reason', event.target.value)} /></label>
                     {chosen ? <small className="attendance-permission-shift-description">الفترة المحددة: {chosen.name} — من {chosen.startTime} إلى {chosen.endTime}</small>
                       : !permissionShiftsLoading && !shifts.length && !permissionShiftsError ? <small className="attendance-permission-shift-warning">لا توجد فترة دوام معيّنة لهذا الموظف في التاريخ المختار</small> : null}
                   </section>

@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import { downloadXlsx } from "../xlsx";
 import { hasPermission } from "../../systemAccess";
 import { CrmSheetLeadsImport } from "../components/CrmSheetLeadsImport";
 import type { CrmMeta } from "../types";
@@ -155,6 +156,10 @@ export function CrmManualLeadsPage() {
         <button className={tab === "list" ? "active" : ""} onClick={() => { setTab("list"); void loadRows(); }}><UsersThree size={18} />عرض العملاء المسجلة</button>
       </div>
 
+      {canImportSheetLeads && tab === "add" && !editingId ? <div className="crm-form-actions crm-import-export-actions">
+        <button type="button" className="crm-secondary-button" onClick={() => downloadXlsx("MZJ-CRM-Leads-Template.xlsx", [{ "Full Name": "", "Phone Number": "", "Source": "السوق المفتوح" }], "إضافة العملاء", ["Full Name", "Phone Number", "Source"])}>تصدير قالب إضافة العملاء</button>
+        <button type="button" className="crm-secondary-button" onClick={() => setTab("lead")}>استيراد العملاء</button>
+      </div> : null}
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
       {tab === "add" ? (
@@ -179,7 +184,7 @@ export function CrmManualLeadsPage() {
         </section>
       ) : null}
 
-      {tab === "lead" && canImportSheetLeads ? <CrmSheetLeadsImport /> : null}
+      {tab === "lead" && canImportSheetLeads ? <CrmSheetLeadsImport sourceNames={(meta?.sources || []).map(source => source.name)} /> : null}
 
       {tab === "list" ? (
         <section className="crm-panel crm-list-panel crm-manual-list-panel">

@@ -8,6 +8,7 @@ export type DashboardData = {
   layout?: { widgetOrder: string[]; operationWidgetOrder: string[]; mainWidgetOrder: string[]; hiddenMainWidgets: string[]; updatedAt?: string };
   crm: {
     totalCustomers: NullableNumber;
+    uniqueCustomers?: NullableNumber;
     openConversations: NullableNumber;
     openCashConversations: NullableNumber;
     openFinanceConversations: NullableNumber;
@@ -23,6 +24,7 @@ export type DashboardData = {
     representatives: Array<{ id: string; name: string; branch: string; customers: number }>;
     newToday: NullableNumber;
     newThisWeek: NullableNumber;
+    newInRange?: NullableNumber;
     recentConversations: Array<{
       id: string;
       customerName: string;

@@ -9162,3 +9162,11 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-permission-shift-description,.attendance-permission-shift-warning { display: block; margin-top: 6px; font-size: 11px; font-weight: 800; color: #775247; }
 .attendance-permission-shift-warning { color: #a52f2c; }
 @media (max-width: 720px) { .attendance-permission-shift-times { grid-template-columns: 1fr; } }
+
+/* Attendance shift permission, type, reason and safe removal */
+.attendance-permission-reason { grid-column: 1/-1; }
+.attendance-permission-reason textarea { width:100%; min-height:68px; border:1px solid #dbc8bf; border-radius:10px; padding:10px; background:#fffdfc; resize:vertical; font:inherit; color:#3e2b25; }
+.attendance-permission-delete { margin-inline-start:6px; padding:3px 8px; background:#fff6f4; color:#9b332b; border:1px solid #f1bdb4; border-radius:7px; cursor:pointer; font:inherit; font-size:10px; }
+.attendance-permission-delete:disabled { cursor:not-allowed; opacity:.5; }
+.attendance-report-table-compact { min-width:1150px; }
+.attendance-report-table-compact .attendance-hours-summary-total { background:#faf2ed; }

@@ -27,11 +27,12 @@ check('CRM report summary matches historical customer cohort only in dashboard m
   assert.match(reportApi,/\$\{dashboardPeriod\}::boolean and \(\s*l\.status_label is distinct from 'غير مؤهل'/);
   assert.match(reportApi,/not \$\{dashboardPeriod\}::boolean[\s\S]{0,140}\$\{reportDateSql\}/);
   assert.match(reportApi,/dashboardPeriod \? distinctCustomers/);
-  assert.match(reportApi,/dashboardPeriod \? allFacts\.filter/);
+  assert.match(reportApi,/const facts = allFacts/);
 });
-check('CRM reports continue transaction-based sales without filtering them by month in the dashboard',()=>{
-  assert.match(reportApi,/\(\$\{dashboardPeriod\}::boolean or \$\{from \|\| null\}::date is null or \$\{manualSaleDateSql\}/);
-  assert.match(reportApi,/\(\$\{dashboardPeriod\}::boolean or \$\{to \|\| null\}::date is null or \$\{manualSaleDateSql\}/);
+check('CRM reports filter canonical sales by sale date in dashboard and reports',()=>{
+  assert.match(reportApi,/and \(\$\{from \|\| null\}::date is null or \$\{manualSaleDateSql\}/);
+  assert.match(reportApi,/and \(\$\{to \|\| null\}::date is null or \$\{manualSaleDateSql\}/);
+  assert.doesNotMatch(reportApi,/\(\$\{dashboardPeriod\}::boolean or \$\{from \|\| null\}::date is null or \$\{manualSaleDateSql\}/);
   assert.match(crmUi,/loadDashboard\(true\);\s*void loadReportSummary\(true\)/);
 });
 check('Attendance UI retrieves date-specific shift assignments before enabling time inputs',()=>{
