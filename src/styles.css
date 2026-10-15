@@ -9154,3 +9154,11 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .crm-dashboard-date-toolbar label{display:flex;flex-direction:column;gap:5px;min-width:158px;color:#673b2c;font-weight:700;font-size:12px}
 .crm-dashboard-date-toolbar input,.crm-dashboard-date-toolbar select{height:39px;border:1px solid #e6d6cc;border-radius:9px;background:#fff;padding:7px 11px;font:inherit}
 .crm-dashboard-date-range{color:#80675f;margin-inline-start:auto;font-size:13px}
+
+/* Explicit attendance shift selection for early departure permissions. */
+.attendance-permission-shift-times { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.attendance-permission-shift-times select { min-height: 42px; border: 1px solid #dbc8bf; border-radius: 10px; padding: 0 11px; background: #fffdfc; color: #3e2b25; font: inherit; }
+.attendance-permission-shift-times :is(input,select):disabled { opacity: .66; cursor: not-allowed; background: #f7f3f1; }
+.attendance-permission-shift-description,.attendance-permission-shift-warning { display: block; margin-top: 6px; font-size: 11px; font-weight: 800; color: #775247; }
+.attendance-permission-shift-warning { color: #a52f2c; }
+@media (max-width: 720px) { .attendance-permission-shift-times { grid-template-columns: 1fr; } }

@@ -997,6 +997,7 @@ async function reportData(request: VercelRequest) {
           meta.sortOrder = Math.min(meta.sortOrder, slot.sortOrder);
         }
         periodsByKey.set(key, {
+          id: clean(slot.id),
           name: slot.name,
           startTime: slot.startTime,
           endTime: slot.endTime,
@@ -1054,16 +1055,18 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
   if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ إذن الانصراف غير صحيح");
 
   const rawItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
-  const itemMap = new Map<string, { userId: string; fromTime: string; toTime: string }>();
+  const itemMap = new Map<string, { userId: string; periodId: string; fromTime: string; toTime: string }>();
   for (const raw of rawItems) {
     const source = raw && typeof raw === "object" ? raw as Record<string, any> : {};
     const userId = clean(source.userId);
+    const periodId = clean(source.periodId);
     const fromTime = clean(source.fromTime).slice(0, 5);
     const toTime = clean(source.toTime).slice(0, 5);
     if (!validUuid(userId)) throw new AttendanceError("USER_REQUIRED", "اختر مستخدمًا صحيحًا");
+    if (periodId !== "friday" && !validUuid(periodId)) throw new AttendanceError("EARLY_DEPARTURE_PERIOD_REQUIRED", "اختر فترة الدوام التي يخصها إذن الانصراف");
     if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف لكل مستخدم");
     if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
-    itemMap.set(userId, { userId, fromTime, toTime });
+    itemMap.set(userId, { userId, periodId, fromTime, toTime });
   }
   const items = [...itemMap.values()];
   if (!items.length) throw new AttendanceError("USERS_REQUIRED", "اختر مستخدمًا واحدًا على الأقل");
@@ -1086,7 +1089,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
     const fridayFrom = clean(settings?.friday_start_time).slice(0,5);
     const fridayTo = clean(settings?.friday_end_time).slice(0,5);
     const isFriday = weekdayForDate(workDate) === 5;
-    const saved: Array<{ userId: string; name: string; fromTime: string; toTime: string }> = [];
+    const saved: Array<{ userId: string; name: string; periodName: string; fromTime: string; toTime: string }> = [];
     for (const item of items) {
       // An authorization belongs to one of the employee's scheduled shifts,
       // independent of whether the employee has recorded attendance yet.
@@ -1107,13 +1110,22 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       const assignedIds = normalizedIdList(assignment.period_ids);
       const selectedPeriods = periods.filter(period => !assignedIds.length || assignedIds.includes(clean(period.id)));
       const overrides = normalizePeriodOverrides(assignment.period_overrides);
-      const allowedRanges = isFriday && validTime(fridayFrom) && validTime(fridayTo)
-        ? [{ startTime: fridayFrom, endTime: fridayTo }]
-        : selectedPeriods.map(period => resolveAssignedPeriodTimes(period, overrides[clean(period.id)]));
-      const permissionFitsShift = allowedRanges.some(period => validTime(period.startTime) && validTime(period.endTime)
-        && timeMinutes(item.fromTime) >= timeMinutes(period.startTime)
-        && timeMinutes(item.toTime) <= timeMinutes(period.endTime));
-      if (!permissionFitsShift) throw new AttendanceError("EARLY_DEPARTURE_OUTSIDE_SHIFT", `وقت إذن ${userMap.get(item.userId)} خارج فترات الدوام المحددة لهذا اليوم`);
+      const fridayShift = isFriday && validTime(fridayFrom) && validTime(fridayTo) && fridayFrom !== fridayTo;
+      // Friday has exactly one evening shift. Otherwise a period must belong to
+      // this employee's effective schedule on the selected date.
+      if (fridayShift && item.periodId !== "friday") throw new AttendanceError("EARLY_DEPARTURE_PERIOD_REQUIRED", "الجمعة فترة مسائية واحدة فقط");
+      if (!fridayShift && item.periodId === "friday") throw new AttendanceError("EARLY_DEPARTURE_PERIOD_REQUIRED", "اختر إحدى فترات دوام الموظف");
+      const selectedShift = fridayShift
+        ? (selectedPeriods.length ? { name: "الفترة المسائية", startTime: fridayFrom, endTime: fridayTo } : null)
+        : (() => {
+          const period = selectedPeriods.find(period => clean(period.id) === item.periodId);
+          return period ? { name: clean(period.name) || "فترة العمل", ...resolveAssignedPeriodTimes(period, overrides[clean(period.id)]) } : null;
+        })();
+      if (!selectedShift) throw new AttendanceError("EARLY_DEPARTURE_PERIOD_REQUIRED", `فترة الإذن غير موجودة في جدول ${userMap.get(item.userId)} لهذا التاريخ`);
+      const permissionFitsShift = validTime(selectedShift.startTime) && validTime(selectedShift.endTime)
+        && timeMinutes(item.fromTime) >= timeMinutes(selectedShift.startTime)
+        && timeMinutes(item.toTime) <= timeMinutes(selectedShift.endTime);
+      if (!permissionFitsShift) throw new AttendanceError("EARLY_DEPARTURE_OUTSIDE_SHIFT", `وقت إذن ${userMap.get(item.userId)} خارج ${selectedShift.name} (${selectedShift.startTime} - ${selectedShift.endTime})`);
       const [permissionClock] = await tx<any[]>`
         select
           ((${workDate}::date + ${item.fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,
@@ -1158,7 +1170,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
           and greatest(${fromAt}::timestamptz,r.check_in) <= now()
       `;
 
-      saved.push({ userId: item.userId, name: userMap.get(item.userId) || "المستخدم", fromTime: item.fromTime, toTime: item.toTime });
+      saved.push({ userId: item.userId, name: userMap.get(item.userId) || "المستخدم", periodName: selectedShift.name, fromTime: item.fromTime, toTime: item.toTime });
     }
 
     return {
@@ -1166,7 +1178,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       count: saved.length,
       items: saved,
       message: saved.length === 1
-        ? `تم حفظ إذن الانصراف المبكر لـ ${saved[0].name} من ${saved[0].fromTime} إلى ${saved[0].toTime}`
+        ? `تم حفظ إذن الانصراف المبكر لـ ${saved[0].name} (${saved[0].periodName}) من ${saved[0].fromTime} إلى ${saved[0].toTime}`
         : `تم حفظ أذونات الانصراف المبكر لـ ${saved.length} مستخدمين`,
     };
   });

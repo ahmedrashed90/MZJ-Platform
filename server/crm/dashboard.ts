@@ -77,8 +77,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       from crm.sales_transactions st
       where st.lead_id=l.id
         and coalesce(st.is_cancelled,false)=false
-        and (${from || null}::date is null or (st.sale_at at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-        and (${to || null}::date is null or (st.sale_at at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     ) period_sale on true
     where l.is_deleted = false
       and ${leadScope}
@@ -98,25 +96,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${registrationOnly}::boolean and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
           and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
         or (not ${registrationOnly}::boolean and (
-        (l.status_label='تم البيع'
-          and (((${from || null}::date is null and ${to || null}::date is null) or period_sale.sale_at is not null)))
-        or (l.status_label<>'تم البيع'
-          and (${from || null}::date is null or (
-            case when l.status_label='غير مؤهل' then
+          -- Keep historic customers in every status except "غير مؤهل".
+          -- Only the date of transition to "غير مؤهل" is bounded by the dashboard filter.
+          l.status_label is distinct from 'غير مؤهل'
+          or (
+            (${from || null}::date is null or (
               coalesce((select max(e.created_at) from crm.lead_events e
                 where e.lead_id=l.id and e.new_status='غير مؤهل'
-                  and e.event_type in ('status_change','department_transfer','manual_status_change')), l.updated_at,l.registered_at,l.created_at)
-            else coalesce(l.registered_at,l.created_at) end
-          at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-          and (${to || null}::date is null or (
-            case when l.status_label='غير مؤهل' then
+                  and e.event_type in ('status_change','department_transfer','manual_status_change')),
+                l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+            and (${to || null}::date is null or (
               coalesce((select max(e.created_at) from crm.lead_events e
                 where e.lead_id=l.id and e.new_status='غير مؤهل'
-                  and e.event_type in ('status_change','department_transfer','manual_status_change')), l.updated_at,l.registered_at,l.created_at)
-            else coalesce(l.registered_at,l.created_at) end
-          at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
-      )
+                  and e.event_type in ('status_change','department_transfer','manual_status_change')),
+                l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+          )
         ))
+      )
       and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})

@@ -280,7 +280,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           coalesce((select max(e.created_at) from crm.lead_events e
             where e.lead_id=l.id and e.new_status='غير مؤهل'
               and e.event_type in ('status_change','department_transfer','manual_status_change')),
-            l.updated_at,l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
+            l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
         when ${dashboardPeriod}::boolean then (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
         else (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date
       end
@@ -469,8 +469,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const filtersSql = sql`
     ${scopeSql}
-    and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
-    and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
+    and (
+      (${dashboardPeriod}::boolean and (
+        l.status_label is distinct from 'غير مؤهل'
+        or ((${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
+          and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date))
+      ))
+      or (not ${dashboardPeriod}::boolean
+        and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
+        and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date))
+    )
     and ${leadDepartmentFilterSql}
     and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${currentLeadBranchCodeSql} else l.report_branch_code end)=${branch || null})
     and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
@@ -880,8 +888,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users current_sales on current_sales.id=l.assigned_to
     left join core.branches current_branch on current_branch.code=(${transactionCurrentBranchCodeSql})
     where coalesce(st.is_cancelled,false)=false
-      and (${from || null}::date is null or ${manualSaleDateSql} >= ${from || null}::date)
-      and (${to || null}::date is null or ${manualSaleDateSql} <= ${to || null}::date)
+      and (${dashboardPeriod}::boolean or ${from || null}::date is null or ${manualSaleDateSql} >= ${from || null}::date)
+      and (${dashboardPeriod}::boolean or ${to || null}::date is null or ${manualSaleDateSql} <= ${to || null}::date)
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
@@ -906,11 +914,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const notContactedStatuses = setOf(quality.not_contacted_statuses, ["عميل جديد"]);
   const summaryCards = (Array.isArray(quality.summary_cards) ? quality.summary_cards : DEFAULT_SUMMARY_CARDS).filter((value: unknown) => DEFAULT_SUMMARY_CARDS.concat(["delayed"]).includes(String(value)));
 
-  const makeMetrics = (rows: any[], facts: any[] = []) => {
+  const makeMetrics = (rows: any[], allFacts: any[] = []) => {
+    const rowLeadIds = new Set(rows.map((lead) => String(lead.id || "")).filter(Boolean));
+    // Dashboard metrics use the same visible customer cohort as its status cards.
+    // Full reports keep every canonical transaction even if its lead no longer exists.
+    const facts = dashboardPeriod ? allFacts.filter((fact) => rowLeadIds.has(String(fact.lead_id || ""))) : allFacts;
     const count = (set: Set<string>) => new Set(
       rows.filter((lead) => set.has(norm(lead.status_label))).map((lead) => String(lead.id || "")).filter(Boolean),
     ).size;
-    const rowLeadIds = new Set(rows.map((lead) => String(lead.id || "")).filter(Boolean));
     const factOnlyLeadIds = new Set(facts.map((fact) => String(fact.lead_id || "")).filter((id) => id && !rowLeadIds.has(id)));
     const factOnlySoldCustomers = factOnlyLeadIds.size;
     const statusCountWithFactOnlySales = (set: Set<string>) => count(set) + (set.has(norm("تم البيع")) ? factOnlySoldCustomers : 0);
@@ -921,7 +932,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     );
     const marketingDen = quality.marketing_denominator_mode === "statuses" ? statusCountWithFactOnlySales(marketingDenStatuses) : distinctCustomers;
     const salesDen = quality.sales_denominator_mode === "all" ? distinctCustomers : statusCountWithFactOnlySales(salesDenStatuses);
-    const total = quality.total_mode === "statuses" ? statusCountWithFactOnlySales(totalStatuses) : distinctCustomers;
+    // A dashboard total must represent every visible unique customer, regardless
+    // of which statuses the reporting administrator selected for report quality.
+    const total = dashboardPeriod ? distinctCustomers : quality.total_mode === "statuses" ? statusCountWithFactOnlySales(totalStatuses) : distinctCustomers;
     return {
       total,
       notContacted: count(notContactedStatuses),

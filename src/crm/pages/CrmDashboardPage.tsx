@@ -352,6 +352,7 @@ export function CrmDashboardPage() {
         <label><span>نوع الفترة</span><select aria-label="نوع الفترة" value={dateMode} onChange={event => setDateMode(event.target.value as "month" | "range")}><option value="month">حسب الشهر</option><option value="range">من تاريخ إلى تاريخ</option></select></label>
         {dateMode === "month" ? <label><span>الشهر</span><input aria-label="الشهر" type="month" value={month} onChange={event => setMonth(event.target.value)} /></label> : <><label><span>من تاريخ</span><input aria-label="من تاريخ" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} /></label><label><span>إلى تاريخ</span><input aria-label="إلى تاريخ" type="date" value={toDate} onChange={event => setToDate(event.target.value)} /></label></>}
         <span className="crm-dashboard-date-range">{activeDates.from} — {activeDates.to}</span>
+        <small className="crm-dashboard-date-hint">التاريخ يُصفّي «غير مؤهل» فقط حسب تاريخ تغيير الحالة. باقي الحالات تعرض العملاء السابقين أيضًا.</small>
         {!datesValid && <small className="crm-error">تاريخ البداية يجب ألا يكون بعد تاريخ النهاية.</small>}
       </div>}
 
@@ -468,6 +469,9 @@ export function CrmDashboardPage() {
           }
           setLeads((current) => current.map((lead) => lead.id === updated.id ? { ...lead, ...updated } : lead));
           setSelected((current) => current ? { ...current, ...updated } : current);
+          // Reload the actual date-scoped cohort after a status change: a lead
+          // moving to "غير مؤهل" may no longer belong to the chosen period.
+          void loadDashboard(true);
           void loadReportSummary(true);
         }}
       />
