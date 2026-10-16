@@ -12,21 +12,22 @@ const crmUi=read('src/crm/pages/CrmDashboardPage.tsx');
 const attendApi=read('server/attendance.ts');
 const attendUi=read('src/attendance/AttendancePage.tsx');
 const css=read('src/styles.css');
-check('CRM original clients remain in sales statuses irrespective of the chosen date',()=>{
-  assert.match(crmApi,/l\.status_label is distinct from 'غير مؤهل'/);
+const customerCohort = read('server/_crm-customer-cohort.ts');
+check('CRM original clients remain visible regardless of selected registration date',()=>{
+  assert.match(crmApi,/crmVisibleCustomerCohortSql\(sql, from \|\| null, to \|\| null\)/);
+  assert.match(customerCohort,/l\.status_label is distinct from 'غير مؤهل'/);
   assert.doesNotMatch(crmApi,/l\.status_label='تم البيع'[\s\S]{0,140}period_sale\.sale_at is not null/);
-  assert.match(crmApi,/l\.status_label is distinct from 'غير مؤهل'[\s\S]*?and \(\$\{branch \|\| null\}/);
 });
-check('CRM only nonqualified leads use date of status change, not last general update',()=>{
-  assert.match(crmApi,/e\.new_status='غير مؤهل'/);
-  assert.match(reportApi,/e\.new_status='غير مؤهل'/);
-  const main=crmApi.slice(crmApi.indexOf('-- Keep historic customers'),crmApi.indexOf('and (${branch || null}'));
-  assert(!main.includes('l.updated_at'), 'Status date may not be based on a general update');
+check('CRM only nonqualified leads use last status-change timestamp',()=>{
+  assert.match(customerCohort,/e\.new_status='غير مؤهل'/);
+  assert.match(customerCohort,/max\(e\.created_at\)/);
+  assert.doesNotMatch(customerCohort,/l\.updated_at/);
+  assert.match(reportApi,/crmVisibleCustomerCohortSql\(sql, from \|\| null, to \|\| null\)/);
 });
-check('CRM report summary matches historical customer cohort only in dashboard mode',()=>{
-  assert.match(reportApi,/\$\{dashboardPeriod\}::boolean and \(\s*l\.status_label is distinct from 'غير مؤهل'/);
+check('CRM report summary counts physical visible leads in dashboard mode',()=>{
+  assert.match(reportApi,/\$\{dashboardPeriod\}::boolean and \$\{crmVisibleCustomerCohortSql/);
   assert.match(reportApi,/not \$\{dashboardPeriod\}::boolean[\s\S]{0,140}\$\{reportDateSql\}/);
-  assert.match(reportApi,/dashboardPeriod \? distinctCustomers/);
+  assert.match(reportApi,/dashboardPeriod \? rowLeadIds\.size/);
   assert.match(reportApi,/const facts = allFacts/);
 });
 check('CRM reports filter canonical sales by sale date in dashboard and reports',()=>{

@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { crmVisibleCustomerCohortSql } from "../_crm-customer-cohort.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 
 const DEFAULT_SUMMARY_CARDS = ["marketing", "total", "notContacted", "waste", "qualified", "potential", "sold", "sales"];
@@ -38,19 +39,6 @@ function departmentBranchDepartmentCode(departmentCode: unknown, branchCode: unk
   const branch = String(branchCode || "").trim().toLowerCase();
   if (CASH_BRANCH_ROLLUP_CODES.has(branch) && ["cash_sales", "finance_sales", "call_center"].includes(department)) return "cash_sales";
   return department;
-}
-
-function agentDepartmentMatchesFilter(departmentCode: unknown, selectedDepartment: unknown) {
-  const code = String(departmentCode || "").trim().toLowerCase();
-  const selected = String(selectedDepartment || "").trim().toLowerCase();
-  if (!selected) return true;
-  if (selected === "cash") return ["cash_sales", "wholesale", "wholesale_sales"].includes(code);
-  if (selected === "finance") return code === "finance_sales";
-  if (selected === "wholesale") return ["wholesale", "wholesale_sales"].includes(code);
-  if (selected === "service") return code === "customer_service";
-  if (selected === "call_center") return code === "call_center";
-  if (["cash_sales", "finance_sales", "customer_service"].includes(selected)) return code === selected;
-  return code === selected;
 }
 
 function percent(num: number, den: number) {
@@ -138,7 +126,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       cc.full_name as report_call_center_name,
       branch_row.name as report_branch_name,
       src.name as catalog_source_name,
-      coalesce(src.report_group,'other') as source_report_group,
+      case when original_source.report_group in ('digital','direct') then original_source.report_group else 'other' end as source_report_group,
       (coalesce(primary_department.code,'')='call_center') as assigned_is_call_center,
       exists(select 1 from integrations.erpnext_sales_orders active_so where active_so.crm_lead_id=l.id and coalesce(active_so.is_cancelled,false)=false) as has_active_erp_order
     from crm.leads l
@@ -249,6 +237,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users cc on cc.id=l.call_center_assigned_to
     left join core.branches branch_row on branch_row.code=effective.branch_code
     left join core.sources src on src.code=(${leadReportSourceCodeSql})
+    -- Group customers by their actual saved source, matching crm.leads and
+    -- the read-only Neon parity query. Display aliases stay independent.
+    left join core.sources original_source on original_source.code=l.source_code
   `;
 
   const scopeSql = sql`
@@ -409,6 +400,25 @@ export default async function handler(request: VercelRequest, response: VercelRe
       else l.report_department_code
     end
   `;
+  // The open detail drawer must use the SAME department and current branch
+  // key as its report group. Otherwise the totals can reconcile but clicking
+  // a row shows a different cohort (or an empty table).
+  const dashboardLeadDepartmentBranchGroupSql = sql`
+    case
+      when lower(coalesce((${currentLeadBranchCodeSql}),'')) in ('qadisiyah','hall','multaqa')
+        and l.department_code in ('cash_sales','finance_sales','call_center')
+      then 'cash_sales'
+      else l.department_code
+    end
+  `;
+  const reportDetailDepartmentGroupSql = sql`
+    case when ${dashboardPeriod}::boolean then (${dashboardLeadDepartmentBranchGroupSql})
+         else (${departmentBranchLeadDepartmentCodeSql}) end
+  `;
+  const reportDetailBranchGroupSql = sql`
+    case when ${dashboardPeriod}::boolean then (${currentLeadBranchCodeSql})
+         else l.report_branch_code end
+  `;
   const departmentBranchTransactionDepartmentCodeSql = sql`
     case
       when lower(coalesce((${transactionBranchCodeSql}),'')) in ('qadisiyah','hall','multaqa')
@@ -457,23 +467,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const currentLeadDepartmentFilterSql = sql`
     (
       ${department || null}::text is null
-      or (${department || null}='cash' and l.current_department_code in ('cash_sales','wholesale','wholesale_sales'))
-      or (${department || null}='finance' and l.current_department_code in ('finance_sales','call_center'))
-      or (${department || null}='service' and l.current_department_code='customer_service')
+      or (${department || null}='cash' and l.department_code in ('cash_sales','wholesale','wholesale_sales'))
+      or (${department || null}='finance' and l.department_code in ('finance_sales','call_center'))
+      or (${department || null}='service' and l.department_code='customer_service')
       or (${department || null}='call_center' and l.call_center_assigned_to is not null)
-      or (${department || null}='wholesale' and l.current_department_code in ('wholesale','wholesale_sales'))
-      or (${department || null} in ('cash_sales','finance_sales','customer_service') and l.current_department_code=${department || null})
+      or (${department || null}='wholesale' and l.department_code in ('wholesale','wholesale_sales'))
+      or (${department || null} in ('cash_sales','finance_sales','customer_service') and l.department_code=${department || null})
     )
   `;
 
   const filtersSql = sql`
     ${scopeSql}
     and (
-      (${dashboardPeriod}::boolean and (
-        l.status_label is distinct from 'غير مؤهل'
-        or ((${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
-          and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date))
-      ))
+      (${dashboardPeriod}::boolean and ${crmVisibleCustomerCohortSql(sql, from || null, to || null)})
       or (not ${dashboardPeriod}::boolean
         and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
         and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date))
@@ -493,10 +499,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     const detailMatch = sql`
       (
-        (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce((${leadReportSourceCodeSql}),'__none__')=${detailValue})
-        or (${detailKind}='department_branch' and (coalesce((${departmentBranchLeadDepartmentCodeSql}),'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
+        (${detailKind}='source' and coalesce((${leadReportSourceCodeSql}),'__none__')=${detailValue})
+        or (${detailKind}='department_branch' and (coalesce((${reportDetailDepartmentGroupSql}),'__none__') || '|' || coalesce((${reportDetailBranchGroupSql}),'__none__'))=${detailValue})
         or (${detailKind}='agent' and coalesce(l.current_assigned_to::text,'__none__')=${detailValue})
-        or (${detailKind}='service' and l.report_department_code='customer_service')
+        or (${detailKind}='service' and (case when ${dashboardPeriod}::boolean then l.department_code else l.report_department_code end)='customer_service')
       )
     `;
 
@@ -511,8 +517,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (detailStatus === "تم البيع" && Boolean(from || to) && ["source", "department_branch"].includes(detailKind)) {
       const soldDetailMatchSql = detailKind === "source"
         ? sql`
-            (${transactionDepartmentCodeSql})<>'customer_service'
-            and coalesce((${transactionReportSourceCodeSql}),'__none__')=${detailValue}
+            coalesce((${transactionReportSourceCodeSql}),'__none__')=${detailValue}
           `
         : sql`
             (coalesce((${departmentBranchTransactionDepartmentCodeSql}),'__none__') || '|' || coalesce((${transactionBranchCodeSql}),'__none__'))=${detailValue}
@@ -798,7 +803,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const detailRows = await sql<any[]>`
       with effective_leads as (${effectiveLeads})
       select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
-        l.report_department_code as department_code,l.report_branch_code as branch_code,
+        (case when ${dashboardPeriod}::boolean then l.department_code else l.report_department_code end) as department_code,
+        (case when ${dashboardPeriod}::boolean then ${currentLeadBranchCodeSql} else l.report_branch_code end) as branch_code,
         l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.registered_at,l.created_at,l.updated_at,
         l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
         l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
@@ -824,7 +830,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const leads = await sql<any[]>`
     with effective_leads as (${effectiveLeads})
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
-      l.report_department_code as department_code,l.report_branch_code as branch_code,
+      (case when ${dashboardPeriod}::boolean then l.department_code else l.report_department_code end) as department_code,
+      (case when ${dashboardPeriod}::boolean then ${currentLeadBranchCodeSql} else l.report_branch_code end) as branch_code,
       l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.registered_at,l.created_at,l.updated_at,
       l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
       l.assigned_is_call_center,l.has_active_erp_order,l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
@@ -859,7 +866,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       coalesce(st.total_amount,0)::float as total_amount,
       (${transactionReportSourceCodeSql}) as source_code,
       coalesce(src.name,st.source_name,l.source_name) as source_name,
-      coalesce(src.report_group,'other') as source_report_group,
+      case when src.report_group in ('digital','direct') then src.report_group else 'other' end as source_report_group,
       (${transactionDepartmentCodeSql}) as department_code,
       (${transactionBranchCodeSql}) as branch_code,
       st.assigned_to::text as assigned_to,
@@ -928,7 +935,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     );
     // A dashboard total must represent every visible unique customer, regardless
     // of which statuses the reporting administrator selected for report quality.
-    const total = dashboardPeriod ? distinctCustomers : quality.total_mode === "statuses" ? statusCountWithFactOnlySales(totalStatuses) : distinctCustomers;
+    // A period-specific customer count comes strictly from visible crm.leads.
+    // Dated sales transactions may add units/revenue, never synthetic customers.
+    const total = dashboardPeriod ? rowLeadIds.size : quality.total_mode === "statuses" ? statusCountWithFactOnlySales(totalStatuses) : distinctCustomers;
     return {
       total,
       notContacted: count(notContactedStatuses),
@@ -945,8 +954,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     };
   };
 
-  const reportRows = leads.filter((row) => row.department_code !== "customer_service");
-  const reportFacts = salesFacts.filter((fact) => fact.department_code !== "customer_service");
+  // Include service customers in all-source and all-department totals. Service
+  // still has its independent operational widget below; it is not excluded from
+  // "إجمالي العملاء" or the source/agent breakdowns.
+  const reportRows = leads;
+  const reportFacts = salesFacts;
 
   if (summaryOnly) {
     return response.status(200).json({
@@ -994,8 +1006,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const digitalSources = sourceGroup("digital");
   const directSources = sourceGroup("direct");
   const otherSources = sourceGroup("other");
-  const salesRows = reportRows.filter((row) => row.current_assigned_is_call_center !== true);
-  const salesOnlyFacts = reportFacts.filter((fact) => fact.department_code !== "customer_service");
+  // One customer belongs to exactly one current department and one agent
+  // dimension. Do not silently discard service or call-center-owned leads.
+  const salesRows = reportRows;
+  const salesOnlyFacts = reportFacts;
   const departmentContext = new Map<string, { departmentCode: string; branchCode: string; branchName: string }>();
   for (const row of [...salesRows, ...salesOnlyFacts]) {
     const canonicalDepartmentCode = departmentBranchDepartmentCode(row.department_code, row.branch_code);
@@ -1019,8 +1033,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const department = departmentLabel(normalizedDepartmentCode);
       const branch = reportBranchLabel(normalizedDepartmentCode, normalizedBranchCode, context?.branchName || "");
       return { ...row, name: `${department} - ${branch}`, department, branch };
-    })
-    .filter((row) => !(norm(row.department) === norm("قسم الجملة") && norm(row.branch) === norm("فرع القادسية")));
+    });
 
   // Keep the website branch visible in the department/branch report even before
   // the first real website sale exists. This is a report dimension, not a
@@ -1188,19 +1201,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
   }
 
-  // Active representatives are filtered by their current CRM identity. Archived or
-  // inactive representatives are already filtered by the historical lead/sale rows
-  // above, so do not hide their old results because their current profile changed.
-  const agentIdentityMatchesActiveFilters = (userId: unknown) => {
-    const userKey = String(userId || "");
-    if (historicalAgentIds.has(userKey)) return true;
-    const identity = agentIdentity.get(userKey);
-    if (!identity) return !branch && !department;
-    if (branch && identity.branchCode !== branch) return false;
-    return agentDepartmentMatchesFilter(identity.departmentCode, department);
-  };
-  const agentSalesRows = salesRows.filter((row) => agentIdentityMatchesActiveFilters(row.current_assigned_to));
-  const agentSalesFacts = salesOnlyFacts.filter((fact) => agentIdentityMatchesActiveFilters(fact.assigned_to));
+  // The database filters and current manager scope have already selected the
+  // records. Re-filtering by the representative's profile loses historical or
+  // transferred customers from the breakdown while keeping them in the total.
+  const agentSalesRows = salesRows;
+  const agentSalesFacts = salesOnlyFacts;
 
   const historicalAgentContext = new Map<string, { department: string; branch: string; departmentCode: string; branchCode: string }>();
   for (const fact of agentSalesFacts) {
@@ -1263,8 +1268,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         reportHistoricalIdentity: historical,
       };
     })
-    .filter((row) => row.reportHistoricalIdentity || !branch || row.reportIdentityBranchCode === branch)
-    .filter((row) => row.reportHistoricalIdentity || agentDepartmentMatchesFilter(row.reportIdentityDepartmentCode, department))
     .filter((row) => Number(row.total || 0) >= 1)
     .map(({ reportIdentityDepartmentCode: _departmentCode, reportIdentityBranchCode: _branchCode, reportHistoricalIdentity: _historical, ...row }) => row)
     .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));

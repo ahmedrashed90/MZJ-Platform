@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { crmVisibleCustomerCohortSql } from "../_crm-customer-cohort.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
 const CRM_DASHBOARD_VISIBLE_LIMIT = 5000;
@@ -29,7 +30,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const to = validDate(requestedTo);
   if ((requestedFrom && !from) || (requestedTo && !to)) return response.status(400).json({ ok: false, error: "صيغة التاريخ غير صحيحة" });
   if (from && to && from > to) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
-  const includeClosed = ["1", "true", "yes"].includes(clean(request.query.includeClosed).toLowerCase());
+  // All historic customer statuses are visible by default. An explicit
+  // includeClosed=0 remains available only to legacy callers that need it.
+  const includeClosed = !["0", "false", "no"].includes(clean(request.query.includeClosed).toLowerCase());
   const registrationOnly = clean(request.query.dateBasis) === "registered";
 
   const customerFields = await getCustomerFieldDefinitions();
@@ -96,21 +99,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${registrationOnly}::boolean and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
           and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
         or (not ${registrationOnly}::boolean and (
-          -- Keep historic customers in every status except "غير مؤهل".
-          -- Only the date of transition to "غير مؤهل" is bounded by the dashboard filter.
-          l.status_label is distinct from 'غير مؤهل'
-          or (
-            (${from || null}::date is null or (
-              coalesce((select max(e.created_at) from crm.lead_events e
-                where e.lead_id=l.id and e.new_status='غير مؤهل'
-                  and e.event_type in ('status_change','department_transfer','manual_status_change')),
-                l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-            and (${to || null}::date is null or (
-              coalesce((select max(e.created_at) from crm.lead_events e
-                where e.lead_id=l.id and e.new_status='غير مؤهل'
-                  and e.event_type in ('status_change','department_transfer','manual_status_change')),
-                l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
-          )
+          -- Shared visibility rule with the platform dashboard and CRM reports.
+          ${crmVisibleCustomerCohortSql(sql, from || null, to || null)}
         ))
       )
       and (${branch || null}::text is null or ${liveBranch} = ${branch || null})

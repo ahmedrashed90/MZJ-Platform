@@ -5,6 +5,7 @@ import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
 import { getTrackingCountSummary } from "./_tracking-counts.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
+import { crmVisibleCustomerCohortSql } from "./_crm-customer-cohort.js";
 import { userScope, crmLeadScopeSql } from "./_crm-utils.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
@@ -58,14 +59,15 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
       await ensureCrmSchema();
       const crmScope = userScope(user);
       const visibleLeadScope = crmLeadScopeSql(sql, crmScope);
-      // All platform CRM cards, department totals, agents and the daily series
-      // share one PostgreSQL snapshot and one de-duplicated set of phone identities.
-      // No last-message or last-update timestamps are substituted for creation.
+      // The headline, department donut and representative list all count the
+      // same unique customer cohort as the CRM dashboard/report period mode.
+      // Conversation, no-answer and dated-sales facts stay separate KPIs;
+      // adding those three activity counts is NOT a customer total.
       const [row] = await sql<any[]>`
         with scoped_input as (
           select l.* from crm.leads l
           where l.is_deleted=false
-            and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and ${crmVisibleCustomerCohortSql(sql, from, to)}
             and ${visibleLeadScope}
         ), scoped_leads as (
           select distinct on (coalesce(nullif(l.phone_normalized,''),nullif(regexp_replace(l.phone,'[^0-9]','','g'),''),l.id::text)) l.*
@@ -95,9 +97,8 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           select department_code,sum(quantity)::int as event_count
           from scoped_sold group by department_code
         ), department_activity as (
-          -- The top KPI deliberately adds three activity counters, not distinct
-          -- people. Reconcile its department breakdown using those SAME counters.
-          -- The unique-person cohort still powers reps and new-customer charts.
+          -- Activity is preserved for the independent conversation/no-answer/
+          -- transaction KPIs only. It does not define a unique customer.
           select department_code,sum(opened)::int as opened,
             sum(no_answer)::int as no_answer,sum(sold)::int as sold,
             sum(opened+no_answer+sold)::int as total
@@ -131,19 +132,21 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           group by d.day order by d.day
         )
         select
-          coalesce((select sum(total) from department_activity),0)::int as total_customers,
+          count(*)::int as total_customers,
           count(*)::int as unique_customers,
           coalesce((select sum(no_answer) from department_activity),0)::int as no_answer_customers,
           coalesce((select sum(sold) from department_activity),0)::int as sold,
           coalesce((select sum(sold) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
           coalesce((select sum(sold) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
-          coalesce((select sum(total) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sales,
-          coalesce((select sum(total) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sales,
-          coalesce((select sum(total) from department_activity where department_code='customer_service'),0)::int as customer_service,
-          coalesce((select sum(total) from department_activity where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null),0)::int as other_customers,
-          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as new_today,
-          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date)::int as new_this_week,
-          count(*)::int as new_in_range,
+          count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
+          count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
+          count(*) filter(where department_code='customer_service')::int as customer_service,
+          count(*) filter(where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null)::int as other_customers,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_today,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_this_week,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_in_range,
           coalesce((select sum(opened) from department_activity),0)::int as open_conversations,
           coalesce((select sum(opened) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as open_cash_conversations,
           coalesce((select sum(opened) from department_activity where department_code in ('finance_sales','call_center')),0)::int as open_finance_conversations,

@@ -703,8 +703,8 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
           </section>
 
           <section className="crm-panel quality-card crm-quality-definition-card">
-            <header><div><h2>إجمالي العملاء</h2><p>حدد هل يتم حساب الإجمالي من كل العملاء بعد الفلاتر مع استبعاد خدمة العملاء، أو من حالات محددة فقط.</p></div></header>
-            <label className="crm-form-label crm-quality-mode-field"><span>طريقة الحساب</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
+            <header><div><h2>إجمالي العملاء</h2><p>إجمالي العملاء في الداش بورد وتقارير الفترة يشمل جميع الأقسام بما فيها خدمة العملاء؛ إعداد حالات المقام يُستخدم للتقارير التاريخية الأخرى فقط.</p></div></header>
+            <label className="crm-form-label crm-quality-mode-field"><span>طريقة الحساب</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر (يشمل خدمة العملاء)</option><option value="statuses">حالات محددة</option></select></label>
             {quality.totalMode === "statuses" ? <><strong>الحالات التي تُحسب ضمن إجمالي العملاء</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`total-${status}`}><input type="checkbox" checked={quality.totalStatuses.includes(status)} onChange={() => toggleQuality("totalStatuses", status)} />{status}</label>)}</div></> : null}
           </section>
 

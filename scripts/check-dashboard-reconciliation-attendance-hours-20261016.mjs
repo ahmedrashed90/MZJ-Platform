@@ -13,28 +13,27 @@ function check(label, test) {
   try { test(); passed++; console.log('PASS: ' + label); }
   catch (error) { console.error('FAIL: ' + label + ' - ' + error.message); process.exitCode = 1; }
 }
-check('All three KPI components use the same department activity CTE', () => {
-  for (const text of ['open_counts as (', 'no_answer_counts as (', 'sold_counts as (', 'department_activity as (']) assert.ok(source.includes(text));
-  for (const alias of ['total_customers', 'no_answer_customers', 'sold', 'open_conversations']) {
+check('Customer headline counts visible lead cohort, never activity events', () => {
+  assert.match(source, /count\(\*\)::int as total_customers/);
+  assert.match(source, /crmVisibleCustomerCohortSql\(sql, from, to\)/);
+  assert.doesNotMatch(source, /sum\(total\) from department_activity\),0\)::int as total_customers/);
+  for (const alias of ['no_answer_customers', 'sold', 'open_conversations'])
     assert.match(source, new RegExp(`from department_activity\\),0\\)::int as ${alias}`));
-  }
 });
-check('Every displayed department total is sourced from department_activity', () => {
-  for (const alias of ['cash_sales','finance_sales','customer_service','other_customers']) {
-    assert.match(source, new RegExp(`select sum\\(total\\) from department_activity[^\\n]+as ${alias}`));
-  }
+check('Every department total comes from the exact same customer count', () => {
+  for (const alias of ['cash_sales','finance_sales','customer_service','other_customers'])
+    assert.match(source, new RegExp(`count\\(\\*\\) filter\\(where[^\\n]+as ${alias}`));
 });
-check('Unclassified events are included rather than disappearing from total', () => {
+check('Unclassified customers are included instead of disappearing', () => {
   assert.match(source, /department_code not in \('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service'\) or department_code is null/);
 });
-check('Main donut has exact same total as top headline', () => {
+check('Main donut equals the unique-customer headline', () => {
   assert.match(screen, /className="pie-center"><Value value=\{crm\?\.totalCustomers \?\? null\}/);
   assert.match(screen, /<h2>توزيع العملاء حسب القسم<\/h2>/);
-  assert.doesNotMatch(screen, /className="pie-center"><Value value=\{crm\?\.uniqueCustomers/);
 });
-check('Main donut openly distinguishes summed indicators from unique customers', () => {
-  assert.match(screen, /قد يظهر العميل في أكثر من مؤشر/);
-  assert.match(screen, /إجمالي المؤشرات/);
+check('Main donut is labeled customers, not activity counts', () => {
+  assert.match(screen, /مجموع الأقسام مطابق لإجمالي العملاء/);
+  assert.doesNotMatch(screen, /<span>إجمالي المؤشرات<\/span>/);
 });
 check('CRM dashboard only displays summary with identical filters', () => {
   for (const item of ['from', 'to', 'department', 'branch', 'agent', 'q']) assert.match(crm, new RegExp(`selected\\?\\.${item}`));
