@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js');
+import ts from 'typescript';
 const read = file => readFileSync(file, 'utf8');
 const cohortSource = read('server/_crm-customer-cohort.ts');
 const root = read('server/_dashboard-data.ts');

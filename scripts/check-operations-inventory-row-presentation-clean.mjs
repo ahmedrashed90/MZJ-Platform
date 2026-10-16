@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = name => readFileSync(path.join(root, name), 'utf8');
 const table = read('src/operations/components/VehicleTable.tsx');
@@ -10,7 +9,7 @@ const detail = read('src/operations/components/VehicleDetailModal.tsx');
 const inventory = read('src/operations/pages/InventoryPage.tsx');
 const styles = read('src/styles.css');
 const catalog = read('shared/operations-inventory-fields.ts');
-const typescript = createRequire(import.meta.url)('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+import typescript from 'typescript';
 const tests = [
   ['VIN first and tajyeer immediately after it in the table', () => {
     const keys = [...table.matchAll(/^\s*\{ key: "([^"]+)", label: /gm)].map(match => match[1]);

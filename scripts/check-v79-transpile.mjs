@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import ts from "/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js";
+import ts from "typescript";
 
 const files = [
   "server/_attendance.ts",
@@ -10,7 +10,7 @@ const files = [
   "src/components/Sidebar.tsx",
   "src/attendance/AttendancePage.tsx",
   "src/attendance/api.ts",
-  "src/attendance/location.ts",
+  "src/attendance/AttendanceSettingsPanel.tsx",
 ];
 
 let failed = 0;
