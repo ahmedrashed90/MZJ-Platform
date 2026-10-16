@@ -463,7 +463,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       or (${department || null}='call_center' and l.call_center_assigned_to is not null)
       or (${department || null}='wholesale' and l.current_department_code in ('wholesale','wholesale_sales'))
       or (${department || null} in ('cash_sales','finance_sales','customer_service') and l.current_department_code=${department || null})
-      or l.service_key=${department || null}
     )
   `;
 
@@ -479,7 +478,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
         and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date))
     )
-    and ${leadDepartmentFilterSql}
+    and ((${dashboardPeriod}::boolean and ${currentLeadDepartmentFilterSql})
+      or (not ${dashboardPeriod}::boolean and ${leadDepartmentFilterSql}))
     and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${currentLeadBranchCodeSql} else l.report_branch_code end)=${branch || null})
     and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)

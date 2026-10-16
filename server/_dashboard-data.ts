@@ -80,6 +80,35 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where coalesce(st.is_cancelled,false)=false
             and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and ${visibleLeadScope}
+        ), open_counts as (
+          select l.department_code,count(*)::int as event_count
+          from crm.conversations c
+          join scoped_leads l on l.id=c.lead_id
+          where c.status='open' and c.closed_at is null
+            and coalesce(c.classification_state,'')<>'closed'
+          group by l.department_code
+        ), no_answer_counts as (
+          select l.department_code,count(*)::int as event_count
+          from scoped_leads l where l.status_label='لم يتم الرد'
+          group by l.department_code
+        ), sold_counts as (
+          select department_code,sum(quantity)::int as event_count
+          from scoped_sold group by department_code
+        ), department_activity as (
+          -- The top KPI deliberately adds three activity counters, not distinct
+          -- people. Reconcile its department breakdown using those SAME counters.
+          -- The unique-person cohort still powers reps and new-customer charts.
+          select department_code,sum(opened)::int as opened,
+            sum(no_answer)::int as no_answer,sum(sold)::int as sold,
+            sum(opened+no_answer+sold)::int as total
+          from (
+            select department_code,event_count as opened,0::int as no_answer,0::int as sold from open_counts
+            union all
+            select department_code,0::int,event_count,0::int from no_answer_counts
+            union all
+            select department_code,0::int,0::int,event_count from sold_counts
+          ) activity_events
+          group by department_code
         ), reps as (
           select l.assigned_to::text as id,
             coalesce(u.full_name,'غير موزع') as name,
@@ -102,28 +131,23 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           group by d.day order by d.day
         )
         select
-          (
-            (select count(*) from crm.conversations c join scoped_leads lc on lc.id=c.lead_id
-              where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed')
-            + count(*) filter(where status_label='لم يتم الرد')
-            + coalesce((select sum(quantity) from scoped_sold),0)
-          )::int as total_customers,
+          coalesce((select sum(total) from department_activity),0)::int as total_customers,
           count(*)::int as unique_customers,
-          count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
-          coalesce((select sum(quantity) from scoped_sold),0)::int as sold,
-          coalesce((select sum(quantity) from scoped_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
-          coalesce((select sum(quantity) from scoped_sold where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
-          count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
-          count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
-          count(*) filter(where department_code='customer_service')::int as customer_service,
-          count(*) filter(where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null)::int as other_customers,
+          coalesce((select sum(no_answer) from department_activity),0)::int as no_answer_customers,
+          coalesce((select sum(sold) from department_activity),0)::int as sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
+          coalesce((select sum(total) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sales,
+          coalesce((select sum(total) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sales,
+          coalesce((select sum(total) from department_activity where department_code='customer_service'),0)::int as customer_service,
+          coalesce((select sum(total) from department_activity where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null),0)::int as other_customers,
           count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as new_today,
           count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date)::int as new_this_week,
           count(*)::int as new_in_range,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed')::int as open_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and l.department_code in ('cash_sales','wholesale','wholesale_sales'))::int as open_cash_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and l.department_code in ('finance_sales','call_center'))::int as open_finance_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and l.department_code='customer_service')::int as open_service_conversations,
+          coalesce((select sum(opened) from department_activity),0)::int as open_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as open_cash_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('finance_sales','call_center')),0)::int as open_finance_conversations,
+          coalesce((select sum(opened) from department_activity where department_code='customer_service'),0)::int as open_service_conversations,
           (select coalesce(json_agg(r order by r.customers desc,r.name),'[]'::json) from reps r) as representatives,
           (select coalesce(json_agg(d order by d.day),'[]'::json) from daily d) as daily_series
         from scoped_leads

@@ -37,6 +37,7 @@ const dashboardReportCards = [
 ] as const;
 
 type DashboardReportSummary = {
+  filters?: { from: string; to: string; department: string; branch: string; agent: string; q: string };
   totals: Record<string, number>;
   quality?: { summary_cards?: string[]; qualified_statuses?: string[] };
 };
@@ -150,6 +151,8 @@ export function CrmDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const openedRequestedLead = useRef("");
+  const dashboardRequestId = useRef(0);
+  const summaryRequestId = useRef(0);
 
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => {
@@ -198,23 +201,26 @@ export function CrmDashboardPage() {
   }
 
   async function loadDashboard(silent = false) {
+    const requestId = ++dashboardRequestId.current;
     if (!silent) setLoading(true);
     if (!silent) setError("");
     try {
       const result = await crmFetch<{ ok: boolean; statuses: CrmStatus[]; leads: CrmLead[] }>(
         `/api/crm/dashboard${queryString({ department, q, branch, agent, from: department === "service" ? undefined : activeDates.from, to: department === "service" ? undefined : activeDates.to })}`,
       );
+      if (requestId !== dashboardRequestId.current) return;
       setStatuses(result.statuses || []);
       setLeads(result.leads || []);
       setSelected((current) => current ? (result.leads.find((lead) => lead.id === current.id) || current) : null);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
+      if (requestId === dashboardRequestId.current) setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && requestId === dashboardRequestId.current) setLoading(false);
     }
   }
 
   async function loadReportSummary(silent = false) {
+    const requestId = ++summaryRequestId.current;
     if (department === "service") {
       setReportSummary(null);
       return;
@@ -223,9 +229,12 @@ export function CrmDashboardPage() {
       const result = await crmFetch<DashboardReportSummary>(
         `/api/crm/reports${queryString({ department, q, branch, agent, from: activeDates.from, to: activeDates.to, dashboardPeriod: 1, summaryOnly: 1 })}`,
       );
-      setReportSummary(result);
+      if (requestId === summaryRequestId.current) setReportSummary(result);
     } catch (failure) {
-      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل مؤشرات التقارير");
+      if (requestId === summaryRequestId.current) {
+        setReportSummary(null);
+        if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل مؤشرات التقارير");
+      }
     }
   }
 
@@ -310,19 +319,33 @@ export function CrmDashboardPage() {
   }, [leads]);
 
   const dashboardTotals = useMemo(() => {
-    const sold = Number(reportSummary?.totals?.sold || 0);
-    const qualifiedStatuses = new Set((reportSummary?.quality?.qualified_statuses || ['مؤهل']).map((label: string) => label.trim()).filter(Boolean));
-    qualifiedStatuses.delete('تم البيع');
-    const qualified = leads.filter(lead => qualifiedStatuses.has(leadStatus(lead))).length;
-    const total = leads.length;
+    // All the headline metrics come from the SAME filtered CRM report snapshot.
+    // Counting displayed cards for the total while reading dated sales from
+    // transactions mixed two different cohorts and understated cash customers.
+    const selected = reportSummary?.filters;
+    const matchingSnapshot = selected?.department === department
+      && selected?.from === activeDates.from && selected?.to === activeDates.to
+      && (selected?.branch || "") === branch && (selected?.agent || "") === agent
+      && (selected?.q || "") === q;
+    const facts = matchingSnapshot ? reportSummary?.totals : undefined;
+    const qualifiedStatuses = new Set((reportSummary?.quality?.qualified_statuses || ["مؤهل"]).map((label) => label.trim()).filter(Boolean));
+    qualifiedStatuses.delete("تم البيع");
+    const total = facts ? Number(facts.total || 0) : leads.length;
+    const sold = facts ? Number(facts.sold || 0) : 0;
+    const qualified = facts ? Number(facts.qualified || 0) : leads.filter((lead) => qualifiedStatuses.has(leadStatus(lead))).length;
     const percentage = (value: number) => total ? Math.round((value / total) * 10000) / 100 : 0;
     return {
-      total, sold, qualified, notQualified: leads.filter(lead => leadStatus(lead) === 'غير مؤهل').length,
-      potential: leads.filter(lead => leadStatus(lead) === 'لم يتم الرد').length,
-      notContacted: Number(reportSummary?.totals?.notContacted ?? leads.filter(lead => leadStatus(lead) === 'عميل جديد').length),
-      marketingQuality: percentage(qualified + sold), salesQuality: percentage(sold),
+      ready: Boolean(facts),
+      total,
+      sold,
+      qualified,
+      notQualified: facts ? Number(facts.notQualified || 0) : leads.filter((lead) => leadStatus(lead) === "غير مؤهل").length,
+      potential: facts ? Number(facts.potential || 0) : leads.filter((lead) => leadStatus(lead) === "لم يتم الرد").length,
+      notContacted: facts ? Number(facts.notContacted || 0) : leads.filter((lead) => leadStatus(lead) === "عميل جديد").length,
+      marketingQuality: facts ? Number(facts.marketingQuality || 0) : percentage(qualified),
+      salesQuality: facts ? Number(facts.salesQuality || 0) : percentage(sold),
     };
-  }, [leads, reportSummary]);
+  }, [leads, reportSummary, department, activeDates.from, activeDates.to, branch, agent, q]);
 
   const visibleBranches = useMemo(() => {
     const all = meta?.branches || [];
@@ -367,7 +390,7 @@ export function CrmDashboardPage() {
         <label><span>نوع الفترة</span><select aria-label="نوع الفترة" value={dateMode} onChange={event => setDateMode(event.target.value as "month" | "range")}><option value="month">حسب الشهر</option><option value="range">من تاريخ إلى تاريخ</option></select></label>
         {dateMode === "month" ? <label><span>الشهر</span><input aria-label="الشهر" type="month" value={month} onChange={event => setMonth(event.target.value)} /></label> : <><label><span>من تاريخ</span><input aria-label="من تاريخ" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} /></label><label><span>إلى تاريخ</span><input aria-label="إلى تاريخ" type="date" value={toDate} onChange={event => setToDate(event.target.value)} /></label></>}
         <span className="crm-dashboard-date-range">{activeDates.from} — {activeDates.to}</span>
-        <small className="crm-dashboard-date-hint">التاريخ يُصفّي «غير مؤهل» فقط حسب تاريخ تغيير الحالة. باقي الحالات تعرض العملاء السابقين أيضًا.</small>
+        <small className="crm-dashboard-date-hint">التاريخ يُصفّي «غير مؤهل» حسب تاريخ تغيير الحالة و«تم البيع» حسب تاريخ البيع الفعلي. إجمالي العملاء من نفس مصدر التقارير ويشمل العملاء السابقين.</small>
         {!datesValid && <small className="crm-error">تاريخ البداية يجب ألا يكون بعد تاريخ النهاية.</small>}
       </div>}
 
@@ -384,7 +407,7 @@ export function CrmDashboardPage() {
           {configuredDashboardReportCards.map((card) => (
             <article key={card.key}>
               <span>{card.label}</span>
-              <strong>{Number(dashboardTotals[card.field as keyof typeof dashboardTotals] ?? 0).toLocaleString("ar-SA-u-nu-latn")}{card.suffix}</strong>
+              <strong>{dashboardTotals.ready ? `${Number(dashboardTotals[card.field as keyof typeof dashboardTotals] ?? 0).toLocaleString("ar-SA-u-nu-latn")}${card.suffix}` : "—"}</strong>
             </article>
           ))}
         </section>

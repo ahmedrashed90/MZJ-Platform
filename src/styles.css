@@ -9170,3 +9170,11 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-permission-delete:disabled { cursor:not-allowed; opacity:.5; }
 .attendance-report-table-compact { min-width:1150px; }
 .attendance-report-table-compact .attendance-hours-summary-total { background:#faf2ed; }
+
+/* Reconciled CRM dashboard metrics: clarify when the total is an activity sum. */
+.distribution-panel .dashboard-metric-definition {
+  color: var(--muted, #927a70);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 10px;
+}

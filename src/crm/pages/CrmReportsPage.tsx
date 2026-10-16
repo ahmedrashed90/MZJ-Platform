@@ -203,7 +203,7 @@ export function CrmReportsPage() {
     setLoading(true);
     setNotice("");
     try {
-      setData(await crmFetch(`/api/crm/reports${queryString(filters)}`));
+      setData(await crmFetch(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1 })}`));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل التقارير");
     } finally {
@@ -215,7 +215,7 @@ export function CrmReportsPage() {
     if (!popup) return;
     setPopupLoading(true);
     try {
-      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: popupPage, detailPageSize: popupPageSize })}`);
+      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: popupPage, detailPageSize: popupPageSize })}`);
       setPopupRows(result.rows || []);
       setPopupTotal(Number(result.total || 0));
     } catch (error) {
@@ -323,7 +323,7 @@ export function CrmReportsPage() {
       let page = 1;
       let total = 0;
       do {
-        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: page, detailPageSize: 200 })}`);
+        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: page, detailPageSize: 200 })}`);
         const pageRows = result.rows || [];
         allRows.push(...pageRows);
         total = Number(result.total || 0);
@@ -376,7 +376,7 @@ export function CrmReportsPage() {
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
-            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>المبيعات حسب تاريخ كل عملية بيع، وباقي الحالات حسب آخر تحديث</small></div></div>
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>المبيعات حسب تاريخ البيع، و«غير مؤهل» حسب تاريخ انتقال الحالة، وباقي العملاء السابقين يظلون ضمن التقرير</small></div></div>
             <div className="crm-report-filter-fields three-columns">
               <label><span>اختيار شهر</span><input type="month" value={selectedMonth} onChange={(event) => setReportMonth(event.target.value)} /></label>
               <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setCustomReportDate("from", event.target.value)} /></label>

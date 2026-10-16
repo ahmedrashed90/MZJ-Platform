@@ -129,9 +129,19 @@ function attendanceHourTotals(rows: ReportRow[]) {
   }, { expected: 0, actual: 0 });
 }
 
-function hourMinuteText(minutes: number) {
-  const rounded = Math.max(0, Math.round(minutes));
-  return `${Math.floor(rounded / 60)} ساعة و ${String(rounded % 60).padStart(2, "0")} دقيقة`;
+// The hours columns are compact whole-hour indicators only. All calculations
+// (including the difference column and exports) retain full minute precision.
+function wholeHoursText(minutes: number) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (!value) return "—";
+  const roundedHours = Math.round(value / 60);
+  return roundedHours ? `${roundedHours} ساعة` : "أقل من ساعة";
+}
+
+function hoursDifferenceText(expectedMinutes: number, actualMinutes: number) {
+  const delta = Math.round(Number(actualMinutes || 0) - Number(expectedMinutes || 0));
+  if (!delta) return "—";
+  return `${delta > 0 ? "+" : "−"}${formatDurationMinutes(Math.abs(delta))}`;
 }
 
 function groupReportRows(rows: ReportRow[]) {
@@ -269,12 +279,12 @@ function buildAttendancePdf(payload: ReportPayload) {
   const summaryRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
     const hours = attendanceHourTotals([row]);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(hourMinuteText(hours.expected))}</td><td>${htmlEscape(hourMinuteText(hours.actual))}</td><td>${hours.actual < hours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(hours.actual-hours.expected)))}</td></tr>`;
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(wholeHoursText(hours.expected))}</td><td>${htmlEscape(wholeHoursText(hours.actual))}</td><td>${htmlEscape(hoursDifferenceText(hours.expected, hours.actual))}</td></tr>`;
   }).join("");
   const detailRows = flatRows.map(({ employee, row }, index) => {
     const [first, second] = exportPeriods(row);
     const hours = attendanceHourTotals([row]);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td><td>${htmlEscape(hourMinuteText(hours.expected))}</td><td>${htmlEscape(hourMinuteText(hours.actual))}</td><td>${hours.actual < hours.expected ? '−' : '+'}${htmlEscape(hourMinuteText(Math.abs(hours.actual-hours.expected)))}</td></tr>`;
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td><td>${htmlEscape(wholeHoursText(hours.expected))}</td><td>${htmlEscape(wholeHoursText(hours.actual))}</td><td>${htmlEscape(hoursDifferenceText(hours.expected, hours.actual))}</td></tr>`;
   }).join("");
   const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
   const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
@@ -322,8 +332,8 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(exportCheckOut(second)),
       cell(exportDelay(second)),
       cell(exportAbsence(second)),
-      cell(hourMinuteText(hours.expected)), cell(hourMinuteText(hours.actual)),
-      cell(`${hours.actual < hours.expected ? '−' : '+'}${hourMinuteText(Math.abs(hours.actual - hours.expected))}`),
+      cell(wholeHoursText(hours.expected)), cell(wholeHoursText(hours.actual)),
+      cell(hoursDifferenceText(hours.expected, hours.actual)),
     ].join("")}</Row>`;
   }).join("");
 
@@ -346,8 +356,8 @@ function buildExcelDocument(payload: ReportPayload) {
       cell(exportDelay(second)),
       cell(exportAbsence(second)),
       cell(exportResult(second)),
-      cell(hourMinuteText(hours.expected)), cell(hourMinuteText(hours.actual)),
-      cell(`${hours.actual < hours.expected ? '−' : '+'}${hourMinuteText(Math.abs(hours.actual - hours.expected))}`),
+      cell(wholeHoursText(hours.expected)), cell(wholeHoursText(hours.actual)),
+      cell(hoursDifferenceText(hours.expected, hours.actual)),
     ].join("")}</Row>`;
   }).join("");
 
@@ -795,7 +805,7 @@ export function AttendancePage() {
                           <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
                           {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                         </td>
-                        {(() => { const hours = attendanceHourTotals([row]); return <><td>{hourMinuteText(hours.expected)}</td><td>{hourMinuteText(hours.actual)}</td><td>{hours.actual < hours.expected ? '−' : '+'}{hourMinuteText(Math.abs(hours.actual - hours.expected))}</td></>; })()}
+                        {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                         {periodHeaders.flatMap((_, periodIndex) => {
                           const period = row.periods[periodIndex];
                           const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -816,7 +826,7 @@ export function AttendancePage() {
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4}>إجمالي ساعات الموظف</th><th>{hourMinuteText(attendanceHourTotals(employee.rows).expected)}</th><th>{hourMinuteText(attendanceHourTotals(employee.rows).actual)}</th><th>{attendanceHourTotals(employee.rows).actual < attendanceHourTotals(employee.rows).expected ? '−' : '+'}{hourMinuteText(Math.abs(attendanceHourTotals(employee.rows).actual - attendanceHourTotals(employee.rows).expected))}</th><th colSpan={Math.max(1, periodHeaders.length * 3)}>—</th></tr></tfoot>
+                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4}>إجمالي ساعات الموظف</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).expected)}</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).actual)}</th><th>{hoursDifferenceText(attendanceHourTotals(employee.rows).expected, attendanceHourTotals(employee.rows).actual)}</th><th colSpan={Math.max(1, periodHeaders.length * 3)}>—</th></tr></tfoot>
                 </table>
               </div>
             </section>
@@ -878,7 +888,7 @@ export function AttendancePage() {
                               <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
                           {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                             </td>
-                            {(() => { const hours = attendanceHourTotals([row]); return <><td>{hourMinuteText(hours.expected)}</td><td>{hourMinuteText(hours.actual)}</td><td>{hours.actual < hours.expected ? '−' : '+'}{hourMinuteText(Math.abs(hours.actual - hours.expected))}</td></>; })()}
+                            {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));

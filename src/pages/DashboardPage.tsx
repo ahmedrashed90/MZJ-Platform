@@ -819,6 +819,7 @@ export function DashboardPage() {
 
           {customizableMainWidget("analytics:distribution", <article className="panel distribution-panel">
             <h2>توزيع العملاء حسب القسم</h2>
+            <p className="dashboard-metric-definition">بحسب نفس إجمالي المؤشرات: المحادثات المفتوحة + لم يتم الرد + تم البيع. قد يظهر العميل في أكثر من مؤشر.</p>
             {pieData.length > 0 ? (
               <div className="distribution-content">
                 <div className="pie-wrap">
@@ -829,11 +830,11 @@ export function DashboardPage() {
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="pie-center"><Value value={crm?.uniqueCustomers ?? null} /><span>عملاء فريدون</span></div>
+                  <div className="pie-center"><Value value={crm?.totalCustomers ?? null} /><span>إجمالي المؤشرات</span></div>
                 </div>
                 <div className="distribution-legend">
                   {pieData.map((entry, index) => (
-                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name}`, (lead) => (entry.name === "غير مصنف" ? !["cash_sales","wholesale","wholesale_sales","finance_sales","call_center","customer_service"].includes(String(lead.department_code || "")) : dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash")))}>
+                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `توزيع المؤشرات في ${entry.name}؛ القائمة تعرض الأشخاص الفريدين فقط`, (lead) => (entry.name === "غير مصنف" ? !["cash_sales","wholesale","wholesale_sales","finance_sales","call_center","customer_service"].includes(String(lead.department_code || "")) : dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash")))}>
                       <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d", "#ae937e"][index] }} />
                       <span>{entry.name}</span>
                       <strong>{numberFormatter.format(entry.value)}</strong>
@@ -848,17 +849,17 @@ export function DashboardPage() {
             <h2>ملخص الإدارات</h2>
             <div className="department-grid">
               <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
-                { label: "العملاء", value: crm?.cashSales ?? null },
+                { label: "إجمالي المؤشرات", value: crm?.cashSales ?? null },
                 { label: "تم البيع", value: crm?.cashSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
               <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
-                { label: "العملاء", value: crm?.financeSales ?? null },
+                { label: "إجمالي المؤشرات", value: crm?.financeSales ?? null },
                 { label: "تم البيع", value: crm?.financeSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
               <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
-                { label: "العملاء", value: crm?.customerService ?? null },
+                { label: "إجمالي المؤشرات", value: crm?.customerService ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
               ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
