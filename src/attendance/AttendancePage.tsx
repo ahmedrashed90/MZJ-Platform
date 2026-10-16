@@ -510,10 +510,21 @@ export function AttendancePage() {
     const fromTime = shift && today === permissionDate
       && clockMinutes(now) >= clockMinutes(shift.startTime)
       && clockMinutes(now) < clockMinutes(shift.endTime) ? now : shift?.startTime || "";
-    setEarlyDepartureDialog((current) => current?.entries[userId]
-      ? { ...current, entries: { ...current.entries, [userId]: {
-        periodId, fromTime, toTime: shift?.endTime || "",
-      } } } : current);
+    setEarlyDepartureDialog((current) => {
+      if (!current?.entries[userId]) return current;
+      return {
+        ...current,
+        entries: {
+          ...current.entries,
+          [userId]: {
+            ...current.entries[userId],
+            periodId,
+            fromTime,
+            toTime: shift?.endTime || "",
+          },
+        },
+      };
+    });
   }
 
   function updateEarlyDepartureEntry(userId: string, field: "fromTime" | "toTime" | "permissionType" | "reason", value: string) {

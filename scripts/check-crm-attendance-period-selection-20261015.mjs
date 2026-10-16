@@ -41,6 +41,15 @@ check('Attendance UI retrieves date-specific shift assignments before enabling t
   assert.match(attendUi,/فترة الدوام/);
   assert.match(attendUi,/disabled=\{!chosen \|\| earlyDepartureSaving\}/);
 });
+check('Attendance shift selection retains permission type and reason',()=>{
+  const start = attendUi.indexOf('function selectEarlyDeparturePeriod(');
+  const end = attendUi.indexOf('function updateEarlyDepartureEntry(', start);
+  assert(start > 0 && end > start, 'Could not locate the period selection handler');
+  const handler = attendUi.slice(start, end);
+  assert.match(handler,/\.\.\.current\.entries\[userId\]/, 'Changing period must preserve existing permissionType and reason');
+  assert.match(handler,/periodId,\s*fromTime,\s*toTime:/, 'Selected shift must still update the period and time fields');
+  assert.match(attendUi,/permissionType: "departure" \| "vacation" \| ""; reason: string/, 'Permission fields must remain required');
+});
 check('Attendance saves the chosen period and validates it server-side',()=>{
   assert.match(attendApi,/const periodId = clean\(source\.periodId\)/);
   assert.match(attendApi,/EARLY_DEPARTURE_PERIOD_REQUIRED/);
