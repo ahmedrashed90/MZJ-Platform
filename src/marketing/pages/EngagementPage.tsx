@@ -81,6 +81,12 @@ type MetaAccount = {
   mediaCount: number | null;
   dailyChange: number | null;
   monthlyChange: number | null;
+  likesTotal: number | null;
+  likesMeasuredCount: number;
+  topPost: {
+    providerId: string; caption: string; permalink: string; publishedAt: string;
+    likes: number | null; comments: number | null; shares: number | null; engagementTotal: number;
+  } | null;
   snapshots: Array<{ date: string; followers: number }>;
   state: {
     backfill_complete: boolean;
@@ -681,11 +687,20 @@ export function EngagementPage() {
             </header>
             <h4>{account.accountName || platformLabel(account.platform)}</h4>
             <div className="marketing-meta-follower-number"><strong>{optionalCount(account.followers)}</strong><small>متابع</small></div>
-            <div className="marketing-meta-account-metrics">
-              <div><span>من آخر قراءة محفوظة</span><strong>{followerChange(account.dailyChange)}</strong></div>
+            <div className={`marketing-meta-account-metrics ${account.platform === "facebook" ? "has-page-likes" : ""}`}>
               <div><span>نمو الشهر المسجل</span><strong>{followerChange(account.monthlyChange)}</strong></div>
-              <div><span>{account.platform === "facebook" ? "المعجبون بالصفحة" : "عدد المحتوى"}</span><strong>{optionalCount(account.platform === "facebook" ? account.fans : account.mediaCount)}</strong></div>
+              <div><span>{account.platform === "facebook" ? "عدد المحتوى المزامن" : "عدد المحتوى"}</span><strong>{optionalCount(account.mediaCount)}</strong></div>
+              <div><span>{account.platform === "facebook" ? "تفاعلات المنشورات (Reactions)" : "إعجابات المنشورات"}</span><strong>{optionalCount(account.likesTotal)}</strong><small>من {count(account.likesMeasuredCount)} منشور تمت قراءة إعجاباته</small></div>
+              {account.platform === "facebook" && <div><span>إعجابات صفحة Facebook</span><strong>{optionalCount(account.fans)}</strong></div>}
             </div>
+            <section className="marketing-meta-top-post" aria-label={`أعلى منشور تفاعلًا في ${platformLabel(account.platform)}`}>
+              <div className="marketing-meta-top-post-title"><Heart size={17}/><strong>أعلى بوست تفاعلًا</strong><span>{account.topPost ? `${count(account.topPost.engagementTotal)} تفاعل` : "—"}</span></div>
+              {account.topPost ? <>
+                <p>{account.topPost.caption || "منشور بدون نص"}</p>
+                <div className="marketing-meta-top-post-metrics"><span>إعجابات / تفاعلات: {optionalCount(account.topPost.likes)}</span><span>تعليقات: {optionalCount(account.topPost.comments)}</span><span>مشاركات: {optionalCount(account.topPost.shares)}</span></div>
+                <footer><span>{marketingDate(account.topPost.publishedAt)}</span>{/^https:\/\//i.test(account.topPost.permalink) && <a href={account.topPost.permalink} target="_blank" rel="noopener noreferrer">فتح المنشور <LinkSimple size={15}/></a>}</footer>
+              </> : <p>لا تتوفر بعد أرقام تفاعل للمنشورات المزامنة في هذا الحساب.</p>}
+            </section>
             {account.snapshots.length > 1 ? <div className="marketing-meta-followers-chart" dir="ltr">
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={account.snapshots} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
@@ -704,7 +719,7 @@ export function EngagementPage() {
           </article>)}
           {!(data?.accounts || []).length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
         </div>
-        <p className="marketing-meta-account-disclaimer">تحديث المتابعين يسجل لقطة يومية للحساب، والتغيرات تُحسب من البيانات المسجلة منذ تفعيل المزامنة. قد تختلف المؤشرات المتاحة حسب نوع المنشور والمنصة.</p>
+        <p className="marketing-meta-account-disclaimer">عدد محتوى Facebook ومجموع التفاعلات وأعلى منشور محسوبة من المنشورات التي اكتملت مزامنتها بالفعل؛ الأرقام قد تزيد مع استيراد الأرشيف أو تحديث تفاعل المنشورات. تفاعلات Facebook تشمل جميع أنواع Reactions، وليست زر Like وحده.</p>
       </> : <>
         <section className="marketing-engagement-stats marketing-result-summary-stats">
           <article><LinkSimple size={24} /><span>{view === "campaigns" ? "الحملات" : "الأجندات"}</span><strong>{marketingResultCount(resultSummary.sources)}</strong><small>بها منشورات أو نتائج محفوظة</small></article>

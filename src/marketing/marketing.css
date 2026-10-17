@@ -6121,11 +6121,22 @@
 .marketing-meta-follower-number strong { font-size: clamp(26px,3vw,38px); font-weight: 900; color: var(--brand); }
 .marketing-meta-follower-number small { font-size: 12px; color: var(--muted); }
 .marketing-meta-account-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 18px 0; gap: 8px; }
+.marketing-meta-account-metrics.has-page-likes { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .marketing-meta-account-metrics > div { display: grid; gap: 7px; padding: 12px; background: var(--surface,#fffaf8); border: 1px solid var(--line); border-radius: 12px; }
 .marketing-meta-account-metrics span { font-size: 11px; color: var(--muted); }
 .marketing-meta-account-metrics strong { font-size: 14px; color: var(--ink); }
 .marketing-meta-followers-chart { min-width: 0; }
 .marketing-meta-chart-empty { min-height: 160px; display: flex; justify-content: center; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); border-radius: 12px; }
+
+.marketing-meta-top-post { border:1px solid var(--line); border-radius:12px; padding:14px; background:var(--surface,#fffaf8); margin:12px 0 18px; }
+.marketing-meta-top-post-title { display:flex; gap:8px; align-items:center; color:var(--brand); }
+.marketing-meta-top-post-title strong { font-size:13px; }
+.marketing-meta-top-post-title > span { margin-inline-start:auto; font-size:13px; font-weight:800; color:var(--ink); }
+.marketing-meta-top-post p { font-size:12px; color:var(--ink); line-height:1.8; overflow-wrap:anywhere; margin:9px 0; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.marketing-meta-top-post-metrics { display:flex; flex-wrap:wrap; gap:8px 15px; color:var(--muted); font-size:11px; }
+.marketing-meta-top-post footer { display:flex; justify-content:space-between; flex-wrap:wrap; align-items:center; gap:10px; margin-top:10px; font-size:11px; color:var(--muted); }
+.marketing-meta-top-post a { display:inline-flex; align-items:center; gap:5px; font-weight:700; color:var(--brand); }
+.marketing-meta-account-metrics small { font-size:10px; font-weight:500; color:var(--muted); }
 .marketing-meta-account-footer { margin-top: 15px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
 .marketing-meta-account-empty { grid-column: 1 / -1; padding: 24px; color: var(--muted); font-size: 13px; }
 .marketing-meta-account-disclaimer { margin: 12px 0 0; font-size: 11px; color: var(--muted); }

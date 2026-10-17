@@ -4,12 +4,13 @@ import { CalendarBlank, FilmStrip, ImageSquare, ListChecks, Megaphone, Plus, X }
 import { W, Empty, Field, FormatSelector, ProductViewButton, WorkAlert, WorkHeader } from './components';
 import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
+import { splitRequiredMediaSelection } from './requiredMedia';
 
 type IdeaAttachment = { key: string; file: File; fileId?: string };
-type RequiredDraft = { key: string; mediaKind: WorkMediaKind; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
+type RequiredDraft = { key: string; mediaKinds: WorkMediaKind[]; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
 type ExecutorDraft = { key: string; departmentId: string; assigneeId: string; items: RequiredDraft[] };
 type Reservation = { id: string; task_no: string; created_at: string };
-const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKind: 'image', ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
+const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKinds: ['image'], ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
 const newExecutor = (): ExecutorDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', items: [newRequired()] });
 
 type PlanEntry = { key: string; date: string; productId: string; platformId: string; postTypeId: string; budget: string };
@@ -35,6 +36,7 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const [reservation, setReservation] = useState<Reservation | null>(null), [name, setName] = useState(''), [typeId, setTypeId] = useState('');
   const [executors, setExecutors] = useState<ExecutorDraft[]>([newExecutor()]);
+  const [targetExecutorKey, setTargetExecutorKey] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
   const uploadController = useRef<AbortController | null>(null);
   useEffect(() => () => uploadController.current?.abort(), []);
@@ -51,7 +53,23 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
   const assignees = useMemo(() => meta.departments.flatMap(department =>
     department.users.map(user => ({ departmentId: department.id, departmentName: department.name, user })))
     .sort((a, b) => String(a.user.fullName || a.user.full_name || '').localeCompare(String(b.user.fullName || b.user.full_name || ''), 'ar')), [meta.departments]);
-  const requiredCount = executors.reduce((sum, executor) => sum + executor.items.length, 0);
+  // One visible request may produce two independent image/video approvals.
+  const requiredCount = executors.reduce((sum, executor) => sum + executor.items.reduce((total, item) => total + item.mediaKinds.length, 0), 0);
+  const selectedExecutor = executors.find(executor => executor.key === targetExecutorKey) || executors[executors.length - 1];
+  function addExecutor() {
+    const executor = newExecutor();
+    setExecutors(current => [...current, executor]);
+    setTargetExecutorKey(executor.key);
+  }
+  function addRequired() {
+    if (!selectedExecutor || requiredCount >= 100) return;
+    setExecutors(current => current.map(executor => executor.key === selectedExecutor.key ? { ...executor, items: [...executor.items, newRequired()] } : executor));
+  }
+  function toggleMedia(executor: ExecutorDraft, item: RequiredDraft, kind: WorkMediaKind) {
+    const mediaKinds = item.mediaKinds.includes(kind) ? item.mediaKinds.filter(media => media !== kind) : [...item.mediaKinds, kind];
+    if (!mediaKinds.length || requiredCount + mediaKinds.length - item.mediaKinds.length > 100) return;
+    changeItem(executor.key, item.key, { mediaKinds, formatIds: item.formatIds.filter(id => mediaKinds.some(media => supportsWorkMedia(media, formats.find(format => format.id === id)?.name || ''))) });
+  }
 
   function updateExecutor(key: string, patch: Partial<ExecutorDraft>) {
     setExecutors(current => current.map(executor => executor.key === key ? { ...executor, ...patch } : executor));
@@ -74,9 +92,15 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
   }
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
+    if (executors.some(executor => executor.items.some(item => item.mediaKinds.length > 0 &&
+        splitRequiredMediaSelection(item.mediaKinds, item.formatIds, formats).length !== item.mediaKinds.length))) {
+      setError('اختر مقاسًا مناسبًا لكل نوع مطلوب: صورة وفيديو عند اختيار الاثنين معًا.'); return;
+    }
     if (!reservation || !name.trim() || !typeId || !requiredCount || requiredCount > 100 ||
         executors.some(executor => !executor.departmentId || !executor.assigneeId || !executor.items.length ||
-          executor.items.some(item => !item.ideaName.trim() || !isWorkDate(item.dueOn) || !item.formatIds.length || (!item.idea.trim() && !item.attachments.length)))) {
+          executor.items.some(item => !item.ideaName.trim() || !isWorkDate(item.dueOn) ||
+            splitRequiredMediaSelection(item.mediaKinds, item.formatIds, formats).length !== item.mediaKinds.length ||
+            (!item.idea.trim() && !item.attachments.length)))) {
       setError(W.requiredFields); return;
     }
     setBusy(true); uploadController.current = new AbortController();
@@ -97,8 +121,12 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
           }
           fileIds.push(fileId);
         }
-        created.push({ clientKey: item.key, departmentId: executor.departmentId, assigneeId: executor.assigneeId, mediaKind: item.mediaKind,
-          ideaName: item.ideaName.trim(), idea: item.idea, formatIds: item.formatIds, dueOn: item.dueOn, ideaFileIds: fileIds });
+        // Keep the existing single-medium schema and approval flow: a combined
+        // selection creates two real deliverables with distinct identities.
+        for (const [index, medium] of splitRequiredMediaSelection(item.mediaKinds, item.formatIds, formats).entries()) {
+          created.push({ clientKey: index ? crypto.randomUUID() : item.key, departmentId: executor.departmentId, assigneeId: executor.assigneeId, mediaKind: medium.mediaKind,
+            ideaName: item.ideaName.trim(), idea: item.idea, formatIds: medium.formatIds, dueOn: item.dueOn, ideaFileIds: fileIds });
+        }
       }
       const result = await workPost<{ id: string }>('create_task', { reservationId: reservation.id, typeId, name: name.trim(), items: created });
       navigate(`/marketing?task=${encodeURIComponent(result.id)}`);
@@ -115,24 +143,24 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
       <Field label={W.taskName}><input required maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} /></Field>
     </div></section>
     <section className="mkw-panel mkw-requirements-panel"><header className="mkw-section-title"><div><h2>{W.assignments}</h2><small className="mkw-muted">{executors.length} منفذ · {requiredCount} مطلوب — لكل منفذ مطلوباته الخاصة</small></div>
-      <button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={() => setExecutors(current => [...current, newExecutor()])}><Plus size={17}/> إضافة منفذ جديد</button>
+      <div className="mkw-assignment-actions"><button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={addRequired} title="إضافة المطلوب إلى المنفذ المحدد"><Plus size={17}/>{W.addItem}</button>
+      <button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={addExecutor}><Plus size={17}/> إضافة منفذ جديد</button></div>
     </header>
-      <div className="mkw-executors-list">{executors.map((executor, executorIndex) => <section className="mkw-executor-group" key={executor.key}>
-        <header className="mkw-executor-header"><div><strong>المنفذ {executorIndex + 1}</strong><small>{executor.items.length} مطلوب</small></div>
-          <div className="mkw-executor-picker"><select aria-label={`اختيار المنفذ ${executorIndex + 1}`} required value={executor.departmentId && executor.assigneeId ? `${executor.departmentId}|${executor.assigneeId}` : ''} disabled={busy} onChange={event => { const [departmentId, assigneeId] = event.target.value.split('|'); updateExecutor(executor.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' }); }}>
+      <div className="mkw-executors-list">{executors.map((executor, executorIndex) => <section className={`mkw-executor-group ${selectedExecutor?.key === executor.key ? 'is-target' : ''}`} key={executor.key}>
+        <header className="mkw-executor-header"><div className="mkw-executor-identity"><div className="mkw-executor-picker"><select aria-label={`اختيار المنفذ ${executorIndex + 1}`} required value={executor.departmentId && executor.assigneeId ? `${executor.departmentId}|${executor.assigneeId}` : ''} disabled={busy} onFocus={() => setTargetExecutorKey(executor.key)} onChange={event => { setTargetExecutorKey(executor.key); const [departmentId, assigneeId] = event.target.value.split('|'); updateExecutor(executor.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' }); }}>
             <option value="">اختر المنفذ</option>{assignees.map(({ departmentId, departmentName, user }) => <option key={`${departmentId}:${user.id}`} value={`${departmentId}|${user.id}`}>{user.fullName || user.full_name} — {departmentName}</option>)}
-          </select></div>
+          </select></div><div className="mkw-executor-number"><strong>المنفذ {executorIndex + 1}</strong><small>{executor.items.length} مطلوب في الشاشة</small></div></div>
+          {executors.length > 1 && <button type="button" className={`secondary mkw-executor-target ${selectedExecutor?.key === executor.key ? 'active' : ''}`} disabled={busy} onClick={() => setTargetExecutorKey(executor.key)}>{selectedExecutor?.key === executor.key ? 'المنفذ المحدد لإضافة مطلوب' : 'اختيار لإضافة مطلوب'}</button>}
           <button type="button" className="icon-button" title="إزالة المنفذ" aria-label={`إزالة المنفذ ${executorIndex + 1}`} disabled={busy || executors.length === 1} onClick={() => setExecutors(current => current.filter(row => row.key !== executor.key))}><X size={18}/></button>
         </header>
         <div className="mkw-horizontal-scroll"><div className="mkw-horizontal-table mkw-executor-requirements"><div className="mkw-horizontal-heading"><span>{W.required}</span><span>{W.sizes}</span><span>{W.idea}</span><span>{W.dueOn}</span><span>{W.remove}</span></div>
           {executor.items.map(item => <div className="mkw-horizontal-row" key={item.key}>
-            <div className="mkw-requirement-type"><input aria-label={W.required} required maxLength={250} value={item.ideaName} disabled={busy} placeholder={W.required} onChange={event => changeItem(executor.key, item.key, { ideaName: event.target.value })}/><div className="mkw-kind-toggle">{(['image', 'video'] as const).map(kind => <button type="button" key={kind} className={item.mediaKind === kind ? 'active' : ''} disabled={busy} onClick={() => changeItem(executor.key, item.key, { mediaKind: kind, formatIds: item.formatIds.filter(id => supportsWorkMedia(kind, formats.find(format => format.id === id)?.name || '')) })}>{kind === 'image' ? <ImageSquare size={16}/> : <FilmStrip size={16}/>} {kind === 'image' ? W.image : W.video}</button>)}</div></div>
-            <div className="mkw-requirement-formats"><FormatSelector formats={formats.filter(format => supportsWorkMedia(item.mediaKind, format.name))} selected={item.formatIds} disabled={busy} onChange={formatIds => changeItem(executor.key, item.key, { formatIds })} /></div>
+            <div className="mkw-requirement-type"><input aria-label={W.required} required maxLength={250} value={item.ideaName} disabled={busy} placeholder={W.required} onChange={event => changeItem(executor.key, item.key, { ideaName: event.target.value })}/><div className="mkw-kind-toggle" role="group" aria-label="نوع المطلوب: اختر صورة أو فيديو أو الاثنين معًا">{(['image', 'video'] as const).map(kind => <button type="button" key={kind} aria-pressed={item.mediaKinds.includes(kind)} className={item.mediaKinds.includes(kind) ? 'active' : ''} disabled={busy || (!item.mediaKinds.includes(kind) && requiredCount >= 100)} onClick={() => toggleMedia(executor, item, kind)}>{kind === 'image' ? <ImageSquare size={16}/> : <FilmStrip size={16}/>} {kind === 'image' ? W.image : W.video}</button>)}</div>{item.mediaKinds.length === 2 && <small className="mkw-media-pair-note">صورة + فيديو: مطلوبان مستقلان في التنفيذ والاعتماد</small>}</div>
+            <div className="mkw-requirement-formats"><FormatSelector formats={formats.filter(format => item.mediaKinds.some(kind => supportsWorkMedia(kind, format.name)))} selected={item.formatIds} disabled={busy} onChange={formatIds => changeItem(executor.key, item.key, { formatIds })} /></div>
             <div className="mkw-requirement-idea"><textarea aria-label={W.idea} value={item.idea} maxLength={20000} disabled={busy} placeholder={W.idea} onChange={event => changeItem(executor.key, item.key, { idea: event.target.value })}/><label className="mkw-inline-file">{W.ideaFile}<input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { attachFiles(executor, item, event.target.files); event.target.value = ''; }}/></label>{item.attachments.map(file => <span className="mkw-requirement-file" key={file.key}>{file.file.name}<button type="button" className="icon-button" aria-label={W.remove} disabled={busy} onClick={() => void removeAttachment(executor, item, file.key)}><X size={13}/></button></span>)}</div>
             <div><input type="date" aria-label={W.dueOn} required value={item.dueOn} disabled={busy} onChange={event => changeItem(executor.key, item.key, { dueOn: event.target.value })}/></div>
             <div><button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || executor.items.length === 1} onClick={() => updateExecutor(executor.key, { items: executor.items.filter(row => row.key !== item.key) })}><X size={18}/></button></div>
           </div>)}</div></div>
-        <footer className="mkw-requirement-footer"><button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={() => updateExecutor(executor.key, { items: [...executor.items, newRequired()] })}><Plus size={17}/>{W.addItem}</button></footer>
       </section>)}</div>
     </section>
     {progress && <div className="mkw-panel"><span>{progress.name} {progress.percent}%</span><progress value={progress.percent} max={100}/><button type="button" className="secondary" onClick={() => uploadController.current?.abort()}>{W.cancel}</button></div>}

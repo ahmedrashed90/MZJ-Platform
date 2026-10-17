@@ -215,7 +215,10 @@ async function enrichRecentInstagramInsights(conn: MetaConnection, record: Disco
 async function savePostBatch(sql: Sql, records: DiscoveredPost[]) {
   if (!records.length) return;
   const unique = [...new Map(records.map((record) => [record.providerId, record])).values()];
-  const payload = JSON.stringify(unique.map((record) => ({
+  // Supply the PostgreSQL driver with a native JSON array instead of a
+  // string or array-typed SQL parameter. jsonb_to_recordset requires an array
+  // as its root value (an object/string root causes the reported DB error).
+  const payload = sql.json(unique.map((record) => ({
     platform: record.platform, account_id: record.accountId,
     provider_post_id: record.providerId, provider_media_id: record.providerMediaId,
     caption: record.caption, permalink: record.permalink || null,
@@ -545,10 +548,24 @@ export async function metaAccountData(sql: Sql) {
     select platform,account_id,backfill_complete,last_recent_at,last_backfill_at,last_success_at,last_error
     from marketing.meta_sync_state
   `;
-  const discoveredCounts = await sql<any[]>`
-    select platform,account_id,count(*)::integer as discovered_count
+  // Counts are computed from the genuinely discovered organic posts. Facebook
+  // does not expose a reliable account-wide media_count like Instagram does;
+  // therefore its number is explicitly the synced-content count.
+  const postStats = await sql<any[]>`
+    select platform,account_id,count(*)::integer as discovered_count,
+      count(likes_count)::integer as likes_measured_count,
+      sum(likes_count)::text as likes_total
     from marketing.meta_external_posts where is_deleted=false
     group by platform,account_id
+  `;
+  const mostEngaged = await sql<any[]>`
+    select distinct on (platform,account_id)
+      platform,account_id,provider_post_id,caption,permalink,published_at,
+      likes_count,comments_count,shares_count,
+      (coalesce(likes_count,0)+coalesce(comments_count,0)+coalesce(shares_count,0))::bigint as engagement_total
+    from marketing.meta_external_posts
+    where is_deleted=false and (likes_count is not null or comments_count is not null or shares_count is not null)
+    order by platform,account_id,engagement_total desc,published_at desc,provider_post_id desc
   `;
   return activeAccounts.map((account: any) => {
     const history = snapshots.filter((row: any) => row.platform === account.platform && row.account_id === account.account_id);
@@ -558,11 +575,23 @@ export async function metaAccountData(sql: Sql) {
     const monthly = history.filter((row: any) => clean(row.snapshot_date).startsWith(monthKey));
     const firstMonth = monthly[0];
     const previous = history.length > 1 ? history[history.length - 2] : null;
+    const stats = postStats.find((row: any) => row.platform === account.platform && row.account_id === account.account_id);
+    const top = mostEngaged.find((row: any) => row.platform === account.platform && row.account_id === account.account_id);
+    const discoveredCount = Number(stats?.discovered_count || 0);
+    const likesTotal = Number(stats?.likes_measured_count || 0) > 0 ? Number(stats.likes_total || 0) : null;
     return {
       platform: account.platform, accountId: account.account_id, accountName: clean(current?.account_name || account.account_name),
       connected: Boolean(account.connected), followers: current?.followers_count ?? null,
-      discoveredCount: Number(discoveredCounts.find((row: any) => row.platform === account.platform && row.account_id === account.account_id)?.discovered_count || 0),
-      fans: current?.fan_count ?? null, mediaCount: current?.media_count ?? null,
+      discoveredCount,
+      // Page likes (fans) are not post reactions; keep both metrics distinct.
+      fans: current?.fan_count ?? null, mediaCount: account.platform === 'facebook' ? discoveredCount : current?.media_count ?? null,
+      likesTotal, likesMeasuredCount: Number(stats?.likes_measured_count || 0),
+      topPost: top ? {
+        providerId: clean(top.provider_post_id), caption: clean(top.caption), permalink: clean(top.permalink),
+        publishedAt: top.published_at, likes: numberOrNull(top.likes_count),
+        comments: numberOrNull(top.comments_count), shares: numberOrNull(top.shares_count),
+        engagementTotal: Number(top.engagement_total || 0),
+      } : null,
       dailyChange: current && previous ? Number(current.followers_count) - Number(previous.followers_count) : null,
       monthlyChange: monthly.length > 1 && firstMonth && current ? Number(current.followers_count) - Number(firstMonth.followers_count) : null,
       snapshots: history.map((row: any) => ({ date: row.snapshot_date, followers: Number(row.followers_count) })),
