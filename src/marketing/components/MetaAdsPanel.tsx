@@ -73,90 +73,92 @@ function CampaignManagerEditor({ managerName, editable, onSave }: {
   </div>;
 }
 
-const CHART_METRICS: { metric: ChartMetric; label: string; hint: string }[] = [
-  { metric: 'costPerLead', label: 'تكلفة الليد', hint: 'بالعملة المسجلة للحساب' },
-  { metric: 'leads', label: 'عدد الليدات', hint: 'العملاء المحتملون حسب Meta' },
-  { metric: 'interactions', label: 'التفاعلات', hint: 'التفاعل المتاح من Meta' },
+const CHART_METRICS: { metric: ChartMetric; label: string; hint: string; chartHint: string }[] = [
+  { metric: 'interactions', label: 'التفاعلات لكل حملة', hint: 'تفاعلات Meta المتاحة لكل حملة', chartHint: 'عدد التفاعلات' },
+  { metric: 'leads', label: 'عدد الليدات لكل حملة', hint: 'العملاء المحتملون المسجلون بإجراءات Meta', chartHint: 'عدد الليدات' },
+  { metric: 'costPerLead', label: 'تكلفة الليد لكل حملة', hint: 'تكلفة الحصول على ليد من كل حملة', chartHint: 'تكلفة الليد' },
 ];
-const CAMPAIGN_CHART_PAGE_SIZE = 8;
+const CAMPAIGN_CHART_PAGE_SIZE = 5;
 const campaignDomId = (key: string) => `marketing-meta-ads-campaign-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
-function CampaignMetricBar({ point, metric, maximum }: { point: ChartPoint; metric: ChartMetric; maximum: number }) {
-  const value = point[metric];
-  const width = value !== null && value > 0 && maximum > 0 ? Math.max(2, (value / maximum) * 100) : 0;
-  const label = CHART_METRICS.find(item => item.metric === metric)?.label || metric;
-  const displayValue = metric === 'costPerLead' ? money(value, point.currency) : num(value);
-  return <div className={`marketing-meta-ads-chart-metric is-${metric}`} aria-label={`${label}: ${displayValue}`}>
-    <span className="marketing-meta-ads-chart-mobile-label" aria-hidden="true">{label}</span>
-    <span className="marketing-meta-ads-chart-track" aria-hidden="true">
-      <span className="marketing-meta-ads-chart-fill" style={{ width: `${width}%` }} />
-    </span>
-    <strong className="marketing-meta-ads-chart-value" dir="ltr">{displayValue}</strong>
-  </div>;
+function openCampaignDetails(key: string) {
+  const details = document.getElementById(campaignDomId(key));
+  if (details instanceof HTMLDetailsElement) {
+    details.open = true;
+    details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
-function CampaignOverviewChart({ points }: { points: ChartPoint[] }) {
-  const [orderBy, setOrderBy] = useState<ChartMetric>('leads');
+function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: ChartMetric }) {
   const [showAll, setShowAll] = useState(false);
+  const config = CHART_METRICS.find(item => item.metric === metric)!;
   const sorted = useMemo(() => [...points].sort((a, b) => {
-    const aValue = a[orderBy];
-    const bValue = b[orderBy];
+    const aValue = a[metric];
+    const bValue = b[metric];
     if (aValue === null && bValue !== null) return 1;
     if (bValue === null && aValue !== null) return -1;
-    if (aValue !== null && bValue !== null && aValue !== bValue) {
-      // A lower cost per lead is better; leads and interactions sort high to low.
-      return orderBy === 'costPerLead' ? aValue - bValue : bValue - aValue;
-    }
+    if (aValue !== null && bValue !== null && aValue !== bValue) return bValue - aValue;
     return a.name.localeCompare(b.name, 'ar');
-  }), [points, orderBy]);
-  const maxima = useMemo(() => ({
-    costPerLead: Math.max(0, ...points.map(point => point.costPerLead ?? 0)),
-    leads: Math.max(0, ...points.map(point => point.leads ?? 0)),
-    interactions: Math.max(0, ...points.map(point => point.interactions ?? 0)),
-  }), [points]);
-  const visible = showAll ? sorted : sorted.slice(0, CAMPAIGN_CHART_PAGE_SIZE);
-  const hasMultipleCurrencies = new Set(points.map(point => point.currency)).size > 1;
+  }), [points, metric]);
+  // The chart is always a compact top-five preview. Expanding a card reveals
+  // every campaign in its table instead of creating tall, unreadable charts.
+  const topCampaigns = sorted.slice(0, CAMPAIGN_CHART_PAGE_SIZE);
+  const tableCampaigns = showAll ? sorted : topCampaigns;
+  const maximum = Math.max(0, ...topCampaigns.map(point => point[metric] ?? 0));
+  const noMetricData = topCampaigns.every(point => point[metric] === null);
+  const hasMultipleCurrencies = metric === 'costPerLead' && new Set(points.map(point => point.currency)).size > 1;
+  const formatted = (point: ChartPoint) => metric === 'costPerLead'
+    ? money(point[metric], point.currency)
+    : num(point[metric]);
+  const compactValue = (point: ChartPoint) => num(point[metric], metric === 'costPerLead' ? 2 : 0);
 
-  const openCampaign = (key: string) => {
-    const details = document.getElementById(campaignDomId(key));
-    if (details instanceof HTMLDetailsElement) {
-      details.open = true;
-      details.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  };
-
-  return <section className="panel marketing-meta-ads-chart-card" aria-label="مقارنة أداء الحملات الإعلانية">
+  return <section className={`panel marketing-meta-ads-chart-card is-${metric}`} aria-label={config.label}>
     <header className="marketing-meta-ads-chart-heading">
       <div>
-        <h4>مقارنة أداء الحملات</h4>
-        <p>تكلفة الليد وعدد الليدات والتفاعلات، مع اسم الحملة ومديرها — حسب الفترة والفلاتر المحددة.</p>
+        <h4>{config.label}</h4>
+        <p>{config.hint}</p>
       </div>
-      <label className="marketing-meta-ads-chart-sort">ترتيب الحملات حسب
-        <select value={orderBy} onChange={event => { setOrderBy(event.target.value as ChartMetric); setShowAll(false); }}>
-          <option value="leads">الأكثر ليدات</option>
-          <option value="costPerLead">الأقل تكلفة لليد</option>
-          <option value="interactions">الأكثر تفاعلًا</option>
-        </select>
-      </label>
+      <span className="marketing-meta-ads-chart-icon" aria-hidden="true">
+        {metric === 'interactions' ? <FacebookLogo size={21} weight="duotone" /> : metric === 'leads' ? <UsersThree size={21} weight="duotone" /> : <ChartLineUp size={21} weight="duotone" />}
+      </span>
     </header>
-    {hasMultipleCurrencies && <p className="marketing-meta-ads-chart-currency-note">تكلفة الليد معروضة بعملة كل حساب إعلاني؛ لا تقارن التكاليف بين عملات مختلفة مباشرة.</p>}
-    <div className="marketing-meta-ads-chart-legend" aria-hidden="true">
-      <span>الحملة / مدير الحملة</span>
-      {CHART_METRICS.map(item => <span key={item.metric} className={`is-${item.metric}`}><i />{item.label}<small>{item.hint}</small></span>)}
-    </div>
-    <div className="marketing-meta-ads-chart-rows">
-      {visible.map(point => <div key={point.key} className="marketing-meta-ads-chart-row">
-        <div className="marketing-meta-ads-chart-campaign">
-          <button type="button" className="marketing-meta-ads-chart-campaign-name" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaign(point.key)}>{point.name}</button>
-          <small title={point.managerName || 'غير محدد'}>مدير الحملة: {point.managerName || 'غير محدد'}</small>
+    {hasMultipleCurrencies && <p className="marketing-meta-ads-chart-currency-note">الحسابات تستخدم عملات مختلفة؛ تكلفة كل حملة معروضة بعملتها، والمقارنة المباشرة بين العملات غير دقيقة.</p>}
+    <div className="marketing-meta-ads-chart-visual">
+      {maximum > 0 && !noMetricData ? <>
+        <div className="marketing-meta-ads-chart-plot" role="img" aria-label={`أعلى ${num(topCampaigns.length)} حملات حسب ${config.chartHint}; القيم الكاملة وأسماء المديرين في الجدول أدناه`}>
+          <div className="marketing-meta-ads-chart-guides" aria-hidden="true"><span /><span /><span /><span /><span /></div>
+          <div className="marketing-meta-ads-chart-bars" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
+            {topCampaigns.map(point => {
+              const value = point[metric];
+              const height = value !== null && value > 0 ? Math.max(3, (value / maximum) * 100) : 0;
+              return <div className="marketing-meta-ads-chart-bar-slot" key={point.key}>
+                <span className="marketing-meta-ads-chart-column" style={{ height: `${height}%` }}>
+                  {height > 0 && <b className="marketing-meta-ads-chart-bar-number" dir="ltr">{compactValue(point)}</b>}
+                </span>
+              </div>;
+            })}
+          </div>
         </div>
-        {CHART_METRICS.map(item => <CampaignMetricBar key={item.metric} point={point} metric={item.metric} maximum={maxima[item.metric]} />)}
-      </div>)}
+        <div className="marketing-meta-ads-chart-xlabels" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
+          {topCampaigns.map(point => <button type="button" key={point.key} title={`${point.name} — مدير الحملة: ${point.managerName || 'غير محدد'} — ${config.chartHint}: ${formatted(point)}`} onClick={() => openCampaignDetails(point.key)}>{point.name}</button>)}
+        </div>
+      </> : <div className="marketing-meta-ads-chart-no-data">{noMetricData ? `لم ترجع Meta بيانات ${config.chartHint} للحملات في الفترة المحددة.` : `لا توجد ${config.chartHint} مسجلة في الفترة المحددة.`}</div>}
+    </div>
+    <div className="marketing-meta-ads-chart-table-wrap">
+      <table className="marketing-meta-ads-chart-table">
+        <thead><tr><th scope="col">#</th><th scope="col">الحملة</th><th scope="col">مدير الحملة</th><th scope="col">{config.chartHint}</th></tr></thead>
+        <tbody>{tableCampaigns.map((point, index) => <tr key={point.key}>
+          <td>{num(index + 1)}</td>
+          <td><button type="button" className="marketing-meta-ads-chart-campaign-name" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>{point.name}</button></td>
+          <td><span className="marketing-meta-ads-chart-manager-name" title={point.managerName || 'غير محدد'}>{point.managerName || 'غير محدد'}</span></td>
+          <td><strong className="marketing-meta-ads-chart-table-value" dir="ltr">{formatted(point)}</strong></td>
+        </tr>)}</tbody>
+      </table>
     </div>
     <footer className="marketing-meta-ads-chart-footer">
-      <span>عرض {num(visible.length)} من أصل {num(points.length)} حملة · طول كل شريط نسبي داخل مؤشره</span>
+      <small>أفضل {num(topCampaigns.length)} من {num(points.length)} حملة · افتح الحملة لتعديل مديرها</small>
       {points.length > CAMPAIGN_CHART_PAGE_SIZE && <button type="button" className="secondary-button small" aria-expanded={showAll} onClick={() => setShowAll(value => !value)}>
-        {showAll ? 'عرض حملات أقل' : `عرض جميع الحملات (${num(points.length)})`}
+        {showAll ? 'إظهار أقل' : `عرض جميع الحملات (${num(points.length)})`}
       </button>}
     </footer>
   </section>;
@@ -260,7 +262,7 @@ export function MetaAdsPanel() {
         <article><ChartLineUp size={24}/><span>تكلفة الليد</span><strong>{commonCurrency && summary.leads ? money(summary.spend / summary.leads, commonCurrency) : '—'}</strong><small>صرف الفترة ÷ ليداتها</small></article>
         <article><FacebookLogo size={24}/><span>تفاعلات الإعلانات</span><strong>{num(summary.interactions)}</strong><small>ما توفر من بيانات التفاعل لدى Meta</small></article>
       </section>
-      {chartPoints.length > 0 && <div className="marketing-meta-ads-charts" aria-label="الرسوم البيانية للحملات الإعلانية"><CampaignOverviewChart points={chartPoints} /></div>}
+      {chartPoints.length > 0 && <div className="marketing-meta-ads-charts" aria-label="الرسوم البيانية للحملات الإعلانية">{CHART_METRICS.map(item => <CampaignMetricCard key={item.metric} points={chartPoints} metric={item.metric} />)}</div>}
       <div className="marketing-meta-ads-list">{filtered.map(({ campaign, account }) => <details key={`${account.id}:${campaign.id}`} id={campaignDomId(`${account.id}:${campaign.id}`)} className="panel marketing-meta-ads-campaign">
         <summary className="marketing-meta-ads-campaign-summary">
           <div><span className="marketing-meta-ads-account">{account.name} · {accountNumber(account.id)}</span><h4>{campaign.name}</h4><small>مدير الحملة: {campaign.managerName || 'غير محدد'} · {campaign.objective || 'الهدف غير مسجل'} · {campaign.ads.length} إعلان · بداية {marketingDate(campaign.startTime)}</small></div>

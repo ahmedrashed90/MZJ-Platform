@@ -99,11 +99,13 @@ const wrongCampaign = loadBackend(async url => {
 }, { META_ADS_ACCESS_TOKEN: 'my-private-test-token', META_AD_ACCOUNT_IDS: accountId });
 await assert.rejects(wrongCampaign.saveMetaAdsCampaignManager(sql, { accountId, campaignId, managerName: 'غير مسموح', updatedBy: '73fb3517-aac7-463e-94d7-bd91eb701b14' }));
 check(sqlCallCount === beforeInvalid, 'Backend refuses manager writes for campaign in a different ad account');
-check(front.includes('<CampaignOverviewChart points={chartPoints} />') && front.includes("metric: 'costPerLead'") && front.includes("metric: 'leads'") && front.includes("metric: 'interactions'"), 'All three campaign metrics appear in one readable comparison chart');
-check(!front.includes('BarChart') && !styles.includes('.marketing-meta-ads-chart-scroll'), 'Charts no longer squeeze axes into three narrow scrollable cards');
-check(front.includes('CAMPAIGN_CHART_PAGE_SIZE = 8') && front.includes('setShowAll(value => !value)') && front.includes('visible.map(point =>'), 'First eight campaigns are readable and remaining campaigns can be expanded');
-check(front.includes('openCampaign(point.key)') && front.includes('id={campaignDomId('), 'Selecting a chart campaign opens its saved details without changing campaign IDs');
-check(styles.includes('@media(max-width:760px)') && styles.includes('.marketing-meta-ads-chart-mobile-label') && styles.includes('grid-template-columns:minmax(0,1fr);'), 'Comparison chart adapts to small screens and labels each of the three metrics');
+check(front.includes('CHART_METRICS.map(item => <CampaignMetricCard') && front.includes("metric: 'costPerLead'") && front.includes("metric: 'leads'") && front.includes("metric: 'interactions'"), 'Three separate campaign chart cards render independent lead cost, lead count, and engagements');
+check(!front.includes('CampaignOverviewChart') && !front.includes('BarChart') && !styles.includes('.marketing-meta-ads-chart-scroll'), 'Original cramped and combined chart layouts are removed');
+check(front.includes('CAMPAIGN_CHART_PAGE_SIZE = 5') && front.includes('tableCampaigns.map(') && front.includes('setShowAll(value => !value)'), 'Five top campaigns stay visible per metric with expandable full campaign table');
+check(front.includes('openCampaignDetails(point.key)') && front.includes('id={campaignDomId('), 'Clicking chart labels or rows opens saved campaign details');
+check(styles.includes('grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))') && styles.includes('@media(max-width:920px)'), 'Three dedicated cards wrap from three to two to one according to available content width');
+check(styles.includes('marketing-meta-ads-chart-plot') && styles.includes('marketing-meta-ads-chart-xlabels') && styles.includes('marketing-meta-ads-chart-table') && !styles.includes('.marketing-meta-ads-chart-row'), 'Each metric has its own vertical bars, uncluttered axis labels and campaign manager table');
+check(front.includes('noMetricData') && front.includes('hasMultipleCurrencies') && front.includes("metric === 'costPerLead'"), 'Chart preserves missing-data and mixed-currency safeguards');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
 check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 2'), 'Dedicated additive schema migration persists manager names');
@@ -135,5 +137,58 @@ check(upgradeV1.length === 1 && upgradeV1[0].includes('create table if not exist
 const upgradeV0 = await simulatedSchemaSetup(0);
 check(upgradeV0.length === 1 && upgradeV0[0].includes('marketing.departments') && upgradeV0[0].includes('meta_ads_campaign_managers'), 'Fresh databases include the manager table in full schema bootstrap');
 check((await simulatedSchemaSetup(2)).length === 0, 'Current databases never rerun Marketing DDL on regular requests');
+// Render the actual TSX card functions with a small JSX runtime mock to catch
+// layout/data regressions beyond string-based source checks.
+const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsPanel()', 'export const __campaignMetricCardForTest = CampaignMetricCard;\nexport function MetaAdsPanel()'), {
+  fileName: 'MetaAdsPanel.tsx',
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+}).outputText;
+const jsxNode = (type, props, key) => ({ type, props: props || {}, key });
+const fakeIcon = () => null;
+const mockFront = {};
+vm.runInNewContext(debugFrontend, {
+  exports: mockFront, console, Date, String, Number, Math, Map, Set, Object, Array, RegExp, Intl,
+  require(name) {
+    if (name === 'react/jsx-runtime') return { jsx: jsxNode, jsxs: jsxNode, Fragment: 'fragment' };
+    if (name === 'react') return { useMemo: run => run(), useState: initial => [initial, () => {}], useEffect: () => {} };
+    if (name === '@phosphor-icons/react') return { FacebookLogo: fakeIcon, UsersThree: fakeIcon, ChartLineUp: fakeIcon,
+      ArrowClockwise: fakeIcon, FloppyDisk: fakeIcon, LinkSimple: fakeIcon, MagnifyingGlass: fakeIcon, Megaphone: fakeIcon, Wallet: fakeIcon };
+    if (name === '../../auth/AuthContext') return { useAuth: () => ({ user: null }) };
+    if (name === '../../systemAccess') return { hasPermission: () => false };
+    if (name === '../api') return { marketingDate: () => '', marketingFetch: () => Promise.resolve({}), marketingLocalDateKey: () => '', marketingQuery: () => '' };
+    if (name === './MarketingPage') return { MarketingAlert: fakeIcon };
+    throw new Error(`Unexpected frontend import: ${name}`);
+  },
+}, { timeout: 3000 });
+const testPoints = [
+  { key: 'act_1:1', name: 'A', managerName: 'مدير 1', currency: 'SAR', costPerLead: 6, leads: 6, interactions: 16 },
+  { key: 'act_1:2', name: 'B', managerName: 'مدير 2', currency: 'SAR', costPerLead: 30, leads: 30, interactions: 9 },
+  { key: 'act_1:3', name: 'C', managerName: '', currency: 'SAR', costPerLead: null, leads: null, interactions: null },
+  { key: 'act_1:4', name: 'D', managerName: 'مدير 4', currency: 'SAR', costPerLead: 17, leads: 17, interactions: 34 },
+  { key: 'act_1:5', name: 'E', managerName: 'مدير 5', currency: 'SAR', costPerLead: 4, leads: 4, interactions: 88 },
+  { key: 'act_1:6', name: 'F', managerName: 'مدير 6', currency: 'SAR', costPerLead: 3, leads: 3, interactions: 2 },
+];
+function childNodes(node) {
+  const out = [];
+  const visit = item => {
+    if (Array.isArray(item)) { item.forEach(visit); return; }
+    if (item && typeof item === 'object' && 'props' in item) {
+      out.push(item);
+      visit(item.props.children);
+    }
+  };
+  visit(node);
+  return out;
+}
+for (const metric of ['interactions', 'leads', 'costPerLead']) {
+  const render = mockFront.__campaignMetricCardForTest({ points: testPoints, metric });
+  const nodes = childNodes(render);
+  const plotBars = nodes.find(node => node.props.className === 'marketing-meta-ads-chart-bars');
+  const tableBody = nodes.find(node => node.type === 'tbody');
+  check(render.type === 'section' && render.props.className.includes(`is-${metric}`) && plotBars?.props.children.length === 5 && tableBody?.props.children.length === 5,
+    `${metric} renders an independent card with exactly five preview bars and matching table entries`);
+  const firstCampaignName = tableBody.props.children[0].props.children[1].props.children.props.children;
+  check(firstCampaignName === (metric === 'interactions' ? 'E' : 'B'), `${metric} sorts campaigns by its own result rather than sharing a global order`);
+}
 console.log(`${assertions}/${assertions} Meta campaign charts, managers and date range checks passed (mock provider/database).`);
 
