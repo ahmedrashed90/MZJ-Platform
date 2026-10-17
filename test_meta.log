@@ -1,0 +1,9 @@
+PASS: Meta rejects unknown period and deduplicates two Meta lead action aliases
+PASS: Meta reads two paid campaigns, each ad, actual leads, CPL and SAR budget
+PASS: Organic Facebook credentials without ads_read do not pretend to expose paid ads
+PASS: Two shifts calculate 480 expected minutes minus 420 logged minutes
+PASS: One shift preserves 6h58m rather than rounding to 7h
+PASS: Weekly rest day is excluded from employee hours total
+PASS: Single-shift leave removes only that shift, not another assigned shift
+PASS: Distinct per-executor required items are filtered by authenticated user on dashboard, detail and calendar
+Meta, attendance and executor regression: 8/8 passed.

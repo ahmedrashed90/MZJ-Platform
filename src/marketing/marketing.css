@@ -6220,25 +6220,28 @@
 .marketing-meta-ads-filters input[type="date"] { width:100%; max-width:100%; min-width:0; color:var(--text); background:var(--surface); border:1px solid var(--line-strong); border-radius:9px; padding:10px 12px; font:inherit; }
 /* Three dedicated Meta campaign charts, as separate cards (not one combined comparison). */
 .marketing-meta-ads-charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr)); gap:14px; min-width:0; align-items:start; }
-.marketing-meta-ads-chart-card { --chart-accent:#bc513e; --chart-pale:#fff5f1; --chart-border:#eed6cf; --chart-text:#984130; display:flex; flex-direction:column; min-width:0; padding:0; border:1px solid var(--chart-border); border-radius:16px; overflow:hidden; background:var(--surface,#fff); box-shadow:0 5px 20px rgba(63,38,26,.045); }
-.marketing-meta-ads-chart-card.is-leads { --chart-accent:#3567d8; --chart-pale:#f0f5ff; --chart-border:#d6e1fa; --chart-text:#244fa9; }
-.marketing-meta-ads-chart-card.is-interactions { --chart-accent:#20815b; --chart-pale:#f0f9f4; --chart-border:#d5ecde; --chart-text:#156b49; }
+.marketing-meta-ads-chart-card { --chart-accent:#a45d45; --chart-pale:#fbf3ef; --chart-border:#eddcd4; --chart-text:#7b432f; display:flex; flex-direction:column; min-width:0; padding:0; border:1px solid var(--chart-border); border-radius:16px; overflow:hidden; background:var(--surface,#fff); box-shadow:0 5px 20px rgba(63,38,26,.045); }
+.marketing-meta-ads-chart-card.is-leads { --chart-accent:#8d5140; --chart-pale:#faf1ed; --chart-border:#ead8d0; --chart-text:#6d3a2c; }
+.marketing-meta-ads-chart-card.is-interactions { --chart-accent:#754034; --chart-pale:#f8efeb; --chart-border:#e7d5cd; --chart-text:#5d3026; }
 .marketing-meta-ads-chart-heading { display:flex; flex-wrap:nowrap; justify-content:space-between; align-items:flex-start; gap:10px; padding:20px 17px 15px; }
 .marketing-meta-ads-chart-heading > div { min-width:0; flex:1; }
 .marketing-meta-ads-chart-heading h4 { margin:0 0 7px; font-size:17px; color:var(--chart-text); font-weight:900; }
-.marketing-meta-ads-chart-heading p { margin:0; line-height:1.65; font-size:11px; color:var(--muted); }
-.marketing-meta-ads-chart-icon { display:grid; place-items:center; flex-shrink:0; width:37px; height:37px; color:var(--chart-accent); background:var(--chart-pale); border-radius:11px; }
-.marketing-meta-ads-chart-currency-note { margin:0 17px 8px; padding:8px 10px; background:var(--chart-pale); color:var(--chart-text); border-radius:8px; font-size:11px; line-height:1.7; }
-.marketing-meta-ads-chart-visual { padding:10px 15px 14px; min-width:0; }
-.marketing-meta-ads-chart-plot { position:relative; height:218px; margin:0 2px; }
+.marketing-meta-ads-chart-heading p { margin:0; line-height:1.7; font-size:11px; color:var(--muted); }
+.marketing-meta-ads-chart-icon { display:grid; place-items:center; flex-shrink:0; width:38px; height:38px; color:var(--chart-accent); background:var(--chart-pale); border:1px solid var(--chart-border); border-radius:12px; }
+.marketing-meta-ads-chart-currency-note { margin:0 17px 8px; padding:8px 10px; background:var(--chart-pale); color:var(--chart-text); border-radius:8px; font-size:11px; line-height:1.75; }
+.marketing-meta-ads-chart-visual { padding:8px 15px 14px; min-width:0; }
+.marketing-meta-ads-chart-stage { display:grid; grid-template-columns:28px 46px minmax(0,1fr); row-gap:8px; column-gap:10px; align-items:stretch; direction:ltr; }
+.marketing-meta-ads-chart-axis-title { grid-column:1; grid-row:1; display:flex; align-items:center; justify-content:center; writing-mode:vertical-rl; text-orientation:mixed; color:var(--chart-text); font-size:12px; font-weight:900; letter-spacing:.2px; }
+.marketing-meta-ads-chart-scale { grid-column:2; grid-row:1; display:flex; flex-direction:column; justify-content:space-between; align-items:flex-end; padding-block:34px 0; min-height:218px; color:var(--muted); font-size:10px; line-height:1; font-variant-numeric:tabular-nums; }
+.marketing-meta-ads-chart-plot { grid-column:3; grid-row:1; position:relative; height:218px; margin:0 2px 0 0; }
 .marketing-meta-ads-chart-guides { position:absolute; inset:33px 4px 0; display:flex; flex-direction:column; justify-content:space-between; pointer-events:none; }
 .marketing-meta-ads-chart-guides span { border-top:1px solid var(--line,#e8e1dc); width:100%; opacity:.78; }
 .marketing-meta-ads-chart-bars { position:absolute; inset:35px 6px 0; display:grid; column-gap:11px; align-items:end; }
 .marketing-meta-ads-chart-bar-slot { height:100%; display:flex; flex-direction:column; justify-content:flex-end; min-width:0; align-items:center; }
-.marketing-meta-ads-chart-column { display:block; position:relative; width:min(100%,51px); background:linear-gradient(0deg, var(--chart-accent), color-mix(in srgb,var(--chart-accent),white 23%)); border-radius:5px 5px 0 0; transition:height .2s ease; }
+.marketing-meta-ads-chart-column { display:block; position:relative; width:min(100%,52px); background:linear-gradient(0deg, color-mix(in srgb,var(--chart-accent),black 6%), color-mix(in srgb,var(--chart-accent),white 18%)); border-radius:6px 6px 0 0; transition:height .2s ease; box-shadow:inset 0 1px 0 rgba(255,255,255,.28); }
 .marketing-meta-ads-chart-bar-number { position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); font-size:11px; color:var(--chart-text); font-weight:900; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.marketing-meta-ads-chart-xlabels { display:grid; align-items:start; gap:7px; padding:8px 7px 0; }
-.marketing-meta-ads-chart-xlabels button { font:inherit; font-size:10px; line-height:1.45; font-weight:700; text-align:center; border:0; background:transparent; color:var(--text); padding:2px 0; width:100%; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:34px; overflow-wrap:anywhere; cursor:pointer; }
+.marketing-meta-ads-chart-xlabels { grid-column:3; grid-row:2; display:grid; align-items:start; gap:7px; padding:2px 7px 0; }
+.marketing-meta-ads-chart-xlabels button { font:inherit; font-size:10px; line-height:1.5; font-weight:800; text-align:center; border:0; background:transparent; color:var(--text); padding:2px 0; width:100%; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:34px; overflow-wrap:anywhere; direction:rtl; cursor:pointer; }
 .marketing-meta-ads-chart-xlabels button:hover { color:var(--chart-accent); text-decoration:underline; }
 .marketing-meta-ads-chart-xlabels button:focus-visible,
 .marketing-meta-ads-chart-campaign-name:focus-visible { outline:2px solid var(--chart-accent); outline-offset:2px; border-radius:3px; }
@@ -6246,21 +6249,23 @@
 .marketing-meta-ads-chart-table-wrap { min-width:0; width:100%; }
 .marketing-meta-ads-chart-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:11px; }
 .marketing-meta-ads-chart-table thead { background:var(--chart-pale); }
-.marketing-meta-ads-chart-table th { text-align:start; font-weight:900; color:var(--text); font-size:10px; padding:11px 6px; border-block:1px solid var(--chart-border); }
-.marketing-meta-ads-chart-table th:first-child { width:30px; text-align:center; }
-.marketing-meta-ads-chart-table th:nth-child(2) { width:36%; }
-.marketing-meta-ads-chart-table th:nth-child(3) { width:27%; }
-.marketing-meta-ads-chart-table th:last-child { width:27%; }
-.marketing-meta-ads-chart-table td { vertical-align:middle; padding:10px 6px; border-bottom:1px solid var(--line); min-width:0; line-height:1.55; }
+.marketing-meta-ads-chart-table th { text-align:start; font-weight:900; color:var(--text); font-size:10px; padding:11px 8px; border-block:1px solid var(--chart-border); }
+.marketing-meta-ads-chart-table th:first-child { width:34px; text-align:center; }
+.marketing-meta-ads-chart-table th:nth-child(2) { width:34%; }
+.marketing-meta-ads-chart-table th:nth-child(3) { width:26%; text-align:center; }
+.marketing-meta-ads-chart-table th:last-child { width:28%; text-align:end; }
+.marketing-meta-ads-chart-table td { vertical-align:middle; padding:10px 8px; border-bottom:1px solid var(--line); min-width:0; line-height:1.55; }
 .marketing-meta-ads-chart-table td:first-child { text-align:center; font-size:10px; color:var(--muted); }
+.marketing-meta-ads-chart-table td:nth-child(3) { text-align:center; }
+.marketing-meta-ads-chart-table td:last-child { text-align:end; }
 .marketing-meta-ads-chart-table tbody tr:last-child td { border-bottom:0; }
 .marketing-meta-ads-chart-table tbody tr:hover { background:var(--chart-pale); }
-.marketing-meta-ads-chart-campaign-name { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-align:start; padding:0; width:100%; border:0; background:transparent; font:inherit; font-size:11px; line-height:1.6; font-weight:800; color:var(--text); overflow-wrap:anywhere; cursor:pointer; }
+.marketing-meta-ads-chart-campaign-name { display:block; overflow:hidden; text-align:start; padding:0; width:100%; border:0; background:transparent; font:inherit; font-size:11px; line-height:1.6; font-weight:800; color:var(--text); white-space:nowrap; text-overflow:ellipsis; cursor:pointer; }
 .marketing-meta-ads-chart-campaign-name:hover { color:var(--chart-accent); text-decoration:underline; }
 .marketing-meta-ads-chart-manager-name { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--muted); font-size:10px; }
-.marketing-meta-ads-chart-table-value { display:block; color:var(--chart-text); font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; text-align:start; font-weight:900; }
+.marketing-meta-ads-chart-table-value { display:block; color:var(--chart-text); font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; text-align:end; font-weight:900; }
 .marketing-meta-ads-chart-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; padding:13px 16px; border-top:1px solid var(--chart-border); margin-top:auto; background:var(--chart-pale); }
-.marketing-meta-ads-chart-footer small { font-size:10px; color:var(--muted); line-height:1.55; }
+.marketing-meta-ads-chart-footer small { font-size:10px; color:var(--muted); line-height:1.6; }
 .marketing-meta-ads-chart-footer .secondary-button { color:var(--chart-text); border-color:var(--chart-border); background:var(--surface,#fff); white-space:nowrap; }
 @media(max-width:920px) {
   .marketing-meta-ads-chart-heading { padding-inline:20px; }
@@ -6270,15 +6275,17 @@
   .marketing-meta-ads-chart-heading { padding:16px 13px 10px; }
   .marketing-meta-ads-chart-heading h4 { font-size:15px; }
   .marketing-meta-ads-chart-visual { padding:8px 8px 12px; }
+  .marketing-meta-ads-chart-stage { grid-template-columns:24px 40px minmax(0,1fr); column-gap:6px; }
+  .marketing-meta-ads-chart-scale { min-height:192px; padding-top:32px; }
   .marketing-meta-ads-chart-plot { height:192px; }
   .marketing-meta-ads-chart-bars { column-gap:5px; }
   .marketing-meta-ads-chart-xlabels { gap:3px; }
   .marketing-meta-ads-chart-xlabels button { font-size:9px; }
   .marketing-meta-ads-chart-table { font-size:10px; }
   .marketing-meta-ads-chart-table th,.marketing-meta-ads-chart-table td { padding-inline:4px; }
-  .marketing-meta-ads-chart-table th:first-child { width:23px; }
-  .marketing-meta-ads-chart-table th:nth-child(2) { width:36%; }
-  .marketing-meta-ads-chart-table th:nth-child(3) { width:24%; }
+  .marketing-meta-ads-chart-table th:first-child { width:24px; }
+  .marketing-meta-ads-chart-table th:nth-child(2) { width:34%; }
+  .marketing-meta-ads-chart-table th:nth-child(3) { width:25%; }
   .marketing-meta-ads-chart-table th:last-child { width:30%; }
   .marketing-meta-ads-chart-table-value { font-size:10px; }
   .marketing-meta-ads-chart-footer { padding:12px; }
