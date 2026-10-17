@@ -76,7 +76,7 @@ function CampaignManagerEditor({ managerName, editable, onSave }: {
 }
 
 function CampaignAxisTick({ x, y, payload, lookup }: {
-  x?: number; y?: number; payload?: { value: string }; lookup: Map<string, ChartPoint>;
+  x?: number | string; y?: number | string; payload?: { value: string | number }; lookup: Map<string, ChartPoint>;
 }) {
   const item = lookup.get(String(payload?.value || ''));
   if (!item) return <g />;
