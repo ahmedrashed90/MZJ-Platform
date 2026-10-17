@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ArrowClockwise, ChartLineUp, FacebookLogo, FloppyDisk, LinkSimple, MagnifyingGlass, Megaphone, UsersThree, Wallet } from '@phosphor-icons/react';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
@@ -30,7 +29,6 @@ const money = (value: number | null | undefined, currency: string) => value === 
 const accountNumber = (id: string) => id.replace(/^act_/, '');
 const campaignUrl = (account: string, id: string) => `https://www.facebook.com/adsmanager/manage/campaigns?act=${encodeURIComponent(accountNumber(account))}&selected_campaign_ids=${encodeURIComponent(id)}`;
 const adUrl = (account: string, id: string) => `https://www.facebook.com/adsmanager/manage/ads?act=${encodeURIComponent(accountNumber(account))}&selected_ad_ids=${encodeURIComponent(id)}`;
-const shortLabel = (text: string, max = 23) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
 function defaultRangeDate(daysBack: number) {
   const date = new Date();
   date.setDate(date.getDate() - daysBack);
@@ -75,45 +73,92 @@ function CampaignManagerEditor({ managerName, editable, onSave }: {
   </div>;
 }
 
-function CampaignAxisTick({ x, y, payload, lookup }: {
-  x?: number | string; y?: number | string; payload?: { value: string | number }; lookup: Map<string, ChartPoint>;
-}) {
-  const item = lookup.get(String(payload?.value || ''));
-  if (!item) return <g />;
-  return <g transform={`translate(${Number(x) || 0},${Number(y) || 0})`}>
-    <title>{`${item.name} — مدير الحملة: ${item.managerName || 'غير محدد'}`}</title>
-    <text textAnchor="end" fontSize="11" fill="var(--text, #542e25)">
-      <tspan x="-7" dy="-4" fontWeight="700">{shortLabel(item.name, 22)}</tspan>
-      <tspan x="-7" dy="15" fill="var(--muted, #987d76)">مدير: {shortLabel(item.managerName || 'غير محدد', 18)}</tspan>
-    </text>
-  </g>;
+const CHART_METRICS: { metric: ChartMetric; label: string; hint: string }[] = [
+  { metric: 'costPerLead', label: 'تكلفة الليد', hint: 'بالعملة المسجلة للحساب' },
+  { metric: 'leads', label: 'عدد الليدات', hint: 'العملاء المحتملون حسب Meta' },
+  { metric: 'interactions', label: 'التفاعلات', hint: 'التفاعل المتاح من Meta' },
+];
+const CAMPAIGN_CHART_PAGE_SIZE = 8;
+const campaignDomId = (key: string) => `marketing-meta-ads-campaign-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
+function CampaignMetricBar({ point, metric, maximum }: { point: ChartPoint; metric: ChartMetric; maximum: number }) {
+  const value = point[metric];
+  const width = value !== null && value > 0 && maximum > 0 ? Math.max(2, (value / maximum) * 100) : 0;
+  const label = CHART_METRICS.find(item => item.metric === metric)?.label || metric;
+  const displayValue = metric === 'costPerLead' ? money(value, point.currency) : num(value);
+  return <div className={`marketing-meta-ads-chart-metric is-${metric}`} aria-label={`${label}: ${displayValue}`}>
+    <span className="marketing-meta-ads-chart-mobile-label" aria-hidden="true">{label}</span>
+    <span className="marketing-meta-ads-chart-track" aria-hidden="true">
+      <span className="marketing-meta-ads-chart-fill" style={{ width: `${width}%` }} />
+    </span>
+    <strong className="marketing-meta-ads-chart-value" dir="ltr">{displayValue}</strong>
+  </div>;
 }
 
-function CampaignMetricChart({ metric, title, explanation, points }: {
-  metric: ChartMetric; title: string; explanation: string; points: ChartPoint[];
-}) {
-  const lookup = useMemo(() => new Map(points.map(row => [row.key, row])), [points]);
-  const chartHeight = Math.max(230, points.length * 53 + 46);
-  const hasData = points.some(row => row[metric] !== null);
-  return <section className="panel marketing-meta-ads-chart-card">
-    <div className="marketing-meta-ads-chart-heading"><h4>{title}</h4><small>{explanation}</small></div>
-    {hasData ? <div className="marketing-meta-ads-chart-scroll" tabIndex={0} role="region" aria-label={title}>
-      <div className="marketing-meta-ads-chart-area" style={{ height: chartHeight }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={points} layout="vertical" margin={{ top: 8, right: 12, bottom: 10, left: 4 }}>
-            <CartesianGrid strokeDasharray="3 4" horizontal={false} stroke="var(--line, #e8dad5)" />
-            <XAxis type="number" allowDecimals={metric === 'costPerLead'} tick={{ fontSize: 11 }} tickFormatter={value => num(Number(value), metric === 'costPerLead' ? 1 : 0)} />
-            <YAxis type="category" dataKey="key" width={168} interval={0} tickLine={false} axisLine={false} tick={props => <CampaignAxisTick {...props} lookup={lookup} />} />
-            <Tooltip cursor={{ fill: 'var(--surface-soft, #f8f0ed)' }} content={({ active, payload }) => {
-              const point = payload?.[0]?.payload as ChartPoint | undefined;
-              if (!active || !point) return null;
-              return <div className="marketing-meta-ads-chart-tooltip" dir="rtl"><strong>{point.name}</strong><small>مدير الحملة: {point.managerName || 'غير محدد'}</small><span>{title}: {metric === 'costPerLead' ? money(point[metric], point.currency) : num(point[metric])}</span></div>;
-            }} />
-            <Bar dataKey={metric} fill="var(--brand, #6a352c)" barSize={19} radius={[0, 5, 5, 0]} isAnimationActive={false} />
-          </BarChart>
-        </ResponsiveContainer>
+function CampaignOverviewChart({ points }: { points: ChartPoint[] }) {
+  const [orderBy, setOrderBy] = useState<ChartMetric>('leads');
+  const [showAll, setShowAll] = useState(false);
+  const sorted = useMemo(() => [...points].sort((a, b) => {
+    const aValue = a[orderBy];
+    const bValue = b[orderBy];
+    if (aValue === null && bValue !== null) return 1;
+    if (bValue === null && aValue !== null) return -1;
+    if (aValue !== null && bValue !== null && aValue !== bValue) {
+      // A lower cost per lead is better; leads and interactions sort high to low.
+      return orderBy === 'costPerLead' ? aValue - bValue : bValue - aValue;
+    }
+    return a.name.localeCompare(b.name, 'ar');
+  }), [points, orderBy]);
+  const maxima = useMemo(() => ({
+    costPerLead: Math.max(0, ...points.map(point => point.costPerLead ?? 0)),
+    leads: Math.max(0, ...points.map(point => point.leads ?? 0)),
+    interactions: Math.max(0, ...points.map(point => point.interactions ?? 0)),
+  }), [points]);
+  const visible = showAll ? sorted : sorted.slice(0, CAMPAIGN_CHART_PAGE_SIZE);
+  const hasMultipleCurrencies = new Set(points.map(point => point.currency)).size > 1;
+
+  const openCampaign = (key: string) => {
+    const details = document.getElementById(campaignDomId(key));
+    if (details instanceof HTMLDetailsElement) {
+      details.open = true;
+      details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  return <section className="panel marketing-meta-ads-chart-card" aria-label="مقارنة أداء الحملات الإعلانية">
+    <header className="marketing-meta-ads-chart-heading">
+      <div>
+        <h4>مقارنة أداء الحملات</h4>
+        <p>تكلفة الليد وعدد الليدات والتفاعلات، مع اسم الحملة ومديرها — حسب الفترة والفلاتر المحددة.</p>
       </div>
-    </div> : <p className="marketing-meta-ads-chart-empty">لا تتوفر بيانات لهذا المؤشر في الفترة المختارة.</p>}
+      <label className="marketing-meta-ads-chart-sort">ترتيب الحملات حسب
+        <select value={orderBy} onChange={event => { setOrderBy(event.target.value as ChartMetric); setShowAll(false); }}>
+          <option value="leads">الأكثر ليدات</option>
+          <option value="costPerLead">الأقل تكلفة لليد</option>
+          <option value="interactions">الأكثر تفاعلًا</option>
+        </select>
+      </label>
+    </header>
+    {hasMultipleCurrencies && <p className="marketing-meta-ads-chart-currency-note">تكلفة الليد معروضة بعملة كل حساب إعلاني؛ لا تقارن التكاليف بين عملات مختلفة مباشرة.</p>}
+    <div className="marketing-meta-ads-chart-legend" aria-hidden="true">
+      <span>الحملة / مدير الحملة</span>
+      {CHART_METRICS.map(item => <span key={item.metric} className={`is-${item.metric}`}><i />{item.label}<small>{item.hint}</small></span>)}
+    </div>
+    <div className="marketing-meta-ads-chart-rows">
+      {visible.map(point => <div key={point.key} className="marketing-meta-ads-chart-row">
+        <div className="marketing-meta-ads-chart-campaign">
+          <button type="button" className="marketing-meta-ads-chart-campaign-name" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaign(point.key)}>{point.name}</button>
+          <small title={point.managerName || 'غير محدد'}>مدير الحملة: {point.managerName || 'غير محدد'}</small>
+        </div>
+        {CHART_METRICS.map(item => <CampaignMetricBar key={item.metric} point={point} metric={item.metric} maximum={maxima[item.metric]} />)}
+      </div>)}
+    </div>
+    <footer className="marketing-meta-ads-chart-footer">
+      <span>عرض {num(visible.length)} من أصل {num(points.length)} حملة · طول كل شريط نسبي داخل مؤشره</span>
+      {points.length > CAMPAIGN_CHART_PAGE_SIZE && <button type="button" className="secondary-button small" aria-expanded={showAll} onClick={() => setShowAll(value => !value)}>
+        {showAll ? 'عرض حملات أقل' : `عرض جميع الحملات (${num(points.length)})`}
+      </button>}
+    </footer>
   </section>;
 }
 
@@ -215,12 +260,8 @@ export function MetaAdsPanel() {
         <article><ChartLineUp size={24}/><span>تكلفة الليد</span><strong>{commonCurrency && summary.leads ? money(summary.spend / summary.leads, commonCurrency) : '—'}</strong><small>صرف الفترة ÷ ليداتها</small></article>
         <article><FacebookLogo size={24}/><span>تفاعلات الإعلانات</span><strong>{num(summary.interactions)}</strong><small>ما توفر من بيانات التفاعل لدى Meta</small></article>
       </section>
-      {chartPoints.length > 0 && <div className="marketing-meta-ads-charts" aria-label="الرسوم البيانية للحملات الإعلانية">
-        <CampaignMetricChart metric="costPerLead" title="تكلفة الليد لكل حملة" explanation="بالعملة المسجلة للحساب الإعلاني، ولا تُجمع العملات المختلفة" points={chartPoints} />
-        <CampaignMetricChart metric="leads" title="عدد الليدات لكل حملة" explanation="العملاء المحتملون المسجلون بإجراءات Meta" points={chartPoints} />
-        <CampaignMetricChart metric="interactions" title="التفاعلات لكل حملة" explanation="تفاعلات Meta المتاحة لكل حملة" points={chartPoints} />
-      </div>}
-      <div className="marketing-meta-ads-list">{filtered.map(({ campaign, account }) => <details key={`${account.id}:${campaign.id}`} className="panel marketing-meta-ads-campaign">
+      {chartPoints.length > 0 && <div className="marketing-meta-ads-charts" aria-label="الرسوم البيانية للحملات الإعلانية"><CampaignOverviewChart points={chartPoints} /></div>}
+      <div className="marketing-meta-ads-list">{filtered.map(({ campaign, account }) => <details key={`${account.id}:${campaign.id}`} id={campaignDomId(`${account.id}:${campaign.id}`)} className="panel marketing-meta-ads-campaign">
         <summary className="marketing-meta-ads-campaign-summary">
           <div><span className="marketing-meta-ads-account">{account.name} · {accountNumber(account.id)}</span><h4>{campaign.name}</h4><small>مدير الحملة: {campaign.managerName || 'غير محدد'} · {campaign.objective || 'الهدف غير مسجل'} · {campaign.ads.length} إعلان · بداية {marketingDate(campaign.startTime)}</small></div>
           <span className={`marketing-meta-ads-status ${campaign.status === 'ACTIVE' ? 'is-active' : ''}`}>{adStatus(campaign.status)}</span>
