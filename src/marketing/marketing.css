@@ -6215,3 +6215,28 @@
 .marketing-meta-ads-table { width:100%; min-width:950px; }
 .marketing-meta-ads-loading { display:flex; align-items:center; gap:8px; }
 .marketing-meta-ads-empty { padding:28px; text-align:center; }
+
+/* Paid Meta campaigns: date-range filters, persistent manager labels and per-campaign charts. */
+.marketing-meta-ads-filters input[type="date"] { width:100%; max-width:100%; min-width:0; color:var(--text); background:var(--surface); border:1px solid var(--line-strong); border-radius:9px; padding:10px 12px; font:inherit; }
+.marketing-meta-ads-charts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; min-width:0; }
+.marketing-meta-ads-chart-card { padding:16px 12px 14px; min-width:0; }
+.marketing-meta-ads-chart-heading { padding:0 7px 13px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+.marketing-meta-ads-chart-heading h4 { margin:0 0 7px; font-size:15px; color:var(--brand); }
+.marketing-meta-ads-chart-heading small { line-height:1.7; color:var(--muted); }
+.marketing-meta-ads-chart-scroll { max-height:560px; overflow-y:auto; overflow-x:hidden; width:100%; scrollbar-width:thin; }
+.marketing-meta-ads-chart-scroll:focus-visible { outline:2px solid var(--brand); outline-offset:-2px; }
+.marketing-meta-ads-chart-area { min-width:0; width:100%; }
+.marketing-meta-ads-chart-tooltip { display:grid; gap:5px; background:var(--surface); border:1px solid var(--line-strong); box-shadow:0 5px 16px #371b171a; border-radius:9px; padding:10px 12px; max-width:260px; font-size:12px; }
+.marketing-meta-ads-chart-tooltip strong { font-size:13px; }
+.marketing-meta-ads-chart-tooltip small { color:var(--muted); }
+.marketing-meta-ads-chart-tooltip span { font-weight:700; color:var(--brand); }
+.marketing-meta-ads-chart-empty { color:var(--muted); font-size:12px; min-height:150px; display:grid; place-content:center; text-align:center; }
+.marketing-meta-ads-manager { display:flex; flex-wrap:wrap; align-items:end; gap:10px 12px; padding:14px; border-radius:11px; background:var(--surface-soft); border:1px solid var(--line); }
+.marketing-meta-ads-manager label { display:grid; gap:6px; flex:1 1 280px; min-width:0; font-size:13px; font-weight:800; }
+.marketing-meta-ads-manager label input { font:inherit; background:var(--surface); border:1px solid var(--line-strong); border-radius:9px; padding:10px 12px; width:100%; min-width:0; }
+.marketing-meta-ads-manager label strong { padding:10px 0; }
+.marketing-meta-ads-manager-help { flex-basis:100%; color:var(--muted); line-height:1.7; }
+.marketing-meta-ads-manager-success { color:#177146; flex-basis:100%; }
+.marketing-meta-ads-manager-error { color:#b32525; flex-basis:100%; }
+@media(max-width:1280px) { .marketing-meta-ads-charts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:850px) { .marketing-meta-ads-charts { grid-template-columns:minmax(0,1fr); } }

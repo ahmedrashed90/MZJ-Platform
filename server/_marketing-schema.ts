@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
-const MARKETING_SCHEMA_VERSION = 1;
+const MARKETING_SCHEMA_VERSION = 2;
 
 const MARKETING_SCHEMA_SQL = String.raw`begin;
 
@@ -1175,6 +1175,17 @@ create table if not exists marketing.meta_sync_state (
   primary key(platform,account_id)
 );
 
+-- Campaign manager names are private MZJ annotations for Meta-paid campaigns.
+-- Never mutate campaign records in Meta or reuse an organic-campaign ID here.
+create table if not exists marketing.meta_ads_campaign_managers (
+  account_id text not null,
+  campaign_id text not null,
+  manager_name text not null default '',
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key(account_id,campaign_id)
+);
+
 create table if not exists marketing.meta_follower_snapshots (
   platform text not null check(platform in ('facebook','instagram')),
   account_id text not null,
@@ -1207,18 +1218,35 @@ create table if not exists marketing.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into marketing.schema_state(id,version,updated_at) values(1,1,now())
-on conflict(id) do update set version=excluded.version,updated_at=excluded.updated_at;
+insert into marketing.schema_state(id,version,updated_at) values(1,2,now())
+on conflict(id) do update set version=greatest(marketing.schema_state.version,excluded.version),updated_at=excluded.updated_at;
 
 commit;
 `;
 
-async function marketingSchemaIsCurrent() {
+// Existing databases already at v1 only need this small, additive migration.
+// Do not replay the full legacy Marketing schema (which can lock large tables).
+const MARKETING_SCHEMA_V2_SQL = String.raw`begin;
+create table if not exists marketing.meta_ads_campaign_managers (
+  account_id text not null,
+  campaign_id text not null,
+  manager_name text not null default '',
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key(account_id,campaign_id)
+);
+update marketing.schema_state set version=greatest(version,2),updated_at=now() where id=1;
+commit;`;
+
+async function marketingSchemaVersion(): Promise<number> {
   const sql = getSql();
   const [relation] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.schema_state')::text as relation`;
-  if (!relation?.relation) return false;
+  if (!relation?.relation) return 0;
   const [state] = await sql<{ version: number }[]>`select version from marketing.schema_state where id=1`;
-  return Number(state?.version || 0) >= MARKETING_SCHEMA_VERSION;
+  return Number(state?.version || 0);
+}
+async function marketingSchemaIsCurrent() {
+  return (await marketingSchemaVersion()) >= MARKETING_SCHEMA_VERSION;
 }
 
 export async function ensureMarketingSchema() {
@@ -1228,7 +1256,10 @@ export async function ensureMarketingSchema() {
     ready = (async () => {
       if (await marketingSchemaIsCurrent()) return;
       await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
-        if (!await marketingSchemaIsCurrent()) await runSqlScript(MARKETING_SCHEMA_SQL);
+        const version = await marketingSchemaVersion();
+        if (version < MARKETING_SCHEMA_VERSION) {
+          await runSqlScript(version >= 1 ? MARKETING_SCHEMA_V2_SQL : MARKETING_SCHEMA_SQL);
+        }
       });
     })().catch(error => { ready = null; throw error; });
   }

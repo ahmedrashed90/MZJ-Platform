@@ -20,10 +20,27 @@ const numberOrNull = (input: unknown): number | null => input === null || input 
 const graphVersion = () => clean(process.env.META_GRAPH_VERSION) || 'v25.0';
 const maxAccountsPerRequest = 4;
 const graphTimeout = 11_000;
+const MAX_MANAGER_LENGTH = 120;
+const CAMPAIGN_ID_RE = /^[0-9]{1,30}$/;
 
 export function metaAdsPreset(input: unknown): MetaAdsPreset {
   const value = clean(input) as MetaAdsPreset;
   return PRESETS.has(value) ? value : 'last_30d';
+}
+
+/** Date boundaries are inclusive, and sent to Insights as Graph's time_range. */
+export function metaAdsTimeRange(fromInput: unknown, toInput: unknown): { since: string; until: string } | null {
+  const since = clean(fromInput);
+  const until = clean(toInput);
+  if (!since && !until) return null;
+  const validDate = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  if (!validDate(since) || !validDate(until)) throw new Error('يجب تحديد تاريخ صحيح في حقلي «من» و«إلى» لقراءة الفترة المخصصة.');
+  if (since > until) throw new Error('تاريخ «من» يجب أن يكون قبل تاريخ «إلى» أو مساويًا له.');
+  return { since, until };
 }
 
 function adsError(error: unknown) {
@@ -146,17 +163,18 @@ async function availableAccounts(token: string): Promise<{ accounts: MetaAdAccou
   return { accounts, truncated: response.more || response.data.length > accounts.length };
 }
 
-async function accountReport(account: MetaAdAccount, token: string, preset: MetaAdsPreset) {
+async function accountReport(account: MetaAdAccount, token: string, preset: MetaAdsPreset, dateRange: { since: string; until: string } | null) {
   const path = account.id;
   const campaignInsightFields = 'campaign_id,campaign_name,reach,impressions,clicks,ctr,spend,actions';
   const adInsightFields = 'campaign_id,ad_id,ad_name,reach,impressions,clicks,ctr,spend,actions';
+  const periodParams = dateRange ? { time_range: JSON.stringify(dateRange) } : { date_preset: preset };
   // Independent errors are retained per account: one revoked account should
   // not remove the campaigns/ads from another account.
   const [campaignList, adsList, campaignInsights, adInsights] = await Promise.all([
     graphCollection(`${path}/campaigns`, token, { fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time,created_time', limit: '100' }, 3),
     graphCollection(`${path}/ads`, token, { fields: 'id,name,campaign_id,status,effective_status,adset{id,name},creative{id,thumbnail_url,effective_object_story_id}', limit: '100' }, 3),
-    graphCollection(`${path}/insights`, token, { level: 'campaign', fields: campaignInsightFields, date_preset: preset, limit: '100' }, 3),
-    graphCollection(`${path}/insights`, token, { level: 'ad', fields: adInsightFields, date_preset: preset, limit: '100' }, 4),
+    graphCollection(`${path}/insights`, token, { level: 'campaign', fields: campaignInsightFields, ...periodParams, limit: '100' }, 3),
+    graphCollection(`${path}/insights`, token, { level: 'ad', fields: adInsightFields, ...periodParams, limit: '100' }, 4),
   ]);
   const campaignById = new Map(campaignInsights.data.map(row => [clean(row.campaign_id), row]));
   const adById = new Map(adInsights.data.map(row => [clean(row.ad_id), row]));
@@ -167,7 +185,7 @@ async function accountReport(account: MetaAdAccount, token: string, preset: Meta
     metrics: insightView(adById.get(clean(ad.id))),
   })).filter(ad => Boolean(ad.id));
   const campaigns = campaignList.data.map(campaign => ({
-    id: clean(campaign.id), accountId: account.id, name: clean(campaign.name) || 'حملة بدون اسم',
+    id: clean(campaign.id), accountId: account.id, name: clean(campaign.name) || 'حملة بدون اسم', managerName: '',
     status: clean(campaign.effective_status || campaign.status), objective: clean(campaign.objective),
     startTime: clean(campaign.start_time || campaign.created_time), stopTime: clean(campaign.stop_time),
     dailyBudget: budgetAmount(campaign.daily_budget, account.currency), lifetimeBudget: budgetAmount(campaign.lifetime_budget, account.currency),
@@ -181,10 +199,11 @@ async function accountReport(account: MetaAdAccount, token: string, preset: Meta
   };
 }
 
-export async function metaAdsData(sql: Sql, presetInput: unknown, accountIdInput?: unknown) {
+export async function metaAdsData(sql: Sql, presetInput: unknown, accountIdInput?: unknown, dateFromInput?: unknown, dateToInput?: unknown) {
   const preset = metaAdsPreset(presetInput);
+  const dateRange = metaAdsTimeRange(dateFromInput, dateToInput);
   const credentials = await adsCredential(sql);
-  const empty = { ok: true, preset, accounts: [], reports: [], errors: [], syncedAt: new Date().toISOString() };
+  const empty = { ok: true, preset: dateRange ? 'custom' : preset, dateRange, accounts: [], reports: [], errors: [], syncedAt: new Date().toISOString() };
   if (!credentials.token) {
     return { ...empty, status: 'needs_permission',
       note: credentials.expired ? 'انتهت صلاحية توكن Meta. أعد ربط الحساب أو استخدم META_ADS_ACCESS_TOKEN بصلاحية ads_read.'
@@ -197,8 +216,21 @@ export async function metaAdsData(sql: Sql, presetInput: unknown, accountIdInput
     const accounts = found.accounts;
     if (selected && !accounts.some(account => account.id === selected)) return { ...empty, status: 'needs_account', accounts, note: 'الحساب الإعلاني المطلوب غير متاح لهذا الربط.' };
     const targets = selected ? accounts.filter(account => account.id === selected) : accounts;
-    const results = await Promise.allSettled(targets.map(account => accountReport(account, credentials.token, preset)));
+    const results = await Promise.allSettled(targets.map(account => accountReport(account, credentials.token, preset, dateRange)));
     const reports = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    // Names are local annotations, never written to Meta or to CRM.
+    // A single bulk query avoids a database round trip per campaign.
+    if (reports.length) {
+      const accountIds = reports.map(report => report.account.id);
+      const managers = await sql<{ account_id: string; campaign_id: string; manager_name: string }[]>`
+        select account_id, campaign_id, manager_name from marketing.meta_ads_campaign_managers
+        where account_id in ${sql(accountIds)}
+      `;
+      const byCampaign = new Map(managers.map(row => [`${row.account_id}:${row.campaign_id}`, row.manager_name]));
+      for (const report of reports) for (const campaign of report.campaigns) {
+        campaign.managerName = byCampaign.get(`${report.account.id}:${campaign.id}`) || '';
+      }
+    }
     const errors = results.flatMap((result, index) => result.status === 'rejected' ? [{ accountId: targets[index].id, message: adsError(result.reason) }] : []);
     return { ...empty, status: reports.length ? 'ready' : 'failed', accounts, reports, errors,
       truncatedAccounts: found.truncated,
@@ -208,4 +240,31 @@ export async function metaAdsData(sql: Sql, presetInput: unknown, accountIdInput
   }
 }
 
-export const metaAdsTestHelpers = { metaAdsPreset, metaLeadCount, budgetAmount, insightView, safeAccountId };
+/** Persist only a local campaign manager label; Ads Manager remains read-only. */
+export async function saveMetaAdsCampaignManager(sql: Sql, input: {
+  accountId: unknown; campaignId: unknown; managerName: unknown; updatedBy: string;
+}) {
+  const accountId = safeAccountId(input.accountId);
+  const campaignId = clean(input.campaignId);
+  const managerName = clean(input.managerName).replace(/\s+/g, ' ');
+  if (!accountId || !CAMPAIGN_ID_RE.test(campaignId)) throw new Error('رقم الحساب أو الحملة الإعلانية غير صحيح.');
+  if (managerName.length > MAX_MANAGER_LENGTH) throw new Error('اسم مدير الحملة يجب ألا يتجاوز 120 حرفًا.');
+  const credential = await adsCredential(sql);
+  if (!credential.token) throw new Error('توكن Meta Ads غير متاح للتحقق من ملكية الحملة.');
+  const available = await availableAccounts(credential.token);
+  if (!available.accounts.some(account => account.id === accountId)) throw new Error('الحساب الإعلاني غير متاح لصلاحيات الربط الحالي.');
+  const campaign = await graphGet(campaignId, credential.token, { fields: 'id,account_id' });
+  if (clean(campaign.id) !== campaignId || safeAccountId(campaign.account_id) !== accountId) {
+    throw new Error('الحملة ليست تابعة للحساب الإعلاني المحدد.');
+  }
+  await sql`
+    insert into marketing.meta_ads_campaign_managers(account_id, campaign_id, manager_name, updated_by, updated_at)
+    values (${accountId}, ${campaignId}, ${managerName}, ${input.updatedBy}::uuid, now())
+    on conflict(account_id, campaign_id) do update
+       set manager_name=excluded.manager_name, updated_by=excluded.updated_by, updated_at=now()
+  `;
+  return { ok: true, accountId, campaignId, managerName };
+}
+
+export const metaAdsTestHelpers = { metaAdsPreset, metaAdsTimeRange, metaLeadCount, budgetAmount, insightView, safeAccountId };
+
