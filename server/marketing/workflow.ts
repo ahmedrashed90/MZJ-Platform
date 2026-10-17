@@ -122,13 +122,13 @@ async function recalculateTask(db: any, taskId: string) {
 async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const task = await taskVisible(db, user, taskId);
   const all = await loadItems(db, taskId);
-  const readiness = workReadiness(all);
   const canSeeAll = isManager(user) || (task.created_by === user.id && (hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review')));
   const scopes = departmentScope(user);
   const permittedDepartments = scopes.length ? await db`select id::text from core.departments where code=any(${scopes}::text[]) and system_code='marketing'` : [];
   const departmentIds = new Set(permittedDepartments.map((d: any) => d.id));
   const items = canSeeAll ? all : all.filter(i => i.assigned_to === user.id || departmentIds.has(i.department_id));
-  const dates = all.map(i => workDate(i.due_on)).sort();
+  const readiness = workReadiness(items);
+  const dates = items.map(i => workDate(i.due_on)).sort();
   const [type] = await db`select name from marketing.campaign_types where id=${task.type_id}::uuid`;
   const itemIds = items.map(i => i.id);
   const events = await db`select id,action,note,actor_name,created_at,item_id,data from marketing.work_history
@@ -149,9 +149,14 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as submitted_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
-    left join marketing.work_items i on i.task_id=t.id
+    left join marketing.work_items i on i.task_id=t.id and (
+      ${isManager(user)} or (t.created_by=${user.id}::uuid and ${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))})
+      or i.assigned_to=${user.id}::uuid or exists(
+        select 1 from core.departments visible_department where visible_department.id=i.department_id
+        and visible_department.code=any(${scopes}::text[])))
     where t.is_deleted=false and (${!activeOnly} or t.status='active') and (
-      ${isManager(user)} or t.created_by=${user.id}::uuid or exists(select 1 from marketing.work_items own
+      ${isManager(user)} or (t.created_by=${user.id}::uuid and ${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))})
+      or exists(select 1 from marketing.work_items own
         left join core.departments d on d.id=own.department_id where own.task_id=t.id and
           (own.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))))
     group by t.id,ct.name order by t.created_at desc,t.task_number desc`;

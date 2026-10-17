@@ -6,9 +6,11 @@ import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from 
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
 
 type IdeaAttachment = { key: string; file: File; fileId?: string };
-type RequiredDraft = { key: string; departmentId: string; assigneeId: string; mediaKind: WorkMediaKind; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
+type RequiredDraft = { key: string; mediaKind: WorkMediaKind; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
+type ExecutorDraft = { key: string; departmentId: string; assigneeId: string; items: RequiredDraft[] };
 type Reservation = { id: string; task_no: string; created_at: string };
-const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', mediaKind: 'image', ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
+const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKind: 'image', ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
+const newExecutor = (): ExecutorDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', items: [newRequired()] });
 
 type PlanEntry = { key: string; date: string; productId: string; platformId: string; postTypeId: string; budget: string };
 const newEntry = (productId = ''): PlanEntry => ({ key: crypto.randomUUID(), date: '', productId, platformId: '', postTypeId: '', budget: '' });
@@ -32,7 +34,7 @@ export function MarketingCreatePage() {
 function TaskComposer({ meta }: { meta: WorkMeta }) {
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const [reservation, setReservation] = useState<Reservation | null>(null), [name, setName] = useState(''), [typeId, setTypeId] = useState('');
-  const [items, setItems] = useState<RequiredDraft[]>([newRequired()]);
+  const [executors, setExecutors] = useState<ExecutorDraft[]>([newExecutor()]);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
   const uploadController = useRef<AbortController | null>(null);
   useEffect(() => () => uploadController.current?.abort(), []);
@@ -46,38 +48,56 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
     const platform = meta.platforms.find(item => item.id === post.platform_id);
     return platform ? [{ ...post, platform_name: platform.name, platform_code: platform.code }] : [];
   }), [meta]);
-  function changeItem(key: string, patch: Partial<RequiredDraft>) {
-    setItems(current => current.map(item => item.key === key ? { ...item, ...patch } : item));
+  const assignees = useMemo(() => meta.departments.flatMap(department =>
+    department.users.map(user => ({ departmentId: department.id, departmentName: department.name, user })))
+    .sort((a, b) => String(a.user.fullName || a.user.full_name || '').localeCompare(String(b.user.fullName || b.user.full_name || ''), 'ar')), [meta.departments]);
+  const requiredCount = executors.reduce((sum, executor) => sum + executor.items.length, 0);
+
+  function updateExecutor(key: string, patch: Partial<ExecutorDraft>) {
+    setExecutors(current => current.map(executor => executor.key === key ? { ...executor, ...patch } : executor));
   }
-  function attachFiles(item: RequiredDraft, files: FileList | null) {
+  function changeItem(executorKey: string, itemKey: string, patch: Partial<RequiredDraft>) {
+    setExecutors(current => current.map(executor => executor.key === executorKey ? {
+      ...executor, items: executor.items.map(item => item.key === itemKey ? { ...item, ...patch } : item),
+    } : executor));
+  }
+  function attachFiles(executor: ExecutorDraft, item: RequiredDraft, files: FileList | null) {
     if (!files) return;
     const next = Array.from(files);
     if (next.some(file => !ideaFileAllowed(file.name) || file.size <= 0 || file.size > 50 * 1024 ** 2)) { setError(W.fileInvalid); return; }
-    changeItem(item.key, { attachments: [...item.attachments, ...next.map(file => ({ key: crypto.randomUUID(), file }))] });
+    changeItem(executor.key, item.key, { attachments: [...item.attachments, ...next.map(file => ({ key: crypto.randomUUID(), file }))] });
   }
-  async function removeAttachment(item: RequiredDraft, key: string) {
+  async function removeAttachment(executor: ExecutorDraft, item: RequiredDraft, key: string) {
     const file = item.attachments.find(entry => entry.key === key);
     if (file?.fileId) await workPost('remove_upload', { fileId: file.fileId }).catch(() => undefined);
-    changeItem(item.key, { attachments: item.attachments.filter(entry => entry.key !== key) });
+    changeItem(executor.key, item.key, { attachments: item.attachments.filter(entry => entry.key !== key) });
   }
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
-    if (!reservation || !name.trim() || !typeId || !items.length || items.some(item => !item.departmentId || !item.assigneeId || !item.ideaName.trim() || !isWorkDate(item.dueOn) || !item.formatIds.length || (!item.idea.trim() && !item.attachments.length))) { setError(W.requiredFields); return; }
+    if (!reservation || !name.trim() || !typeId || !requiredCount || requiredCount > 100 ||
+        executors.some(executor => !executor.departmentId || !executor.assigneeId || !executor.items.length ||
+          executor.items.some(item => !item.ideaName.trim() || !isWorkDate(item.dueOn) || !item.formatIds.length || (!item.idea.trim() && !item.attachments.length)))) {
+      setError(W.requiredFields); return;
+    }
     setBusy(true); uploadController.current = new AbortController();
     try {
       const created = [];
-      for (const item of items) {
+      // Each required deliverable is a separate work item owned by exactly one
+      // executor. Existing dashboard/calendar permissions and file approvals are retained.
+      for (const executor of executors) for (const item of executor.items) {
         const fileIds: string[] = [];
         for (const attachment of item.attachments) {
           let fileId = attachment.fileId;
           if (!fileId) {
             fileId = await uploadWorkFile(attachment.file, { reservationId: reservation.id, category: 'idea' }, percent => setProgress({ name: attachment.file.name, percent }), uploadController.current.signal);
             attachment.fileId = fileId;
-            setItems(current => current.map(row => ({ ...row, attachments: row.attachments.map(file => file.key === attachment.key ? { ...file, fileId } : file) })));
+            setExecutors(current => current.map(row => ({ ...row, items: row.items.map(required => ({
+              ...required, attachments: required.attachments.map(file => file.key === attachment.key ? { ...file, fileId } : file),
+            })) })));
           }
           fileIds.push(fileId);
         }
-        created.push({ clientKey: item.key, departmentId: item.departmentId, assigneeId: item.assigneeId, mediaKind: item.mediaKind,
+        created.push({ clientKey: item.key, departmentId: executor.departmentId, assigneeId: executor.assigneeId, mediaKind: item.mediaKind,
           ideaName: item.ideaName.trim(), idea: item.idea, formatIds: item.formatIds, dueOn: item.dueOn, ideaFileIds: fileIds });
       }
       const result = await workPost<{ id: string }>('create_task', { reservationId: reservation.id, typeId, name: name.trim(), items: created });
@@ -94,16 +114,26 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
       <Field label={W.taskType}><select required value={typeId} disabled={busy} onChange={event => setTypeId(event.target.value)}><option value="">{W.choose}</option>{meta.campaignTypes.map(type => <option value={type.id} key={type.id}>{type.name}</option>)}</select></Field>
       <Field label={W.taskName}><input required maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} /></Field>
     </div></section>
-    <section className="mkw-panel mkw-requirements-panel"><header className="mkw-section-title"><h2>{W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></header>
-      <div className="mkw-horizontal-scroll"><div className="mkw-horizontal-table"><div className="mkw-horizontal-heading"><span>{W.assignee}</span><span>{W.required}</span><span>{W.sizes}</span><span>{W.idea}</span><span>{W.dueOn}</span><span>{W.remove}</span></div>
-      {items.map(item => <div className="mkw-horizontal-row" key={item.key}>
-        <div><select aria-label={W.assignee} required value={item.departmentId && item.assigneeId ? `${item.departmentId}|${item.assigneeId}` : ''} disabled={busy} onChange={event => { const [departmentId, assigneeId] = event.target.value.split('|'); changeItem(item.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' }); }}><option value="">{W.choose}</option>{Array.from(new Map(meta.departments.flatMap(department => department.users.map(user => [user.id, { departmentId: department.id, user }] as const))).values()).sort((a, b) => String(a.user.fullName || a.user.full_name || '').localeCompare(String(b.user.fullName || b.user.full_name || ''), 'ar')).map(({ departmentId, user }) => <option key={user.id} value={`${departmentId}|${user.id}`}>{user.fullName || user.full_name}</option>)}</select></div>
-        <div className="mkw-requirement-type"><input aria-label={W.required} required maxLength={250} value={item.ideaName} disabled={busy} placeholder={W.required} onChange={event => changeItem(item.key, { ideaName: event.target.value })}/><div className="mkw-kind-toggle">{(['image', 'video'] as const).map(kind => <button type="button" key={kind} className={item.mediaKind === kind ? 'active' : ''} disabled={busy} onClick={() => changeItem(item.key, { mediaKind: kind, formatIds: item.formatIds.filter(id => supportsWorkMedia(kind, formats.find(format => format.id === id)?.name || '')) })}>{kind === 'image' ? <ImageSquare size={16}/> : <FilmStrip size={16}/>} {kind === 'image' ? W.image : W.video}</button>)}</div></div>
-        <div className="mkw-requirement-formats"><FormatSelector formats={formats.filter(format => supportsWorkMedia(item.mediaKind, format.name))} selected={item.formatIds} disabled={busy} onChange={formatIds => changeItem(item.key, { formatIds })} /></div>
-        <div className="mkw-requirement-idea"><textarea aria-label={W.idea} value={item.idea} maxLength={20000} disabled={busy} placeholder={W.idea} onChange={event => changeItem(item.key, { idea: event.target.value })}/><label className="mkw-inline-file">{W.ideaFile}<input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { attachFiles(item, event.target.files); event.target.value = ''; }}/></label>{item.attachments.map(file => <span className="mkw-requirement-file" key={file.key}>{file.file.name}<button type="button" className="icon-button" aria-label={W.remove} disabled={busy} onClick={() => void removeAttachment(item, file.key)}><X size={13}/></button></span>)}</div>
-        <div><input type="date" aria-label={W.dueOn} required value={item.dueOn} disabled={busy} onChange={event => changeItem(item.key, { dueOn: event.target.value })}/></div>
-        <div><button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || items.length === 1} onClick={() => setItems(current => current.filter(row => row.key !== item.key))}><X size={18}/></button></div>
-      </div>)}</div></div><footer className="mkw-requirement-footer"><button type="button" className="secondary" disabled={busy} onClick={() => setItems(current => [...current, newRequired()])}><Plus size={17}/>{W.addItem}</button></footer>
+    <section className="mkw-panel mkw-requirements-panel"><header className="mkw-section-title"><div><h2>{W.assignments}</h2><small className="mkw-muted">{executors.length} منفذ · {requiredCount} مطلوب — لكل منفذ مطلوباته الخاصة</small></div>
+      <button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={() => setExecutors(current => [...current, newExecutor()])}><Plus size={17}/> إضافة منفذ جديد</button>
+    </header>
+      <div className="mkw-executors-list">{executors.map((executor, executorIndex) => <section className="mkw-executor-group" key={executor.key}>
+        <header className="mkw-executor-header"><div><strong>المنفذ {executorIndex + 1}</strong><small>{executor.items.length} مطلوب</small></div>
+          <div className="mkw-executor-picker"><select aria-label={`اختيار المنفذ ${executorIndex + 1}`} required value={executor.departmentId && executor.assigneeId ? `${executor.departmentId}|${executor.assigneeId}` : ''} disabled={busy} onChange={event => { const [departmentId, assigneeId] = event.target.value.split('|'); updateExecutor(executor.key, { departmentId: departmentId || '', assigneeId: assigneeId || '' }); }}>
+            <option value="">اختر المنفذ</option>{assignees.map(({ departmentId, departmentName, user }) => <option key={`${departmentId}:${user.id}`} value={`${departmentId}|${user.id}`}>{user.fullName || user.full_name} — {departmentName}</option>)}
+          </select></div>
+          <button type="button" className="icon-button" title="إزالة المنفذ" aria-label={`إزالة المنفذ ${executorIndex + 1}`} disabled={busy || executors.length === 1} onClick={() => setExecutors(current => current.filter(row => row.key !== executor.key))}><X size={18}/></button>
+        </header>
+        <div className="mkw-horizontal-scroll"><div className="mkw-horizontal-table mkw-executor-requirements"><div className="mkw-horizontal-heading"><span>{W.required}</span><span>{W.sizes}</span><span>{W.idea}</span><span>{W.dueOn}</span><span>{W.remove}</span></div>
+          {executor.items.map(item => <div className="mkw-horizontal-row" key={item.key}>
+            <div className="mkw-requirement-type"><input aria-label={W.required} required maxLength={250} value={item.ideaName} disabled={busy} placeholder={W.required} onChange={event => changeItem(executor.key, item.key, { ideaName: event.target.value })}/><div className="mkw-kind-toggle">{(['image', 'video'] as const).map(kind => <button type="button" key={kind} className={item.mediaKind === kind ? 'active' : ''} disabled={busy} onClick={() => changeItem(executor.key, item.key, { mediaKind: kind, formatIds: item.formatIds.filter(id => supportsWorkMedia(kind, formats.find(format => format.id === id)?.name || '')) })}>{kind === 'image' ? <ImageSquare size={16}/> : <FilmStrip size={16}/>} {kind === 'image' ? W.image : W.video}</button>)}</div></div>
+            <div className="mkw-requirement-formats"><FormatSelector formats={formats.filter(format => supportsWorkMedia(item.mediaKind, format.name))} selected={item.formatIds} disabled={busy} onChange={formatIds => changeItem(executor.key, item.key, { formatIds })} /></div>
+            <div className="mkw-requirement-idea"><textarea aria-label={W.idea} value={item.idea} maxLength={20000} disabled={busy} placeholder={W.idea} onChange={event => changeItem(executor.key, item.key, { idea: event.target.value })}/><label className="mkw-inline-file">{W.ideaFile}<input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { attachFiles(executor, item, event.target.files); event.target.value = ''; }}/></label>{item.attachments.map(file => <span className="mkw-requirement-file" key={file.key}>{file.file.name}<button type="button" className="icon-button" aria-label={W.remove} disabled={busy} onClick={() => void removeAttachment(executor, item, file.key)}><X size={13}/></button></span>)}</div>
+            <div><input type="date" aria-label={W.dueOn} required value={item.dueOn} disabled={busy} onChange={event => changeItem(executor.key, item.key, { dueOn: event.target.value })}/></div>
+            <div><button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || executor.items.length === 1} onClick={() => updateExecutor(executor.key, { items: executor.items.filter(row => row.key !== item.key) })}><X size={18}/></button></div>
+          </div>)}</div></div>
+        <footer className="mkw-requirement-footer"><button type="button" className="secondary" disabled={busy || requiredCount >= 100} onClick={() => updateExecutor(executor.key, { items: [...executor.items, newRequired()] })}><Plus size={17}/>{W.addItem}</button></footer>
+      </section>)}</div>
     </section>
     {progress && <div className="mkw-panel"><span>{progress.name} {progress.percent}%</span><progress value={progress.percent} max={100}/><button type="button" className="secondary" onClick={() => uploadController.current?.abort()}>{W.cancel}</button></div>}
     <footer className="mkw-form-footer"><button type="button" className="secondary" disabled={busy} onClick={() => navigate('/marketing')}>{W.cancel}</button><button type="submit" className="primary" disabled={busy || !reservation}>{busy ? W.loading : W.createTask}</button></footer>

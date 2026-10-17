@@ -1023,6 +1023,7 @@ async function reportData(request: VercelRequest) {
         employeeNo: user.employee_no,
         name: user.full_name,
         scheduleName: assignment?.schedule_name || null,
+        isDayOff,
         earlyDeparturePermission: earlyDeparturePermission ? {
           id: earlyDeparturePermission.id,
           fromAt: earlyDeparturePermission.from_at,

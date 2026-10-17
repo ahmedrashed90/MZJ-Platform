@@ -47,6 +47,7 @@ type ReportRow = {
   employeeNo: string | null;
   name: string;
   scheduleName: string | null;
+  isDayOff: boolean;
   earlyDeparturePermission: {
     id: string;
     fromAt: string;
@@ -120,28 +121,38 @@ function scheduledMinutes(period: ReportPeriod | null) {
   return from >= 0 && to >= 0 ? (to >= from ? to - from : 24 * 60 - from + to) : 0;
 }
 
+// Daily totals use minutes without rounding off the fraction of an hour.
+// A weekly rest day and a full-day vacation are excluded from employee totals.
+// A vacation granted for one shift removes only that shift's required hours.
 function attendanceHourTotals(rows: ReportRow[]) {
   return rows.reduce((total, row) => {
+    if (row.isDayOff) return total;
     const periods = row.periods.filter((period): period is ReportPeriod => Boolean(period));
-    total.expected += periods.reduce((sum, period) => sum + scheduledMinutes(period), 0);
-    total.actual += periods.reduce((sum, period) => sum + Math.max(0, Number(period.workMinutes || 0)), 0);
+    const fullDayVacation = row.earlyDeparturePermission?.permissionType === 'vacation'
+      && !row.earlyDeparturePermission.periodId && !periods.some(period => Boolean(period.checkIn));
+    if (fullDayVacation) return total;
+    for (const period of periods) {
+      const vacationPeriod = row.earlyDeparturePermission?.permissionType === 'vacation'
+        && !period.checkIn && (row.earlyDeparturePermission.periodId === period.id);
+      if (vacationPeriod) continue;
+      total.expected += scheduledMinutes(period);
+      total.actual += Math.max(0, Math.round(Number(period.workMinutes || 0)));
+    }
     return total;
   }, { expected: 0, actual: 0 });
 }
 
-// The hours columns are compact whole-hour indicators only. All calculations
-// (including the difference column and exports) retain full minute precision.
 function wholeHoursText(minutes: number) {
   const value = Math.max(0, Math.round(Number(minutes) || 0));
-  if (!value) return "—";
-  const roundedHours = Math.round(value / 60);
-  return roundedHours ? `${roundedHours} ساعة` : "أقل من ساعة";
+  return value ? formatDurationMinutes(value) : '—';
 }
 
+// Required duration minus the actual minutes registered by attendance, not
+// the lateness/result label in the shift (which measures a different metric).
 function hoursDifferenceText(expectedMinutes: number, actualMinutes: number) {
-  const delta = Math.round(Number(actualMinutes || 0) - Number(expectedMinutes || 0));
-  if (!delta) return "—";
-  return `${delta > 0 ? "+" : "−"}${formatDurationMinutes(Math.abs(delta))}`;
+  const delta = Math.round(Number(expectedMinutes || 0) - Number(actualMinutes || 0));
+  if (!delta) return '—';
+  return `${delta > 0 ? '+' : '−'}${formatDurationMinutes(Math.abs(delta))}`;
 }
 
 function groupReportRows(rows: ReportRow[]) {
@@ -252,7 +263,7 @@ const ATTENDANCE_SUMMARY_HEADERS = [
   "انصراف الفترة الثانية",
   "تأخير الفترة الثانية",
   "غياب الفترة الثانية",
-  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (فعلي − مفترض)",
+  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (مفترض − فعلي)",
 ] as const;
 
 const ATTENDANCE_DETAILS_HEADERS = [
@@ -271,7 +282,7 @@ const ATTENDANCE_DETAILS_HEADERS = [
   "تأخير الفترة الثانية",
   "غياب الفترة الثانية",
   "نتيجة الفترة الثانية",
-  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (فعلي − مفترض)",
+  "ساعات الدوام المفترضة", "ساعات العمل الفعلية", "الفرق (مفترض − فعلي)",
 ] as const;
 
 function buildAttendancePdf(payload: ReportPayload) {
@@ -412,7 +423,7 @@ export function AttendancePage() {
 
   const groupedRows = useMemo(() => groupReportRows(report?.rows || []), [report?.rows]);
   const employeeGroups = useMemo(() => groupReportRowsByEmployee(report?.rows || []), [report?.rows]);
-  const showEmployeeBlocks = employeeIds.length > 1;
+  const showEmployeeBlocks = employeeIds.length > 0 || Boolean(branchId);
 
   async function loadAdminUsers() {
     if (!isAdmin) return;
@@ -769,12 +780,13 @@ export function AttendancePage() {
                     <col className="attendance-col-index" />
                     <col className="attendance-col-day" />
                     <col className="attendance-col-date" />
-                    <col className="attendance-col-action" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
+                    <col className="attendance-col-action" />
                     {periodHeaders.flatMap((header) => [
                       <col key={`${employee.userId}-${header}-col-in`} className="attendance-col-period-time" />,
                       <col key={`${employee.userId}-${header}-col-out`} className="attendance-col-period-time" />,
                       <col key={`${employee.userId}-${header}-col-result`} className="attendance-col-period-result" />,
                     ])}
+                    <col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
                   </colgroup>
                   <thead>
                     <tr className="attendance-main-head-row">
@@ -782,10 +794,10 @@ export function AttendancePage() {
                       <th rowSpan={2}>اليوم</th>
                       <th rowSpan={2}>التاريخ</th>
                       <th rowSpan={2}>إذن الانصراف</th>
+                      {periodHeaders.map((header) => <th key={`${employee.userId}-${header}-group`} colSpan={3}>{header}</th>)}
                       <th rowSpan={2}>ساعات الدوام المفترضة</th>
                       <th rowSpan={2}>ساعات العمل الفعلية</th>
-                      <th rowSpan={2}>الفرق (فعلي − مفترض)</th>
-                      {periodHeaders.map((header) => <th key={`${employee.userId}-${header}-group`} colSpan={3}>{header}</th>)}
+                      <th rowSpan={2}>الفرق (مفترض − فعلي)</th>
                     </tr>
                     <tr className="attendance-sub-head-row">
                       {periodHeaders.flatMap((header) => [
@@ -805,7 +817,6 @@ export function AttendancePage() {
                           <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
                           {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                         </td>
-                        {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                         {periodHeaders.flatMap((_, periodIndex) => {
                           const period = row.periods[periodIndex];
                           const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -823,10 +834,11 @@ export function AttendancePage() {
                             </td>,
                           ];
                         })}
+                        {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4}>إجمالي ساعات الموظف</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).expected)}</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).actual)}</th><th>{hoursDifferenceText(attendanceHourTotals(employee.rows).expected, attendanceHourTotals(employee.rows).actual)}</th><th colSpan={Math.max(1, periodHeaders.length * 3)}>—</th></tr></tfoot>
+                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4 + periodHeaders.length * 3}>إجمالي ساعات الموظف (باستثناء الإجازات)</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).expected)}</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).actual)}</th><th>{hoursDifferenceText(attendanceHourTotals(employee.rows).expected, attendanceHourTotals(employee.rows).actual)}</th></tr></tfoot>
                 </table>
               </div>
             </section>
@@ -852,12 +864,13 @@ export function AttendancePage() {
                         <col className="attendance-col-index" />
                         <col className="attendance-col-branch" />
                         <col className="attendance-col-name" />
-                        <col className="attendance-col-action" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
+                        <col className="attendance-col-action" />
                         {periodHeaders.flatMap((header) => [
                           <col key={`${group.date}-${header}-col-in`} className="attendance-col-period-time" />,
                           <col key={`${group.date}-${header}-col-out`} className="attendance-col-period-time" />,
                           <col key={`${group.date}-${header}-col-result`} className="attendance-col-period-result" />,
                         ])}
+                        <col className="attendance-col-period-result" /><col className="attendance-col-period-result" /><col className="attendance-col-period-result" />
                       </colgroup>
                       <thead>
                         <tr className="attendance-main-head-row">
@@ -865,10 +878,10 @@ export function AttendancePage() {
                           <th rowSpan={2}>الفرع</th>
                           <th rowSpan={2}>الاسم</th>
                           <th rowSpan={2}>إذن الانصراف</th>
-                      <th rowSpan={2}>ساعات الدوام المفترضة</th>
-                      <th rowSpan={2}>ساعات العمل الفعلية</th>
-                      <th rowSpan={2}>الفرق (فعلي − مفترض)</th>
                           {periodHeaders.map((header) => <th key={`${group.date}-${header}-group`} colSpan={3}>{header}</th>)}
+                          <th rowSpan={2}>ساعات الدوام المفترضة</th>
+                          <th rowSpan={2}>ساعات العمل الفعلية</th>
+                          <th rowSpan={2}>الفرق (مفترض − فعلي)</th>
                         </tr>
                         <tr className="attendance-sub-head-row">
                           {periodHeaders.flatMap((header) => [
@@ -888,7 +901,6 @@ export function AttendancePage() {
                               <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
                           {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
                             </td>
-                            {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -906,6 +918,7 @@ export function AttendancePage() {
                                 </td>,
                               ];
                             })}
+                            {(() => { const hours = attendanceHourTotals([row]); return <><td>{wholeHoursText(hours.expected)}</td><td>{wholeHoursText(hours.actual)}</td><td>{hoursDifferenceText(hours.expected, hours.actual)}</td></>; })()}
                           </tr>
                         ))}
                       </tbody>

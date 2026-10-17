@@ -26,6 +26,7 @@ import { hasPermission } from "../../systemAccess";
 import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
+import { MetaAdsPanel } from "../components/MetaAdsPanel";
 import {
   marketingResultCount,
   marketingResultPlatformLabel,
@@ -103,7 +104,7 @@ type Payload = {
 type RecordStatus = "active" | "archived" | "all";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
-type PageView = "engagement" | "accounts" | "campaigns" | "agendas";
+type PageView = "engagement" | "accounts" | "campaigns" | "agendas" | "meta_ads";
 type PostOrigin = "all" | "system" | "meta";
 
 const EMPTY_SUMMARY: EngagementSummary = {
@@ -191,7 +192,7 @@ function processingLabel(status: string) {
   return "قيد المعالجة";
 }
 function pageView(value: string | null): PageView {
-  return value === "campaigns" || value === "agendas" || value === "accounts" ? value : "engagement";
+  return value === "campaigns" || value === "agendas" || value === "accounts" || value === "meta_ads" ? value : "engagement";
 }
 function bestPlatform(result: EngagementResultGroup) {
   return [...result.platforms].sort((a, b) => b.engagements - a.engagements || b.posts - a.posts)[0];
@@ -557,7 +558,7 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة منشورات السيستم وMeta مباشرة، وتحليلات الحسابات والمتابعين. تحويل التعليقات إلى CRM يظل مرتبطًا بمنشورات السيستم فقط."
+    description="متابعة المنشورات العادية والحملات الممولة من Meta Ads Manager وتحليلات الحسابات. تقارير الإعلانات للقراءة فقط ولا تضيف عملاء إلى CRM."
     actions={<div className="marketing-engagement-actions">
       {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
@@ -574,10 +575,11 @@ export function EngagementPage() {
         <button type="button" className={view === "engagement" ? "active" : ""} onClick={() => changeView("engagement")}>تفاعل النشر</button>
         <button type="button" className={view === "accounts" ? "active" : ""} onClick={() => changeView("accounts")}>الحسابات والمتابعون</button>
         <button type="button" className={view === "campaigns" ? "active" : ""} onClick={() => changeView("campaigns")}>نتائج الحملات</button>
+        <button type="button" className={view === "meta_ads" ? "active" : ""} onClick={() => changeView("meta_ads")}>حملات Meta الممولة</button>
         <button type="button" className={view === "agendas" ? "active" : ""} onClick={() => changeView("agendas")}>نتائج الأجندات</button>
       </div>
 
-      {view === "engagement" ? <>
+      {view === "meta_ads" ? <MetaAdsPanel /> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>

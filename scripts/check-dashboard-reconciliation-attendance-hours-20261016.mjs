@@ -66,17 +66,17 @@ const helpers = ['formatDurationMinutes','wholeHoursText','hoursDifferenceText']
   return block.replaceAll(': unknown', '').replaceAll(': number', '');
 }).join('\n');
 const formats = vm.runInNewContext(`${helpers}\n({ wholeHoursText,hoursDifferenceText })`);
-check('Whole hours omit minutes, including in empty attendance', () => {
-  assert.equal(formats.wholeHoursText(418), '7 ساعة');
+check('Actual attendance and expected duty minutes are never rounded to whole hours', () => {
+  assert.equal(formats.wholeHoursText(418), '6 ساعة و 58 دقيقة');
   assert.equal(formats.wholeHoursText(0), '—');
-  assert.equal(formats.wholeHoursText(20), 'أقل من ساعة');
+  assert.equal(formats.wholeHoursText(20), '20 دقيقة');
 });
-check('Difference converts each 60 minutes to an hour without zero-hour prefix', () => {
+check('Difference is scheduled minus worked, in exact hours and minutes', () => {
   assert.equal(formats.hoursDifferenceText(60, 60), '—');
-  assert.equal(formats.hoursDifferenceText(60, 119), '+59 دقيقة');
-  assert.equal(formats.hoursDifferenceText(60, 120), '+1 ساعة');
-  assert.equal(formats.hoursDifferenceText(135, 60), '−1 ساعة و 15 دقيقة');
-  assert.equal(formats.hoursDifferenceText(418, 0), '−6 ساعة و 58 دقيقة');
+  assert.equal(formats.hoursDifferenceText(60, 119), '−59 دقيقة');
+  assert.equal(formats.hoursDifferenceText(60, 120), '−1 ساعة');
+  assert.equal(formats.hoursDifferenceText(135, 60), '+1 ساعة و 15 دقيقة');
+  assert.equal(formats.hoursDifferenceText(418, 0), '+6 ساعة و 58 دقيقة');
 });
 check('Both attendance daily layouts and XLS/PDF exports share formatters', () => {
   assert.ok((attendance.match(/hoursDifferenceText\(/g) || []).length >= 7);

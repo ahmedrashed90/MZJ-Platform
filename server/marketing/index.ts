@@ -41,6 +41,7 @@ import {
 } from "../_google-drive-storage.js";
 import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delivery.js";
 import { autoRefreshExternalMetaMetrics, refreshExternalMetaMetrics, syncMetaEngagement } from "../_marketing-meta-sync.js";
+import { metaAdsData } from "../_marketing-meta-ads.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -4501,6 +4502,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
+      if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId));}
       if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));

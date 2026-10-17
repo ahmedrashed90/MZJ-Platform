@@ -6167,3 +6167,40 @@
 .marketing-linked-requests-hint > div { display: grid; gap: 5px; flex: 1 1 280px; }
 .marketing-linked-requests-hint strong { font-size: 13px; color: var(--brand); }
 .marketing-linked-requests-hint small { font-size: 12px; color: var(--muted); line-height: 1.8; }
+
+/* Live, read-only paid Meta Ads data: kept visually distinct from organic posts. */
+.marketing-meta-ads { display:grid; gap:16px; min-width:0; }
+.marketing-meta-ads-intro header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
+.marketing-meta-ads-filters { display:flex; flex-wrap:wrap; gap:13px; margin:14px 0; align-items:flex-end; }
+.marketing-meta-ads-filters label { display:grid; gap:5px; min-width:170px; }
+.marketing-meta-ads-filters .marketing-engagement-search { flex:1 1 230px; }
+.marketing-meta-ads-filters select { width:100%; }
+.marketing-meta-ads-setup { display:grid; gap:8px; }
+.marketing-meta-ads-setup p { margin:0; line-height:1.9; }
+.marketing-meta-ads-list { display:grid; gap:14px; }
+.marketing-meta-ads-campaign { padding:0; overflow:hidden; }
+.marketing-meta-ads-campaign-summary { cursor:pointer; list-style:none; padding:18px 20px; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; }
+.marketing-meta-ads-campaign-summary::-webkit-details-marker { display:none; }
+.marketing-meta-ads-campaign-summary > div { min-width:190px; flex:1 1 280px; }
+.marketing-meta-ads-campaign-summary h4 { margin:4px 0; font-size:17px; }
+.marketing-meta-ads-campaign-summary small { display:block; font-size:12px; color:var(--muted); }
+.marketing-meta-ads-account { color:var(--brand); font-size:12px; font-weight:700; }
+.marketing-meta-ads-status { border-radius:30px; border:1px solid var(--line-strong); padding:5px 11px; font-size:12px; font-weight:800; white-space:nowrap; }
+.marketing-meta-ads-status.is-active { background:#e5f5e9; color:#137044; border-color:#b7e6c4; }
+.marketing-meta-ads-open { font-size:12px; color:var(--brand); }
+.marketing-meta-ads-campaign[open] .marketing-meta-ads-campaign-summary { background:var(--surface-soft); border-bottom:1px solid var(--line-strong); }
+.marketing-meta-ads-campaign-body { padding:18px; display:grid; gap:13px; }
+.marketing-meta-ads-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(115px,1fr)); gap:9px; }
+.marketing-meta-ads-metrics > div { display:grid; gap:5px; padding:12px; border:1px solid var(--line); border-radius:9px; }
+.marketing-meta-ads-metrics small { font-size:12px; color:var(--muted); }
+.marketing-meta-ads-metrics strong { font-size:15px; }
+.marketing-meta-ads-campaign-body h5 { margin:7px 0 0; font-size:14px; }
+.marketing-meta-ads-note { margin:0; color:var(--muted); font-size:12px; line-height:1.8; }
+.marketing-meta-ads-campaign-body > a { width:max-content; }
+.marketing-meta-ads-ad-identify { display:flex; gap:8px; align-items:center; min-width:175px; }
+.marketing-meta-ads-ad-identify img { width:42px; height:42px; border-radius:6px; object-fit:cover; }
+.marketing-meta-ads-ad-identify span { display:grid; gap:5px; }
+.marketing-meta-ads-ad-identify small { font-size:11px; color:var(--muted); }
+.marketing-meta-ads-table { width:100%; min-width:950px; }
+.marketing-meta-ads-loading { display:flex; align-items:center; gap:8px; }
+.marketing-meta-ads-empty { padding:28px; text-align:center; }
