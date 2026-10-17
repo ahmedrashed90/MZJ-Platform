@@ -73,8 +73,9 @@ test('Dashboard includes completed tasks and orders by newest creation first',()
 test('Campaign and agenda platform choices come from active marketing catalog, not task formats',()=>{
   const front=fs.readFileSync(path.join(root,'src/marketing/workflow/CreatePage.tsx'),'utf8');
   const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
-  assert(front.includes('meta.postTypes.filter(type => type.platform_id === entry.platformId'));
-  assert(front.includes('activePlatforms.filter(platform =>'));
+  assert(front.includes('activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id).length)'));
+  assert(front.includes('availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId)'));
+  assert(api.includes('const formats = await validateFormats(tx, product.media_kind, ids)'));
   assert(api.includes('await validateFormats(tx, product.media_kind, [postTypeId])'));
   assert(!api.includes('if (!list(product.formats).some((format: WorkFormat) => format.id === postTypeId))'));
 });

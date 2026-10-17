@@ -5,6 +5,7 @@ import { W, Empty, Field, FormatSelector, ProductViewButton, WorkAlert, WorkHead
 import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
 import { splitRequiredMediaSelection } from './requiredMedia';
+import { addPlanPlatform, availablePlanPostTypes, availablePlanProducts, planEntriesPayload, planEntryValid, validatePlanComposer, type PlanEntryDraft, type PlanPlatformDraft } from './planComposer';
 
 type IdeaAttachment = { key: string; file: File; fileId?: string };
 type RequiredDraft = { key: string; mediaKinds: WorkMediaKind[]; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
@@ -13,8 +14,7 @@ type Reservation = { id: string; task_no: string; created_at: string };
 const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKinds: ['image'], ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
 const newExecutor = (): ExecutorDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', items: [newRequired()] });
 
-type PlanEntry = { key: string; date: string; productId: string; platformId: string; postTypeId: string; budget: string };
-const newEntry = (productId = ''): PlanEntry => ({ key: crypto.randomUUID(), date: '', productId, platformId: '', postTypeId: '', budget: '' });
+const newEntry = (productId = ''): PlanEntryDraft => ({ key: crypto.randomUUID(), date: '', productId, platforms: [] });
 
 export function MarketingCreatePage() {
   const [params, setParams] = useSearchParams();
@@ -172,73 +172,152 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const [name, setName] = useState('');
-  const [entries, setEntries] = useState<PlanEntry[]>([newEntry(initialProduct)]);
+  const [entries, setEntries] = useState<PlanEntryDraft[]>([newEntry(initialProduct)]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const dateLabel = kind === 'agenda' ? W.publishDate : W.fundingDate;
   const label = kind === 'agenda' ? W.agenda : W.campaign;
-  // The publishing catalog is controlled in marketing settings, not by a task's requested formats.
-  const activePlatforms = meta.platforms.filter(platform => meta.postTypes.some(type => type.platform_id === platform.id));
+  const products = productsQuery.data?.rows || [];
+  // Publishing formats come from marketing platform settings, and the selected
+  // product's approved image/video type determines which choices are valid.
+  const activePlatforms = useMemo(() => meta.platforms.filter(platform =>
+    meta.postTypes.some(type => type.platform_id === platform.id)), [meta.platforms, meta.postTypes]);
   const productGroups = useMemo(() => {
     const groups = new Map<string, { title: string; rows: WorkProduct[] }>();
-    for (const product of productsQuery.data?.rows || []) {
+    for (const product of products) {
       const key = product.task_id || product.task_no;
       if (!groups.has(key)) groups.set(key, { title: `${product.task_no} — ${product.task_name}`, rows: [] });
       groups.get(key)!.rows.push(product);
     }
     return Array.from(groups.values());
-  }, [productsQuery.data]);
-  const previewRows = entries.map((entry, index) => ({
-    index: index + 1,
-    entry,
-    product: productsQuery.data?.rows.find(product => product.id === entry.productId),
-    platform: meta.platforms.find(platform => platform.id === entry.platformId),
-    postType: meta.postTypes.find(type => type.id === entry.postTypeId),
-    valid: isWorkDate(entry.date) && Boolean(entry.productId && entry.platformId && entry.postTypeId) && (kind === 'agenda' || (entry.budget !== '' && Number.isFinite(Number(entry.budget)) && Number(entry.budget) >= 0)),
-  }));
-  function updateEntry(key: string, patch: Partial<PlanEntry>) { setEntries(current => current.map(row => row.key === key ? { ...row, ...patch } : row)); }
+  }, [products]);
+  const selectedProductIds = useMemo(() => new Set(entries.map(entry => entry.productId).filter(Boolean)), [entries]);
+  const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.length, 0);
+  const noMoreProducts = Boolean(productsQuery.data?.rows?.length) && products.every(product => selectedProductIds.has(product.id));
+  const previewRows = entries.flatMap((entry, entryIndex) => {
+    const product = products.find(item => item.id === entry.productId);
+    const rowValid = planEntryValid(entry, products, meta.postTypes, kind) &&
+      entries.filter(other => other.productId && other.productId === entry.productId).length === 1;
+    return (entry.platforms.length ? entry.platforms : [null]).map(platform => ({
+      key: `${entry.key}:${platform?.platformId || 'empty'}`, index: entryIndex + 1, entry, product,
+      platform: meta.platforms.find(item => item.id === platform?.platformId),
+      postType: meta.postTypes.find(item => item.id === platform?.postTypeId),
+      budget: platform?.budget || '', valid: rowValid,
+    }));
+  });
+
+  function updateEntry(key: string, patch: Partial<PlanEntryDraft>) {
+    setEntries(current => current.map(row => row.key === key ? { ...row, ...patch } : row));
+  }
+  function changePlatform(key: string, platformId: string, patch: Partial<PlanPlatformDraft>) {
+    setEntries(current => current.map(entry => entry.key === key ? {
+      ...entry, platforms: entry.platforms.map(platform => platform.platformId === platformId ? { ...platform, ...patch } : platform),
+    } : entry));
+  }
+  function togglePlatform(key: string, platformId: string) {
+    setEntries(current => current.map(entry => {
+      if (entry.key !== key) return entry;
+      const product = products.find(item => item.id === entry.productId);
+      if (!product) return entry;
+      if (entry.platforms.some(platform => platform.platformId === platformId)) {
+        return { ...entry, platforms: entry.platforms.filter(platform => platform.platformId !== platformId) };
+      }
+      if (!availablePlanPostTypes(meta.postTypes, product.media_kind, platformId).length) return entry;
+      return { ...entry, platforms: [...entry.platforms, addPlanPlatform(platformId, meta.postTypes, product.media_kind)] };
+    }));
+  }
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
-    if (!entries.length || entries.some(entry => !isWorkDate(entry.date) || !entry.productId || !entry.platformId || !entry.postTypeId || (kind === 'campaign' && (!entry.budget || Number(entry.budget) < 0)))) { setError(W.requiredFields); return; }
+    const validationError = validatePlanComposer(entries, products, meta.postTypes, kind);
+    if (validationError) { setError(validationError); return; }
     setBusy(true);
-    try { await workPost('create_plan', { requestKey: requestKey.current, kind, name: name.trim(), entries: entries.map(entry => ({ date: entry.date, productId: entry.productId, postTypeId: entry.postTypeId, budget: kind === 'campaign' ? Number(entry.budget) : 0 })) }); navigate('/marketing'); }
-    catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
+    try {
+      // One product is chosen once; each platform creates its own publish line.
+      // Budget belongs to the platform line and is never duplicated implicitly.
+      await workPost('create_plan', {
+        requestKey: requestKey.current, kind, name: name.trim(),
+        entries: planEntriesPayload(entries, kind),
+      });
+      navigate('/marketing');
+    } catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
     finally { setBusy(false); }
   }
-  return <form className="mkw mkw-plan-composer" onSubmit={save}><section className="mkw-panel"><header><h2>بيانات {label}</h2></header><div className="mkw-fields"><Field label={`اسم ${label}`}><input maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder={`اسم ${label}`}/></Field></div></section>
-    <section className="mkw-panel"><header className="mkw-section-title"><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2><span>{entries.length} {W.addDate}</span></header><WorkAlert>{error || productsQuery.error}</WorkAlert>
-    {productsQuery.loading && !productsQuery.data ? <Empty>{W.loading}</Empty> : <div className="mkw-horizontal-scroll"><div className={`mkw-plan-table ${kind === 'agenda' ? 'agenda' : ''}`}><div className="mkw-plan-heading"><span>{dateLabel}</span><span>{W.selectProduct}</span><span>المنصة</span><span>نوع النشر</span>{kind === 'campaign' && <span>الميزانية</span>}<span>{W.remove}</span></div>
-      {entries.map(entry => {
-        const product = productsQuery.data?.rows.find(product => product.id === entry.productId);
-        const platforms = activePlatforms.filter(platform => meta.postTypes.some(type => type.platform_id === platform.id && (!product || supportsWorkMedia(product.media_kind, type.name))));
-        const postTypes = meta.postTypes.filter(type => type.platform_id === entry.platformId && (!product || supportsWorkMedia(product.media_kind, type.name)));
-        return <div className="mkw-plan-table-row" key={entry.key}>
-          <input aria-label={dateLabel} type="date" required value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
-          <div className="mkw-plan-product-picker">
-            <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platformId: '', postTypeId: '' })}>
-              <option value="">اختر المطلوب / المنتج من التاسك</option>
-              {productGroups.map(group => <optgroup key={group.title} label={group.title}>{group.rows.map(candidate => <option key={candidate.id} value={candidate.id}>المطلوب {candidate.sort_order} — {candidate.idea_name} — {candidate.media_kind === 'video' ? 'فيديو' : 'صورة'} — {candidate.assignee_name || '—'} — {candidate.idea.slice(0, 65)}</option>)}</optgroup>)}
-            </select>
-            {product && <div className="mkw-plan-product-preview" role="status">
-              <strong>{product.idea_name}</strong>
-              <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
-              <span><b>الفكرة:</b> {product.idea || '—'}</span>
-              <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
-              <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
-            </div>}
-          </div>
-          <select aria-label="المنصة" required value={entry.platformId} disabled={busy || !entry.productId} onChange={event => updateEntry(entry.key, { platformId: event.target.value, postTypeId: '' })}><option value="">{W.choose}</option>{platforms.map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select>
-          <select aria-label="نوع النشر" required value={entry.postTypeId} disabled={busy || !entry.platformId} onChange={event => updateEntry(entry.key, { postTypeId: event.target.value })}><option value="">{W.choose}</option>{postTypes.map(format => <option key={format.id} value={format.id}>{format.name}</option>)}</select>
-          {kind === 'campaign' && <input aria-label="الميزانية" type="number" min="0" step="0.01" max="100000000" required value={entry.budget} disabled={busy} onChange={event => updateEntry(entry.key, { budget: event.target.value })} placeholder="ر.س"/>}
-          <button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || entries.length === 1} onClick={() => setEntries(current => current.filter(row => row.key !== entry.key))}><X size={18}/></button>
-        </div>;
-      })}</div></div>}
-    <footer className="mkw-requirement-footer"><button className="secondary" type="button" disabled={busy} onClick={() => setEntries(current => [...current, newEntry()])}><Plus size={17}/>{W.addDate}</button></footer></section>
-    {previewOpen && <section className="mkw-panel mkw-plan-preview" aria-label="معاينة جدول النشر"><header><h2>معاينة جدول {kind === 'campaign' ? 'التمويل' : 'النشر'} — {previewRows.length} يوم</h2></header>
+  return <form className="mkw mkw-plan-composer" onSubmit={save}>
+    <section className="mkw-panel"><header><h2>بيانات {label}</h2></header>
+      <div className="mkw-fields"><Field label={`اسم ${label}`}><input maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder={`اسم ${label}`}/></Field></div>
+    </section>
+    <section className="mkw-panel"><header className="mkw-section-title"><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2><span>{entries.length} {W.addDate}</span></header>
+      <WorkAlert>{error || productsQuery.error}</WorkAlert>
+      {kind === 'campaign' && <p className="mkw-plan-budget-hint">الميزانية مستقلة لكل منصة. يتم جمع ميزانيات المنصات في إجمالي اليوم، بدون تكرار المبلغ عند تحديد أكثر من منصة.</p>}
+      {productsQuery.loading && !productsQuery.data ? <Empty>{W.loading}</Empty> :
+        <div className="mkw-horizontal-scroll"><div className={`mkw-plan-table ${kind === 'agenda' ? 'agenda' : ''}`}>
+          <div className="mkw-plan-heading"><span>{dateLabel}</span><span>{W.selectProduct}</span><span>المنصات (اختيار متعدد)</span><span>نوع النشر لكل منصة</span>{kind === 'campaign' && <span>ميزانية كل منصة</span>}<span>{W.remove}</span></div>
+          {entries.map((entry, entryIndex) => {
+            const product = products.find(item => item.id === entry.productId);
+            const availableIds = new Set(availablePlanProducts(products, entries, entry.key).map(item => item.id));
+            const selectableGroups = productGroups.map(group => ({ ...group, rows: group.rows.filter(item => availableIds.has(item.id)) })).filter(group => group.rows.length);
+            const platforms = product ? activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id).length) : [];
+            const selected = new Map(entry.platforms.map(platform => [platform.platformId, platform]));
+            return <div className="mkw-plan-table-row" key={entry.key}>
+              <input aria-label={dateLabel} type="date" required value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
+              <div className="mkw-plan-product-picker">
+                <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platforms: [] })}>
+                  <option value="">اختر المطلوب / المنتج من التاسك</option>
+                  {selectableGroups.map(group => <optgroup key={group.title} label={group.title}>{group.rows.map(candidate => <option key={candidate.id} value={candidate.id}>المطلوب {candidate.sort_order} — {candidate.idea_name} — {candidate.media_kind === 'video' ? 'فيديو' : 'صورة'} — {candidate.assignee_name || '—'} — {candidate.idea.slice(0, 65)}</option>)}</optgroup>)}
+                </select>
+                {!entry.productId && !selectableGroups.length && <small className="mkw-muted">كل المنتجات المتاحة مختارة بالفعل في أيام أخرى.</small>}
+                {product && <div className="mkw-plan-product-preview" role="status">
+                  <strong>{product.idea_name}</strong>
+                  <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
+                  <span><b>الفكرة:</b> {product.idea || '—'}</span>
+                  <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
+                  <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
+                </div>}
+              </div>
+              <div className="mkw-plan-platform-options" role="group" aria-label={`منصات اليوم ${entryIndex + 1}`}>
+                {!product ? <small className="mkw-muted">اختر المنتج أولًا</small> : !platforms.length ? <small className="mkw-muted">لا توجد منصة متوافقة مع نوع المطلوب في الإعدادات.</small> : platforms.map(platform =>
+                  <label key={platform.id} className={selected.has(platform.id) ? 'is-checked' : ''}>
+                    <input type="checkbox" checked={selected.has(platform.id)} disabled={busy} onChange={() => togglePlatform(entry.key, platform.id)}/>
+                    <span>{platform.name}</span>
+                  </label>)}
+              </div>
+              <div className="mkw-plan-per-platform">
+                {!entry.platforms.length ? <small className="mkw-muted">حدد منصة أو أكثر</small> : entry.platforms.map(platform => {
+                  const formats = availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId);
+                  return <label className="mkw-plan-platform-field" key={platform.platformId}>
+                    <small>{meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}</small>
+                    <select aria-label={`نوع النشر — ${meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}`} required value={platform.postTypeId} disabled={busy} onChange={event => changePlatform(entry.key, platform.platformId, { postTypeId: event.target.value })}>
+                      <option value="">{W.choose}</option>{formats.map(format => <option key={format.id} value={format.id}>{format.name}</option>)}
+                    </select>
+                  </label>;
+                })}
+              </div>
+              {kind === 'campaign' && <div className="mkw-plan-per-platform mkw-plan-platform-budgets">
+                {!entry.platforms.length ? <small className="mkw-muted">حدد منصة أو أكثر</small> : entry.platforms.map(platform =>
+                  <label className="mkw-plan-platform-field" key={platform.platformId}>
+                    <small>{meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}</small>
+                    <input aria-label={`ميزانية ${meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}`} type="number" min="0" step="0.01" max="100000000" required value={platform.budget} disabled={busy} onChange={event => changePlatform(entry.key, platform.platformId, { budget: event.target.value })} placeholder="ر.س"/>
+                  </label>)}
+                {!!entry.platforms.length && <strong className="mkw-plan-day-total">الإجمالي: {entry.platforms.reduce((total, platform) => total + (Number(platform.budget) || 0), 0).toLocaleString('ar-SA-u-nu-latn', { maximumFractionDigits: 2 })} ر.س</strong>}
+              </div>}
+              <button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || entries.length === 1} onClick={() => setEntries(current => current.filter(row => row.key !== entry.key))}><X size={18}/></button>
+            </div>;
+          })}
+        </div></div>}
+      <footer className="mkw-requirement-footer"><button className="secondary" type="button" disabled={busy || noMoreProducts || entries.length >= 500} onClick={() => setEntries(current => [...current, newEntry()])}><Plus size={17}/>{W.addDate}</button></footer>
+    </section>
+    {previewOpen && <section className="mkw-panel mkw-plan-preview" aria-label="معاينة جدول النشر"><header><h2>معاينة جدول {kind === 'campaign' ? 'التمويل' : 'النشر'} — {entries.length} يوم · {platformLineCount} موعد منصة</h2></header>
       <div className="mkw-horizontal-scroll"><table className="mkw-plan-preview-table"><thead><tr><th>{dateLabel}</th><th>المنتج / المطلوب</th><th>الفكرة</th><th>المنصة</th><th>نوع النشر</th>{kind === 'campaign' && <th>الميزانية</th>}<th>النتيجة</th></tr></thead><tbody>
-      {previewRows.map(({ index, entry, product, platform, postType, valid }) => <tr key={entry.key}><td>{entry.date || '—'}</td><td>{product ? `${product.task_no} — المطلوب ${product.sort_order}: ${product.idea_name}` : '—'}</td><td>{product?.idea || '—'}</td><td>{platform?.name || '—'}</td><td>{postType?.name || '—'}</td>{kind === 'campaign' && <td>{entry.budget !== '' ? `${entry.budget} ر.س` : '—'}</td>}<td className={valid ? 'mkw-preview-ok' : 'mkw-preview-missing'}>{valid ? 'مكتمل' : `الصف ${index}: بيانات ناقصة`}</td></tr>)}
-      </tbody></table></div><p className="mkw-muted">المعاينة لا تنشئ حملة ولا أجندة ولا تنشر محتوى. راجع الصفوف ثم احفظ الجدول.</p>
+        {previewRows.map(({ key, index, entry, product, platform, postType, budget, valid }) => <tr key={key}>
+          <td>{entry.date || '—'}</td><td>{product ? `${product.task_no} — المطلوب ${product.sort_order}: ${product.idea_name}` : '—'}</td><td>{product?.idea || '—'}</td>
+          <td>{platform?.name || '—'}</td><td>{postType?.name || '—'}</td>{kind === 'campaign' && <td>{budget !== '' ? `${budget} ر.س` : '—'}</td>}
+          <td className={valid ? 'mkw-preview-ok' : 'mkw-preview-missing'}>{valid ? 'مكتمل' : `اليوم ${index}: بيانات ناقصة`}</td>
+        </tr>)}
+      </tbody></table></div><p className="mkw-muted">كل منصة محددة لها موعد نشر مستقل لنفس المطلوب، والمبلغ الموضح يخص تلك المنصة فقط. المعاينة لا تنشئ حملة ولا أجندة ولا تنشر محتوى.</p>
     </section>}
-    <footer className="mkw-form-footer"><button type="button" className="secondary" disabled={busy} onClick={() => navigate('/marketing')}>{W.cancel}</button><button type="button" className="secondary" disabled={busy} onClick={() => setPreviewOpen(current => !current)}>{previewOpen ? 'إغلاق المعاينة' : 'معاينة'}</button><button type="submit" className="primary" disabled={busy || !productsQuery.data?.rows.length}>{busy ? W.loading : kind === 'campaign' ? 'حفظ الجدول وإنشاء الحملة' : 'حفظ الجدول وإنشاء الأجندة'}</button></footer>
+    <footer className="mkw-form-footer"><button type="button" className="secondary" disabled={busy} onClick={() => navigate('/marketing')}>{W.cancel}</button>
+      <button type="button" className="secondary" disabled={busy} onClick={() => setPreviewOpen(current => !current)}>{previewOpen ? 'إغلاق المعاينة' : 'معاينة'}</button>
+      <button type="submit" className="primary" disabled={busy || !productsQuery.data?.rows.length}>{busy ? W.loading : kind === 'campaign' ? 'حفظ الجدول وإنشاء الحملة' : 'حفظ الجدول وإنشاء الأجندة'}</button>
+    </footer>
   </form>;
 }

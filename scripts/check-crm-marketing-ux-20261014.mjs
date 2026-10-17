@@ -36,7 +36,8 @@ console.log('PASS: caption and hashtags save independently for each output and t
 const create=read('src/marketing/workflow/CreatePage.tsx');
 assert.doesNotMatch(create,/const \[productSearch, setProductSearch\]/);
 assert.match(create,/mkw-plan-product-preview/);
-assert.match(create,/productGroups.map\(group => <optgroup/);
+assert.match(create,/selectableGroups.map\(group => <optgroup/);
+assert.match(create,/availablePlanProducts\(products, entries, entry.key\)/);
 assert.match(create,/معاينة جدول/);
 assert.match(create,/previewRows.map/);
 assert.match(create,/ProductViewButton id=\{product\.id\}/);

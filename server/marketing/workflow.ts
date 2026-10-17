@@ -582,20 +582,57 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     await tx`select pg_advisory_xact_lock(hashtext(${`work-plan:${user.id}:${requestKey}`}))`;
     const [existing] = await tx<any[]>`select id from marketing.work_plans where created_by=${user.id}::uuid and request_key=${requestKey}::uuid`;
     if (existing) return { ok: true, id: existing.id, message: W.saved };
-    const normalized: { productId: string; date: string; postTypeId: string; budget: number }[] = [], seen = new Set<string>();
+    const normalized: { productId: string; date: string; postTypeId: string; budget: number }[] = [];
+    const seen = new Set<string>(), usedProducts = new Set<string>();
+    // New composers submit exactly one product per row with several selected
+    // platforms. Old clients may still send the original flat plan entries.
+    // Both paths persist ordinary work_plan_items (one per publish platform),
+    // without migrations or changes to existing publication/CRM adapters.
+    const grouped = entries.every(entry => Array.isArray(entry?.platforms));
+    if (!grouped && entries.some(entry => Array.isArray(entry?.platforms))) throw new Error(W.invalid);
     for (const entry of entries) {
       const productId = id(entry.productId), date = text(entry.date, 10);
       if (!isWorkDate(date)) throw new Error(W.dateInvalid);
-      const postTypeId = id(entry.postTypeId);
-      const budget = kind === 'campaign' ? Number(entry.budget) : 0;
-      if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.round(budget * 100) / 100 !== budget) throw new Error(W.invalid);
+      if (grouped && usedProducts.has(productId)) {
+        throw new Error('المطلوب / المنتج مكرر داخل نفس الحملة أو الأجندة. اختر مطلوبًا مختلفًا لكل يوم.');
+      }
+      usedProducts.add(productId);
       const product = await productVisible(tx, user, productId);
-      // A plan may use any active post type appropriate to the product media,
-      // even if that post type was not part of the original execution task.
-      await validateFormats(tx, product.media_kind, [postTypeId]);
-      const key = `${date}:${productId}:${postTypeId}`;
-      if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
-      seen.add(key); normalized.push({ productId, date, postTypeId, budget });
+      if (grouped) {
+        const platforms = list(entry.platforms);
+        if (!platforms.length || platforms.length > 50) throw new Error(W.requiredFields);
+        const requested = platforms.map(platform => ({
+          platformId: id(platform.platformId), postTypeId: id(platform.postTypeId),
+          rawBudget: platform.budget,
+        }));
+        const ids = requested.map(platform => platform.postTypeId);
+        const formats = await validateFormats(tx, product.media_kind, ids);
+        const formatById = new Map(formats.map(format => [format.id, format]));
+        const selectedPlatforms = new Set<string>();
+        for (const platform of requested) {
+          if (selectedPlatforms.has(platform.platformId)) throw new Error('لا يمكن اختيار نفس المنصة أكثر من مرة للمطلوب الواحد.');
+          selectedPlatforms.add(platform.platformId);
+          if (formatById.get(platform.postTypeId)?.platform_id !== platform.platformId) throw new Error(W.selectFormats);
+          if (kind === 'campaign' && (platform.rawBudget === '' || platform.rawBudget == null)) throw new Error(W.requiredFields);
+          const budget = kind === 'campaign' ? Number(platform.rawBudget) : 0;
+          if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.abs(budget * 100 - Math.round(budget * 100)) > 0.000001) throw new Error(W.invalid);
+          const key = `${date}:${productId}:${platform.postTypeId}`;
+          if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
+          seen.add(key);
+          normalized.push({ productId, date, postTypeId: platform.postTypeId, budget });
+        }
+      } else {
+        // Backward-compatible single-post-type payload from older deployments.
+        const postTypeId = id(entry.postTypeId);
+        const budget = kind === 'campaign' ? Number(entry.budget) : 0;
+        if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.round(budget * 100) / 100 !== budget) throw new Error(W.invalid);
+        await validateFormats(tx, product.media_kind, [postTypeId]);
+        const key = `${date}:${productId}:${postTypeId}`;
+        if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
+        seen.add(key);
+        normalized.push({ productId, date, postTypeId, budget });
+      }
+      if (normalized.length > 500) throw new Error('الحد الأقصى 500 موعد نشر داخل الحملة أو الأجندة.');
     }
     let seq: any, planNo = '';
     do {
