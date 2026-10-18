@@ -1,4 +1,5 @@
 import { clean, normalizePhone, resolveSourceName } from "./_crm-utils.js";
+import { resolveSheetImportCampaign } from "./_crm-import-campaign.js";
 import { getSql } from "./_db.js";
 import { publishBackgroundEvent } from "./_crm-background-jobs.js";
 import {
@@ -208,6 +209,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   const sourceName = await resolveSourceName(sourceCode);
   const occurredAt = dateValue(payload);
   const data = importedData(payload);
+  const campaign = resolveSheetImportCampaign(payload, sourceCode);
   if (!data.phoneNormalized) throw new Error("رقم جوال ليد الاستيراد غير صالح");
 
   const preferredContactChannel = first(payload?.preferredContactChannel, payload?.preferred_contact_channel, payload?.outboundChannel, payload?.outbound_channel, "whatsapp").toLowerCase();
@@ -360,6 +362,8 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     lastImportEventId: eventId,
     lastImportRouteSource: routeSource,
     lastImportPayload: toJsonValue(data.raw),
+    ...(campaign.sheetCampaignName ? { lastSheetCampaignName: campaign.sheetCampaignName } : {}),
+    ...(campaign.metaPlatform ? { lastMetaPlatform: campaign.metaPlatform } : {}),
   };
   if (sourceCode === "installment_calculator") {
     nextExtraData.calculator = toJsonValue(data.calculator);
@@ -384,6 +388,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       payment_type=case when ${existedBefore} then payment_type else 'تمويل' end,
       car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
       car_type=case when ${existedBefore} then coalesce(nullif(car_type,''),${data.carName || null}) else ${data.carName || null} end,
+      campaign_name=case when ${existedBefore} then coalesce(nullif(campaign_name,''),${campaign.campaignName || null}) else ${campaign.campaignName || null} end,
       location=case when ${existedBefore} then coalesce(nullif(location,''),${data.location || null}) else ${data.location || null} end,
       age=case when ${existedBefore} then coalesce(age,${data.age}) else ${data.age} end,
       salary=case when ${existedBefore} then coalesce(salary,${data.salary}) else ${data.salary} end,
@@ -403,7 +408,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_name,note,details,created_at)
     select ${lead.id}::uuid,'lead_import_received',${lead.status_label || "عميل جديد"},${lead.department_code || "finance_sales"},${lead.branch_code || "online"},
       'Integration Gateway',${existedBefore ? "تم إرفاق بيانات مصدر جديد بالعميل الموجود" : "تم استيراد العميل وتوزيعه من المصدر الخارجي"},
-      ${sql.json({ eventId, routeSource, sourceCode, sourceName, preferredContactChannel, existedBefore })},${occurredAt}::timestamptz
+      ${sql.json({ eventId, routeSource, sourceCode, sourceName, preferredContactChannel, existedBefore, campaignName: campaign.campaignName, metaPlatform: campaign.metaPlatform })},${occurredAt}::timestamptz
     where not exists(
       select 1 from crm.lead_events
       where lead_id=${lead.id}::uuid and event_type='lead_import_received' and details->>'eventId'=${eventId}
