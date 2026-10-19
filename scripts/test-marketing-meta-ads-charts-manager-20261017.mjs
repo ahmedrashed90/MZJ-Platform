@@ -106,8 +106,9 @@ check(front.includes('openCampaignDetails(point.key)') && front.includes('id={ca
 check(styles.includes('grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))') && styles.includes('@media(max-width:920px)'), 'Three dedicated cards wrap from three to two to one according to available content width');
 check(styles.includes('marketing-meta-ads-chart-plot') && styles.includes('marketing-meta-ads-chart-xlabels') && styles.includes('marketing-meta-ads-chart-table') && !styles.includes('.marketing-meta-ads-chart-row'), 'Each metric has its own vertical bars, uncluttered axis labels and campaign manager table');
 check(front.includes('noMetricData') && front.includes('hasMultipleCurrencies') && front.includes("metric === 'costPerLead'"), 'Chart preserves missing-data and mixed-currency safeguards');
-check(!front.includes('shortCampaignName') && front.includes('marketing-meta-ads-chart-key-full-name') && front.includes('CampaignNameText') && front.includes('campaignDisplayName('), 'Campaigns are displayed with meaningful names and only independent date segments are removed');
-check(styles.includes('marketing-meta-ads-chart-key-full-name') && styles.includes('overflow-wrap:anywhere') && styles.includes('marketing-meta-ads-chart-campaign-name { display:block; text-align:right') && styles.includes('table-layout:auto'), 'Chart legend and campaign column align right and wrap without overlaps');
+check(!front.includes('shortCampaignName') && !front.includes('marketing-meta-ads-chart-name-key') && front.includes('marketing-meta-ads-chart-tooltip') && front.includes('CampaignNameText'), 'Chart removes duplicate campaign-name legend and displays name only on column selection');
+check(styles.includes('marketing-meta-ads-chart-tooltip') && styles.includes('marketing-meta-ads .marketing-meta-ads-chart-campaign-name { display:block; min-height:0; direction:rtl; text-align:right') && styles.includes('marketing-meta-ads-campaign-name-text { display:block; direction:rtl; text-align:right'), 'Table campaign name stays right-aligned for mixed Arabic and English names');
+check(front.includes('aria-pressed={activeCampaignKey === point.key}') && front.includes('onClick={() => setActiveCampaignKey(') && front.includes('role="group"'), 'Every chart column is an accessible click target with independent active state');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
 check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 2'), 'Dedicated additive schema migration persists manager names');
@@ -148,11 +149,24 @@ const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsP
 const jsxNode = (type, props, key) => ({ type, props: props || {}, key });
 const fakeIcon = () => null;
 const mockFront = {};
+let mockHookStates = [];
+let mockHookIndex = 0;
+function resetHooks() { mockHookStates = []; mockHookIndex = 0; }
+function renderCard(points, metric) {
+  mockHookIndex = 0;
+  return mockFront.__campaignMetricCardForTest({ points, metric });
+}
 vm.runInNewContext(debugFrontend, {
   exports: mockFront, console, Date, String, Number, Math, Map, Set, Object, Array, RegExp, Intl,
   require(name) {
     if (name === 'react/jsx-runtime') return { jsx: jsxNode, jsxs: jsxNode, Fragment: 'fragment' };
-    if (name === 'react') return { useMemo: run => run(), useState: initial => [initial, () => {}], useEffect: () => {} };
+    if (name === 'react') return { useMemo: run => run(), useState: initial => {
+      const index = mockHookIndex++;
+      if (!(index in mockHookStates)) mockHookStates[index] = initial;
+      return [mockHookStates[index], next => {
+        mockHookStates[index] = typeof next === 'function' ? next(mockHookStates[index]) : next;
+      }];
+    }, useEffect: () => {} };
     if (name === '@phosphor-icons/react') return { FacebookLogo: fakeIcon, UsersThree: fakeIcon, ChartLineUp: fakeIcon,
       ArrowClockwise: fakeIcon, FloppyDisk: fakeIcon, LinkSimple: fakeIcon, MagnifyingGlass: fakeIcon, Megaphone: fakeIcon, Wallet: fakeIcon };
     if (name === '../../auth/AuthContext') return { useAuth: () => ({ user: null }) };
@@ -183,14 +197,27 @@ function childNodes(node) {
   return out;
 }
 for (const metric of ['interactions', 'leads', 'costPerLead']) {
-  const render = mockFront.__campaignMetricCardForTest({ points: testPoints, metric });
+  resetHooks();
+  const render = renderCard(testPoints, metric);
   const nodes = childNodes(render);
   const plotBars = nodes.find(node => node.props.className === 'marketing-meta-ads-chart-bars');
+  const bars = nodes.filter(node => node.type === 'button' && node.props.className === 'marketing-meta-ads-chart-bar-slot');
   const tableBody = nodes.find(node => node.type === 'tbody');
-  check(render.type === 'section' && render.props.className.includes(`is-${metric}`) && plotBars?.props.children.length === 5 && tableBody?.props.children.length === 5,
-    `${metric} renders an independent card with exactly five preview bars and matching table entries`);
+  check(render.type === 'section' && render.props.className.includes(`is-${metric}`) && plotBars?.props.children.length === 5 && bars.length === 5 && tableBody?.props.children.length === 5,
+    `${metric} renders an independent card with five clickable columns and matching table entries`);
   const firstCampaignName = tableBody.props.children[0].props.children[1].props.children.props.children.props.name;
   check(firstCampaignName === (metric === 'interactions' ? 'E' : 'B'), `${metric} sorts campaigns by its own result rather than sharing a global order`);
+  check(bars.every(node => node.props['aria-pressed'] === false && node.props['aria-label']?.includes(metric === 'interactions' ? 'عدد التفاعلات' : metric === 'leads' ? 'عدد الليدات' : 'تكلفة الليد')),
+    `${metric} chart bars announce their campaign and metric to keyboard/screen-reader users`);
+  bars[0].props.onClick();
+  const opened = childNodes(renderCard(testPoints, metric));
+  const tip = opened.find(node => node.props.className === 'marketing-meta-ads-chart-tooltip');
+  check(tip?.props.role === 'status' && tip.props.children[1]?.props.name === (metric === 'interactions' ? 'E' : 'B'),
+    `${metric} clicking a column displays only its name and value in an in-chart tooltip`);
+  const close = opened.find(node => node.props.className === 'marketing-meta-ads-chart-tooltip-close');
+  close?.props.onClick();
+  check(!childNodes(renderCard(testPoints, metric)).some(node => node.props.className === 'marketing-meta-ads-chart-tooltip'),
+    `${metric} tooltip closes without changing campaign details or date filters`);
 }
 const completeNames = [
   'MZJ | Standard 2026 | Installments | Oct 2026',
@@ -202,17 +229,18 @@ const fullNameExample = completeNames.map((name, index) => ({
   costPerLead: 3 + index, leads: 30 - index, interactions: 100 - index,
 }));
 for (const metric of ['interactions', 'leads', 'costPerLead']) {
-  const rendered = mockFront.__campaignMetricCardForTest({ points: fullNameExample, metric });
+  resetHooks();
+  const rendered = renderCard(fullNameExample, metric);
   const nodes = childNodes(rendered);
-  const fullChartNames = nodes.filter(node => node.type === mockFront.__campaignNameTextForTest && node.props.className === 'marketing-meta-ads-chart-key-full-name').map(node => node.props.name);
+  const fullChartNames = nodes.filter(node => node.type === 'button' && node.props.className === 'marketing-meta-ads-chart-bar-slot').map(node => node.props['aria-label']);
   const fullTableNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-campaign-name').map(node => node.props.children.props.name);
-  const numericChartLabels = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-xlabels')[0]?.props.children;
-  check(fullChartNames.length === completeNames.length && fullChartNames.every(name => completeNames.includes(name)) && new Set(fullChartNames).size === completeNames.length,
-    `${metric} chart binds each distinct campaign's real name, without first-token truncation`);
+  const numericChartLabels = nodes.find(node => node.props.className === 'marketing-meta-ads-chart-xlabels')?.props.children;
+  check(fullChartNames.length === completeNames.length && fullChartNames.every(label => completeNames.some(name => label.includes(name))),
+    `${metric} campaign names are accessible from chart columns without a repeated visual legend`);
   check(fullTableNames.length === completeNames.length && fullTableNames.every(name => completeNames.includes(name)),
-    `${metric} table binds each distinct campaign's real name, with matching formatting`);
+    `${metric} table retains complete original campaign names in the right-aligned column`);
   check(numericChartLabels?.length === completeNames.length && numericChartLabels.every((node, index) => node.props.children === String(index + 1)),
-    `${metric} chart uses numbered bar keys to avoid long labels colliding`);
+    `${metric} numbered x-axis labels remain distinct and uncluttered`);
 }
 
 const displayName = mockFront.__campaignNameForTest;
@@ -230,8 +258,9 @@ for (const [input, expected] of nameCases) {
 }
 const mockCampaignName = mockFront.__campaignNameTextForTest({ name: 'MZJ | MG5 Standard 2026 | Installments | Oct 2026' });
 check(mockCampaignName.type === 'span' && mockCampaignName.props.dir === 'rtl'
-  && mockCampaignName.props.children.length === 3,
-  'Campaign name segments render inside a right-to-left container');
+  && mockCampaignName.props.children.type === 'bdi' && mockCampaignName.props.children.props.dir === 'auto'
+  && mockCampaignName.props.children.props.children === 'MZJ | MG5 Standard 2026 | Installments',
+  'Campaign names are right-aligned while a single bidirectional isolate preserves English name order');
 
 console.log(`${assertions}/${assertions} Meta campaign charts, managers and date range checks passed (mock provider/database).`);
 

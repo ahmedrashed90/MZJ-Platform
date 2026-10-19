@@ -102,8 +102,9 @@ function campaignDisplayName(value: string) {
 }
 
 function CampaignNameText({ name, className }: { name: string; className?: string }) {
-  const parts = campaignNameSegments(name);
-  return <span className={className} dir="rtl">{parts.map((part, index) => <span key={`${part}-${index}`} className="marketing-meta-ads-campaign-name-part"><bdi>{part}</bdi>{index < parts.length - 1 && <span className="marketing-meta-ads-campaign-name-separator" aria-hidden="true">|</span>}</span>)}</span>;
+  // Keep the cell right-aligned in RTL while preserving the proper reading order
+  // of full English campaign names and mixed Arabic/English punctuation.
+  return <span className={`marketing-meta-ads-campaign-name-text${className ? ` ${className}` : ''}`} dir="rtl"><bdi dir="auto">{campaignDisplayName(name)}</bdi></span>;
 }
 
 const chartAxisTop = (maximum: number) => {
@@ -144,6 +145,7 @@ function openCampaignDetails(key: string) {
 
 function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: ChartMetric }) {
   const [showAll, setShowAll] = useState(false);
+  const [activeCampaignKey, setActiveCampaignKey] = useState<string | null>(null);
   const config = CHART_METRICS.find(item => item.metric === metric)!;
   const sorted = useMemo(() => [...points].sort((a, b) => {
     const aValue = a[metric];
@@ -154,6 +156,7 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
     return a.name.localeCompare(b.name, 'ar');
   }), [points, metric]);
   const topCampaigns = sorted.slice(0, CAMPAIGN_CHART_PAGE_SIZE);
+  const activeCampaign = topCampaigns.find(point => point.key === activeCampaignKey);
   const tableCampaigns = showAll ? sorted : topCampaigns;
   const maximum = Math.max(0, ...topCampaigns.map(point => point[metric] ?? 0));
   const chartTop = chartAxisTop(maximum);
@@ -182,28 +185,31 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
       {maximum > 0 && !noMetricData ? <div className="marketing-meta-ads-chart-stage">
         <div className="marketing-meta-ads-chart-axis-title" aria-hidden="true">{axisLabel(metric, axisNote)}</div>
         <div className="marketing-meta-ads-chart-scale" aria-hidden="true">{ticks.map((tick, index) => <span key={`${metric}-tick-${index}`} dir="ltr">{axisTickText(metric, tick)}</span>)}</div>
-        <div className="marketing-meta-ads-chart-plot" role="img" aria-label={`أعلى ${num(topCampaigns.length)} حملات حسب ${config.chartHint}; القيم الكاملة وأسماء المديرين في الجدول أدناه`}>
+        <div className="marketing-meta-ads-chart-plot" role="group" aria-label={`أعلى ${num(topCampaigns.length)} حملات حسب ${config.chartHint}؛ اضغط أي عمود لعرض اسم الحملة وقيمتها`}>
           <div className="marketing-meta-ads-chart-guides" aria-hidden="true">{ticks.map((_, index) => <span key={`${metric}-guide-${index}`} />)}</div>
-          <div className="marketing-meta-ads-chart-bars" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
-            {topCampaigns.map(point => {
+          <div className="marketing-meta-ads-chart-bars" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
+            {topCampaigns.map((point, index) => {
               const value = point[metric];
               const height = value !== null && value > 0 ? Math.max(3, (value / chartTop) * 100) : 0;
-              return <div className="marketing-meta-ads-chart-bar-slot" key={point.key}>
+              return <button type="button" className="marketing-meta-ads-chart-bar-slot" key={point.key}
+                title={`${point.name} — ${config.chartHint}: ${formatted(point)}`}
+                aria-label={`الحملة ${num(index + 1)}: ${point.name}، ${config.chartHint}: ${formatted(point)}`}
+                aria-pressed={activeCampaignKey === point.key}
+                onClick={() => setActiveCampaignKey(current => current === point.key ? null : point.key)}>
                 <span className="marketing-meta-ads-chart-column" style={{ height: `${height}%` }}>
                   {height > 0 && <b className="marketing-meta-ads-chart-bar-number" dir="ltr">{compactValue(point)}</b>}
                 </span>
-              </div>;
+              </button>;
             })}
           </div>
+          {activeCampaign && <div className="marketing-meta-ads-chart-tooltip" role="status">
+            <button type="button" className="marketing-meta-ads-chart-tooltip-close" aria-label="إغلاق تفاصيل العمود" onClick={() => setActiveCampaignKey(null)}>×</button>
+            <CampaignNameText name={activeCampaign.name} />
+            <strong className="marketing-meta-ads-chart-tooltip-value" dir="ltr">{formatted(activeCampaign)}</strong>
+          </div>}
         </div>
-        <div className="marketing-meta-ads-chart-xlabels" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
-          {topCampaigns.map((point, index) => <span key={point.key} title={point.name} aria-label={`الحملة ${num(index + 1)}: ${point.name}`}>{num(index + 1)}</span>)}
-        </div>
-        <div className="marketing-meta-ads-chart-name-key" aria-label="أسماء الحملات المرتبطة بأعمدة الرسم">
-          {topCampaigns.map((point, index) => <button type="button" key={point.key} className="marketing-meta-ads-chart-key-item" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>
-            <span className="marketing-meta-ads-chart-key-index" aria-hidden="true">{num(index + 1)}</span>
-            <CampaignNameText className="marketing-meta-ads-chart-key-full-name" name={point.name} />
-          </button>)}
+        <div className="marketing-meta-ads-chart-xlabels" aria-label="أرقام أعمدة الحملات" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
+          {topCampaigns.map((point, index) => <span key={point.key} title={point.name} aria-label={`الحملة ${num(index + 1)}`}>{num(index + 1)}</span>)}
         </div>
       </div> : <div className="marketing-meta-ads-chart-no-data">{noMetricData ? `لم ترجع Meta بيانات ${config.chartHint} للحملات في الفترة المحددة.` : `لا توجد ${config.chartHint} مسجلة في الفترة المحددة.`}</div>}
     </div>
