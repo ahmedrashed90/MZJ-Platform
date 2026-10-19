@@ -33,6 +33,17 @@ const identitySql=scriptedSql([]);
 
 test('Readiness is parent-level approved/final-file ratio',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'},item]),{total:2,approved:1,percent:50,complete:false}));
 test('Final upload alone never counts as approval',()=>assert.equal(domain.workReadiness([item]).percent,0));
+test('Individual requirement starts at 0 percent without final uploads',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[]}),0));
+test('Idea-only attachments do not mark requirement as uploaded',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[{...file,category:'idea'}]}),0));
+test('Pending or unfinished files do not mark requirement as uploaded',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[{...file,status:'pending'}]}),0));
+test('Individual requirement reaches 50 percent after all final files are uploaded',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress'}),50));
+test('Submitted requirement remains at 50 percent until approval',()=>assert.equal(domain.workItemReadiness(item),50));
+test('Revision with still-ready final files remains at 50 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'revision'}),50));
+test('Individual requirement reaches 100 percent after approval',()=>assert.equal(domain.workItemReadiness({...item,status:'approved'}),100));
+test('Approval without final coverage cannot show 100 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'approved',files:[]}),0));
+test('Incomplete multi-format upload has not reached the 50 percent milestone',()=>assert.equal(domain.workItemReadiness({...item,formats:[format,{...format,id:uid(11)}]}),0));
+test('Parent task readiness still depends on approval only',()=>assert.equal(domain.workReadiness([item]).percent,0));
+test('Each requirement displays its idea and readiness without opening detail',()=>{const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');assert(front.includes('({item.idea?.trim() ||'));assert(front.includes('<Readiness value={workItemReadiness(item)} />'));assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'));});
 test('Approval without a ready file never counts',()=>assert.equal(domain.workReadiness([{...item,status:'approved',files:[]}]).percent,0));
 test('All formats need final coverage',()=>assert.equal(domain.finalCoverage({...item,formats:[format,{...format,id:uid(11)}]}),false));
 test('Wrong image/video file type is rejected',()=>assert.equal(domain.finalCoverage({...item,media_kind:'video'}),false));

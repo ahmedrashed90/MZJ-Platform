@@ -78,6 +78,15 @@ export function matchingWorkflowPublishFiles(
   return [];
 }
 
+/**
+ * Per-requirement display readiness. Uploading every required final output
+ * reaches 50%; review approval reaches 100%. This is intentionally separate
+ * from the task's approved-only aggregate readiness.
+ */
+export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>): 0 | 50 | 100 {
+  if (!finalCoverage(item)) return 0;
+  return item.status === 'approved' ? 100 : 50;
+}
 export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>>) {
   const total = items.length;
   const approved = items.filter(item => item.status === 'approved' && finalCoverage(item)).length;

@@ -3,7 +3,7 @@ import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSim
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
-import { finalCoverage, ideaFileAllowed, workFileMatches, type WorkCapabilities, type WorkItem, type WorkTask } from '../../../shared/marketing-workflow';
+import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, type WorkCapabilities, type WorkItem, type WorkTask } from '../../../shared/marketing-workflow';
 import { W, Empty, Field, FileLink, FilesPreview, Formats, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
 
@@ -38,11 +38,12 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name}</strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} <span className="mkw-requirement-review-idea">({item.idea?.trim() || 'لم تُحدد الفكرة'})</span></strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
                   <Status value={item.status}/>
                   {item.status === 'approved' ? <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>تم اعتماد المطلوب</span> : item.status === 'submitted' ? <span className="mkw-requirement-waiting">بانتظار اعتماد المطلوب</span> : null}
                   <span className="mkw-requirement-review-label">{opened ? 'إغلاق' : item.status === 'submitted' && query.data!.capabilities.review ? 'فتح واعتماد' : 'فتح المطلوب'}<CaretDown size={16}/></span>
                 </button>
+                <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities} refresh={refresh} />}
               </section>;
             })}

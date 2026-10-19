@@ -497,6 +497,11 @@
 .mkw-requirement-review-identify { min-width:165px; flex:1 1 250px; display:grid; gap:4px; }
 .mkw-requirement-review-identify strong { overflow-wrap:anywhere; font-size:14px; }
 .mkw-requirement-review-identify small { color:var(--muted); font-size:12px; }
+.mkw-requirement-review-idea { color:var(--brand); font-weight:650; white-space:pre-wrap; overflow-wrap:anywhere; }
+.mkw-requirement-item-readiness { padding:0 16px 14px; }
+.mkw-requirement-item-readiness .mkw-readiness { gap:7px; }
+.mkw-requirement-item-readiness .mkw-readiness>span { align-items:center; font-weight:700; }
+.mkw-requirement-item-readiness .mkw-readiness strong { font-size:13px; }
 .mkw-requirement-reviewed,.mkw-requirement-waiting { display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:12px; font-weight:800; }
 .mkw-requirement-waiting { color:var(--brand); }
 .mkw-requirement-review-label { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:800; color:var(--brand); }
