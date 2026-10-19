@@ -106,6 +106,8 @@ check(front.includes('openCampaignDetails(point.key)') && front.includes('id={ca
 check(styles.includes('grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))') && styles.includes('@media(max-width:920px)'), 'Three dedicated cards wrap from three to two to one according to available content width');
 check(styles.includes('marketing-meta-ads-chart-plot') && styles.includes('marketing-meta-ads-chart-xlabels') && styles.includes('marketing-meta-ads-chart-table') && !styles.includes('.marketing-meta-ads-chart-row'), 'Each metric has its own vertical bars, uncluttered axis labels and campaign manager table');
 check(front.includes('noMetricData') && front.includes('hasMultipleCurrencies') && front.includes("metric === 'costPerLead'"), 'Chart preserves missing-data and mixed-currency safeguards');
+check(!front.includes('shortCampaignName') && front.includes('marketing-meta-ads-chart-key-full-name') && front.includes('>{point.name}</button>'), 'Campaign names are never shortened in chart legend or table');
+check(styles.includes('marketing-meta-ads-chart-key-full-name') && styles.includes('overflow-wrap:anywhere') && !styles.includes('marketing-meta-ads-chart-campaign-name { display:block; overflow:hidden'), 'Chart legend and table show full long names across lines without ellipsis');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
 check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 2'), 'Dedicated additive schema migration persists manager names');
@@ -189,6 +191,28 @@ for (const metric of ['interactions', 'leads', 'costPerLead']) {
     `${metric} renders an independent card with exactly five preview bars and matching table entries`);
   const firstCampaignName = tableBody.props.children[0].props.children[1].props.children.props.children;
   check(firstCampaignName === (metric === 'interactions' ? 'E' : 'B'), `${metric} sorts campaigns by its own result rather than sharing a global order`);
+}
+const completeNames = [
+  'MZJ | Standard 2026 | Installments | Oct 2026',
+  'MZJ | Sonata Installments | Oct 2026',
+  'المنشور: كيف تبدأ تمويل سيارتك؟ 🚙 — حملة التعريف',
+];
+const fullNameExample = completeNames.map((name, index) => ({
+  key: `act_1:long-${index}`, name, managerName: 'سمر', currency: 'SAR',
+  costPerLead: 3 + index, leads: 30 - index, interactions: 100 - index,
+}));
+for (const metric of ['interactions', 'leads', 'costPerLead']) {
+  const rendered = mockFront.__campaignMetricCardForTest({ points: fullNameExample, metric });
+  const nodes = childNodes(rendered);
+  const fullChartNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-key-full-name').map(node => node.props.children);
+  const fullTableNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-campaign-name').map(node => node.props.children);
+  const numericChartLabels = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-xlabels')[0]?.props.children;
+  check(fullChartNames.length === completeNames.length && fullChartNames.every(name => completeNames.includes(name)) && new Set(fullChartNames).size === completeNames.length,
+    `${metric} chart visibly lists complete, distinct campaign names, including punctuation and Arabic`);
+  check(fullTableNames.length === completeNames.length && fullTableNames.every(name => completeNames.includes(name)),
+    `${metric} table renders the same complete campaign names without clipping them in JSX`);
+  check(numericChartLabels?.length === completeNames.length && numericChartLabels.every((node, index) => node.props.children === String(index + 1)),
+    `${metric} chart uses numbered bar keys to avoid long labels colliding`);
 }
 console.log(`${assertions}/${assertions} Meta campaign charts, managers and date range checks passed (mock provider/database).`);
 

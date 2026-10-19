@@ -81,17 +81,6 @@ const CHART_METRICS: { metric: ChartMetric; label: string; hint: string; chartHi
 const CAMPAIGN_CHART_PAGE_SIZE = 5;
 const campaignDomId = (key: string) => `marketing-meta-ads-campaign-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
-const shortCampaignName = (name: string) => {
-  const cleaned = name.replace(/\s+/g, ' ').trim();
-  if (!cleaned) return 'حملة بدون اسم';
-  const preferred = cleaned
-    .split(/\s*[|•·/]\s*|\s+[-—–]\s+/)
-    .map(part => part.trim())
-    .filter(Boolean)
-    .find(part => part.length >= 3) || cleaned;
-  return preferred.length > 18 ? `${preferred.slice(0, 18).trimEnd()}…` : preferred;
-};
-
 const chartAxisTop = (maximum: number) => {
   if (!maximum || maximum <= 0) return 0;
   const magnitude = 10 ** Math.floor(Math.log10(maximum));
@@ -183,7 +172,13 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
           </div>
         </div>
         <div className="marketing-meta-ads-chart-xlabels" style={{ gridTemplateColumns: `repeat(${topCampaigns.length}, minmax(0, 1fr))` }}>
-          {topCampaigns.map(point => <button type="button" key={point.key} title={`${point.name} — مدير الحملة: ${point.managerName || 'غير محدد'} — ${config.chartHint}: ${formatted(point)}`} onClick={() => openCampaignDetails(point.key)}>{shortCampaignName(point.name)}</button>)}
+          {topCampaigns.map((point, index) => <span key={point.key} title={point.name} aria-label={`الحملة ${num(index + 1)}: ${point.name}`}>{num(index + 1)}</span>)}
+        </div>
+        <div className="marketing-meta-ads-chart-name-key" aria-label="أسماء الحملات المرتبطة بأعمدة الرسم">
+          {topCampaigns.map((point, index) => <button type="button" key={point.key} className="marketing-meta-ads-chart-key-item" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>
+            <span className="marketing-meta-ads-chart-key-index" aria-hidden="true">{num(index + 1)}</span>
+            <span className="marketing-meta-ads-chart-key-full-name" dir="auto">{point.name}</span>
+          </button>)}
         </div>
       </div> : <div className="marketing-meta-ads-chart-no-data">{noMetricData ? `لم ترجع Meta بيانات ${config.chartHint} للحملات في الفترة المحددة.` : `لا توجد ${config.chartHint} مسجلة في الفترة المحددة.`}</div>}
     </div>
@@ -192,7 +187,7 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
         <thead><tr><th scope="col">#</th><th scope="col">الحملة</th><th scope="col">مدير الحملة</th><th scope="col">{config.chartHint}</th></tr></thead>
         <tbody>{tableCampaigns.map((point, index) => <tr key={point.key}>
           <td>{num(index + 1)}</td>
-          <td><button type="button" className="marketing-meta-ads-chart-campaign-name" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>{shortCampaignName(point.name)}</button></td>
+          <td><button type="button" className="marketing-meta-ads-chart-campaign-name" dir="auto" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>{point.name}</button></td>
           <td><span className="marketing-meta-ads-chart-manager-name" title={point.managerName || 'غير محدد'}>{point.managerName || 'غير محدد'}</span></td>
           <td><strong className="marketing-meta-ads-chart-table-value" dir="ltr">{formatted(point)}</strong></td>
         </tr>)}</tbody>

@@ -14,7 +14,7 @@ const checks = [
   ["server/_erpnext-sales-order-normalizer.ts", "erpnext-webhook"],
   ["server/integrations/erpnext-sales-order.ts", "registrationFeeRowsIgnoredAsVehicles"],
   [".env.example", "ERPNEXT_WEBHOOK_KEY"],
-  ["docs/ERPNEXT-WEBHOOK-TRACKING-AR.md", "X-MZJ-ERPNext-Key"],
+  ["server/integrations/erpnext-sales-order.ts", "x-mzj-erpnext-key"],
   ["src/App.tsx", 'path="/tracking"'],
   ["src/App.tsx", 'path="/track"'],
   ["src/App.tsx", 'path="/Test-Track.html"'],
