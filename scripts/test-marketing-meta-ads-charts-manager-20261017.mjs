@@ -106,8 +106,8 @@ check(front.includes('openCampaignDetails(point.key)') && front.includes('id={ca
 check(styles.includes('grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))') && styles.includes('@media(max-width:920px)'), 'Three dedicated cards wrap from three to two to one according to available content width');
 check(styles.includes('marketing-meta-ads-chart-plot') && styles.includes('marketing-meta-ads-chart-xlabels') && styles.includes('marketing-meta-ads-chart-table') && !styles.includes('.marketing-meta-ads-chart-row'), 'Each metric has its own vertical bars, uncluttered axis labels and campaign manager table');
 check(front.includes('noMetricData') && front.includes('hasMultipleCurrencies') && front.includes("metric === 'costPerLead'"), 'Chart preserves missing-data and mixed-currency safeguards');
-check(!front.includes('shortCampaignName') && front.includes('marketing-meta-ads-chart-key-full-name') && front.includes('>{point.name}</button>'), 'Campaign names are never shortened in chart legend or table');
-check(styles.includes('marketing-meta-ads-chart-key-full-name') && styles.includes('overflow-wrap:anywhere') && !styles.includes('marketing-meta-ads-chart-campaign-name { display:block; overflow:hidden'), 'Chart legend and table show full long names across lines without ellipsis');
+check(!front.includes('shortCampaignName') && front.includes('marketing-meta-ads-chart-key-full-name') && front.includes('CampaignNameText') && front.includes('campaignDisplayName('), 'Campaigns are displayed with meaningful names and only independent date segments are removed');
+check(styles.includes('marketing-meta-ads-chart-key-full-name') && styles.includes('overflow-wrap:anywhere') && styles.includes('marketing-meta-ads-chart-campaign-name { display:block; text-align:right') && styles.includes('table-layout:auto'), 'Chart legend and campaign column align right and wrap without overlaps');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
 check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 2'), 'Dedicated additive schema migration persists manager names');
@@ -141,7 +141,7 @@ check(upgradeV0.length === 1 && upgradeV0[0].includes('marketing.departments') &
 check((await simulatedSchemaSetup(2)).length === 0, 'Current databases never rerun Marketing DDL on regular requests');
 // Render the actual TSX card functions with a small JSX runtime mock to catch
 // layout/data regressions beyond string-based source checks.
-const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsPanel()', 'export const __campaignMetricCardForTest = CampaignMetricCard;\nexport function MetaAdsPanel()'), {
+const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsPanel()', 'export const __campaignMetricCardForTest = CampaignMetricCard;\nexport const __campaignNameForTest = campaignDisplayName;\nexport const __campaignNameTextForTest = CampaignNameText;\nexport function MetaAdsPanel()'), {
   fileName: 'MetaAdsPanel.tsx',
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
@@ -189,7 +189,7 @@ for (const metric of ['interactions', 'leads', 'costPerLead']) {
   const tableBody = nodes.find(node => node.type === 'tbody');
   check(render.type === 'section' && render.props.className.includes(`is-${metric}`) && plotBars?.props.children.length === 5 && tableBody?.props.children.length === 5,
     `${metric} renders an independent card with exactly five preview bars and matching table entries`);
-  const firstCampaignName = tableBody.props.children[0].props.children[1].props.children.props.children;
+  const firstCampaignName = tableBody.props.children[0].props.children[1].props.children.props.children.props.name;
   check(firstCampaignName === (metric === 'interactions' ? 'E' : 'B'), `${metric} sorts campaigns by its own result rather than sharing a global order`);
 }
 const completeNames = [
@@ -204,15 +204,34 @@ const fullNameExample = completeNames.map((name, index) => ({
 for (const metric of ['interactions', 'leads', 'costPerLead']) {
   const rendered = mockFront.__campaignMetricCardForTest({ points: fullNameExample, metric });
   const nodes = childNodes(rendered);
-  const fullChartNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-key-full-name').map(node => node.props.children);
-  const fullTableNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-campaign-name').map(node => node.props.children);
+  const fullChartNames = nodes.filter(node => node.type === mockFront.__campaignNameTextForTest && node.props.className === 'marketing-meta-ads-chart-key-full-name').map(node => node.props.name);
+  const fullTableNames = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-campaign-name').map(node => node.props.children.props.name);
   const numericChartLabels = nodes.filter(node => node.props.className === 'marketing-meta-ads-chart-xlabels')[0]?.props.children;
   check(fullChartNames.length === completeNames.length && fullChartNames.every(name => completeNames.includes(name)) && new Set(fullChartNames).size === completeNames.length,
-    `${metric} chart visibly lists complete, distinct campaign names, including punctuation and Arabic`);
+    `${metric} chart binds each distinct campaign's real name, without first-token truncation`);
   check(fullTableNames.length === completeNames.length && fullTableNames.every(name => completeNames.includes(name)),
-    `${metric} table renders the same complete campaign names without clipping them in JSX`);
+    `${metric} table binds each distinct campaign's real name, with matching formatting`);
   check(numericChartLabels?.length === completeNames.length && numericChartLabels.every((node, index) => node.props.children === String(index + 1)),
     `${metric} chart uses numbered bar keys to avoid long labels colliding`);
 }
+
+const displayName = mockFront.__campaignNameForTest;
+const nameCases = [
+  ['MZJ | MG5 Standard 2026 | Installments | Oct 2026', 'MZJ | MG5 Standard 2026 | Installments'],
+  ['MZJ | Sonata Installments | Oct | 2026', 'MZJ | Sonata Installments'],
+  ['MZJ | Elantra Cash | October', 'MZJ | Elantra Cash'],
+  ['MZJ | Tucson Comfort 2026 | Cash | Leads | Oct2026', 'MZJ | Tucson Comfort 2026 | Cash | Leads | Oct2026'],
+  ['حملة عروض | أكتوبر 2026', 'حملة عروض'],
+  ['إعلان سيارات 2026 بدون فواصل', 'إعلان سيارات 2026 بدون فواصل'],
+  ['المنشور: كيف تبدأ تمويل سيارتك؟ 🚙', 'المنشور: كيف تبدأ تمويل سيارتك؟ 🚙'],
+];
+for (const [input, expected] of nameCases) {
+  check(displayName(input) === expected, `Campaign display name handles date segments without removing model years: ${input}`);
+}
+const mockCampaignName = mockFront.__campaignNameTextForTest({ name: 'MZJ | MG5 Standard 2026 | Installments | Oct 2026' });
+check(mockCampaignName.type === 'span' && mockCampaignName.props.dir === 'rtl'
+  && mockCampaignName.props.children.length === 3,
+  'Campaign name segments render inside a right-to-left container');
+
 console.log(`${assertions}/${assertions} Meta campaign charts, managers and date range checks passed (mock provider/database).`);
 

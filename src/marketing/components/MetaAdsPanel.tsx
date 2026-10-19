@@ -81,6 +81,31 @@ const CHART_METRICS: { metric: ChartMetric; label: string; hint: string; chartHi
 const CAMPAIGN_CHART_PAGE_SIZE = 5;
 const campaignDomId = (key: string) => `marketing-meta-ads-campaign-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
+const ENGLISH_MONTH_SEGMENT = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:[\s\/_-]+20\d{2})?$/i;
+const ARABIC_MONTH_SEGMENT = /^(?:يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)(?:[\s\/_-]+20\d{2})?$/;
+const YEAR_ONLY_SEGMENT = /^20\d{2}$/;
+
+function isCampaignDateSuffixSegment(value: string) {
+  const segment = value.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+  return YEAR_ONLY_SEGMENT.test(segment) || ENGLISH_MONTH_SEGMENT.test(segment) || ARABIC_MONTH_SEGMENT.test(segment);
+}
+
+function campaignNameSegments(value: string) {
+  const parts = String(value || '').split('|').map(part => part.trim()).filter(Boolean);
+  if (!parts.length) return ['—'];
+  const filtered = parts.filter(part => !isCampaignDateSuffixSegment(part));
+  return filtered.length ? filtered : parts;
+}
+
+function campaignDisplayName(value: string) {
+  return campaignNameSegments(value).join(' | ');
+}
+
+function CampaignNameText({ name, className }: { name: string; className?: string }) {
+  const parts = campaignNameSegments(name);
+  return <span className={className} dir="rtl">{parts.map((part, index) => <span key={`${part}-${index}`} className="marketing-meta-ads-campaign-name-part"><bdi>{part}</bdi>{index < parts.length - 1 && <span className="marketing-meta-ads-campaign-name-separator" aria-hidden="true">|</span>}</span>)}</span>;
+}
+
 const chartAxisTop = (maximum: number) => {
   if (!maximum || maximum <= 0) return 0;
   const magnitude = 10 ** Math.floor(Math.log10(maximum));
@@ -177,7 +202,7 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
         <div className="marketing-meta-ads-chart-name-key" aria-label="أسماء الحملات المرتبطة بأعمدة الرسم">
           {topCampaigns.map((point, index) => <button type="button" key={point.key} className="marketing-meta-ads-chart-key-item" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>
             <span className="marketing-meta-ads-chart-key-index" aria-hidden="true">{num(index + 1)}</span>
-            <span className="marketing-meta-ads-chart-key-full-name" dir="auto">{point.name}</span>
+            <CampaignNameText className="marketing-meta-ads-chart-key-full-name" name={point.name} />
           </button>)}
         </div>
       </div> : <div className="marketing-meta-ads-chart-no-data">{noMetricData ? `لم ترجع Meta بيانات ${config.chartHint} للحملات في الفترة المحددة.` : `لا توجد ${config.chartHint} مسجلة في الفترة المحددة.`}</div>}
@@ -187,7 +212,7 @@ function CampaignMetricCard({ points, metric }: { points: ChartPoint[]; metric: 
         <thead><tr><th scope="col">#</th><th scope="col">الحملة</th><th scope="col">مدير الحملة</th><th scope="col">{config.chartHint}</th></tr></thead>
         <tbody>{tableCampaigns.map((point, index) => <tr key={point.key}>
           <td>{num(index + 1)}</td>
-          <td><button type="button" className="marketing-meta-ads-chart-campaign-name" dir="auto" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}>{point.name}</button></td>
+          <td><button type="button" className="marketing-meta-ads-chart-campaign-name" title={`فتح تفاصيل: ${point.name}`} onClick={() => openCampaignDetails(point.key)}><CampaignNameText name={point.name} /></button></td>
           <td><span className="marketing-meta-ads-chart-manager-name" title={point.managerName || 'غير محدد'}>{point.managerName || 'غير محدد'}</span></td>
           <td><strong className="marketing-meta-ads-chart-table-value" dir="ltr">{formatted(point)}</strong></td>
         </tr>)}</tbody>
@@ -247,7 +272,7 @@ export function MetaAdsPanel() {
   const currencies = [...new Set(filtered.map(({ account }) => account.currency))];
   const commonCurrency = currencies.length === 1 ? currencies[0] : '';
   const chartPoints: ChartPoint[] = useMemo(() => filtered.map(({ campaign, account }) => ({
-    key: `${account.id}:${campaign.id}`, name: campaign.name, managerName: campaign.managerName, currency: account.currency,
+    key: `${account.id}:${campaign.id}`, name: campaignDisplayName(campaign.name), managerName: campaign.managerName, currency: account.currency,
     costPerLead: campaign.metrics.costPerLead, leads: campaign.metrics.leads, interactions: campaign.metrics.interactions,
   })).sort((a, b) => (b.leads || 0) - (a.leads || 0) || a.name.localeCompare(b.name, 'ar')), [filtered]);
 
@@ -303,7 +328,7 @@ export function MetaAdsPanel() {
       {chartPoints.length > 0 && <div className="marketing-meta-ads-charts" aria-label="الرسوم البيانية للحملات الإعلانية">{CHART_METRICS.map(item => <CampaignMetricCard key={item.metric} points={chartPoints} metric={item.metric} />)}</div>}
       <div className="marketing-meta-ads-list">{filtered.map(({ campaign, account }) => <details key={`${account.id}:${campaign.id}`} id={campaignDomId(`${account.id}:${campaign.id}`)} className="panel marketing-meta-ads-campaign">
         <summary className="marketing-meta-ads-campaign-summary">
-          <div><span className="marketing-meta-ads-account">{account.name} · {accountNumber(account.id)}</span><h4>{campaign.name}</h4><small>مدير الحملة: {campaign.managerName || 'غير محدد'} · {campaign.objective || 'الهدف غير مسجل'} · {campaign.ads.length} إعلان · بداية {marketingDate(campaign.startTime)}</small></div>
+          <div><span className="marketing-meta-ads-account">{account.name} · {accountNumber(account.id)}</span><h4>{campaignDisplayName(campaign.name)}</h4><small>مدير الحملة: {campaign.managerName || 'غير محدد'} · {campaign.objective || 'الهدف غير مسجل'} · {campaign.ads.length} إعلان · بداية {marketingDate(campaign.startTime)}</small></div>
           <span className={`marketing-meta-ads-status ${campaign.status === 'ACTIVE' ? 'is-active' : ''}`}>{adStatus(campaign.status)}</span>
           <strong>{money(campaign.metrics.spend, account.currency)}</strong><span className="marketing-meta-ads-open">تفاصيل الحملة والإعلانات</span>
         </summary>
