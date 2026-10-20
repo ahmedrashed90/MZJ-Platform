@@ -9168,6 +9168,11 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-permission-reason textarea { width:100%; min-height:68px; border:1px solid #dbc8bf; border-radius:10px; padding:10px; background:#fffdfc; resize:vertical; font:inherit; color:#3e2b25; }
 .attendance-permission-delete { margin-inline-start:6px; padding:3px 8px; background:#fff6f4; color:#9b332b; border:1px solid #f1bdb4; border-radius:7px; cursor:pointer; font:inherit; font-size:10px; }
 .attendance-permission-delete:disabled { cursor:not-allowed; opacity:.5; }
+
+/* Each approved shift authorization is independently visible and removable. */
+.attendance-permission-items { display:flex; flex-direction:column; align-items:flex-start; gap:5px; min-width:110px; }
+.attendance-permission-item { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+.attendance-permission-item .attendance-early-departure-done small { font-size:9px; font-weight:700; color:#806055; }
 .attendance-report-table-compact { min-width:1150px; }
 .attendance-report-table-compact .attendance-hours-summary-total { background:#faf2ed; }
 

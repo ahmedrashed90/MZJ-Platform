@@ -21,6 +21,19 @@ type AdminBranch = { id: string; code?: string | null; name: string };
 
 type AdminPayload = { ok: true; users: AdminUser[]; branches: AdminBranch[] };
 
+type ReportPermission = {
+  id: string;
+  fromAt: string;
+  toAt: string;
+  fromText: string;
+  toText: string;
+  authorizedAt: string;
+  permissionType: 'departure' | 'vacation' | 'exceptional';
+  reason: string;
+  periodId: string;
+  periodName: string;
+};
+
 type ReportPeriod = {
   id: string;
   name: string;
@@ -39,6 +52,7 @@ type ReportPeriod = {
   delayMinutes: number;
   workMinutes: number;
   creditedMinutes?: number;
+  permission?: Pick<ReportPermission, 'id' | 'permissionType' | 'reason'> | null;
 };
 
 type ReportRow = {
@@ -49,22 +63,13 @@ type ReportRow = {
   name: string;
   scheduleName: string | null;
   isDayOff: boolean;
-  earlyDeparturePermission: {
-    id: string;
-    fromAt: string;
-    toAt: string;
-    fromText: string;
-    toText: string;
-    authorizedAt: string;
-    permissionType: 'departure' | 'vacation';
-    reason: string;
-    periodId: string;
-  } | null;
+  earlyDeparturePermission: ReportPermission | null;
+  earlyDeparturePermissions: ReportPermission[];
   periods: Array<ReportPeriod | null>;
 };
 
 type PermissionShift = { periodId: string; name: string; startTime: string; endTime: string };
-type PermissionEntry = { periodId: string; fromTime: string; toTime: string; permissionType: "departure" | "vacation" | ""; reason: string };
+type PermissionEntry = { periodId: string; fromTime: string; toTime: string; permissionType: "departure" | "vacation" | "exceptional" | ""; reason: string };
 
 type ReportPayload = {
   ok: true;
@@ -79,6 +84,8 @@ type ReportPayload = {
 function missingResultLabel(result: string | null | undefined) {
   const value = String(result || "");
   if (value.includes("إجازة")) return "إجازة";
+  if (value.includes("إذن استثنائي")) return "إذن استثنائي";
+  if (value.includes("إذن انصراف")) return "إذن انصراف";
   if (value.includes("غائب")) return "غائب";
   if (value.includes("لم يسجل")) return "لم يسجل";
   return "—";
@@ -111,9 +118,37 @@ function clockMinutes(value: string) {
   return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : -1;
 }
 
-function earlyDepartureText(row: ReportRow) {
-  if (row.earlyDeparturePermission) return row.earlyDeparturePermission.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة';
-  return row.periods.some((period) => period?.checkoutSource === 'authorized') ? 'إذن انصراف' : '—';
+function permissionTypeLabel(type: ReportPermission['permissionType']) {
+  if (type === 'vacation') return 'إجازة';
+  if (type === 'exceptional') return 'إذن استثنائي';
+  return 'إذن انصراف';
+}
+
+function reportPermissions(row: ReportRow): ReportPermission[] {
+  return row.earlyDeparturePermissions?.length
+    ? row.earlyDeparturePermissions
+    : row.earlyDeparturePermission ? [row.earlyDeparturePermission] : [];
+}
+
+function EarlyPermissionCell({ row, saving, onDelete }: {
+  row: ReportRow; saving: boolean; onDelete: (id: string) => void;
+}) {
+  const permissions = reportPermissions(row);
+  if (!permissions.length) return <td className="attendance-early-departure-cell"><span className="attendance-early-departure-empty">{row.periods.some(period => period?.checkoutSource === 'authorized') ? 'إذن انصراف' : '—'}</span></td>;
+  return <td className="attendance-early-departure-cell"><div className="attendance-permission-items">
+    {permissions.map(permission => <div className="attendance-permission-item" key={permission.id}>
+      <span className="attendance-early-departure-done" title={permission.reason}>{permissionTypeLabel(permission.permissionType)} <small>({permission.periodName || 'الدوام'})</small></span>
+      <button type="button" className="attendance-permission-delete" title={`حذف ${permissionTypeLabel(permission.permissionType)} - ${permission.periodName || 'الدوام'}`} disabled={saving} onClick={() => onDelete(permission.id)}>حذف</button>
+    </div>)}
+  </div></td>;
+}
+
+function periodResultLabel(period: ReportPeriod | null, delay: number) {
+  if (!period) return '—';
+  if (period.permission?.permissionType === 'vacation') return 'إجازة';
+  if (period.permission?.permissionType === 'exceptional') return period.checkIn ? `${formatDurationMinutes(delay)} • إذن استثنائي` : 'إذن استثنائي';
+  if (period.checkoutSource === 'authorized' || (!period.checkIn && period.permission?.permissionType === 'departure')) return 'إذن انصراف';
+  return period.checkIn ? formatDurationMinutes(delay) : missingResultLabel(period.result);
 }
 
 function scheduledMinutes(period: ReportPeriod | null) {
@@ -125,20 +160,12 @@ function scheduledMinutes(period: ReportPeriod | null) {
 // Attendance hours are credited by the server for each scheduled period.
 // That calculation already accounts for per-period grace, early exits and
 // the exact approved authorization interval without double counting.
-// Vacations and weekly rest days remain excluded from employee totals.
+// Approved vacation and exceptional hours are credited; weekly rest stays excluded.
 function attendanceHourTotals(rows: ReportRow[]) {
   return rows.reduce((total, row) => {
     if (row.isDayOff) return total;
     const periods = row.periods.filter((period): period is ReportPeriod => Boolean(period));
-    const fullDayVacation = row.earlyDeparturePermission?.permissionType === 'vacation'
-      && !row.earlyDeparturePermission.periodId && !periods.some(period => Boolean(period.checkIn));
-    if (fullDayVacation) return total;
     for (const period of periods) {
-      const vacationPeriod = row.earlyDeparturePermission?.permissionType === 'vacation'
-        && !period.checkIn && (row.earlyDeparturePermission.periodId === period.id
-          || (row.earlyDeparturePermission.periodId === 'friday'
-            && periods.length === 1 && period.name.includes('المسائية')));
-      if (vacationPeriod) continue;
       total.expected += scheduledMinutes(period);
       total.actual += Math.max(0, Math.round(Number(period.creditedMinutes ?? period.workMinutes ?? 0)));
     }
@@ -243,7 +270,9 @@ function exportAbsence(period: ReportPeriod | undefined) {
 
 function exportResult(period: ReportPeriod | undefined) {
   if (!period) return "—";
-  if (period.checkoutSource === "authorized") return "إجازة";
+  if (period.permission?.permissionType === 'vacation') return 'إجازة';
+  if (period.permission?.permissionType === 'exceptional') return 'إذن استثنائي';
+  if (period.checkoutSource === "authorized" || period.permission?.permissionType === 'departure') return 'إذن انصراف';
   if (period.checkIn) return exportDelay(period);
   return missingResultLabel(period.result);
 }
@@ -543,7 +572,7 @@ export function AttendancePage() {
           [userId]: {
             ...current.entries[userId],
             periodId,
-            fromTime,
+            fromTime: current.entries[userId].permissionType === 'vacation' ? shift?.startTime || '' : fromTime,
             toTime: shift?.endTime || "",
           },
         },
@@ -552,16 +581,22 @@ export function AttendancePage() {
   }
 
   function updateEarlyDepartureEntry(userId: string, field: "fromTime" | "toTime" | "permissionType" | "reason", value: string) {
-    setEarlyDepartureDialog((current) => current && current.entries[userId]
-      ? { ...current, entries: { ...current.entries, [userId]: { ...current.entries[userId], [field]: value } } }
-      : current);
+    setEarlyDepartureDialog((current) => {
+      if (!current?.entries[userId]) return current;
+      const entry = { ...current.entries[userId], [field]: value };
+      if (field === 'permissionType' && value === 'vacation') {
+        const shift = (permissionShifts[userId] || []).find(item => item.periodId === entry.periodId);
+        if (shift) { entry.fromTime = shift.startTime; entry.toTime = shift.endTime; }
+      }
+      return { ...current, entries: { ...current.entries, [userId]: entry } };
+    });
   }
 
   async function authorizeEarlyDeparture() {
     if (!isAdmin || earlyDepartureSaving || !earlyDepartureDialog) return;
     const items = (Object.entries(earlyDepartureDialog.entries) as Array<[string, PermissionEntry]>).map(([userId, value]) => ({ userId, ...value }));
     if (!items.length) {
-      setError("اختر مستخدمًا واحدًا على الأقل لإذن الانصراف");
+      setError("اختر مستخدمًا واحدًا على الأقل لتسجيل الإذن");
       return;
     }
     if (permissionShiftsLoading || permissionShiftsError || items.some((item) => !(permissionShifts[item.userId] || []).some((shift) => shift.periodId === item.periodId))) {
@@ -588,11 +623,11 @@ export function AttendancePage() {
         method: "POST",
         body: JSON.stringify({ action: "authorize_early_departure", workDate: earlyDepartureDialog.workDate, items }),
       });
-      setMessage(result.message || "تم حفظ إذن الانصراف المبكر");
+      setMessage(result.message || "تم حفظ الإذن");
       setEarlyDepartureDialog(null);
       await loadReport();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تسجيل إذن الانصراف المبكر");
+      setError(failure instanceof Error ? failure.message : "تعذر تسجيل الإذن");
     } finally {
       setEarlyDepartureSaving(false);
     }
@@ -816,10 +851,7 @@ export function AttendancePage() {
                         <td>{index + 1}</td>
                         <td>{formatAttendanceDay(row.date)}</td>
                         <td>{formatAttendanceDate(row.date)}</td>
-                        <td className="attendance-early-departure-cell">
-                          <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
-                          {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
-                        </td>
+                        <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} />
                         {periodHeaders.flatMap((_, periodIndex) => {
                           const period = row.periods[periodIndex];
                           const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -833,7 +865,7 @@ export function AttendancePage() {
                               {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                             </td>,
                             <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                              {period?.checkoutSource === "authorized" ? <strong>{row.earlyDeparturePermission?.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة'}</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                              <strong>{periodResultLabel(period, delay)}</strong>
                             </td>,
                           ];
                         })}
@@ -841,7 +873,7 @@ export function AttendancePage() {
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4 + periodHeaders.length * 3}>إجمالي ساعات الموظف (باستثناء الإجازات)</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).expected)}</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).actual)}</th><th>{hoursDifferenceText(attendanceHourTotals(employee.rows).expected, attendanceHourTotals(employee.rows).actual)}</th></tr></tfoot>
+                  <tfoot><tr className="attendance-hours-summary-total"><th colSpan={4 + periodHeaders.length * 3}>إجمالي ساعات الموظف (يشمل الإجازات والأذونات المحتسبة؛ باستثناء الراحة الأسبوعية)</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).expected)}</th><th>{wholeHoursText(attendanceHourTotals(employee.rows).actual)}</th><th>{hoursDifferenceText(attendanceHourTotals(employee.rows).expected, attendanceHourTotals(employee.rows).actual)}</th></tr></tfoot>
                 </table>
               </div>
             </section>
@@ -900,10 +932,7 @@ export function AttendancePage() {
                             <td>{index + 1}</td>
                             <td>{row.branch}</td>
                             <td className="attendance-name-cell"><strong>{row.name}</strong></td>
-                            <td className="attendance-early-departure-cell">
-                              <span className={earlyDepartureText(row) === "—" ? "attendance-early-departure-empty" : "attendance-early-departure-done"} title={row.earlyDeparturePermission?.reason || ''}>{earlyDepartureText(row)}</span>
-                          {row.earlyDeparturePermission?.id && <button type="button" className="attendance-permission-delete" title="حذف الإذن" disabled={earlyDepartureSaving} onClick={() => void deletePermission(row.earlyDeparturePermission!.id)}>حذف</button>}
-                            </td>
+                            <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} />
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -917,7 +946,7 @@ export function AttendancePage() {
                                   {period?.checkoutSource === "authorized" ? <small>إذن مبكر</small> : period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
-                                  {period?.checkoutSource === "authorized" ? <strong>{row.earlyDeparturePermission?.permissionType === 'departure' ? 'إذن انصراف' : 'إجازة'}</strong> : hasCheckIn ? <strong>{formatDurationMinutes(delay)}</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                                  <strong>{periodResultLabel(period, delay)}</strong>
                                 </td>,
                               ];
                             })}
@@ -941,7 +970,7 @@ export function AttendancePage() {
         <div className="attendance-permission-backdrop" onMouseDown={() => !earlyDepartureSaving && setEarlyDepartureDialog(null)}>
           <div className="attendance-permission-dialog attendance-permission-dialog-wide" onMouseDown={(event) => event.stopPropagation()}>
             <header>
-              <div><h2>إذن مبكر / إجازة</h2><p>حدد نوع الإذن والسبب، ثم فترة دوام الموظف وتوقيت الإذن داخلها.</p></div>
+              <div><h2>أذونات الحضور والانصراف والإجازات</h2><p>حدد نوع الإذن والسبب وفترة دوام الموظف. الإجازة تحتسب كامل الفترة، والإذن الاستثنائي يحتسب الوقت المحدد.</p></div>
               <button type="button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>×</button>
             </header>
             <div className="attendance-permission-date-row">
@@ -970,14 +999,14 @@ export function AttendancePage() {
                     <header><div><strong>{employee?.full_name || "المستخدم"}</strong><small>{employee?.branch_name || "—"}</small></div><button type="button" onClick={() => toggleEarlyDepartureUser(userId)} disabled={earlyDepartureSaving}>إزالة</button></header>
                     <div className="attendance-permission-times attendance-permission-shift-times">
                       <label><span>نوع الإذن</span><select aria-label={`نوع الإذن ${employee?.full_name || 'الموظف'}`} required value={entry.permissionType} disabled={earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, 'permissionType', event.target.value)}>
-                        <option value="">حدد نوع الإذن</option><option value="departure">إذن انصراف</option><option value="vacation">إجازة</option>
+                        <option value="">حدد نوع الإذن</option><option value="departure">إذن انصراف</option><option value="vacation">إجازة</option><option value="exceptional">إذن استثنائي</option>
                       </select></label>
                       <label><span>فترة الدوام</span><select aria-label={`فترة دوام ${employee?.full_name || "الموظف"}`} value={entry.periodId} onChange={(event) => selectEarlyDeparturePeriod(userId, event.target.value)} disabled={permissionShiftsLoading || earlyDepartureSaving || !shifts.length}>
                         <option value="">{permissionShiftsLoading ? "جاري تحميل الفترات..." : "اختر الفترة"}</option>
                         {shifts.map((shift) => <option key={shift.periodId} value={shift.periodId}>{shift.name} ({shift.startTime} - {shift.endTime})</option>)}
                       </select></label>
-                      <label><span>من الساعة</span><input type="time" value={entry.fromTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "fromTime", event.target.value)} /></label>
-                      <label><span>إلى الساعة</span><input type="time" value={entry.toTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "toTime", event.target.value)} /></label>
+                      <label><span>من الساعة</span><input type="time" value={entry.fromTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving || entry.permissionType === 'vacation'} onChange={(event) => updateEarlyDepartureEntry(userId, "fromTime", event.target.value)} /></label>
+                      <label><span>إلى الساعة</span><input type="time" value={entry.toTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving || entry.permissionType === 'vacation'} onChange={(event) => updateEarlyDepartureEntry(userId, "toTime", event.target.value)} /></label>
                     </div>
                     <label className="attendance-permission-reason"><span>سبب الإذن</span><textarea rows={2} maxLength={1000} required value={entry.reason} disabled={earlyDepartureSaving} placeholder="اكتب سبب الإذن أو الإجازة" onChange={(event) => updateEarlyDepartureEntry(userId, 'reason', event.target.value)} /></label>
                     {chosen ? <small className="attendance-permission-shift-description">الفترة المحددة: {chosen.name} — من {chosen.startTime} إلى {chosen.endTime}</small>
@@ -987,7 +1016,7 @@ export function AttendancePage() {
               })}
               {!Object.keys(earlyDepartureDialog.entries).length ? <p className="attendance-permission-empty">اختر يوزر واحدًا أو أكثر من القائمة بالأعلى.</p> : null}
             </div>
-            <p className="attendance-permission-note">الإذن يُحفظ مستقلًا عن تسجيل الحضور. لو اليوزر مسجل حضور يتم إنهاء حضوره عند بداية الإذن، ولو لم يسجل حضور يظل الإذن محفوظًا بدون إنشاء حضور وهمي.</p>
+            <p className="attendance-permission-note">كل إذن يُحفظ على فترة الدوام المختارة دون استبدال إذن فترة أخرى. إذن الانصراف فقط ينهي البصمة المفتوحة عند بدايته؛ الإجازة تحتسب كامل الفترة، والإذن الاستثنائي يحتسب مدته المحددة دون إنشاء حضور وهمي.</p>
             <footer>
               <button type="button" className="secondary-button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>إلغاء</button>
               <button type="button" className="attendance-view-button" onClick={() => void authorizeEarlyDeparture()} disabled={earlyDepartureSaving || permissionShiftsLoading || Boolean(permissionShiftsError) || !Object.keys(earlyDepartureDialog.entries).length || Object.entries(earlyDepartureDialog.entries).some(([userId, entry]) => !(permissionShifts[userId] || []).some((shift) => shift.periodId === entry.periodId))}>

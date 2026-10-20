@@ -114,10 +114,10 @@ actual = hour.attendanceHourTotals([{ isDayOff: true, periods: [morning, evening
 assert.equal(actual.expected, 0);
 assert.equal(actual.actual, 0);
 success('Weekly rest day is excluded from employee hours total');
-actual = hour.attendanceHourTotals([{ isDayOff: false, periods: [{ ...morning, checkIn: null, workMinutes: 0 }, evening], earlyDeparturePermission: { permissionType: 'vacation', periodId: 'm' } }]);
-assert.equal(actual.expected, 300);
-assert.equal(actual.actual, 239);
-success('Single-shift leave removes only that shift, not another assigned shift');
+actual = hour.attendanceHourTotals([{ isDayOff: false, periods: [{ ...morning, checkIn: null, workMinutes: 0, creditedMinutes: 180 }, evening], earlyDeparturePermissions: [{ permissionType: 'vacation', periodId: 'm' }] }]);
+assert.equal(actual.expected, 480);
+assert.equal(actual.actual, 419);
+success('Approved morning vacation credits its 180 minutes without changing evening work or expected duration');
 
 const create = read('src/marketing/workflow/CreatePage.tsx');
 const workflow = read('server/marketing/workflow.ts');

@@ -277,6 +277,15 @@ function reportDelayMinutes(checkIn: unknown, workDate: string, periodStartTime:
 }
 
 
+function permissionForReportShift(dayPermissions: any[], periodId: string, isFridayShift: boolean) {
+  // Prefer the exact shift permission; the empty period ID belongs only to
+  // legacy day-wide permissions created before shift-scoped authorizations.
+  return dayPermissions.find((permission) => clean(permission.period_id) === periodId)
+    || (isFridayShift ? dayPermissions.find((permission) => clean(permission.period_id) === 'friday') : null)
+    || dayPermissions.find((permission) => !clean(permission.period_id))
+    || null;
+}
+
 // Attendance reports credit scheduled shift minutes, with the configured grace
 // already reflected in delayMinutes. Raw work_minutes remains untouched in the
 // database for audit/history and must not be mistaken for the report total.
@@ -304,20 +313,30 @@ function attendanceReportCreditedMinutes(
     ? Math.max(start, Math.min(availableEnd, checkout ?? availableEnd))
     : start;
   const elapsed = Math.max(0, recordedEnd - start);
-  const worked = Math.max(0, elapsed - Math.min(elapsed, Math.max(0, Math.round(Number(delayMinutes) || 0))));
+  const delay = Math.max(0, Math.round(Number(delayMinutes) || 0));
+  const attendedStart = Math.min(recordedEnd, start + delay);
+  const worked = Math.max(0, elapsed - Math.min(elapsed, delay));
 
+  // A granted vacation substitutes for the entire scheduled shift; an
+  // exceptional permission or early departure credits only its approved time.
+  // No check-in is invented, and overlapping recorded work is never counted twice.
   let permitted = 0;
-  if (permission?.permission_type === 'departure') {
+  if (permission?.permission_type === 'vacation') {
+    permitted = Math.max(0, availableEnd - start) - worked;
+  } else if (permission?.permission_type === 'departure' || permission?.permission_type === 'exceptional') {
     const from = attendanceReportTimelineMinute(permission.from_at, workDate);
     const to = attendanceReportTimelineMinute(permission.to_at, workDate);
     if (from !== null && to !== null && to > from) {
-      const permissionStart = Math.max(start, recordedEnd, from);
-      permitted = Math.max(0, Math.min(availableEnd, to) - permissionStart);
+      const permissionStart = Math.max(start, from);
+      const permissionEnd = Math.min(availableEnd, to);
+      const interval = Math.max(0, permissionEnd - permissionStart);
+      const overlap = Math.max(0, Math.min(permissionEnd, recordedEnd) - Math.max(permissionStart, attendedStart));
+      permitted = Math.max(0, interval - overlap);
     }
   }
 
-  // Keep legitimately recorded post-shift overtime, but do not grant automatic
-  // overtime for system-generated or authorized checkout timestamps.
+  // Keep explicitly recorded post-shift overtime only when an employee
+  // actually clocked out. Auto/authorized check-outs cannot produce overtime.
   const actualOut = checkout === null || !record?.check_in || ['auto', 'authorized'].includes(String(record.checkout_source || ''))
     ? 0 : Math.max(0, Math.min(checkout - end, 1440));
   return Math.max(0, worked + permitted + actualOut);
@@ -931,9 +950,11 @@ async function reportData(request: VercelRequest) {
     recordMap.get(key)!.push(record);
   }
 
-  const permissionMap = new Map<string, any>();
+  const permissionMap = new Map<string, any[]>();
   for (const permission of earlyPermissions) {
-    permissionMap.set(`${permission.user_id}:${dateOnlyValue(permission.work_date)}`, permission);
+    const key = `${permission.user_id}:${dateOnlyValue(permission.work_date)}`;
+    if (!permissionMap.has(key)) permissionMap.set(key, []);
+    permissionMap.get(key)!.push(permission);
   }
 
   const rawRows: any[] = [];
@@ -958,7 +979,7 @@ async function reportData(request: VercelRequest) {
       if (branchId && effectiveBranchId !== branchId) continue;
       if (attendanceBranchName && assignmentBranchName !== attendanceBranchName) continue;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
-      const earlyDeparturePermission = permissionMap.get(`${user.id}:${day}`) || null;
+      const dayPermissions = permissionMap.get(`${user.id}:${day}`) || [];
       const visibleDayRecords = dayRecords.filter((record) => {
         const legacySourceKey = clean(record.legacy_source_key);
         const periodName = clean(record.period_name);
@@ -1021,15 +1042,21 @@ async function reportData(request: VercelRequest) {
       for (const slot of slots) {
         const record = slot.record;
         const delayMinutes = reportDelayMinutes(record?.check_in, day, slot.startTime, slot.graceMinutes, Number(record?.delay_minutes || 0));
+        const permissionForShift = permissionForReportShift(
+          dayPermissions, clean(slot.id), isFriday && fridayScheduleEnabled,
+        );
         let result = "—";
-        if (record?.check_in) {
+        if (isDayOff || permissionForShift?.permission_type === 'vacation') {
+          result = "إجازة";
+        } else if (record?.check_in) {
           const statusText = delayMinutes > 0 ? "متأخر" : "حاضر";
           const workText = record.check_out ? `العمل ${formatMinutes(Number(record.work_minutes || 0))}` : "الفترة مفتوحة";
           const delayText = delayMinutes > 0 ? `تأخير ${formatMinutes(delayMinutes)}` : "بدون تأخير";
           const departureText = record.checkout_source === "authorized" ? " • إذن انصراف مبكر" : "";
-          result = `${statusText} • ${workText} • ${delayText}${departureText}`;
-        } else if (isDayOff || (earlyDeparturePermission && (!earlyDeparturePermission.period_id || earlyDeparturePermission.period_id === (isFriday && fridayScheduleEnabled ? 'friday' : slot.id)))) {
-          result = isDayOff || earlyDeparturePermission?.permission_type !== 'departure' ? "إجازة" : "إذن انصراف";
+          const exceptionalText = permissionForShift?.permission_type === 'exceptional' ? ' • إذن استثنائي' : '';
+          result = `${statusText} • ${workText} • ${delayText}${departureText}${exceptionalText}`;
+        } else if (permissionForShift) {
+          result = permissionForShift.permission_type === 'exceptional' ? 'إذن استثنائي' : 'إذن انصراف';
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {
@@ -1043,10 +1070,6 @@ async function reportData(request: VercelRequest) {
           const meta = headerMeta.get(key)!;
           meta.sortOrder = Math.min(meta.sortOrder, slot.sortOrder);
         }
-        const permissionForShift = earlyDeparturePermission &&
-          (earlyDeparturePermission.period_id === clean(slot.id) ||
-           (isFriday && fridayScheduleEnabled && earlyDeparturePermission.period_id === 'friday'))
-          ? earlyDeparturePermission : null;
         periodsByKey.set(key, {
           id: clean(slot.id),
           name: slot.name,
@@ -1062,12 +1085,30 @@ async function reportData(request: VercelRequest) {
           earlyDepartureFromText: reportClock(record?.early_departure_from_at),
           earlyDepartureToText: reportClock(record?.early_departure_to_at),
           result,
+          permission: permissionForShift ? {
+            id: permissionForShift.id,
+            permissionType: permissionForShift.permission_type,
+            reason: permissionForShift.reason || '',
+          } : null,
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
           creditedMinutes: attendanceReportCreditedMinutes(record, day, slot.startTime, slot.endTime, delayMinutes, permissionForShift),
         });
       }
 
+      const mappedPermissions = dayPermissions.map((permission) => ({
+        id: permission.id,
+        fromAt: permission.from_at,
+        toAt: permission.to_at,
+        fromText: reportClock(permission.from_at),
+        toText: reportClock(permission.to_at),
+        authorizedAt: permission.authorized_at,
+        permissionType: permission.permission_type || 'vacation',
+        reason: permission.reason || '',
+        periodId: permission.period_id || '',
+        periodName: slots.find((slot) => slot.id === permission.period_id ||
+          (isFriday && fridayScheduleEnabled && permission.period_id === 'friday'))?.name || 'جميع الفترات',
+      }));
       rawRows.push({
         date: day,
         branch: assignmentBranchName || assignment?.branch_name || user.branch_name || "—",
@@ -1076,17 +1117,8 @@ async function reportData(request: VercelRequest) {
         name: user.full_name,
         scheduleName: assignment?.schedule_name || null,
         isDayOff,
-        earlyDeparturePermission: earlyDeparturePermission ? {
-          id: earlyDeparturePermission.id,
-          fromAt: earlyDeparturePermission.from_at,
-          toAt: earlyDeparturePermission.to_at,
-          fromText: reportClock(earlyDeparturePermission.from_at),
-          toText: reportClock(earlyDeparturePermission.to_at),
-          authorizedAt: earlyDeparturePermission.authorized_at,
-          permissionType: earlyDeparturePermission.permission_type || 'vacation',
-          reason: earlyDeparturePermission.reason || '',
-          periodId: earlyDeparturePermission.period_id || '',
-        } : null,
+        earlyDeparturePermissions: mappedPermissions,
+        earlyDeparturePermission: mappedPermissions[0] || null,
         periodsByKey,
       });
     }
@@ -1111,7 +1143,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
   if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ إذن الانصراف غير صحيح");
 
   const rawItems = Array.isArray(body.items) && body.items.length ? body.items : [body];
-  const itemMap = new Map<string, { userId: string; periodId: string; fromTime: string; toTime: string; permissionType: "departure" | "vacation"; reason: string }>();
+  const itemMap = new Map<string, { userId: string; periodId: string; fromTime: string; toTime: string; permissionType: 'departure' | 'vacation' | 'exceptional'; reason: string }>();
   for (const raw of rawItems) {
     const source = raw && typeof raw === "object" ? raw as Record<string, any> : {};
     const userId = clean(source.userId);
@@ -1123,17 +1155,17 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
     if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_REQUIRED", "حدد وقت بداية ونهاية إذن الانصراف لكل مستخدم");
     if (timeMinutes(toTime) <= timeMinutes(fromTime)) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "نهاية الإذن يجب أن تكون بعد بدايته");
     const permissionType = clean(source.permissionType);
-    if (permissionType !== 'departure' && permissionType !== 'vacation') throw new AttendanceError('PERMISSION_TYPE_REQUIRED','حدد نوع الإذن: إذن انصراف أو إجازة');
+    if (permissionType !== 'departure' && permissionType !== 'vacation' && permissionType !== 'exceptional') throw new AttendanceError('PERMISSION_TYPE_REQUIRED','حدد نوع الإذن: إذن انصراف أو إجازة أو إذن استثنائي');
     const reason = clean(source.reason).slice(0, 1000);
     if (!reason) throw new AttendanceError('PERMISSION_REASON_REQUIRED','اكتب سبب الإذن أو الإجازة');
-    itemMap.set(userId, { userId, periodId, fromTime, toTime, permissionType, reason });
+    itemMap.set(`${userId}:${periodId}`, { userId, periodId, fromTime, toTime, permissionType: permissionType as 'departure' | 'vacation' | 'exceptional', reason });
   }
   const items = [...itemMap.values()];
   if (!items.length) throw new AttendanceError("USERS_REQUIRED", "اختر مستخدمًا واحدًا على الأقل");
 
   const sql = getSql();
   return sql.begin(async (tx) => {
-    const userIds = items.map((item) => item.userId);
+    const userIds = [...new Set(items.map((item) => item.userId))];
     const users = await tx<any[]>`
       select id::text,full_name
       from core.users
@@ -1196,11 +1228,15 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
 
       const [previousPermission] = await tx<any[]>`
-        select from_at,to_at from core.attendance_early_departure_permissions
-        where user_id=${item.userId}::uuid and work_date=${workDate}::date for update
+        select from_at,to_at,permission_type from core.attendance_early_departure_permissions
+        where user_id=${item.userId}::uuid and work_date=${workDate}::date
+          and period_id=${item.periodId} for update
       `;
-      if (previousPermission && (new Date(previousPermission.from_at).getTime() !== new Date(fromAt).getTime()
-        || new Date(previousPermission.to_at).getTime() !== new Date(toAt).getTime())) {
+      if (previousPermission?.permission_type === 'departure' && (
+        item.permissionType !== 'departure' ||
+        new Date(previousPermission.from_at).getTime() !== new Date(fromAt).getTime() ||
+        new Date(previousPermission.to_at).getTime() !== new Date(toAt).getTime()
+      )) {
         await tx`
           update core.attendance_records set
             check_out=null, checkout_source=null, work_minutes=0,
@@ -1218,7 +1254,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
         ) values (
           ${item.userId}::uuid,${workDate}::date,${fromAt}::timestamptz,${toAt}::timestamptz,${adminId}::uuid,${item.permissionType},${item.reason},${item.periodId},now(),now(),now()
         )
-        on conflict(user_id,work_date) do update set
+        on conflict(user_id,work_date,period_id) do update set
           from_at=excluded.from_at,
           to_at=excluded.to_at,
           authorized_by=excluded.authorized_by,
@@ -1229,7 +1265,7 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
           updated_at=now()
       `;
 
-      await tx`
+      if (item.permissionType === 'departure') await tx`
         update core.attendance_records r
         set check_out=greatest(${fromAt}::timestamptz,r.check_in),
             checkout_source='authorized',
@@ -1258,8 +1294,8 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       count: saved.length,
       items: saved,
       message: saved.length === 1
-        ? `تم حفظ إذن الانصراف المبكر لـ ${saved[0].name} (${saved[0].periodName}) من ${saved[0].fromTime} إلى ${saved[0].toTime}`
-        : `تم حفظ أذونات الانصراف المبكر لـ ${saved.length} مستخدمين`,
+        ? `تم حفظ الإذن لـ ${saved[0].name} (${saved[0].periodName}) من ${saved[0].fromTime} إلى ${saved[0].toTime}`
+        : `تم حفظ ${saved.length} إذن بنجاح`,
     };
   });
 }

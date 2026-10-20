@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261004-global-attendance-v13-independent-early-departure";
+export const ATTENDANCE_SCHEMA_VERSION = "20261020-global-attendance-v14-independent-period-permissions";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -172,7 +172,7 @@ create table if not exists core.attendance_early_departure_permissions (
   from_at timestamptz not null,
   to_at timestamptz not null,
   authorized_by uuid references core.users(id) on delete set null,
-  permission_type text not null default 'vacation' check (permission_type in ('departure','vacation')),
+  permission_type text not null default 'vacation' check (permission_type in ('departure','vacation','exceptional')),
   reason text not null default '',
   period_id text not null default '',
   authorized_at timestamptz not null default now(),
@@ -180,13 +180,35 @@ create table if not exists core.attendance_early_departure_permissions (
   updated_at timestamptz not null default now(),
   check (to_at > from_at)
 );
-create unique index if not exists attendance_early_departure_user_day_unique
-  on core.attendance_early_departure_permissions(user_id,work_date);
-create index if not exists attendance_early_departure_date_idx
-  on core.attendance_early_departure_permissions(work_date desc,user_id);
 alter table core.attendance_early_departure_permissions add column if not exists permission_type text not null default 'vacation';
 alter table core.attendance_early_departure_permissions add column if not exists reason text not null default '';
 alter table core.attendance_early_departure_permissions add column if not exists period_id text not null default '';
+drop index if exists core.attendance_early_departure_user_day_unique;
+create unique index if not exists attendance_early_departure_user_day_period_unique
+  on core.attendance_early_departure_permissions(user_id,work_date,period_id);
+create index if not exists attendance_early_departure_date_idx
+  on core.attendance_early_departure_permissions(work_date desc,user_id);
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conname='attendance_early_departure_permissions_permission_type_check'
+      and conrelid='core.attendance_early_departure_permissions'::regclass
+      and position('exceptional' in pg_get_constraintdef(oid))=0
+  ) then
+    alter table core.attendance_early_departure_permissions
+      drop constraint attendance_early_departure_permissions_permission_type_check;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname='attendance_early_departure_permissions_permission_type_check'
+      and conrelid='core.attendance_early_departure_permissions'::regclass
+  ) then
+    alter table core.attendance_early_departure_permissions
+      add constraint attendance_early_departure_permissions_permission_type_check
+      check (permission_type in ('departure','vacation','exceptional'));
+  end if;
+end $$;
 
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('core','attendance','الحضور والانصراف','/attendance',15,true)
@@ -258,6 +280,14 @@ async function attendanceSchemaReady() {
       and exists (select 1 from information_schema.columns where table_schema='core' and table_name='attendance_early_departure_permissions' and column_name='permission_type')
       and exists (select 1 from information_schema.columns where table_schema='core' and table_name='attendance_early_departure_permissions' and column_name='reason')
       and exists (select 1 from information_schema.columns where table_schema='core' and table_name='attendance_early_departure_permissions' and column_name='period_id')
+      and to_regclass('core.attendance_early_departure_user_day_period_unique') is not null
+      and to_regclass('core.attendance_early_departure_user_day_unique') is null
+      and exists (
+        select 1 from pg_constraint
+        where conname='attendance_early_departure_permissions_permission_type_check'
+          and conrelid='core.attendance_early_departure_permissions'::regclass
+          and position('exceptional' in pg_get_constraintdef(oid))>0
+      )
       and exists (
         select 1 from pg_constraint
         where conname='attendance_records_checkout_source_check'
@@ -360,8 +390,30 @@ export function ensureAttendanceSchema() {
           alter table core.attendance_early_departure_permissions add column if not exists permission_type text not null default 'vacation';
           alter table core.attendance_early_departure_permissions add column if not exists reason text not null default '';
           alter table core.attendance_early_departure_permissions add column if not exists period_id text not null default '';
-          create unique index if not exists attendance_early_departure_user_day_unique
-            on core.attendance_early_departure_permissions(user_id,work_date);
+          do $$
+          begin
+            if exists (
+              select 1 from pg_constraint
+              where conname='attendance_early_departure_permissions_permission_type_check'
+                and conrelid='core.attendance_early_departure_permissions'::regclass
+                and position('exceptional' in pg_get_constraintdef(oid))=0
+            ) then
+              alter table core.attendance_early_departure_permissions
+                drop constraint attendance_early_departure_permissions_permission_type_check;
+            end if;
+            if not exists (
+              select 1 from pg_constraint
+              where conname='attendance_early_departure_permissions_permission_type_check'
+                and conrelid='core.attendance_early_departure_permissions'::regclass
+            ) then
+              alter table core.attendance_early_departure_permissions
+                add constraint attendance_early_departure_permissions_permission_type_check
+                check (permission_type in ('departure','vacation','exceptional'));
+            end if;
+          end $$;
+          drop index if exists core.attendance_early_departure_user_day_unique;
+          create unique index if not exists attendance_early_departure_user_day_period_unique
+            on core.attendance_early_departure_permissions(user_id,work_date,period_id);
           create index if not exists attendance_early_departure_date_idx
             on core.attendance_early_departure_permissions(work_date desc,user_id);
           do $$
