@@ -276,6 +276,53 @@ function reportDelayMinutes(checkIn: unknown, workDate: string, periodStartTime:
   return Math.max(0, dayOffsetMinutes + checkInMinutes - scheduledMinutes);
 }
 
+
+// Attendance reports credit scheduled shift minutes, with the configured grace
+// already reflected in delayMinutes. Raw work_minutes remains untouched in the
+// database for audit/history and must not be mistaken for the report total.
+// A departure authorization credits only the approved interval in its shift.
+function attendanceReportTimelineMinute(value: unknown, workDate: string): number | null {
+  const date = reportDateFromTimestamp(value);
+  const minute = reportTimeMinutesFromTimestamp(value);
+  if (!date || minute === null || !validDate(workDate)) return null;
+  const offset = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${workDate}T00:00:00Z`)) / 86400000);
+  return offset * 1440 + minute;
+}
+
+function attendanceReportCreditedMinutes(
+  record: any, workDate: string, startTime: string, endTime: string,
+  delayMinutes: number, permission: any | null,
+): number {
+  if (!validTime(startTime) || !validTime(endTime) || !validDate(workDate)) return Math.max(0, liveWorkMinutes(record));
+  const start = timeMinutes(startTime);
+  let end = timeMinutes(endTime);
+  if (end <= start) end += 1440;
+  const current = attendanceReportTimelineMinute(new Date(), workDate);
+  const availableEnd = Math.max(start, Math.min(end, current ?? start));
+  const checkout = record?.check_out ? attendanceReportTimelineMinute(record.check_out, workDate) : null;
+  const recordedEnd = record?.check_in
+    ? Math.max(start, Math.min(availableEnd, checkout ?? availableEnd))
+    : start;
+  const elapsed = Math.max(0, recordedEnd - start);
+  const worked = Math.max(0, elapsed - Math.min(elapsed, Math.max(0, Math.round(Number(delayMinutes) || 0))));
+
+  let permitted = 0;
+  if (permission?.permission_type === 'departure') {
+    const from = attendanceReportTimelineMinute(permission.from_at, workDate);
+    const to = attendanceReportTimelineMinute(permission.to_at, workDate);
+    if (from !== null && to !== null && to > from) {
+      const permissionStart = Math.max(start, recordedEnd, from);
+      permitted = Math.max(0, Math.min(availableEnd, to) - permissionStart);
+    }
+  }
+
+  // Keep legitimately recorded post-shift overtime, but do not grant automatic
+  // overtime for system-generated or authorized checkout timestamps.
+  const actualOut = checkout === null || !record?.check_in || ['auto', 'authorized'].includes(String(record.checkout_source || ''))
+    ? 0 : Math.max(0, Math.min(checkout - end, 1440));
+  return Math.max(0, worked + permitted + actualOut);
+}
+
 async function adminBootstrap() {
   const sql = getSql();
   const [settings] = await sql<{ enforcement_enabled: boolean; official_day_end: string; friday_start_time: string | null; friday_end_time: string | null }[]>`
@@ -996,6 +1043,10 @@ async function reportData(request: VercelRequest) {
           const meta = headerMeta.get(key)!;
           meta.sortOrder = Math.min(meta.sortOrder, slot.sortOrder);
         }
+        const permissionForShift = earlyDeparturePermission &&
+          (earlyDeparturePermission.period_id === clean(slot.id) ||
+           (isFriday && fridayScheduleEnabled && earlyDeparturePermission.period_id === 'friday'))
+          ? earlyDeparturePermission : null;
         periodsByKey.set(key, {
           id: clean(slot.id),
           name: slot.name,
@@ -1013,6 +1064,7 @@ async function reportData(request: VercelRequest) {
           result,
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
+          creditedMinutes: attendanceReportCreditedMinutes(record, day, slot.startTime, slot.endTime, delayMinutes, permissionForShift),
         });
       }
 

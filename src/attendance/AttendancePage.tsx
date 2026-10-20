@@ -38,6 +38,7 @@ type ReportPeriod = {
   result: string;
   delayMinutes: number;
   workMinutes: number;
+  creditedMinutes?: number;
 };
 
 type ReportRow = {
@@ -121,9 +122,10 @@ function scheduledMinutes(period: ReportPeriod | null) {
   return from >= 0 && to >= 0 ? (to >= from ? to - from : 24 * 60 - from + to) : 0;
 }
 
-// Daily totals use minutes without rounding off the fraction of an hour.
-// A weekly rest day and a full-day vacation are excluded from employee totals.
-// A vacation granted for one shift removes only that shift's required hours.
+// Attendance hours are credited by the server for each scheduled period.
+// That calculation already accounts for per-period grace, early exits and
+// the exact approved authorization interval without double counting.
+// Vacations and weekly rest days remain excluded from employee totals.
 function attendanceHourTotals(rows: ReportRow[]) {
   return rows.reduce((total, row) => {
     if (row.isDayOff) return total;
@@ -133,10 +135,12 @@ function attendanceHourTotals(rows: ReportRow[]) {
     if (fullDayVacation) return total;
     for (const period of periods) {
       const vacationPeriod = row.earlyDeparturePermission?.permissionType === 'vacation'
-        && !period.checkIn && (row.earlyDeparturePermission.periodId === period.id);
+        && !period.checkIn && (row.earlyDeparturePermission.periodId === period.id
+          || (row.earlyDeparturePermission.periodId === 'friday'
+            && periods.length === 1 && period.name.includes('المسائية')));
       if (vacationPeriod) continue;
       total.expected += scheduledMinutes(period);
-      total.actual += Math.max(0, Math.round(Number(period.workMinutes || 0)));
+      total.actual += Math.max(0, Math.round(Number(period.creditedMinutes ?? period.workMinutes ?? 0)));
     }
     return total;
   }, { expected: 0, actual: 0 });
@@ -147,8 +151,7 @@ function wholeHoursText(minutes: number) {
   return value ? formatDurationMinutes(value) : '—';
 }
 
-// Required duration minus the actual minutes registered by attendance, not
-// the lateness/result label in the shift (which measures a different metric).
+// Required duration minus credited attendance and authorized shift minutes.
 function hoursDifferenceText(expectedMinutes: number, actualMinutes: number) {
   const delta = Math.round(Number(expectedMinutes || 0) - Number(actualMinutes || 0));
   if (!delta) return '—';

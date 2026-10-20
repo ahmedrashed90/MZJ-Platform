@@ -90,7 +90,7 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
   const rows = await db`select i.*,i.due_on::text,coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
-    case when i.status in ('submitted','approved') and i.submitted_at is not null
+    case when i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       then case when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
       else null end as delivery_status,
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,
@@ -144,11 +144,11 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     -- only these requirements, so its readiness uses the same exact shared
     -- final-file coverage rules as the detail view, without N+1 queries.
     coalesce(array_agg(i.id::text) filter(where i.id is not null),'{}'::text[]) as visible_item_ids,
-    -- On-time delivery measures the executor's submission, NOT admin approval.
-    -- Riyadh calendar date makes submissions around UTC midnight unambiguous.
-    count(i.id) filter(where i.status in ('submitted','approved') and i.submitted_at is not null
+    -- Show delivery badges only after final approval. Classify punctuality by
+    -- the executor's original submission date in Riyadh, not admin review time.
+    count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on)::int as submitted_on_time_count,
-    count(i.id) filter(where i.status in ('submitted','approved') and i.submitted_at is not null
+    count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as submitted_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
