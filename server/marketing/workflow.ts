@@ -140,7 +140,10 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   const scopes = departmentScope(user);
   const rows = await sql<any[]>`select t.*,ct.name as type_name,
     count(i.id)::int as product_count,
-    count(i.id) filter(where i.status='approved' and exists(select 1 from marketing.work_item_files jf join marketing.files f on f.id=jf.file_id where jf.item_id=i.id and jf.category='final' and f.status='ready'))::int as approved_count,
+    -- Keep the IDs from the permission-scoped join. The next query loads
+    -- only these requirements, so its readiness uses the same exact shared
+    -- final-file coverage rules as the detail view, without N+1 queries.
+    coalesce(array_agg(i.id::text) filter(where i.id is not null),'{}'::text[]) as visible_item_ids,
     -- On-time delivery measures the executor's submission, NOT admin approval.
     -- Riyadh calendar date makes submissions around UTC midnight unambiguous.
     count(i.id) filter(where i.status in ('submitted','approved') and i.submitted_at is not null
@@ -160,7 +163,29 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
         left join core.departments d on d.id=own.department_id where own.task_id=t.id and
           (own.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))))
     group by t.id,ct.name order by t.created_at desc,t.task_number desc`;
-  return rows.map(row => ({ ...row, readiness: row.product_count ? Math.round(row.approved_count * 1000 / row.product_count) / 10 : 0 }));
+  const visibleItemIds = rows.flatMap(row => Array.isArray(row.visible_item_ids) ? row.visible_item_ids : []);
+  const itemsByTask = new Map<string, WorkItem[]>();
+  if (visibleItemIds.length) {
+    // Use the very same item status, configured formats and ready final
+    // attachments as workItemReadiness. Scoped IDs came from the query above.
+    const readyItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+      coalesce((select jsonb_agg(jsonb_build_object('name',f.original_name,'mime_type',f.mime_type,
+        'category',j.category,'format_id',j.format_id,'status',f.status))
+        from marketing.work_item_files j join marketing.files f on f.id=j.file_id
+        where j.item_id=i.id and j.category='final' and f.status='ready'),'[]'::jsonb) as files
+      from marketing.work_items i where i.id=any(${visibleItemIds}::uuid[])`;
+    for (const item of readyItems) {
+      const taskId = String(item.task_id);
+      const grouped = itemsByTask.get(taskId) || [];
+      grouped.push(item as WorkItem);
+      itemsByTask.set(taskId, grouped);
+    }
+  }
+  return rows.map(row => {
+    const { visible_item_ids: _scopedItemIds, ...task } = row;
+    const readiness = workReadiness(itemsByTask.get(String(row.id)) || []);
+    return { ...task, product_count: readiness.total, approved_count: readiness.approved, readiness: readiness.percent };
+  });
 }
 async function reserveTask(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.create');

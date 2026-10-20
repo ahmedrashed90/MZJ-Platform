@@ -16,7 +16,7 @@ const stubs = {
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
 };
-const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask'];
+const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
 const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
@@ -31,8 +31,8 @@ const itemLoad=rows=>step('coalesce(d.name',rows);
 const recalc=(rows,expectedStatus)=>[taskLock(),itemLoad(rows),step('update marketing.work_tasks',[],values=>assert.equal(values[0],expectedStatus))];
 const identitySql=scriptedSql([]);
 
-test('Readiness is parent-level approved/final-file ratio',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'},item]),{total:2,approved:1,percent:50,complete:false}));
-test('Final upload alone never counts as approval',()=>assert.equal(domain.workReadiness([item]).percent,0));
+test('Parent readiness includes both approved and uploaded final outputs',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'},item]),{total:2,approved:1,percent:75,complete:false}));
+test('Final upload counts half readiness but not final approval',()=>assert.deepEqual(domain.workReadiness([item]),{total:1,approved:0,percent:50,complete:false}));
 test('Individual requirement starts at 0 percent without final uploads',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[]}),0));
 test('Idea-only attachments do not mark requirement as uploaded',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[{...file,category:'idea'}]}),0));
 test('Pending or unfinished files do not mark requirement as uploaded',()=>assert.equal(domain.workItemReadiness({...item,status:'in_progress',files:[{...file,status:'pending'}]}),0));
@@ -42,7 +42,7 @@ test('Revision with still-ready final files remains at 50 percent',()=>assert.eq
 test('Individual requirement reaches 100 percent after approval',()=>assert.equal(domain.workItemReadiness({...item,status:'approved'}),100));
 test('Approval without final coverage cannot show 100 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'approved',files:[]}),0));
 test('Incomplete multi-format upload has not reached the 50 percent milestone',()=>assert.equal(domain.workItemReadiness({...item,formats:[format,{...format,id:uid(11)}]}),0));
-test('Parent task readiness still depends on approval only',()=>assert.equal(domain.workReadiness([item]).percent,0));
+test('Parent task progress mirrors the detailed requirement milestone',()=>assert.equal(domain.workReadiness([item]).percent,domain.workItemReadiness(item)));
 test('Each requirement displays its idea and readiness without opening detail',()=>{const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');assert(front.includes('({item.idea?.trim() ||'));assert(front.includes('<Readiness value={workItemReadiness(item)} />'));assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'));});
 test('Approval without a ready file never counts',()=>assert.equal(domain.workReadiness([{...item,status:'approved',files:[]}]).percent,0));
 test('All formats need final coverage',()=>assert.equal(domain.finalCoverage({...item,formats:[format,{...format,id:uid(11)}]}),false));
@@ -106,7 +106,54 @@ test('Publishing page starts collapsed with a compact row table',()=>{
 });
 test('Deletion shrinks the readiness denominator',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'}]),{total:1,approved:1,percent:100,complete:true}));
 test('An empty task is never 100 percent complete',()=>assert.deepEqual(domain.workReadiness([]),{total:0,approved:0,percent:0,complete:false}));
-test('Rounding is stable',()=>assert.equal(domain.workReadiness([{...item,status:'approved'},item,item]).percent,33.3));
+test('Six outputs grant 8.3% for a ready upload and 16.7% when approved',()=>{
+  const base = Array.from({length:6},(_,index)=>({...item,id:uid(60+index),status:'in_progress',files:[]}));
+  assert.deepEqual(domain.workReadiness([{...base[0],files:[file]},...base.slice(1)]),{total:6,approved:0,percent:8.3,complete:false});
+  assert.deepEqual(domain.workReadiness([{...base[0],status:'approved',files:[file]},...base.slice(1)]),{total:6,approved:1,percent:16.7,complete:false});
+  assert.deepEqual(domain.workReadiness(base.map(entry=>({...entry,files:[file]}))),{total:6,approved:0,percent:50,complete:false});
+  assert.deepEqual(domain.workReadiness(base.map(entry=>({...entry,status:'approved',files:[file]}))),{total:6,approved:6,percent:100,complete:true});
+});
+test('Task percent combines approved, uploaded, and unfinished items without rounding each contribution',()=>{
+  const cases = [100,100,100,100,50,50].map((percent,index)=>({...item,id:uid(60+index),status:percent===100?'approved':'submitted'}));
+  assert.deepEqual(domain.workReadiness(cases),{total:6,approved:4,percent:83.3,complete:false});
+});
+test('Incomplete media and unfinished uploads contribute 0 instead of false readiness',()=>{
+  const missing={...item,formats:[format,{...format,id:uid(11)}]};
+  assert.deepEqual(domain.workReadiness([missing,{...item,files:[]}]),{total:2,approved:0,percent:0,complete:false});
+  assert.deepEqual(domain.workReadiness([{...item,status:'approved',files:[]}]),{total:1,approved:0,percent:0,complete:false});
+});
+test('Task list batches only authorized item IDs and derives identical weighted readiness as detail',async()=>{
+  const taskId=uid(50), otherTaskId=uid(59);
+  const one=uid(51),two=uid(52),three=uid(53),four=uid(54),five=uid(55),six=uid(56);
+  const records=[one,two,three,four,five,six].map((value,index)=>({
+    task_id:taskId,id:value,status:index===0?'approved':index===1?'submitted':'in_progress',
+    media_kind:'image',formats:[format],files:index<2?[file]:[],
+  }));
+  const db=scriptedSql([
+    step('select t.*,ct.name as type_name',[{id:taskId,visible_item_ids:[one,two,three,four,five,six],product_count:6},
+      {id:otherTaskId,visible_item_ids:[],product_count:0}],(_,query)=>{
+      assert.match(query,/array_agg\(i\.id::text\)/);
+      assert.match(query,/i\.assigned_to=/);
+    }),
+    step('select i.task_id::text as task_id',records,(values,query)=>{
+      assert.deepEqual(values,[[one,two,three,four,five,six]]);
+      assert.match(query,/j\.category='final' and f\.status='ready'/);
+    }),
+  ]);
+  const result=await api.taskList(db,worker);
+  assert.deepEqual(result.map(({id,product_count,approved_count,readiness})=>({id,product_count,approved_count,readiness})),[
+    {id:taskId,product_count:6,approved_count:1,readiness:25},
+    {id:otherTaskId,product_count:0,approved_count:0,readiness:0},
+  ]);
+  assert.equal(result[0].visible_item_ids,undefined);
+  db.assertDone();
+});
+test('Empty task dashboard does not query item files',async()=>{
+  const db=scriptedSql([step('select t.*,ct.name as type_name',[{id:uid(50),visible_item_ids:[],product_count:0}])]);
+  assert.equal((await api.taskList(db,worker))[0].readiness,0);
+  db.assertDone();
+});
+test('Rounding is stable',()=>assert.equal(domain.workReadiness([{...item,status:'approved'},item,item]).percent,66.7));
 for(const name of ['Reels','video','Shorts'])test(`Video format filter: ${name}`,()=>{assert.equal(domain.supportsWorkMedia('image',name),false);assert.equal(domain.supportsWorkMedia('video',name),true);});
 for(const name of ['Photo','image','carousel'])test(`Image format filter: ${name}`,()=>{assert.equal(domain.supportsWorkMedia('image',name),true);assert.equal(domain.supportsWorkMedia('video',name),false);});
 test('Generic story supports both declared media kinds',()=>{assert.equal(domain.supportsWorkMedia('image','Story'),true);assert.equal(domain.supportsWorkMedia('video','Story'),true);});

@@ -79,9 +79,9 @@ export function matchingWorkflowPublishFiles(
 }
 
 /**
- * Per-requirement display readiness. Uploading every required final output
- * reaches 50%; review approval reaches 100%. This is intentionally separate
- * from the task's approved-only aggregate readiness.
+ * Each requirement contributes equally to the parent task: 0 before its
+ * final outputs are complete, 50 after complete final uploads, and 100 once
+ * the reviewer approves them. Both screens use these same milestones.
  */
 export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>): 0 | 50 | 100 {
   if (!finalCoverage(item)) return 0;
@@ -89,8 +89,17 @@ export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'f
 }
 export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>>) {
   const total = items.length;
-  const approved = items.filter(item => item.status === 'approved' && finalCoverage(item)).length;
-  return { total, approved, percent: total ? Math.round(approved * 1000 / total) / 10 : 0, complete: total > 0 && approved === total };
+  let approved = 0;
+  let readinessPoints = 0;
+  for (const item of items) {
+    const itemPercent = workItemReadiness(item);
+    readinessPoints += itemPercent;
+    if (itemPercent === 100) approved += 1;
+  }
+  // Round only the final total, so six approved items reach exactly 100%,
+  // while one uploaded/approved item contributes 8.3% / 16.7% respectively.
+  return { total, approved, percent: total ? Math.round(readinessPoints * 10 / total) / 10 : 0,
+    complete: total > 0 && approved === total };
 }
 export function isWorkDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
