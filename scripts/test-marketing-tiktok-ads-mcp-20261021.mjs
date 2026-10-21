@@ -77,7 +77,7 @@ async function fakeFetch(url, init={}) {
     {advertiser_id:'7373597771888295952',advertiser_name:'MZJ Account 1'},
     {advertiser_id:'7373575366947962897',advertiser_name:'MZJ Account 2'}
   ]}};
-  else if(name==='tool_get')result=[{name:'report_integrated_get',inputSchema:{properties:{metrics:{items:{enum:['spend','impressions','clicks','ctr','conversion','onsite_conversion.lead']}}}}}];
+  else if(name==='tool_get')result=[{name:'report_integrated_get',inputSchema:{properties:{metrics:{items:{enum:['spend','impressions','clicks','ctr','conversion','onsite_form']}}}}}];
   else if(name==='tool_execute'){
     const {tool_name,params}=args;
     network[network.length-1].name=tool_name;
@@ -88,7 +88,7 @@ async function fakeFetch(url, init={}) {
       if(params.filtering?.campaign_ids) campaigns=campaigns.filter(x=>params.filtering.campaign_ids.includes(x.campaign_id));
       result={code:0,data:{list:campaigns,page_info:{page:params.page,page_size:params.page_size,total_page:campaigns.length?1:0,total_number:campaigns.length}}};
     }
-    else if(tool_name==='report_integrated_get')result={code:0,data:{list:params.advertiser_id==='7373575366947962897' ? fakeCampaigns.map(item=>({dimensions:{campaign_id:item.campaign_id},metrics:{spend:'20.0',impressions:'1000',clicks:'100',ctr:'10',conversion:'7','onsite_conversion.lead':'5'}})):[],page_info:{page:1,total_page:1}}};
+    else if(tool_name==='report_integrated_get')result={code:0,data:{list:params.advertiser_id==='7373575366947962897' ? fakeCampaigns.map(item=>({dimensions:{campaign_id:item.campaign_id},metrics:{spend:'20.0',impressions:'1000',clicks:'100',ctr:'10',conversion:'7','onsite_form':'5'}})):[],page_info:{page:1,total_page:1}}};
     else if(tool_name==='campaign_status_update'||tool_name==='smart_plus_campaign_status_update')result={code:0,message:'OK',data:{}};
     else if(tool_name==='campaign_create')result={code:0,message:'OK',data:{campaign_id:'1879385075698588'}};
     else throw Error('Unexpected tool_execute call '+tool_name);

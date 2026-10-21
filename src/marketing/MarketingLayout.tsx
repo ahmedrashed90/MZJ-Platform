@@ -6,6 +6,7 @@ import {
   CalendarCheck,
   Car,
   ChartLineUp,
+  Star,
   CreditCard,
   ChatCircleDots,
   CirclesFour,
@@ -27,6 +28,7 @@ const links = [
   { to: "/marketing/receipt-calendar", label: W.calendar, icon: CalendarCheck, permission: "marketing.receipt_calendar.view" },
   { to: "/marketing/publish-prep", label: W.publishing, icon: PaperPlaneTilt, permission: "marketing.publish_prep.view" },
   { to: "/marketing/engagement", label: "\u062a\u0641\u0627\u0639\u0644 \u0627\u0644\u0646\u0634\u0631", icon: ChatCircleDots, permission: "marketing.engagement.view" },
+  { to: "/marketing/ratings", label: "تقييمات المنفذين", icon: Star, permission: "marketing.dashboard.view" },
   { to: "/marketing/stock", label: "\u0627\u0644\u0627\u0633\u062a\u0648\u0643", icon: Car, permission: "marketing.stock.view" },
   { to: "/marketing/subscriptions", label: "\u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643\u0627\u062a", icon: CreditCard, permission: "marketing.subscriptions.view" },
 ];

@@ -126,6 +126,62 @@ create table if not exists marketing.work_product_drafts (
 insert into marketing.workflow_migrations(code) values('schema-3') on conflict do nothing;
 commit;`;
 
+export const MARKETING_WORKFLOW_KPI_SQL = `-- Marketing workflow: independent format review and executor quality evaluation.
+-- Applied through the platform Marketing workflow schema initializer.
+begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_review_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists marketing.work_kpi_criteria (
+  id uuid primary key default gen_random_uuid(),
+  name text not null, sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists marketing.work_format_reviews (
+  item_id uuid not null references marketing.work_items(id) on delete cascade,
+  format_id text not null,
+  status text not null check(status in ('submitted','approved','revision')),
+  submitted_at timestamptz,
+  approved_at timestamptz,
+  approved_by uuid references core.users(id),
+  updated_at timestamptz not null default now(),
+  primary key(item_id,format_id)
+);
+create index if not exists work_format_reviews_item_status on marketing.work_format_reviews(item_id,status);
+alter table marketing.work_items add column if not exists review_note_type_id uuid references marketing.work_review_categories(id);
+alter table marketing.work_items add column if not exists review_note_created_at timestamptz;
+create table if not exists marketing.work_item_ratings (
+  item_id uuid primary key references marketing.work_items(id) on delete cascade,
+  assignee_id uuid not null references core.users(id),
+  rated_by uuid not null references core.users(id),
+  scores jsonb not null check(jsonb_typeof(scores)='array'),
+  percentage numeric(5,2) not null check(percentage between 0 and 100),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create index if not exists work_item_ratings_monthly on marketing.work_item_ratings(created_at,assignee_id);
+-- Preserve previously approved files exactly as approved; previously submitted
+-- formats remain awaiting review. A format without a ready file is not marked.
+insert into marketing.work_format_reviews(item_id,format_id,status,submitted_at,approved_at,approved_by)
+select i.id, f.value->>'id',
+  case when i.status='approved' then 'approved' else 'submitted' end,
+  i.submitted_at, case when i.status='approved' then i.approved_at else null end,
+  case when i.status='approved' then i.approved_by else null end
+from marketing.work_items i
+cross join lateral jsonb_array_elements(i.formats) f(value)
+where i.status in ('approved','submitted')
+  and exists(select 1 from marketing.work_item_files w join marketing.files file on file.id=w.file_id
+    where w.item_id=i.id and w.format_id=f.value->>'id' and w.category='final' and file.status='ready')
+on conflict(item_id,format_id) do nothing;
+insert into marketing.workflow_migrations(code) values ('schema-5') on conflict do nothing;
+commit;
+`;
+
 export const MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL = `begin;
 set local lock_timeout = '3s';
 set local statement_timeout = '12s';
@@ -218,11 +274,11 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5') };
     };
-    if ((await flags()).current && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
+    if ((await flags()).current && (await flags()).hasKpi && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -231,6 +287,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasTaskDeletion) await runSqlScript(MARKETING_WORKFLOW_TASK_DELETE_SQL);
       if (!(await flags()).hasDrafts) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
       if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
+      if (!(await flags()).hasKpi) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
@@ -251,15 +308,18 @@ let workflowStructureReady: Promise<void> | null = null;
 export function assertMarketingWorkflowReady(sql = getSql()) {
   if (!workflowStructureReady) {
     workflowStructureReady = (async () => {
-      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean }[]>`
+      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean }[]>`
         select
           to_regclass('marketing.work_tasks') is not null as tasks,
           to_regclass('marketing.work_items') is not null as items,
           to_regclass('marketing.work_plans') is not null as plans,
           to_regclass('marketing.work_product_drafts') is not null as drafts,
-          to_regclass('marketing.work_item_files') is not null as files
+          to_regclass('marketing.work_item_files') is not null as files,
+          to_regclass('marketing.work_item_ratings') is not null as ratings,
+          to_regclass('marketing.work_format_reviews') is not null as formats,
+          to_regclass('marketing.work_review_categories') is not null as categories
       `;
-      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files) {
+      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories) {
         const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
         (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
         throw error;

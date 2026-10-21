@@ -399,6 +399,7 @@ function metaScopes() {
   return [...new Set([...parseScopes(process.env.META_SCOPES || ""), ...required])];
 }
 function tiktokScopes() { return parseScopes(process.env.TIKTOK_SCOPES || "user.info.basic,video.upload,video.publish"); }
+function tiktokRequiredScopes() { return ["user.info.basic", "video.upload", "video.publish"]; }
 const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
 const YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
 const YOUTUBE_PLAYLIST_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
@@ -648,14 +649,48 @@ async function refreshTikTokToken(refreshToken: string) {
 async function loadTikTokUser(accessToken: string, scopes: string[]) {
   const fields = ["open_id", "union_id", "avatar_url", "display_name"];
   if (scopes.includes("user.info.profile")) fields.push("username", "profile_deep_link");
+  if (scopes.includes("user.info.stats")) fields.push("follower_count");
   const url = new URL("https://open.tiktokapis.com/v2/user/info/");
   url.searchParams.set("fields", fields.join(","));
-  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(9000) });
   if (payload?.error && clean(payload.error.code) && clean(payload.error.code) !== "ok") throw new Error(clean(payload.error.message || payload.error.code));
   const profile = payload?.data?.user;
   if (!profile?.open_id) throw new Error("تعذر قراءة بيانات حساب TikTok");
   return profile;
 }
+export async function tiktokProfileFollowersOverview(sql: Sql) {
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='tiktok' limit 1`;
+  if (!row?.connected || !row.access_token_encrypted) return { connected: false, accountName: '', followers: null as number | null, statsAvailable: false };
+  let scopes = array(row.scopes).map(clean);
+  const overview = { connected: true, accountName: clean(row.account_name), followers: null as number | null, statsAvailable: scopes.includes('user.info.stats') };
+  if (!overview.statsAvailable) return overview;
+  try {
+    let accessToken = decryptPlatformToken(row.access_token_encrypted);
+    if (tokenNearExpiry(row.token_expires_at)) {
+      if (!row.refresh_token_encrypted) return overview;
+      const originalRefresh = decryptPlatformToken(row.refresh_token_encrypted);
+      const refreshed = await refreshTikTokToken(originalRefresh);
+      accessToken = clean(refreshed.access_token);
+      if (!accessToken) return overview;
+      scopes = parseScopes(refreshed.scope || scopes.join(','));
+      const newRefresh = clean(refreshed.refresh_token) || originalRefresh;
+      await sql`update marketing.platform_connections set access_token_encrypted=${encryptPlatformToken(accessToken)},
+        refresh_token_encrypted=${encryptPlatformToken(newRefresh)},scopes=${sql.json(dbJson(scopes))},
+        token_expires_at=${addSeconds(refreshed.expires_in) || row.token_expires_at},
+        refresh_token_expires_at=${addSeconds(refreshed.refresh_expires_in) || row.refresh_token_expires_at},updated_at=now()
+        where platform='tiktok' and access_token_encrypted=${row.access_token_encrypted}`;
+    }
+    if (!scopes.includes('user.info.stats')) return { ...overview, statsAvailable: false };
+    const profile = await loadTikTokUser(accessToken, scopes);
+    const count = Number(profile.follower_count);
+    return { ...overview, accountName: clean(profile.display_name) || overview.accountName,
+      followers: Number.isSafeInteger(count) && count >= 0 && profile.follower_count != null ? count : null };
+  } catch {
+    // A follower lookup failure must not block the other connected providers.
+    return overview;
+  }
+}
+
 async function saveTikTokConnection(sql: Sql, user: SessionUser, token: any, profile: any, existing?: ConnectionRow) {
   const scopes = parseScopes(token.scope || array(existing?.scopes).join(","));
   const tokenExpiresAt = addSeconds(token.expires_in) || existing?.token_expires_at || null;
@@ -670,7 +705,7 @@ async function completeTikTokCallback(sql: Sql, user: SessionUser, code: string,
   const config = ensureProviderConfigured("tiktok", request);
   const token = await exchangeTikTokToken(code, config.redirectUri);
   const scopes = parseScopes(token.scope);
-  assertScopes(scopes, tiktokScopes(), "TikTok");
+  assertScopes(scopes, tiktokRequiredScopes(), "TikTok");
   const profile = await loadTikTokUser(clean(token.access_token), scopes);
   await saveTikTokConnection(sql, user, token, profile);
   await recordEvent(sql, user, "tiktok", "connected", "success", clean(profile.display_name), { openId: clean(profile.open_id), scopes });
@@ -776,7 +811,7 @@ async function loadYouTubeChannel(accessToken: string) {
   const url = new URL("https://www.googleapis.com/youtube/v3/channels");
   url.searchParams.set("part", "id,snippet");
   url.searchParams.set("mine", "true");
-  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(9000) });
   const channel = array(payload.items)[0];
   if (!channel?.id) throw new Error("الحساب المحدد لا يحتوي على قناة YouTube");
   return channel;
@@ -1018,7 +1053,7 @@ export async function validatePlatformConnection(sql: Sql, user: SessionUser, re
         refreshToken = clean(token.refresh_token || refreshToken);
       }
       const scopes = parseScopes(token.scope || array(row.scopes).join(","));
-      assertScopes(scopes, tiktokScopes(), "TikTok");
+      assertScopes(scopes, tiktokRequiredScopes(), "TikTok");
       const profile = await loadTikTokUser(accessToken, scopes);
       await saveTikTokConnection(sql, user, { ...token, scope: scopes.join(","), access_token: accessToken, refresh_token: refreshToken }, profile, row);
       await recordEvent(sql, user, "tiktok", "validated", "success", clean(profile.display_name), { openId: clean(profile.open_id) });

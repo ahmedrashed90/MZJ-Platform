@@ -37,7 +37,7 @@ expect("Tokens use AES-256-GCM with mandatory 32+ char key", has(files.helper, "
 expect("OAuth state is hashed, expiring and user-bound", has(files.helper, "stateHash", "platform_oauth_states", "expires_at>now()", "user_id=${user.id}::uuid"));
 expect("Meta reconnect draft preserves current active connection", has(files.helper, "platform_connection_drafts", "savePendingMetaSelection", "cancelPlatformConnectionDraft"));
 expect("No token is returned by public connection mapper", has(files.helper, "tokenStored:") && lacks(files.helper.slice(files.helper.indexOf("export function publicPlatformConnection"), files.helper.indexOf("function safePublicUrl")), "accessToken:"));
-expect("Provider scopes are verified", has(files.helper, "assertScopes", 'assertScopes(scopes, metaScopes()', 'assertScopes(scopes, tiktokScopes()', 'assertScopes(parseScopes(token.scope), youtubeScopes()'));
+expect("Provider scopes are verified", has(files.helper, "assertScopes", 'assertScopes(scopes, metaScopes()', 'assertScopes(scopes, tiktokRequiredScopes()', 'assertScopes(parseScopes(token.scope), youtubeScopes()'));
 const metaOauthBlock = files.helper.slice(files.helper.indexOf('if (provider === "meta") {'), files.helper.indexOf('} else if (provider === "tiktok")'));
 expect("Meta uses Facebook Login for Business configuration", has(metaOauthBlock, 'config_id', 'META_CONFIG_ID', 'response_type', 'override_default_response_type') && lacks(metaOauthBlock, 'searchParams.set("scope"'));
 expect("Meta configuration ID is mandatory", has(files.helper, '["META_CONFIG_ID", process.env.META_CONFIG_ID]') && has(files.env, "META_CONFIG_ID="));

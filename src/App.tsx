@@ -35,6 +35,7 @@ const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePag
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
 const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
 const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
+const MarketingRatingsPage = lazy(() => import("./marketing/pages/MarketingRatingsPage").then(module => ({ default: module.MarketingRatingsPage })));
 const MarketingCreatePage = lazy(() => import("./marketing/workflow/CreatePage").then(module => ({ default: module.MarketingCreatePage })));
 const ProductsPage = lazy(() => import("./marketing/pages/ProductsPage").then(module => ({ default: module.ProductsPage })));
 const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingDatabasePage").then((module) => ({ default: module.MarketingDatabasePage })));
@@ -125,6 +126,7 @@ function PlatformRoutes() {
             <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><Navigate to="/settings?section=marketing&tab=platforms" replace /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
             <Route path="engagement" element={<PermissionGuard permission="marketing.engagement.view"><EngagementPage /></PermissionGuard>} />
+            <Route path="ratings" element={<PermissionGuard permission="marketing.dashboard.view"><MarketingRatingsPage /></PermissionGuard>} />
             <Route path="monitoring" element={<Navigate to="/marketing" replace />} />
             <Route path="calendar" element={<Navigate to="/marketing/receipt-calendar" replace />} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />

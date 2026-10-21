@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowClockwise, ChartBar, ChartLineUp, FilePdf, FileXls, Funnel, Megaphone, UsersThree, Wallet } from '@phosphor-icons/react';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CampaignReportPayload, CampaignReportRow } from '../../../shared/campaign-report';
 import { marketingFetch, marketingLocalDateKey, marketingQuery } from '../api';
 import { downloadCampaignReportXlsx, printCampaignReportPdf } from '../reporting/exportCampaignReport';
@@ -7,20 +8,39 @@ import { downloadCampaignReportXlsx, printCampaignReportPdf } from '../reporting
 const number = (value: number | null, decimals = 0) => value === null ? '—' : value.toLocaleString('ar-SA-u-nu-latn', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
 const currencyValue = (value: number | null, currency: string) => value === null ? '—' : `${number(value, 2)} ${currency}`;
 const RECENT = 29 * 86_400_000;
-const CHART_LIMIT = 10;
+type ChartMetric = 'interactions' | 'leads' | 'costPerLead';
+const CHART_COLORS: Record<ChartMetric, string> = { interactions: '#167d91', leads: '#2e8b68', costPerLead: '#ca8741' };
 
-function CampaignBars({ title, metric, rows }: { title: string; metric: 'interactions' | 'leads' | 'costPerLead'; rows: CampaignReportRow[] }) {
-  const ordered = useMemo(() => [...rows].filter(row => row[metric] !== null)
-    .sort((a, b) => (b[metric] || 0) - (a[metric] || 0) || a.campaignName.localeCompare(b.campaignName, 'ar'))
-    .slice(0, CHART_LIMIT), [rows, metric]);
-  const maximum = Math.max(1, ...ordered.map(row => row[metric] || 0));
+function CampaignBars({ title, metric, rows }: { title: string; metric: ChartMetric; rows: CampaignReportRow[] }) {
+  const ordered = useMemo(() => [...rows]
+    .filter(row => row[metric] !== null && Number.isFinite(row[metric]))
+    .sort((a, b) => (b[metric] || 0) - (a[metric] || 0) || a.campaignName.localeCompare(b.campaignName, 'ar')),
+  [rows, metric]);
+  const values = useMemo(() => ordered.map(row => ({
+    key: row.key, label: row.campaignName, platform: row.platformName, currency: row.currency,
+    value: Number(row[metric]) || 0,
+  })), [ordered, metric]);
+  const chartWidth = Math.max(360, values.length * 84);
+  const digits = metric === 'costPerLead' ? 2 : 0;
   return <section className="panel mcr-chart" aria-label={title}>
-    <header><h4>{title}</h4><span>أعلى {number(ordered.length)} حملات</span></header>
-    {ordered.length ? <div className="mcr-chart-rows">{ordered.map(row => <div key={row.key} className="mcr-chart-row" title={`${row.platformName} • ${row.campaignName}: ${number(row[metric], metric === 'costPerLead' ? 2 : 0)}`}>
-      <div className="mcr-chart-label"><bdi dir="auto">{row.campaignName}</bdi><small>{row.platformName}</small></div>
-      <div className="mcr-chart-track" role="img" aria-label={`${row.campaignName}: ${number(row[metric])}`}><div style={{ width: `${Math.max(0, (row[metric] || 0) / maximum * 100)}%` }}/></div>
-      <strong dir="ltr">{number(row[metric], metric === 'costPerLead' ? 2 : 0)}{metric === 'costPerLead' ? ` ${row.currency}` : ''}</strong>
-    </div>)}</div> : <div className="mcr-no-chart">لم تُرجع المنصات بيانات مؤكدة لهذا المقياس في الفترة المختارة.</div>}
+    <header><h4>{title}</h4><span>{number(values.length)} حملة</span></header>
+    {values.length ? <div className="mcr-chart-scroller" dir="ltr" tabIndex={0} aria-label={title}>
+      <BarChart width={chartWidth} height={310} data={values} margin={{ top: 23, right: 12, left: 6, bottom: 65 }}>
+        <CartesianGrid stroke="#e7edf1" strokeDasharray="3 4" vertical={false} />
+        <XAxis dataKey="key" interval={0} tickLine={false} axisLine={false} height={70} angle={-42}
+          textAnchor="end" tick={{ fontSize: 10, fill: '#657b8b' }}
+          tickFormatter={key => { const label = values.find(row => row.key === key)?.label || String(key); return label.length > 15 ? `${label.slice(0, 14)}…` : label; }} />
+        <YAxis width={35} tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#718595' }} />
+        <Tooltip cursor={{ fill: 'rgba(37,104,116,.06)' }} labelFormatter={key => {
+          const row = values.find(item => item.key === key);
+          return row ? `${row.label} · ${row.platform}` : String(key);
+        }} formatter={value => [number(Number(value), digits), title]} />
+        <Bar dataKey="value" name={title} fill={CHART_COLORS[metric]} radius={[6, 6, 0, 0]} maxBarSize={46} isAnimationActive={values.length < 40}>
+          {values.map(row => <Cell key={row.key} fill={CHART_COLORS[metric]} />)}
+          <LabelList dataKey="value" position="top" formatter={value => number(Number(value), digits)} style={{ fontSize: 10, fill: '#405b70', fontWeight: 700 }} />
+        </Bar>
+      </BarChart>
+    </div> : <div className="mcr-no-chart">لا توجد بيانات لهذا المقياس في الفترة المحددة.</div>}
   </section>;
 }
 
@@ -74,7 +94,6 @@ export function CampaignReportPage() {
   const allInteractionsKnown = rows.length > 0 && rows.every(row => row.interactions !== null);
   const totalLeads = rows.reduce((sum, row) => sum + (row.leads || 0), 0);
   const totalInteractions = rows.reduce((sum, row) => sum + (row.interactions || 0), 0);
-  const reportingCurrencies = [...new Set(rows.map(row => row.currency).filter(Boolean))];
   const canExport = Boolean(data && !loading);
   const exportPdf = () => {
     if (!data) return;
@@ -84,12 +103,12 @@ export function CampaignReportPage() {
   };
 
   return <div className="mcr-shell" dir="rtl">
-    <section className="panel mcr-head">
-      <div className="mcr-head-title"><span className="mcr-head-icon"><ChartBar size={24} weight="duotone" /></span><div><h3>تقرير الحملات</h3><p>لوحة موحدة لنتائج الحملات الإعلانية من كل المنصات المتصلة، مع الحفاظ على مصدر وبيانات كل حساب.</p></div></div>
-      <div className="mcr-head-actions"><button type="button" className="secondary-button" disabled={!canExport} onClick={() => data && downloadCampaignReportXlsx(rows, data.providers, data.from, data.to)}><FileXls size={19}/> تصدير Excel</button>
-      <button type="button" className="secondary-button" disabled={!canExport} onClick={exportPdf}><FilePdf size={19}/> تصدير PDF</button></div>
-    </section>
-    <section className="panel mcr-filters"><div className="mcr-filter-heading"><Funnel size={19}/><strong>تصفية التقرير</strong><small>التاريخ حسب الأيام الإعلانية للفترة المختارة، شامل تاريخ البداية والنهاية.</small></div>
+    <div className="mcr-charts">
+      <CampaignBars title="التفاعلات لكل حملة" metric="interactions" rows={rows}/>
+      <CampaignBars title="عدد الليدات لكل حملة" metric="leads" rows={rows}/>
+      <CampaignBars title="تكلفة الليد لكل حملة" metric="costPerLead" rows={rows}/>
+    </div>
+    <section className="panel mcr-filters"><div className="mcr-filter-heading"><Funnel size={19}/><strong>تصفية التقرير</strong><div className="mcr-head-actions"><button type="button" className="secondary-button" disabled={!canExport} onClick={() => data && downloadCampaignReportXlsx(rows, data.providers, data.from, data.to)}><FileXls size={19}/> تصدير Excel</button><button type="button" className="secondary-button" disabled={!canExport} onClick={exportPdf}><FilePdf size={19}/> تصدير PDF</button></div></div>
       <div className="mcr-filter-row"><label><span>من تاريخ</span><input type="date" value={from} max={to || undefined} onChange={event => setFrom(event.target.value)}/></label>
         <label><span>إلى تاريخ</span><input type="date" value={to} min={from || undefined} onChange={event => setTo(event.target.value)}/></label>
         <button type="button" className="primary-button" disabled={!valid || loading} onClick={() => setApplied({from, to})}>عرض التقرير</button>
@@ -119,9 +138,6 @@ export function CampaignReportPage() {
           {!rows.length && <tr><td colSpan={8} className="mcr-empty">لا توجد حملات في الفترة أو الفلاتر المختارة، أو أن جميع حسابات الإعلانات غير متاحة.</td></tr>}
         </tbody></table></div>
       </section>
-      {reportingCurrencies.length > 1 && <p className="mcr-info">رسوم تكلفة الليد تعرض الحملات بعملاتها الأصلية؛ الأرقام بين العملات المختلفة ليست مقارنة مالية مباشرة. اختر عملة واحدة من الفلتر للمقارنة الدقيقة.</p>}
-      <div className="mcr-charts"><CampaignBars title="رسم بياني التفاعلات لكل حملة" metric="interactions" rows={rows}/><CampaignBars title="رسم بياني عدد الليدات لكل حملة" metric="leads" rows={rows}/><CampaignBars title="رسم بياني تكلفة الليد لكل حملة" metric="costPerLead" rows={rows}/></div>
-      <p className="mcr-disclaimer">الأرقام من واجهات الإعلانات وليس من CRM. شرطة (—) تعني أن البيانات غير متاحة أو لا يمكن حسابها، وليست صفرًا. التفاعلات تُقاس وفق تعريف كل منصة، وقد تختلف بين Meta وGoogle وTikTok. تصدير PDF يفتح نافذة الطباعة الاحترافية؛ اختر «Save as PDF / حفظ بصيغة PDF».</p>
     </>}
   </div>;
 }

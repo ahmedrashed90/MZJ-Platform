@@ -15,7 +15,7 @@ const sql = async (parts) => {
   const query = parts.join('?').replace(/\s+/g, ' ').trim();
   log.push(query);
   if (query.includes("to_regclass('marketing.work_tasks')")) {
-    return [{tasks:true,items:true,plans:true,drafts:true,files:true}];
+    return [{tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true}];
   }
   if (query.includes("to_regclass('marketing.work_plan_unique_entry')")) {
     return [{plans:true,lines:true,migrations:true,unique_index:applied}];

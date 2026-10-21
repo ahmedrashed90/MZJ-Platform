@@ -84,7 +84,7 @@ async function fakeFetch(url, init={}) {
     const creativeFields=['ad_name','identity_type','identity_id','ad_format','video_id','ad_text','call_to_action','page_id',...(removeAdStatusSchema?[]:['operation_status']),'image_ids','identity_authorized_bc_id'];
     const names=args.tool_name_list || [];
     result=names.includes('report_integrated_get')
-      ? [{name:'report_integrated_get',inputSchema:{properties:{metrics:{items:{enum:['spend','impressions','clicks','ctr','conversion','onsite_conversion.lead']}}}}}]
+      ? [{name:'report_integrated_get',inputSchema:{properties:{metrics:{items:{enum:['spend','impressions','clicks','ctr','conversion','onsite_form']}}}}}]
       : [
         {name:'campaign_create',inputSchema:{properties:Object.fromEntries(['advertiser_id','campaign_name','objective_type','budget_mode','budget','operation_status'].map(k=>[k,{type:'string'}]))}},
         {name:'adgroup_create',inputSchema:{properties:Object.fromEntries(groupFields.map(k=>[k,{type:'string'}])),required}},
@@ -101,7 +101,7 @@ async function fakeFetch(url, init={}) {
       if(params.filtering?.campaign_ids) campaigns=[...campaigns,{campaign_id:'1879385075698588',campaign_name:'Sonata MZJ Oct 2026',objective_type:'LEAD_GENERATION',operation_status:'DISABLE',campaign_automation_type:'MANUAL'}].filter(x=>params.filtering.campaign_ids.includes(x.campaign_id));
       result={code:0,data:{list:campaigns,page_info:{page:params.page,page_size:params.page_size,total_page:campaigns.length?1:0,total_number:campaigns.length}}};
     }
-    else if(tool_name==='report_integrated_get')result={code:0,data:{list:params.advertiser_id==='7373575366947962897' ? fakeCampaigns.map(item=>({dimensions:{campaign_id:item.campaign_id},metrics:{spend:'20.0',impressions:'1000',clicks:'100',ctr:'10',conversion:'7','onsite_conversion.lead':'5'}})):[],page_info:{page:1,total_page:1}}};
+    else if(tool_name==='report_integrated_get')result={code:0,data:{list:params.advertiser_id==='7373575366947962897' ? fakeCampaigns.map(item=>({dimensions:{campaign_id:item.campaign_id},metrics:{spend:'20.0',impressions:'1000',clicks:'100',ctr:'10',conversion:'7','onsite_form':'5'}})):[],page_info:{page:1,total_page:1}}};
     else if(tool_name==='campaign_status_update'||tool_name==='smart_plus_campaign_status_update')result={code:0,message:'OK',data:{}};
     else if(tool_name==='campaign_create')result={code:0,message:'OK',data:{campaign_id:'1879385075698588'}};
     else if(tool_name==='adgroup_get')result={code:0,data:{list:[{adgroup_id:'1879385075698589',campaign_id:'1879385075698588',adgroup_name:'Sonata Group',operation_status:'DISABLE'}]}};

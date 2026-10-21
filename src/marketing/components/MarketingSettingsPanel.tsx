@@ -7,9 +7,10 @@ import { marketingFetch } from "../api";
 import { DepartmentsPage } from "../pages/DepartmentsPage";
 import { PlatformConnectionsPage } from "../pages/PlatformConnectionsPage";
 import { SubscriptionSettings } from "./SubscriptionSettings";
+import { WorkflowEvaluationSettings } from "./WorkflowEvaluationSettings";
 import "../marketing.css";
 
-type MarketingSettingsTab = "departments" | "colors" | "packages" | "platforms" | "subscriptions";
+type MarketingSettingsTab = "departments" | "colors" | "packages" | "evaluations" | "platforms" | "subscriptions";
 type UserColorRow = { id: string; full_name: string; email?: string | null; color: string };
 type LookupRow = { id: string; name: string; sort_order: number };
 
@@ -19,7 +20,7 @@ type PackageSettingsPayload = {
 };
 
 function resolveMarketingSettingsTab(value: string | null, canViewSettings: boolean, canViewConnections: boolean, canManageSubscriptions: boolean): MarketingSettingsTab {
-  if (canViewSettings && (value === "departments" || value === "colors" || value === "packages")) return value;
+  if (canViewSettings && (value === "departments" || value === "colors" || value === "packages" || value === "evaluations")) return value;
   if (value === "platforms" && canViewConnections) return "platforms";
   if (value === "subscriptions" && canManageSubscriptions) return "subscriptions";
   if (canViewSettings) return "departments";
@@ -190,6 +191,7 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
           {canViewMarketingSettings ? <button type="button" className={tab === "departments" ? "active" : ""} onClick={() => chooseTab("departments")}><UsersThree size={18} weight="duotone" />الأقسام</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "colors" ? "active" : ""} onClick={() => chooseTab("colors")}><Palette size={18} weight="duotone" />تعيين لون لكل مسؤول</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "packages" ? "active" : ""} onClick={() => chooseTab("packages")}><Package size={18} weight="duotone" />إعدادات الباقات</button> : null}
+          {canViewMarketingSettings ? <button type="button" className={tab === "evaluations" ? "active" : ""} onClick={() => chooseTab("evaluations")}><UsersThree size={18} weight="duotone" />الملاحظات والتقييم</button> : null}
           {canViewConnections ? <button type="button" className={tab === "platforms" ? "active" : ""} onClick={() => chooseTab("platforms")}><LinkSimple size={18} weight="duotone" />ربط المنصات</button> : null}
           {canManageSubscriptions ? <button type="button" className={tab === "subscriptions" ? "active" : ""} onClick={() => chooseTab("subscriptions")}><CreditCard size={18} weight="duotone" />الاشتراكات</button> : null}
         </nav>
@@ -204,6 +206,8 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
 
       {tab !== "platforms" && tab !== "subscriptions" ? <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
         {tab === "departments" ? <DepartmentsPage embedded /> : null}
+
+        {tab === "evaluations" ? <WorkflowEvaluationSettings readOnly={readOnly}/> : null}
 
         {tab === "colors" ? (
           <section className="panel marketing-settings-panel">

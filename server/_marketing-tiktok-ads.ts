@@ -327,7 +327,7 @@ async function campaignsForAccount(token: string, account: TikTokAdsAccount) {
 
 const BASIC_METRICS = ['spend', 'impressions', 'clicks', 'ctr', 'conversion'];
 // Probe only attributed lead events. General conversion is not synonymous with lead.
-const LEAD_METRIC_CANDIDATES = ['onsite_conversion.lead', 'onsite_conversion.lead_grouped', 'onsite_conversion.total_lead', 'lead', 'total_lead'];
+const LEAD_METRIC_CANDIDATES = ['onsite_form'];
 const INTERACTION_COMPONENTS = ['likes', 'comments', 'shares'];
 const INTERACTION_AGGREGATES = ['engagements', 'engagement'];
 const reportSelectionCache = new Map<string, { lead: string | null; interactionFields: string[]; expires: number }>();

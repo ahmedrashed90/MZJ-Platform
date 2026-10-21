@@ -8,11 +8,20 @@ export type WorkFile = { id: string; name: string; mime_type: string; file_size:
 export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
   media_kind: WorkMediaKind; idea_name: string; idea: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
-  files: WorkFile[]; review_note: string; version: number; approved_at?: string | null; submitted_at?: string | null;
+  files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
+  format_reviews?: Array<{ format_id: string; status: 'submitted' | 'approved' | 'revision'; submitted_at?: string | null; approved_at?: string | null }>;
+  rating?: WorkItemRating | null; version: number; approved_at?: string | null; submitted_at?: string | null;
   delivery_status?: 'on_time' | 'late' | null;
   pending_uploads?: { id: string; name: string; category: string }[];
   sort_order: number; task_name?: string; task_no?: string; actions?: { id: string; name: string; completed: boolean; admin_only: boolean; is_final_approval: boolean }[];
 };
+export type WorkItemRating = {
+  percentage: number; scores: Array<{ criterionId: string; criterionName: string; score: number }>;
+  created_at: string; updated_at: string; reviewer_name: string;
+};
+export type WorkEvaluationSetting = { id: string; name: string; sort_order: number; is_active: boolean };
+export type WorkEvaluationSettings = { ok: true; categories: WorkEvaluationSetting[]; criteria: WorkEvaluationSetting[]; canManage: boolean };
+
 export type WorkTask = {
   id: string; task_no: string; name: string; type_id: string; type_name: string; created_at: string; created_by: string;
   status: 'active' | 'completed' | 'empty'; due_from: string | null; due_to: string | null; product_count: number;
@@ -83,11 +92,19 @@ export function matchingWorkflowPublishFiles(
  * final outputs are complete, 50 after complete final uploads, and 100 once
  * the reviewer approves them. Both screens use these same milestones.
  */
-export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>): 0 | 50 | 100 {
-  if (!finalCoverage(item)) return 0;
-  return item.status === 'approved' ? 100 : 50;
+export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>): number {
+  if (!item.formats.length) return 0;
+  const byFormat = new Map((item.format_reviews || []).map(format => [format.format_id, format.status]));
+  const total = item.formats.reduce((sum, format) => {
+    const uploaded = finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind });
+    if (!uploaded) return sum;
+    const approved = byFormat.get(format.id) === 'approved' ||
+      (!item.format_reviews && item.status === 'approved');
+    return sum + (approved ? 100 : 50);
+  }, 0);
+  return Math.round(total * 10 / item.formats.length) / 10;
 }
-export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>>) {
+export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>>) {
   const total = items.length;
   let approved = 0;
   let readinessPoints = 0;
@@ -96,8 +113,6 @@ export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' |
     readinessPoints += itemPercent;
     if (itemPercent === 100) approved += 1;
   }
-  // Round only the final total, so six approved items reach exactly 100%,
-  // while one uploaded/approved item contributes 8.3% / 16.7% respectively.
   return { total, approved, percent: total ? Math.round(readinessPoints * 10 / total) / 10 : 0,
     complete: total > 0 && approved === total };
 }
@@ -118,4 +133,12 @@ export function ideaFileAllowed(name: string) { return /\.(docx?|xlsx?)$/i.test(
 export function workDate(value: unknown) {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : '';
   return String(value || '').slice(0, 10);
+}
+
+export function workRatingLevel(value: number) {
+  return value >= 100 ? { label: 'ممتاز', stars: 5, css: 'excellent' } :
+    value >= 90 ? { label: 'جيد', stars: 4, css: 'good' } :
+    value >= 60 ? { label: 'مقبول', stars: 3, css: 'acceptable' } :
+    value >= 50 ? { label: 'ضعيف', stars: 2, css: 'weak' } :
+    { label: 'غير مناسب', stars: 1, css: 'unsuitable' };
 }

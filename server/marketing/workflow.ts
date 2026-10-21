@@ -5,7 +5,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { loadUserProfile, type SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { assertMarketingWorkflowReady, marketingPlanScheduleSchemaStatus, upgradeMarketingPlanScheduleSchema } from '../_marketing-workflow-schema.js';
+import { assertMarketingWorkflowReady, marketingPlanScheduleSchemaStatus, ensureMarketingWorkflowSchema } from '../_marketing-workflow-schema.js';
 import { createNotification } from '../_notifications.js';
 import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketingStorageKey } from '../_media-storage.js';
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
@@ -13,6 +13,7 @@ import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishi
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
 import { finalCoverage, matchingWorkflowPublishFiles, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
+import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem } from './evaluations.js';
 
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
@@ -86,7 +87,7 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
       ${isManager(user)} or i.assigned_to=${user.id}::uuid or
       (${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))} and t.created_by=${user.id}::uuid) or d.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.notFound);
-  if (forEdit && !['in_progress', 'revision'].includes(row.status)) throw new Error(W.immutable);
+  if (forEdit && !['in_progress', 'revision', 'submitted'].includes(row.status)) throw new Error(W.immutable);
   return row;
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
@@ -101,6 +102,14 @@ async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkIt
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'category',up.category))
       from marketing.work_uploads up join marketing.files f on f.id=up.file_id
       where up.item_id=i.id and up.cancelled_at is null and f.status='uploading'),'[]'::jsonb) as pending_uploads,
+    coalesce((select jsonb_agg(jsonb_build_object('format_id',fr.format_id,'status',fr.status,
+      'submitted_at',fr.submitted_at,'approved_at',fr.approved_at) order by fr.format_id)
+      from marketing.work_format_reviews fr where fr.item_id=i.id),'[]'::jsonb) as format_reviews,
+    (select jsonb_build_object('percentage',r.percentage::float8,'scores',r.scores,
+      'created_at',r.created_at,'updated_at',r.updated_at,'reviewer_name',coalesce(ru.full_name,''))
+      from marketing.work_item_ratings r left join core.users ru on ru.id=r.rated_by
+      where r.item_id=i.id) as rating,
+    (select rc.name from marketing.work_review_categories rc where rc.id=i.review_note_type_id) as review_note_type_name,
     coalesce((select jsonb_agg(jsonb_build_object('id',a.id::text,'name',a.name,'completed',coalesce(ap.completed,false),
       'admin_only',a.admin_only,'is_final_approval',a.is_final_approval) order by a.sort_order,a.created_at)
       from marketing.assignment_actions a left join marketing.work_action_progress ap on ap.action_id=a.id and ap.item_id=i.id
@@ -135,7 +144,7 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const events = await db`select id,action,note,actor_name,created_at,item_id,data from marketing.work_history
     where task_id=${taskId}::uuid and (${canSeeAll} or item_id=any(${itemIds}::uuid[])) order by created_at desc,id desc limit 150`;
   return { ok: true, task: { ...task, type_name: type?.name || '', items, product_count: readiness.total,
-    approved_count: readiness.approved, readiness: readiness.percent, due_from: dates[0] || null, due_to: dates.at(-1) || null }, events, capabilities: workflowCapabilities(user) };
+    approved_count: readiness.approved, readiness: readiness.percent, due_from: dates[0] || null, due_to: dates.at(-1) || null }, events, capabilities: workflowCapabilities(user), canRate: canGradeWorkItem(user) };
 }
 async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   const scopes = departmentScope(user);
@@ -269,7 +278,7 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
     if (locked.version !== Number(body.version)) throw new Error(W.conflict);
-    if (!['in_progress', 'revision'].includes(locked.status)) throw new Error(W.immutable);
+    if (!['in_progress', 'revision', 'submitted'].includes(locked.status)) throw new Error(W.immutable);
     const managerEdit = hasPermission(user, 'marketing.task.edit') && (isManager(user) || current.created_by === user.id || departmentScope(user).length > 0);
     if (current.assigned_to !== user.id && !managerEdit) throw new Error(W.denied);
     const idea = text(body.idea ?? locked.idea, 20000), ideaName = text(body.ideaName ?? locked.idea_name, 250);
@@ -298,13 +307,24 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
     if (locked.version !== Number(body.version)) throw new Error(W.conflict);
-    if (!['in_progress','revision'].includes(locked.status)) throw new Error(W.immutable);
+    if (!['in_progress','revision','submitted'].includes(locked.status)) throw new Error(W.immutable);
     const items = await loadItems(tx, current.task_id), item = items.find(row => row.id === itemId);
-    if (!item || !finalCoverage(item)) throw new Error(W.incompleteFiles);
+    if (!item) throw new Error(W.notFound);
+    const pending = new Set((item.format_reviews || []).filter(r => r.status === 'submitted').map(r => r.format_id));
+    const approved = new Set((item.format_reviews || []).filter(r => r.status === 'approved').map(r => r.format_id));
+    const revision = new Set((item.format_reviews || []).filter(r => r.status === 'revision').map(r => r.format_id));
+    const selectable = item.formats.filter(format => !pending.has(format.id) && !approved.has(format.id) && !revision.has(format.id) &&
+      finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
+    if (!selectable.length) throw new Error(W.incompleteFiles);
     const [uploads] = await tx<any[]>`select count(*)::int as count from marketing.work_uploads up join marketing.files f on f.id=up.file_id
       where up.item_id=${itemId}::uuid and up.cancelled_at is null and f.status='uploading'`;
     if (uploads.count > 0) throw new Error(W.incompleteFiles);
-    await tx`update marketing.work_items set status='submitted',submitted_at=now(),approved_at=null,approved_by=null,version=version+1,updated_at=now() where id=${itemId}::uuid`;
+    for (const format of selectable) {
+      await tx`insert into marketing.work_format_reviews(item_id,format_id,status,submitted_at,updated_at)
+        values(${itemId}::uuid,${format.id},'submitted',now(),now())
+        on conflict(item_id,format_id) do update set status='submitted',submitted_at=now(),approved_at=null,approved_by=null,updated_at=now()`;
+    }
+    await tx`update marketing.work_items set status='submitted',submitted_at=now(),version=version+1,updated_at=now() where id=${itemId}::uuid`;
     await history(tx, user, current.task_id, itemId, 'submitted');
     await recalculateTask(tx, current.task_id);
     return { ok: true, taskId: current.task_id, owner: current.created_by, title: current.task_name, message: W.saved };
@@ -323,8 +343,10 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
 async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.review');
   const itemId = id(body.itemId), decision = text(body.decision), note = text(body.note, 10000);
-  if (!['approve','revise','reject'].includes(decision)) throw new Error(W.invalid);
-  if (decision === 'revise' && !note) throw new Error(W.notesRequired);
+  const categoryId = body.categoryId ? id(body.categoryId) : null;
+  const requestedFormat = body.formatId ? text(body.formatId, 80) : '';
+  if (!['approve', 'revise', 'reject'].includes(decision)) throw new Error(W.invalid);
+  if (decision === 'revise' && (!note || !categoryId)) throw new Error('اختر نوع الملاحظة واكتب التفاصيل');
   const result = await sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
@@ -332,22 +354,45 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
     await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
     if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
-    if (locked.status !== 'submitted') throw new Error(W.immutable);
+    if (locked.status === 'approved') throw new Error(W.immutable);
     const item = (await loadItems(tx, locked.task_id)).find(row => row.id === itemId);
-    if (decision === 'approve' && (!item || !finalCoverage(item))) throw new Error(W.incompleteFiles);
-    await history(tx, user, locked.task_id, itemId, decision === 'approve' ? 'approved' : decision === 'revise' ? 'revision' : 'rejected', note,
-      decision === 'reject' ? { assigneeId: locked.assigned_to, mediaKind: locked.media_kind, ideaName: locked.idea_name } : {});
+    const pending = (item?.format_reviews || []).filter(row => row.status === 'submitted');
+    if (!item || (decision !== 'reject' && !pending.length)) throw new Error(W.immutable);
+    if (requestedFormat && !item.formats.some(format => format.id === requestedFormat)) throw new Error(W.selectFormats);
+    const targets = requestedFormat ? pending.filter(row => row.format_id === requestedFormat) : pending;
+    if (decision !== 'reject' && !targets.length) throw new Error(W.immutable);
+    if (categoryId) {
+      const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`;
+      if (!category) throw new Error('نوع الملاحظة غير موجود في الإعدادات');
+    }
+    await history(tx, user, locked.task_id, itemId,
+      decision === 'approve' ? 'approved' : decision === 'revise' ? 'revision' : 'rejected', note,
+      { formatIds: targets.map(row => row.format_id), categoryId });
     if (decision === 'reject') {
-      // Hard-delete the requirement, not a hidden rejected requirement that
-      // would keep contributing to count/readiness or return to its executor.
+      // The existing requirement-rejection policy is preserved.
       await tx`delete from marketing.work_items where id=${itemId}::uuid`;
     } else {
-      await tx`update marketing.work_items set status=${decision === 'approve' ? 'approved' : 'revision'},review_note=${note},
-        approved_at=case when ${decision === 'approve'} then now() else null end,
-        approved_by=case when ${decision === 'approve'} then ${user.id}::uuid else null end,
+      for (const format of targets) {
+        await tx`update marketing.work_format_reviews set status=${decision === 'approve' ? 'approved' : 'revision'},
+          approved_at=case when ${decision === 'approve'} then now() else null end,
+          approved_by=case when ${decision === 'approve'} then ${user.id}::uuid else null end,
+          updated_at=now() where item_id=${itemId}::uuid and format_id=${format.format_id}`;
+      }
+      const all = await tx<any[]>`select format_id,status from marketing.work_format_reviews where item_id=${itemId}::uuid`;
+      const statuses = new Map<string,string>(all.map(row => [row.format_id, row.status]));
+      const completelyApproved = item.formats.every(format => statuses.get(format.id) === 'approved');
+      const pendingReview = all.some(row => row.status === 'submitted');
+      const nextStatus = completelyApproved ? 'approved' : pendingReview ? 'submitted' : decision === 'revise' ? 'revision' : 'in_progress';
+      await tx`update marketing.work_items set status=${nextStatus},
+        review_note=case when ${decision === 'revise'} then ${note} else review_note end,
+        review_note_type_id=case when ${decision === 'revise'} then ${categoryId}::uuid else review_note_type_id end,
+        review_note_created_at=case when ${decision === 'revise'} then now() else review_note_created_at end,
+        approved_at=case when ${completelyApproved} then now() else null end,
+        approved_by=case when ${completelyApproved} then ${user.id}::uuid else null end,
         version=version+1,updated_at=now() where id=${itemId}::uuid`;
-      if (decision === 'approve') await tx`insert into marketing.work_action_progress(item_id,action_id,completed,completed_by)
-        select ${itemId}::uuid,id,true,${user.id}::uuid from marketing.assignment_actions where department_id=${locked.department_id}::uuid and is_active=true and is_final_approval=true
+      if (completelyApproved) await tx`insert into marketing.work_action_progress(item_id,action_id,completed,completed_by)
+        select ${itemId}::uuid,id,true,${user.id}::uuid from marketing.assignment_actions
+        where department_id=${locked.department_id}::uuid and is_active=true and is_final_approval=true
         on conflict(item_id,action_id) do update set completed=true,completed_by=excluded.completed_by,updated_at=now()`;
     }
     const readiness = await recalculateTask(tx, locked.task_id);
@@ -406,6 +451,9 @@ async function prepareUpload(sql: Sql, body: Row, user: SessionUser) {
         if (!workFileMatches(item.media_kind, fileName, mimeType)) throw new Error(W.fileInvalid);
         formats = [...new Set(list(body.formatIds).map(id))];
         if (!formats.length || formats.some(formatId => !list(item.formats).some(f => f.id === formatId))) throw new Error(W.selectFormats);
+        const lockedFormats = await tx<any[]>`select format_id from marketing.work_format_reviews
+          where item_id=${itemId}::uuid and status in ('approved','submitted') and format_id=any(${formats}::text[])`;
+        if (lockedFormats.length) throw new Error('لا يمكن استبدال مقاس معتمد أو قيد المراجعة');
       } else if (item.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
       taskId = item.task_id; taskNo = item.task_no;
     } else {
@@ -457,7 +505,7 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
       const item = await visibleItem(tx, user, upload.item_id, true);
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${upload.item_id}::uuid for update`;
-      if (!current || !['in_progress','revision'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
       await visibleItem(tx, user, upload.item_id, true);
       if (upload.category === 'final') { requirePermission(user, 'marketing.task.final_file.upload'); if (current.assigned_to !== user.id) throw new Error(W.denied); }
       else if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
@@ -472,6 +520,11 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
     await tx`update marketing.work_uploads set committed_at=now() where file_id=${fileId}::uuid`;
     if (upload.item_id) {
       const formatIds = upload.category === 'final' ? list(upload.format_ids).map(String) : [''];
+      if (upload.category === 'final') {
+        const [blocked] = await tx<any[]>`select format_id from marketing.work_format_reviews
+          where item_id=${upload.item_id}::uuid and status in ('approved','submitted') and format_id=any(${formatIds}::text[]) limit 1`;
+        if (blocked) throw new Error('لا يمكن تعديل مقاس معتمد أو قيد المراجعة');
+      }
       const [kind] = await tx<any[]>`select media_kind from marketing.work_items where id=${upload.item_id}::uuid`;
       if (upload.category === 'final' && kind.media_kind === 'video') await tx`delete from marketing.work_item_files
         where item_id=${upload.item_id}::uuid and category='final' and format_id=any(${formatIds}::text[])`;
@@ -479,6 +532,14 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
         values(${upload.item_id}::uuid,${fileId}::uuid,${upload.category},${formatId},
           (select coalesce(max(order_index),-1)+1 from marketing.work_item_files where item_id=${upload.item_id}::uuid and format_id=${formatId}))
         on conflict(item_id,file_id,format_id) do nothing`;
+      if (upload.category === 'final') {
+        await tx`delete from marketing.work_format_reviews where item_id=${upload.item_id}::uuid
+          and format_id=any(${formatIds}::text[]) and status='revision'`;
+        await tx`update marketing.work_items set review_note='',review_note_type_id=null,review_note_created_at=null
+          where id=${upload.item_id}::uuid and review_note_created_at is not null and
+          review_note_created_at <= (select created_at from marketing.work_uploads where file_id=${fileId}::uuid)
+          and not exists (select 1 from marketing.work_format_reviews fr where fr.item_id=${upload.item_id}::uuid and fr.status='revision')`;
+      }
       await tx`update marketing.work_items set version=version+1,updated_at=now() where id=${upload.item_id}::uuid`;
     }
   });
@@ -497,11 +558,15 @@ async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
       // Same ordering as submit/review/commit: task -> item -> upload.
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${itemId}::uuid for update`;
-      if (!current || !['in_progress','revision'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
       await visibleItem(tx, user, itemId, true);
       if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
       const [linked] = await tx<any[]>`select 1 from marketing.work_item_files where item_id=${itemId}::uuid and file_id=${fileId}::uuid`;
       if (!linked && upload?.item_id !== itemId) throw new Error(W.notFound);
+      const approvedFile = await tx<any[]>`select 1 from marketing.work_item_files wf
+        join marketing.work_format_reviews fr on fr.item_id=wf.item_id and fr.format_id=wf.format_id
+        where wf.item_id=${itemId}::uuid and wf.file_id=${fileId}::uuid and fr.status in ('approved','submitted') limit 1`;
+      if (approvedFile.length) throw new Error('لا يمكن حذف ملف معتمد أو قيد المراجعة');
       await tx`delete from marketing.work_item_files where item_id=${itemId}::uuid and file_id=${fileId}::uuid`;
       if (upload?.item_id === itemId) {
         await tx`update marketing.work_uploads set cancelled_at=now() where file_id=${fileId}::uuid`;
@@ -1238,12 +1303,14 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
   // superadmin action, never a dashboard load or a normal publishing request.
   if (request.method === 'GET' && resource === 'work_schema_status') {
     const status = await marketingPlanScheduleSchemaStatus(sql);
-    response.status(200).json({ ok: true, ...status, canUpgrade: hasPermission(user, 'platform.superadmin') });
+    const [kpi] = await sql<{ current: boolean }[]>`select to_regclass('marketing.work_item_ratings') is not null and to_regclass('marketing.work_format_reviews') is not null and to_regclass('marketing.work_kpi_criteria') is not null as current`;
+    response.status(200).json({ ok: true, ...status, ready: Boolean(status.ready && kpi?.current), canUpgrade: hasPermission(user, 'platform.superadmin') });
     return true;
   }
   if (request.method === 'POST' && action === 'work_upgrade_schema') {
     requirePermission(user, 'platform.superadmin');
-    const upgraded = await upgradeMarketingPlanScheduleSchema();
+    await ensureMarketingWorkflowSchema();
+    const upgraded = await marketingPlanScheduleSchemaStatus(sql);
     response.status(200).json({ ok: true, ...upgraded, message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
     return true;
   }
@@ -1270,6 +1337,10 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_task') {
       if (!hasPermission(user, 'marketing.task.view_assigned') && !hasPermission(user, 'marketing.task.view_all') && !hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.task.review')) throw new Error(W.denied);
       result = await taskSummary(sql, user, id(request.query.id));
+    } else if (resource === 'work_evaluation_settings') {
+      result = await evaluationSettings(sql, user);
+    } else if (resource === 'work_ratings') {
+      result = await ratingsReport(sql, user, request.query);
     } else if (resource === 'work_products') {
       requirePermission(user, 'marketing.products.view'); result = { ok: true, rows: await products(sql, user) };
     } else if (resource === 'work_product') {
@@ -1293,6 +1364,17 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_save_item') result = await saveItem(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
     else if (action === 'work_review') result = await reviewItem(sql, body, user);
+    else if (action === 'work_save_evaluation_setting') result = await manageEvaluationSetting(sql, user, body);
+    else if (action === 'work_save_rating') {
+      const item = await visibleItem(sql, user, id(body.itemId));
+      if (!canGradeWorkItem(user)) throw new Error(W.denied);
+      result = await saveItemRating(sql, user, body, item);
+    }
+    else if (action === 'work_manage_note') {
+      const item = await visibleItem(sql, user, id(body.itemId));
+      if (!canGradeWorkItem(user)) throw new Error(W.denied);
+      result = await manageItemReviewNote(sql, user, body, item);
+    }
     else if (action === 'work_action') result = await toggleAction(sql, body, user);
     else if (action === 'work_prepare_upload') result = await prepareUpload(sql, body, user);
     else if (action === 'work_commit_upload') result = await commitUpload(sql, body, user);

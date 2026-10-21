@@ -572,3 +572,20 @@
 .mkw-executor-requirements .mkw-horizontal-heading,
 .mkw-executor-requirements .mkw-horizontal-row { grid-template-columns:minmax(175px,1.5fr) minmax(200px,1.6fr) minmax(245px,2fr) minmax(145px,1fr) 48px; }
 @media(max-width:850px) { .mkw-executor-group { padding:12px; } .mkw-executor-picker { width:100%; max-width:none; } }
+/* Marketing requirement review and executor evaluation */
+.mkw-note-fields{display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2.4fr);align-items:end;gap:12px;direction:rtl}
+.mkw-note-fields>label{min-width:0}.mkw-note-fields input,.mkw-note-fields select{width:100%;min-height:42px;box-sizing:border-box}
+.mkw-current-review{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:14px 18px;border:1px solid #f0d8a6;background:#fffaf0;border-radius:12px}
+.mkw-current-review p{margin:5px 0 0;white-space:pre-wrap}
+.mkw-format-state{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--muted,#6e8190)}
+.mkw-format-approved{border-color:#bbded0!important;background:#f6fbf8!important}.mkw-format-approved .mkw-format-state{color:#168258}
+.mkw-format-review-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.mkw-rating-section{display:grid;justify-items:start;gap:10px;padding:16px;border:1px solid var(--line,#e0e8ed);border-radius:14px;margin:12px 0}
+.mkw-rating-section .mkw-section-title{width:100%}.mkw-rating-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.mkw-rating-summary strong{font-size:22px}
+.mkw-rating-stars{display:inline-flex;gap:2px;direction:ltr}.mkw-rating-stars.is-excellent,.mkw-rating-stars.is-good,.mkw-rating-level.is-excellent,.mkw-rating-level.is-good{color:#138459}
+.mkw-rating-stars.is-acceptable,.mkw-rating-stars.is-weak,.mkw-rating-level.is-acceptable,.mkw-rating-level.is-weak{color:#c59b16}
+.mkw-rating-stars.is-unsuitable,.mkw-rating-level.is-unsuitable{color:#bb3748}
+.mkw-rating-level{font-size:12px;font-weight:800}.mkw-rating-form{display:grid;gap:12px;padding:8px}
+.mkw-rating-form>label{display:grid;grid-template-columns:minmax(150px,1fr) 125px;align-items:center;gap:12px;border-bottom:1px solid var(--line,#e4eaf0);padding:8px 0}
+.mkw-rating-form>label select{min-height:40px;max-width:125px}
+@media(max-width:620px){.mkw-note-fields{grid-template-columns:minmax(105px,1fr) minmax(0,1.65fr);gap:7px}.mkw-current-review{flex-wrap:wrap}}

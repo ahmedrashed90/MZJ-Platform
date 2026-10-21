@@ -3,6 +3,7 @@
  */
 import { getSql } from './_db.js';
 import { tiktokAdsAccountsOverview } from './_marketing-tiktok-ads.js';
+import { tiktokProfileFollowersOverview } from './_platform-connections.js';
 
 type Sql = ReturnType<typeof getSql>;
 const clean = (value: unknown) => String(value ?? '').trim();
@@ -37,10 +38,11 @@ async function organicTikTokAccounts() {
 }
 
 export async function marketingSocialAccountsOverview(sql: Sql) {
-  const [rows, tiktokAds, organic] = await Promise.all([
+  const [rows, tiktokAds, organic, tiktokProfile] = await Promise.all([
     sql<any[]>`select platform,connected,account_name,metadata from marketing.platform_connections where platform='google_ads' limit 1`,
     tiktokAdsAccountsOverview(sql),
     organicTikTokAccounts(),
+    tiktokProfileFollowersOverview(sql),
   ]);
   const row = rows[0];
   const metadata = record(row?.metadata);
@@ -53,5 +55,6 @@ export async function marketingSocialAccountsOverview(sql: Sql) {
     googleAds: { connected: Boolean(row?.connected), accounts: googleAccounts, note: googleAccounts.length ? '' : 'لا توجد حسابات Google Ads مختارة حاليًا.' },
     tiktokAds,
     tiktok: organic,
+    tiktokProfile,
   };
 }

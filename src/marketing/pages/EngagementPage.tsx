@@ -26,12 +26,10 @@ import { hasPermission } from "../../systemAccess";
 import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
-import { PaidAdsPanel } from "../components/PaidAdsPanel";
 import { CampaignReportPage } from "../components/CampaignReportPage";
 import "../reporting/report.css";
 import { ConnectedAccountsOverview } from "../components/ConnectedAccountsOverview";
 import {
-  marketingResultCount,
   marketingResultPlatformLabel,
   marketingResultSourceLabel,
   type EngagementResultGroup,
@@ -113,7 +111,7 @@ type Payload = {
 type RecordStatus = "active" | "archived" | "all";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
-type PageView = "engagement" | "accounts" | "agendas" | "meta_ads" | "report";
+type PageView = "engagement" | "accounts" | "report";
 type PostOrigin = "all" | "system" | "meta";
 
 const EMPTY_SUMMARY: EngagementSummary = {
@@ -147,7 +145,6 @@ const VISIBLE_META_POSTS_PER_PLATFORM = 5;
 const AUTO_META_RETRY_DELAY_MS = 12_000;
 const POST_PAGE_SIZE = 40;
 const ENGAGEMENT_PAGE_SIZE = 30;
-const RESULT_PAGE_SIZE = 40;
 
 type DirectMetaResult = {
   id?: string;
@@ -204,10 +201,7 @@ function processingLabel(status: string) {
   return "قيد المعالجة";
 }
 function pageView(value: string | null): PageView {
-  return value === "campaigns" ? "meta_ads" : value === "agendas" || value === "accounts" || value === "meta_ads" || value === "report" ? value : "engagement";
-}
-function bestPlatform(result: EngagementResultGroup) {
-  return [...result.platforms].sort((a, b) => b.engagements - a.engagements || b.posts - a.posts)[0];
+  return value === "campaigns" || value === "meta_ads" || value === "report" ? "report" : value === "accounts" ? "accounts" : "engagement";
 }
 
 export function EngagementPage() {
@@ -236,7 +230,6 @@ export function EngagementPage() {
   const [engagementStatus, setEngagementStatus] = useState<RecordStatus>("active");
   const [postPage, setPostPage] = useState(1);
   const [eventPage, setEventPage] = useState(1);
-  const [resultPage, setResultPage] = useState(1);
   const canRefresh = hasPermission(user, "marketing.engagement.refresh");
   const canManage = hasPermission(user, "marketing.publish.now");
   const canSubscribeWebhook = hasPermission(user, "marketing.engagement.subscribe");
@@ -316,7 +309,7 @@ export function EngagementPage() {
 
   useEffect(() => {
     // Paid campaigns are independent and must not trigger organic report reads.
-    if (view === "meta_ads" || view === "report") { setLoading(false); return; }
+    if (view === "report") { setLoading(false); return; }
     void load();
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(true);
@@ -420,33 +413,8 @@ export function EngagementPage() {
       && (!search || haystack.includes(search.toLowerCase()));
   }), [data, engagementStatus, platform, search]);
 
-  const resultRows = useMemo(() => {
-    const collection = view === "agendas" ? data?.results.agendas || [] : [];
-    const needle = search.trim().toLowerCase();
-    return collection.filter((result) => {
-      const matchesSearch = !needle || `${result.name} ${result.code} ${result.bestCreative?.name || ""}`.toLowerCase().includes(needle);
-      const matchesPlatform = !platform || result.platforms.some((item) => item.platform === platform && item.posts > 0);
-      return matchesSearch && matchesPlatform;
-    });
-  }, [data, platform, search, view]);
-
-  // Render bounded page sizes instead of thousands of table/feed elements.
-  // All filtered data and original totals remain available through pagination.
   useEffect(() => { setPostPage(1); }, [platform, postOrigin, postStatus, search]);
   useEffect(() => { setEventPage(1); }, [platform, engagementStatus, search]);
-  useEffect(() => { setResultPage(1); }, [platform, search, view]);
-  const visiblePosts = useMemo(() => rows.slice((postPage - 1) * POST_PAGE_SIZE, postPage * POST_PAGE_SIZE), [rows, postPage]);
-  const visibleEvents = useMemo(() => engagements.slice((eventPage - 1) * ENGAGEMENT_PAGE_SIZE, eventPage * ENGAGEMENT_PAGE_SIZE), [engagements, eventPage]);
-  const visibleResults = useMemo(() => resultRows.slice((resultPage - 1) * RESULT_PAGE_SIZE, resultPage * RESULT_PAGE_SIZE), [resultRows, resultPage]);
-
-  const resultSummary = useMemo(() => resultRows.reduce((total, result) => ({
-    sources: total.sources + 1,
-    posts: total.posts + result.summary.posts,
-    engagements: total.engagements + result.summary.engagements,
-    crmLeads: total.crmLeads + result.summary.crmLeads,
-    soldLeads: total.soldLeads + result.summary.soldLeads,
-  }), { sources: 0, posts: 0, engagements: 0, crmLeads: 0, soldLeads: 0 }), [resultRows]);
-
   function changeView(next: PageView) {
     setView(next);
     setSelectedResult(null);
@@ -601,7 +569,6 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة أداء المنشورات والحسابات والحملات الممولة عبر المنصات المرتبطة، مع فصل نتائج كل منصة بوضوح."
     actions={<div className="marketing-engagement-actions">
       {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
@@ -617,12 +584,10 @@ export function EngagementPage() {
       <div className="marketing-engagement-view-tabs" role="tablist" aria-label="أقسام تفاعل النشر">
         <button type="button" className={view === "engagement" ? "active" : ""} onClick={() => changeView("engagement")}>تفاعل النشر</button>
         <button type="button" className={view === "accounts" ? "active" : ""} onClick={() => changeView("accounts")}>الحسابات والمتابعون</button>
-        <button type="button" className={view === "meta_ads" ? "active" : ""} onClick={() => changeView("meta_ads")}>الحملات الممولة</button>
         <button type="button" className={view === "report" ? "active" : ""} onClick={() => changeView("report")}>تقرير الحملات</button>
-        <button type="button" className={view === "agendas" ? "active" : ""} onClick={() => changeView("agendas")}>نتائج الأجندات</button>
       </div>
 
-      {view === "meta_ads" ? <PaidAdsPanel /> : view === "report" ? <CampaignReportPage /> : view === "engagement" ? <>
+      {view === "report" ? <CampaignReportPage /> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{data ? count(summary.posts) : "—"}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{data ? count(summary.likes) : "—"}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>
@@ -773,49 +738,7 @@ export function EngagementPage() {
           {!data ? <div className="panel marketing-meta-account-empty" role="status">{loading ? "جاري تحميل حسابات Meta..." : "لم يتم تحميل حالة الحسابات. تحقق من رسالة الخطأ وأعد المحاولة."}</div>
             : !data.accounts.length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
         </div>
-        <p className="marketing-meta-account-disclaimer">عدد محتوى Facebook ومجموع التفاعلات وأعلى منشور محسوبة من المنشورات التي اكتملت مزامنتها بالفعل؛ الأرقام قد تزيد مع استيراد الأرشيف أو تحديث تفاعل المنشورات. تفاعلات Facebook تشمل جميع أنواع Reactions، وليست زر Like وحده.</p>
-      </> : <>
-        <section className="marketing-engagement-stats marketing-result-summary-stats">
-          <article><LinkSimple size={24} /><span>{"الأجندات"}</span><strong>{data ? marketingResultCount(resultSummary.sources) : "—"}</strong><small>بها منشورات أو نتائج محفوظة</small></article>
-          <article><LinkSimple size={24} /><span>إجمالي المنشورات</span><strong>{data ? marketingResultCount(resultSummary.posts) : "—"}</strong><small>كل المنصات</small></article>
-          <article><Heart size={24} /><span>إجمالي التفاعلات</span><strong>{data ? marketingResultCount(resultSummary.engagements) : "—"}</strong><small>إعجابات + تعليقات + مشاركات</small></article>
-          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{data ? marketingResultCount(resultSummary.crmLeads) : "—"}</strong><small>عملاء مختلفون</small></article>
-          <article><CheckCircle size={24} /><span>تم البيع</span><strong>{data ? marketingResultCount(resultSummary.soldLeads) : "—"}</strong><small>حسب الحالة الحالية في CRM</small></article>
-        </section>
-
-        <section className="panel marketing-engagement-panel marketing-results-panel">
-          <header><div><h3>{"نتائج الأجندات"}</h3><p>تجميع موحد لنتائج Facebook وInstagram وYouTube وتجهيز TikTok وSnapchat من نفس مصدر البيانات.</p></div></header>
-          <div className="marketing-engagement-control-panel marketing-results-control-panel">
-            <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`بحث باسم ${"الأجندة"} أو الكود أو الكرييتيف`} /></div>
-            <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
-            <div className="marketing-engagement-filter-note"><strong>أرقام موحدة</strong><small>نفس النتائج تظهر داخل قاعدة البيانات بدون حسابات منفصلة أو تكرار.</small></div>
-          </div>
-          <div className="marketing-result-list-wrap"><table className="marketing-result-list-table"><thead><tr><th>{"الأجندة"}</th><th>الفترة</th><th>المنشورات</th><th>المشاهدات</th><th>التفاعلات</th><th>عملاء CRM</th><th>تم البيع</th><th>أفضل منصة</th><th>أفضل كرييتيف</th><th>التفاصيل</th></tr></thead><tbody>
-            {visibleResults.map((result) => {
-              const topPlatform = bestPlatform(result);
-              return <tr key={`${result.sourceType}-${result.sourceId}`}>
-                <td><b>{result.name}</b><small>{result.code || (result.sourceType === "agenda" ? "أجندة" : "حملة")}</small></td>
-                <td>{marketingDate(result.publishStart)} — {marketingDate(result.publishEnd)}</td>
-                <td>{marketingResultCount(result.summary.posts)}</td>
-                <td>{marketingResultCount(result.summary.views)}</td>
-                <td>{marketingResultCount(result.summary.engagements)}</td>
-                <td>{marketingResultCount(result.summary.crmLeads)}</td>
-                <td>{marketingResultCount(result.summary.soldLeads)}</td>
-                <td>{topPlatform?.posts ? <span className={`marketing-result-platform-chip ${topPlatform.platform}`}>{marketingResultPlatformLabel(topPlatform.platform)}</span> : "—"}</td>
-                <td>{result.bestCreative?.name || "—"}</td>
-                <td><button type="button" className="table-action" onClick={() => setSelectedResult(result)}>عرض النتائج</button></td>
-              </tr>;
-            })}
-            {!resultRows.length ? <tr><td colSpan={10}><div className="marketing-database-empty">{loading ? "جاري تحميل النتائج..." : error && !data ? "تعذر تحميل النتائج؛ يمكنك إعادة المحاولة." : "لا توجد نتائج مطابقة."}</div></td></tr> : null}
-          </tbody></table></div>
-          {resultRows.length > RESULT_PAGE_SIZE && <div className="marketing-engagement-pagination" aria-label="صفحات نتائج الحملات والأجندات">
-            <span>عرض {count((resultPage-1)*RESULT_PAGE_SIZE+1)}–{count(Math.min(resultPage*RESULT_PAGE_SIZE,resultRows.length))} من {count(resultRows.length)} نتيجة</span>
-            <button type="button" disabled={resultPage===1} onClick={()=>setResultPage(page=>Math.max(1,page-1))}>السابق</button>
-            <strong>{count(resultPage)} / {count(Math.ceil(resultRows.length/RESULT_PAGE_SIZE))}</strong>
-            <button type="button" disabled={resultPage*RESULT_PAGE_SIZE>=resultRows.length} onClick={()=>setResultPage(page=>page+1)}>التالي</button>
-          </div>}
-        </section>
-      </>}
+      </> : null}
     </div>
 
     <Modal

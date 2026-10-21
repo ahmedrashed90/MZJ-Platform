@@ -41,7 +41,7 @@ test('Submitted requirement remains at 50 percent until approval',()=>assert.equ
 test('Revision with still-ready final files remains at 50 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'revision'}),50));
 test('Individual requirement reaches 100 percent after approval',()=>assert.equal(domain.workItemReadiness({...item,status:'approved'}),100));
 test('Approval without final coverage cannot show 100 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'approved',files:[]}),0));
-test('Incomplete multi-format upload has not reached the 50 percent milestone',()=>assert.equal(domain.workItemReadiness({...item,formats:[format,{...format,id:uid(11)}]}),0));
+test('Partial format upload contributes its proportional share before other formats arrive',()=>assert.equal(domain.workItemReadiness({...item,formats:[format,{...format,id:uid(11)}]}),25));
 test('Parent task progress mirrors the detailed requirement milestone',()=>assert.equal(domain.workReadiness([item]).percent,domain.workItemReadiness(item)));
 test('Each requirement displays its idea and readiness without opening detail',()=>{const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');assert(front.includes('({item.idea?.trim() ||'));assert(front.includes('<Readiness value={workItemReadiness(item)} />'));assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'));});
 test('Approval without a ready file never counts',()=>assert.equal(domain.workReadiness([{...item,status:'approved',files:[]}]).percent,0));
@@ -117,9 +117,9 @@ test('Task percent combines approved, uploaded, and unfinished items without rou
   const cases = [100,100,100,100,50,50].map((percent,index)=>({...item,id:uid(60+index),status:percent===100?'approved':'submitted'}));
   assert.deepEqual(domain.workReadiness(cases),{total:6,approved:4,percent:83.3,complete:false});
 });
-test('Incomplete media and unfinished uploads contribute 0 instead of false readiness',()=>{
+test('Incomplete media counts only finished formats, with remaining formats at zero',()=>{
   const missing={...item,formats:[format,{...format,id:uid(11)}]};
-  assert.deepEqual(domain.workReadiness([missing,{...item,files:[]}]),{total:2,approved:0,percent:0,complete:false});
+  assert.deepEqual(domain.workReadiness([missing,{...item,files:[]}]),{total:2,approved:0,percent:12.5,complete:false});
   assert.deepEqual(domain.workReadiness([{...item,status:'approved',files:[]}]),{total:1,approved:0,percent:0,complete:false});
 });
 test('Task list batches only authorized item IDs and derives identical weighted readiness as detail',async()=>{
@@ -171,14 +171,27 @@ test('Executor cannot invoke reviewer API',async()=>assert.rejects(()=>api.revie
 test('Revision needs a note',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'revise',version:1,note:''},admin)));
 test('Stale review cannot overwrite concurrent changes',async()=>{const db=scriptedSql([itemRead([item]),taskLock(),itemLock([{...item,version:2}])]);await assert.rejects(()=>api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin));db.assertDone();});
 test('Approve checks actual final files before updating state',async()=>{const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item]),itemLoad([{...item,files:[]}])]);await assert.rejects(()=>api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin));db.assertDone();});
-test('Approval completes a fully delivered single-output task',async()=>{const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item]),itemLoad([item]),step('insert into marketing.work_history'),step('update marketing.work_items',[],v=>assert.equal(v[0],'approved')),step('insert into marketing.work_action_progress'),...recalc([{...item,status:'approved'}],'completed')]);const r=await api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin);assert.equal(r.readiness.percent,100);db.assertDone();});
+test('Approval completes a fully delivered single-output task',async()=>{
+  const pending={...item,format_reviews:[{format_id:format.id,status:'submitted'}]};
+  const db=scriptedSql([
+    itemRead([pending]),taskLock(),itemLock([pending]),itemLoad([pending]),
+    step('insert into marketing.work_history'),
+    step('update marketing.work_format_reviews',[],v=>assert.equal(v[0],'approved')),
+    step('select format_id,status',[{format_id:format.id,status:'approved'}]),
+    step('update marketing.work_items',[],v=>assert.equal(v[0],'approved')),
+    step('insert into marketing.work_action_progress'),
+    ...recalc([{...pending,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]}],'completed'),
+  ]);
+  const result=await api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin);
+  assert.equal(result.readiness.percent,100);db.assertDone();
+});
 test('Reject hard-deletes only selected output and recalculates rest',async()=>{const remaining={...item,id:uid(52),status:'approved'};const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item]),itemLoad([item,remaining]),step('insert into marketing.work_history'),step('delete from marketing.work_items',[],v=>assert.deepEqual(v,[item.id])),...recalc([remaining],'completed')]);const r=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);assert.equal(r.readiness.total,1);assert.equal(r.readiness.percent,100);db.assertDone();});
 test('Rejecting last output leaves empty task, not a product',async()=>{const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item]),itemLoad([item]),step('insert into marketing.work_history'),step('delete from marketing.work_items'),...recalc([],'empty')]);const r=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);assert.equal(r.readiness.complete,false);db.assertDone();});
 test('Submitting someone else output is denied',async()=>{const db=scriptedSql([itemRead([{...item,assigned_to:uid(3),status:'in_progress'}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
 test('Pending uploads block submission',async()=>{const current={...item,status:'in_progress'};const db=scriptedSql([itemRead([current]),taskLock(),itemLock([current]),itemLoad([current]),step('select count(*)::int as count',[{count:1}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
 test('Upload item/reservation identity is mutually exclusive',async()=>assert.rejects(()=>api.prepareUpload(identitySql,{itemId:item.id,reservationId:uid(90),category:'idea',fileName:'a.docx',fileSize:4},admin)));
 test('Upload to someone else output is denied',async()=>{const db=scriptedSql([itemRead([{...item,status:'in_progress'}]),taskLock(),step('select id from marketing.work_items'),itemRead([{...item,status:'in_progress'}])]);await assert.rejects(()=>api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'a.jpg',fileSize:4,mimeType:'image/jpeg',formatIds:[format.id]},admin));db.assertDone();});
-test('Staging final upload holds task and item locks atomically',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([itemRead([row]),taskLock(),step('select id from marketing.work_items'),itemRead([row]),step('insert into marketing.files',[{id:file.id}]),step('insert into marketing.work_uploads')]);const r=await api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'a.jpg',fileSize:4,mimeType:'image/jpeg',formatIds:[format.id]},worker);assert.equal(r.storageProvider,'google-drive');db.assertDone();});
+test('Staging final upload holds task and item locks atomically',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([itemRead([row]),taskLock(),step('select id from marketing.work_items'),itemRead([row]),step('select format_id from marketing.work_format_reviews',[]),step('insert into marketing.files',[{id:file.id}]),step('insert into marketing.work_uploads')]);const r=await api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'a.jpg',fileSize:4,mimeType:'image/jpeg',formatIds:[format.id]},worker);assert.equal(r.storageProvider,'google-drive');db.assertDone();});
 test('Removing an unrelated file is denied',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([step('select * from marketing.work_uploads',[{file_id:file.id,item_id:uid(99),created_by:uid(3)}]),itemRead([row]),taskLock(),step('select status,assigned_to',[row]),itemRead([row]),step('select 1 from marketing.work_item_files')]);await assert.rejects(()=>api.removeUpload(db,{itemId:item.id,fileId:file.id},worker));db.assertDone();});
 test('Products require whole-task completion and newest-first order',async()=>{const db=scriptedSql([step("where t.is_deleted=false and t.status='completed' and i.status='approved'",[],(v,q)=>{assert(q.includes('order by t.completed_at desc,i.approved_at desc'));})]);assert.deepEqual(await api.products(db,admin),[]);db.assertDone();});
 test('Unreleased products cannot be selected by ID',async()=>{const db=scriptedSql([step("and t.status='completed'",[])]);await assert.rejects(()=>api.productVisible(db,admin,item.id));db.assertDone();});
