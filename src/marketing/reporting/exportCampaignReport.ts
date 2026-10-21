@@ -44,7 +44,16 @@ function zip(parts: Array<[string, string]>) {
   const end = new Uint8Array(22), view = new DataView(end.buffer);
   little32(view, 0, 0x06054b50); little16(view, 8, central.length); little16(view, 10, central.length);
   little32(view, 12, centralSize); little32(view, 16, offset);
-  return new Blob([...buffers, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  // Assemble the ZIP into an owned ArrayBuffer. BlobPart requires ArrayBuffer,
+  // not a Uint8Array whose backing buffer may be SharedArrayBuffer.
+  const archive = new ArrayBuffer(offset + centralSize + end.length);
+  const output = new Uint8Array(archive);
+  let position = 0;
+  for (const part of [...buffers, ...central, end]) {
+    output.set(part, position);
+    position += part.length;
+  }
+  return new Blob([archive], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
 export function campaignReportXlsx(rows: CampaignReportRow[], providers: CampaignReportProvider[], from: string, to: string) {

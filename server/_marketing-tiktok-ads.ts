@@ -571,8 +571,11 @@ export async function createPausedTikTokAdsCampaign(sql: Sql, input: Json) {
 const BUILD_TOOLS = ['campaign_create', 'adgroup_create', 'ad_create'] as const;
 type BuildTool = typeof BUILD_TOOLS[number];
 function toolDefinition(result: unknown, name: string): Json | null {
-  const raw = Array.isArray(result) ? result : Array.isArray(object(result).tools) ? object(result).tools
-    : Array.isArray(object(object(result).data).list) ? object(result.data).list : [result];
+  const response = object(result);
+  const data = object(response.data);
+  const raw = Array.isArray(result) ? result
+    : Array.isArray(response.tools) ? response.tools
+    : Array.isArray(data.list) ? data.list : [result];
   const found = raw.map(object).find(item => clean(item.name || item.tool_name) === name);
   return found || null;
 }
