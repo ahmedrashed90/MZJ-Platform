@@ -42,9 +42,18 @@ function popupHtml(result: { provider: PlatformProvider; returnOrigin: string; r
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
+  if (request.method === "GET" && !clean(request.query.provider)) {
+    const started = Date.now();
+    response.once("finish", () => {
+      const elapsed = Date.now() - started;
+      if (elapsed >= 2500) console.warn(`[MZJ slow platform connections GET] ${elapsed} ms`);
+    });
+  }
   try {
     await ensureAccessControlSchema();
-    await ensureMarketingSchema();
+    // The first OAuth/write operation may upgrade provider tables, but a
+    // routine provider STATUS read must not obtain locks for migrations.
+    if (request.method !== "GET" || clean(request.query.provider)) await ensureMarketingSchema();
     const providerFromRoute = clean(request.query.provider);
     const user = providerFromRoute ? await getSessionUser(request) : await requireUser(request, response);
     if (!user) {

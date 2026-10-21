@@ -4443,6 +4443,16 @@ export async function runMarketingScheduledPublishing() {
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
+  // Server timing is emitted only for slow, safe GET reads. No user IDs,
+  // tokens, payloads or query parameters are logged.
+  const monitoredResource = String(request.query.resource || "");
+  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads"].includes(monitoredResource)) {
+    const started = Date.now();
+    response.once("finish", () => {
+      const elapsed = Date.now() - started;
+      if (elapsed >= 2500) console.warn(`[MZJ slow marketing GET] ${monitoredResource}: ${elapsed} ms`);
+    });
+  }
   try {
     // The engagement page updates current Meta counts on open. This action
     // uses tables already deployed by the normal marketing flow; do not run
@@ -4467,10 +4477,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     // Operations DDL belongs to the operations/bootstrap lifecycle, not
     // to any Marketing page load. Operations is already initialized by the
     // platform and retains its independent migration implementation.
-    // Only legacy Marketing requests keep their existing version-aware
-    // Marketing schema check; new workflow reads never run Marketing DDL.
+    // Page reads are strictly read-only: never enqueue ALTER TABLE behind
+    // active imports/cron syncs. Writes keep the existing migration guard.
     const workflowRequest = clean(request.query.resource).startsWith('work_') || clean(initialBody.action).startsWith('work_');
-    if (!workflowRequest) {
+    if (request.method !== 'GET' && !workflowRequest) {
       await ensureMarketingSchema();
     }
     const user = await requireUser(request,response); if(!user)return;
@@ -4505,7 +4515,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
       if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
-      if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
+      if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql,request.query.view);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));

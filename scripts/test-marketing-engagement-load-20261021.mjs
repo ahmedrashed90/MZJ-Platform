@@ -40,7 +40,7 @@ for(const job of ['backfillPublishedPosts','cleanupLegacyTestEngagementRows','re
   check(!getSection.includes(`await ${job}(sql)`),`Read-only engagement endpoint avoids expensive ${job} write task`);
 }
 check(engagement.includes('export async function refreshEngagementMetrics') && engagement.split('export async function refreshEngagementMetrics')[1].includes('await backfillPublishedPosts(sql)'), 'Manual refresh retains legacy backfill path');
-check(page.includes('if (view === "meta_ads") return;') && page.includes('<PaidAdsPanel />'), 'Paid reports skip organic engagement fetch');
+check(page.includes('if (view === "meta_ads") { setLoading(false); return; }') && page.includes('<PaidAdsPanel />'), 'Paid reports skip organic engagement fetch');
 check(page.includes('visiblePosts.map') && page.includes('visibleEvents.map') && page.includes('visibleResults.map'), 'All long engagement lists render bounded pages');
 check(platforms.includes("['meta', 'tiktok', 'youtube', 'google_ads']"),'Previous OAuth platforms remain visible during network failures');
 check(platforms.includes('setLoading("");\n      if (result.canManage)'), 'Connections render immediately, independently of Zoho status request');

@@ -33,6 +33,7 @@ export function GoogleAdsPanel() {
   const canEdit = hasPermission(user, 'marketing.campaign.edit');
   const [data, setData] = useState<AdsResponse | null>(null);
   const requestVersion = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
   const [preset, setPreset] = useState<Preset>('last_30d');
   const [dateFrom, setDateFrom] = useState(marketingLocalDateKey(new Date(Date.now() - 29 * 86400_000)));
   const [dateTo, setDateTo] = useState(marketingLocalDateKey());
@@ -50,15 +51,27 @@ export function GoogleAdsPanel() {
   const load = useCallback(async () => {
     if (customDateError) return;
     const version = ++requestVersion.current;
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    let timedOut = false;
+    const deadline = window.setTimeout(() => { timedOut = true; controller.abort(); }, 25_000);
     setLoading(true); setError('');
     try {
-      const result = await marketingFetch<AdsResponse>(`/api/marketing${marketingQuery({resource: 'google_ads', preset: preset === 'custom' ? 'last_30d' : preset, accountId, dateFrom: preset === 'custom' ? dateFrom : undefined, dateTo: preset === 'custom' ? dateTo : undefined})}`);
+      const result = await marketingFetch<AdsResponse>(`/api/marketing${marketingQuery({resource: 'google_ads', preset: preset === 'custom' ? 'last_30d' : preset, accountId, dateFrom: preset === 'custom' ? dateFrom : undefined, dateTo: preset === 'custom' ? dateTo : undefined})}`, { signal: controller.signal });
       if (requestVersion.current === version) setData(result);
-    } catch (failure) { if (requestVersion.current === version) setError(failure instanceof Error ? failure.message : 'تعذر تحميل Google Ads'); }
-    finally { if (requestVersion.current === version) setLoading(false); }
+    } catch (failure) {
+      if (requestVersion.current === version) setError(timedOut ? 'انتهت مهلة قراءة Google Ads؛ جرب تحديث البيانات.' : failure instanceof Error ? failure.message : 'تعذر تحميل Google Ads');
+    } finally {
+      window.clearTimeout(deadline);
+      if (requestVersion.current === version) { activeRequest.current = null; setLoading(false); }
+    }
   }, [accountId, customDateError, dateFrom, dateTo, preset]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { activeRequest.current?.abort(); activeRequest.current = null; ++requestVersion.current; };
+  }, [load]);
   const filtered = useMemo(() => (data?.reports || []).flatMap(report => report.campaigns.map(campaign => ({ account: report.account, campaign })))
     .filter(row => status === 'all' || row.campaign.status === status)
     .filter(row => !search.trim() || `${row.campaign.name} ${row.campaign.id} ${row.account.name} ${row.campaign.ads.map(ad => ad.name).join(' ')}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))

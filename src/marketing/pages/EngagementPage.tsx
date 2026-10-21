@@ -211,8 +211,8 @@ export function EngagementPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<Payload | null>(null);
-  const loadingRequest = useRef(false);
-  const queuedReload = useRef(false);
+  const activeLoad = useRef<AbortController | null>(null);
+  const loadSequence = useRef(0);
   const [loading, setLoading] = useState(false);
   const openedAutoRefresh = useRef(false);
   const mountedPage = useRef(false);
@@ -242,28 +242,38 @@ export function EngagementPage() {
   const canDeleteCustomer = hasPermission(user, "crm.customer.delete");
 
   async function load(silent = false) {
-    if (loadingRequest.current) {
-      if (silent) queuedReload.current = true;
-      return;
-    }
-    loadingRequest.current = true;
+    // Changing tabs cancels the old response. A silent poll must never queue
+    // another expensive read behind a still-pending one.
+    if (silent && activeLoad.current) return;
+    const sequence = ++loadSequence.current;
+    activeLoad.current?.abort();
+    const controller = new AbortController();
+    activeLoad.current = controller;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 20_000);
     if (!silent) {
       setLoading(true);
+      setData(null);
       setError("");
     }
     try {
-      // Read our stored snapshot only; polling never triggers requests to Meta.
-      const payload = await marketingFetch<Payload>(`/api/marketing${marketingQuery({ resource: "engagement" })}`);
+      const linkedType = searchParams.get("sourceType");
+      const reportView = searchParams.get("sourceId") && view === "engagement"
+        ? (linkedType === "agenda" ? "agendas" : "campaigns") : view;
+      const payload = await marketingFetch<Payload>(`/api/marketing${marketingQuery({ resource: "engagement", view: reportView })}`, { signal: controller.signal });
+      if (sequence !== loadSequence.current) return;
       setData(payload);
       if (!subscriptionResults.length && payload.webhook.subscriptionResults?.length) setSubscriptionResults(payload.webhook.subscriptionResults);
     } catch (failure) {
-      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل تفاعل النشر");
+      if (sequence !== loadSequence.current) return;
+      if (!silent) setError(timedOut
+        ? "تأخر الخادم أكثر من 20 ثانية. أعد المحاولة أو راجع سجلات Vercel؛ لن تبقى الصفحة معلقة."
+        : failure instanceof Error ? failure.message : "تعذر تحميل تفاعل النشر");
     } finally {
-      loadingRequest.current = false;
-      if (!silent) setLoading(false);
-      if (queuedReload.current) {
-        queuedReload.current = false;
-        void load(true);
+      window.clearTimeout(timeout);
+      if (sequence === loadSequence.current) {
+        activeLoad.current = null;
+        if (!silent) setLoading(false);
       }
     }
   }
@@ -302,14 +312,18 @@ export function EngagementPage() {
   }
 
   useEffect(() => {
-    // Paid campaigns load independently via MetaAdsPanel / GoogleAdsPanel.
-    // Never block the paid-campaign view on the organic engagement snapshot.
-    if (view === "meta_ads") return;
+    // Paid campaigns are independent and must not trigger organic report reads.
+    if (view === "meta_ads") { setLoading(false); return; }
     void load();
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(true);
-    }, 60_000);
-    return () => window.clearInterval(interval);
+    }, 120_000);
+    return () => {
+      window.clearInterval(interval);
+      activeLoad.current?.abort();
+      activeLoad.current = null;
+      ++loadSequence.current;
+    };
   }, [view]);
   useEffect(() => {
     mountedPage.current = true;
@@ -365,8 +379,11 @@ export function EngagementPage() {
         if (attempt < 2) retryTimer = window.setTimeout(() => void run(attempt + 1), AUTO_META_RETRY_DELAY_MS);
       }
     };
-    void run(0);
+    const startTimer = window.setTimeout(() => {
+      if (document.visibilityState === "visible" && !cancelled) void run(0);
+    }, 12_000);
     return () => {
+      window.clearTimeout(startTimer);
       cancelled = true;
       openedAutoRefresh.current = false;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
@@ -591,7 +608,7 @@ export function EngagementPage() {
     </div>}
   >
     <div className="marketing-engagement-shell">
-      {error ? <MarketingAlert>{error}</MarketingAlert> : null}
+      {error ? <MarketingAlert>{error} <button type="button" className="secondary-button small" onClick={() => void load()}>إعادة المحاولة</button></MarketingAlert> : null}
       {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
       <div className="marketing-engagement-view-tabs" role="tablist" aria-label="أقسام تفاعل النشر">
@@ -604,11 +621,11 @@ export function EngagementPage() {
 
       {view === "meta_ads" ? <PaidAdsPanel /> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
-          <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>من السيستم وMeta بدون تكرار</small></article>
-          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>
-          <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق محفوظ ومربوط بالسيستم</small></article>
-          <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
-          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.commentEvents + summary.likeEvents)} تفاعل محفوظ بهوية صاحبه</small></article>
+          <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{data ? count(summary.posts) : "—"}</strong><small>من السيستم وMeta بدون تكرار</small></article>
+          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{data ? count(summary.likes) : "—"}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>
+          <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{data ? count(summary.comments) : "—"}</strong><small>{count(summary.commentEvents)} تعليق محفوظ ومربوط بالسيستم</small></article>
+          <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{data ? count(summary.shares) : "—"}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
+          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{data ? count(summary.crmLeads) : "—"}</strong><small>من {count(summary.commentEvents + summary.likeEvents)} تفاعل محفوظ بهوية صاحبه</small></article>
         </section>
 
         <section className="panel marketing-engagement-panel marketing-posts-panel">
@@ -746,16 +763,17 @@ export function EngagementPage() {
             </footer>
             {account.state?.last_error ? <details className="marketing-error-compact"><summary>تنبيه المزامنة</summary><p>{account.state.last_error}</p></details> : null}
           </article>)}
-          {!(data?.accounts || []).length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
+          {!data ? <div className="panel marketing-meta-account-empty" role="status">{loading ? "جاري تحميل حسابات Meta..." : "لم يتم تحميل حالة الحسابات. تحقق من رسالة الخطأ وأعد المحاولة."}</div>
+            : !data.accounts.length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
         </div>
         <p className="marketing-meta-account-disclaimer">عدد محتوى Facebook ومجموع التفاعلات وأعلى منشور محسوبة من المنشورات التي اكتملت مزامنتها بالفعل؛ الأرقام قد تزيد مع استيراد الأرشيف أو تحديث تفاعل المنشورات. تفاعلات Facebook تشمل جميع أنواع Reactions، وليست زر Like وحده.</p>
       </> : <>
         <section className="marketing-engagement-stats marketing-result-summary-stats">
-          <article><LinkSimple size={24} /><span>{view === "campaigns" ? "الحملات" : "الأجندات"}</span><strong>{marketingResultCount(resultSummary.sources)}</strong><small>بها منشورات أو نتائج محفوظة</small></article>
-          <article><LinkSimple size={24} /><span>إجمالي المنشورات</span><strong>{marketingResultCount(resultSummary.posts)}</strong><small>كل المنصات</small></article>
-          <article><Heart size={24} /><span>إجمالي التفاعلات</span><strong>{marketingResultCount(resultSummary.engagements)}</strong><small>إعجابات + تعليقات + مشاركات</small></article>
-          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{marketingResultCount(resultSummary.crmLeads)}</strong><small>عملاء مختلفون</small></article>
-          <article><CheckCircle size={24} /><span>تم البيع</span><strong>{marketingResultCount(resultSummary.soldLeads)}</strong><small>حسب الحالة الحالية في CRM</small></article>
+          <article><LinkSimple size={24} /><span>{view === "campaigns" ? "الحملات" : "الأجندات"}</span><strong>{data ? marketingResultCount(resultSummary.sources) : "—"}</strong><small>بها منشورات أو نتائج محفوظة</small></article>
+          <article><LinkSimple size={24} /><span>إجمالي المنشورات</span><strong>{data ? marketingResultCount(resultSummary.posts) : "—"}</strong><small>كل المنصات</small></article>
+          <article><Heart size={24} /><span>إجمالي التفاعلات</span><strong>{data ? marketingResultCount(resultSummary.engagements) : "—"}</strong><small>إعجابات + تعليقات + مشاركات</small></article>
+          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{data ? marketingResultCount(resultSummary.crmLeads) : "—"}</strong><small>عملاء مختلفون</small></article>
+          <article><CheckCircle size={24} /><span>تم البيع</span><strong>{data ? marketingResultCount(resultSummary.soldLeads) : "—"}</strong><small>حسب الحالة الحالية في CRM</small></article>
         </section>
 
         <section className="panel marketing-engagement-panel marketing-results-panel">
@@ -781,7 +799,7 @@ export function EngagementPage() {
                 <td><button type="button" className="table-action" onClick={() => setSelectedResult(result)}>عرض النتائج</button></td>
               </tr>;
             })}
-            {!resultRows.length ? <tr><td colSpan={10}><div className="marketing-database-empty">{loading ? "جاري تحميل النتائج..." : "لا توجد نتائج مطابقة."}</div></td></tr> : null}
+            {!resultRows.length ? <tr><td colSpan={10}><div className="marketing-database-empty">{loading ? "جاري تحميل النتائج..." : error && !data ? "تعذر تحميل النتائج؛ يمكنك إعادة المحاولة." : "لا توجد نتائج مطابقة."}</div></td></tr> : null}
           </tbody></table></div>
           {resultRows.length > RESULT_PAGE_SIZE && <div className="marketing-engagement-pagination" aria-label="صفحات نتائج الحملات والأجندات">
             <span>عرض {count((resultPage-1)*RESULT_PAGE_SIZE+1)}–{count(Math.min(resultPage*RESULT_PAGE_SIZE,resultRows.length))} من {count(resultRows.length)} نتيجة</span>

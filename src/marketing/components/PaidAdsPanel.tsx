@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FacebookLogo, GoogleLogo } from '@phosphor-icons/react';
 import { MetaAdsPanel } from './MetaAdsPanel';
 import { GoogleAdsPanel } from './GoogleAdsPanel';
@@ -8,6 +8,13 @@ type ProviderFilter = 'all' | 'meta' | 'google';
 /** Paid campaigns hub: provider reports remain independent to avoid false cross-platform conversions/currency totals. */
 export function PaidAdsPanel() {
   const [selected, setSelected] = useState<ProviderFilter>('all');
+  const [googleReady, setGoogleReady] = useState(false);
+  useEffect(() => {
+    if (selected === 'google') { setGoogleReady(true); return; }
+    if (selected === 'meta') { setGoogleReady(false); return; }
+    const timer = window.setTimeout(() => setGoogleReady(true), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [selected]);
   return <div className="marketing-paid-ads-hub">
     <section className="panel marketing-paid-ads-header">
       <div className="marketing-paid-ads-headline"><h3>الحملات الممولة</h3><p>متابعة موحدة لنتائج Meta وGoogle Ads، مع الحفاظ على مصدر بيانات كل منصة وعملة كل حساب.</p><small>تفاعل المنشورات في Facebook وInstagram وYouTube وTikTok وSnapchat يظل في تبويبات تفاعل النشر والحسابات.</small></div>
@@ -18,6 +25,6 @@ export function PaidAdsPanel() {
       </div>
     </section>
     {(selected === 'all' || selected === 'meta') && <section aria-label="حملات Meta الممولة"><MetaAdsPanel /></section>}
-    {(selected === 'all' || selected === 'google') && <section aria-label="حملات Google Ads الممولة"><GoogleAdsPanel /></section>}
+    {(selected === 'google' || (selected === 'all' && googleReady)) && <section aria-label="حملات Google Ads الممولة"><GoogleAdsPanel /></section>}
   </div>;
 }

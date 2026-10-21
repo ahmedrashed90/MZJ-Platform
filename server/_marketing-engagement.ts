@@ -133,7 +133,6 @@ export async function engagementResultsData(
   sql: ReturnType<typeof getSql>,
   input: { sourceType?: string; sourceId?: string; source?: any } = {},
 ) {
-  await ensureCrmSchema();
   const sourceType = clean(input.sourceType);
   const sourceId = clean(input.sourceId);
   const scoped = Boolean(sourceType && sourceId);
@@ -975,12 +974,21 @@ export async function refreshEngagementMetrics(sql: ReturnType<typeof getSql>, i
   return { ok: true, results, updated: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length };
 }
 
-export async function engagementData(sql: ReturnType<typeof getSql>) {
+export async function engagementData(sql: ReturnType<typeof getSql>, requestedView: unknown = "") {
+  // Fetch only the database views required by the active tab. In the old
+  // implementation, opening Meta followers also joined ALL post engagement
+  // and CRM campaign reports (and vice versa), serialized behind migrations.
+  // An empty requestedView keeps the full legacy payload for existing callers.
+  const view = clean(requestedView);
+  const scoped = ["engagement", "accounts", "campaigns", "agendas"].includes(view);
+  const needFeed = !scoped || view === "engagement";
+  const needAccounts = !scoped || view === "accounts";
+  const needResults = !scoped || view === "campaigns" || view === "agendas";
   // Read-only page load: backfill, legacy CRM repair and reassignments are
   // deliberate write/maintenance actions in refreshEngagementMetrics().
   // Running them on every read serializes dashboard loading on DB locks.
-  await ensureCrmSchema();
-  const rows = await sql<any[]>`
+  const [rows, engagements, discovered] = await Promise.all([
+    needFeed ? sql<any[]>`
     select pp.*,pp.id::text,pp.schedule_id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
       pp.archived_by::text,pp.deleted_by::text,
       coalesce(campaign.name,agenda.name,'—') as source_name,
@@ -995,8 +1003,8 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     left join core.users u on u.id=t.assigned_to
     where pp.is_deleted=false
     order by pp.published_at desc
-  `;
-  const engagements = await sql<any[]>`
+  ` : Promise.resolve([] as any[]),
+    needFeed ? sql<any[]>`
     select pe.*,pe.id::text,pe.published_post_id::text,pe.crm_lead_id::text,pe.archived_by::text,pe.deleted_by::text,
       pp.platform,pp.archived_at as post_archived_at,coalesce(campaign.name,agenda.name,'—') as campaign_name,
       coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
@@ -1011,8 +1019,9 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     left join core.users sales on sales.id=l.assigned_to
     where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pp.is_deleted=false
     order by coalesce(pe.engaged_at,pe.created_at) desc limit 500
-  `;
-  const discovered = await externalMetaPosts(sql);
+  ` : Promise.resolve([] as any[]),
+    needFeed ? externalMetaPosts(sql) : Promise.resolve([] as any[]),
+  ]);
   const allPosts = [
     ...rows.map((row: any) => ({ ...row, publication_origin: 'system' })),
     ...discovered,
@@ -1035,7 +1044,11 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     shareEvents: 0,
   };
   const crmLeads = new Set(activeEngagements.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
-  const connections = await sql<any[]>`select platform,metadata from marketing.platform_connections where platform in ('facebook','instagram') order by platform`;
+  const [connections, results, accounts] = await Promise.all([
+    needFeed ? sql<any[]>`select platform,metadata from marketing.platform_connections where platform in ('facebook','instagram') order by platform` : Promise.resolve([] as any[]),
+    needResults ? engagementResultsData(sql) : Promise.resolve({ groups: [], campaigns: [], agendas: [], supportedPlatforms: [...RESULT_PLATFORMS] }),
+    needAccounts ? metaAccountData(sql) : Promise.resolve([]),
+  ]);
   const subscriptionResults = connections.flatMap((row: any) => {
     const stored = asObject(asObject(row.metadata).engagementWebhookSubscription);
     const direct = asObject(stored.result);
@@ -1043,11 +1056,10 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     return asArray(stored.results).filter((item: any) => clean(item?.platform) === clean(row.platform));
   });
   const callbackBase = clean(process.env.MZJ_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ''));
-  const results = await engagementResultsData(sql);
   return {
     ok: true,
     rows: allPosts,
-    accounts: await metaAccountData(sql),
+    accounts,
     engagements,
     comments: engagements.filter((row: any) => row.engagement_type === 'comment'),
     summary: { ...summary, ...engagementSummary, crmLeads },

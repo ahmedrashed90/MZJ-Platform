@@ -174,7 +174,7 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
 
   const load = useCallback(async () => {
     try {
-      const result = await marketingFetch<ConnectionsPayload>("/api/marketing/platform-connections");
+      const result = await marketingFetch<ConnectionsPayload>("/api/marketing/platform-connections", { signal: AbortSignal.timeout(20_000) });
       setPayload(result);
       // Provider status and buttons are ready immediately; Zoho's independent
       // status endpoint must never block the entire platforms grid.

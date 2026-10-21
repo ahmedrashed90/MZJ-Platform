@@ -251,15 +251,18 @@ export function MetaAdsPanel() {
   useEffect(() => {
     if (customRangeInvalid) { setLoading(false); setData(null); setError(''); return; }
     let cancelled = false;
+    let timedOut = false;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => { timedOut = true; controller.abort(); }, 25_000);
     setLoading(true);
     setData(null); // Never show a previous period's totals under a newly chosen date range.
     setError('');
     const url = `/api/marketing${marketingQuery({ resource: 'meta_ads', preset, accountId: selectedAccount, dateFrom: preset === 'custom' ? dateFrom : '', dateTo: preset === 'custom' ? dateTo : '' })}`;
-    void marketingFetch<MetaAdsResponse>(url)
+    void marketingFetch<MetaAdsResponse>(url, { signal: controller.signal })
       .then(result => { if (!cancelled) setData(result); })
-      .catch(reason => { if (!cancelled) { setData(null); setError(reason instanceof Error ? reason.message : 'تعذر تحميل الإعلانات'); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .catch(reason => { if (!cancelled) { setData(null); setError(timedOut ? 'انتهت مهلة قراءة Meta Ads؛ حاول تحديث البيانات.' : reason instanceof Error ? reason.message : 'تعذر تحميل الإعلانات'); } })
+      .finally(() => { window.clearTimeout(deadline); if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(deadline); };
   }, [preset, dateFrom, dateTo, selectedAccount, reloadCount, customRangeInvalid]);
   const filtered = useMemo(() => (data?.reports || []).flatMap(report => report.campaigns.map(campaign => ({
     account: report.account,

@@ -540,25 +540,27 @@ export async function metaAccountData(sql: Sql) {
            case when platform='facebook' then page_name else coalesce(username,account_name) end as account_name,
            connected,status from marketing.platform_connections where platform in ('facebook','instagram')
   `;
-  const snapshots = await sql<any[]>`
+  if (!activeAccounts.length) return [];
+  const [snapshots, states, postStats, mostEngaged] = await Promise.all([
+    sql<any[]>`
     select platform,account_id,account_name,snapshot_date::text,followers_count,fan_count,media_count
     from marketing.meta_follower_snapshots order by snapshot_date asc
-  `;
-  const states = await sql<any[]>`
+  `,
+  sql<any[]>`
     select platform,account_id,backfill_complete,last_recent_at,last_backfill_at,last_success_at,last_error
     from marketing.meta_sync_state
-  `;
+  `,
   // Counts are computed from the genuinely discovered organic posts. Facebook
   // does not expose a reliable account-wide media_count like Instagram does;
   // therefore its number is explicitly the synced-content count.
-  const postStats = await sql<any[]>`
+  sql<any[]>`
     select platform,account_id,count(*)::integer as discovered_count,
       count(likes_count)::integer as likes_measured_count,
       sum(likes_count)::text as likes_total
     from marketing.meta_external_posts where is_deleted=false
     group by platform,account_id
-  `;
-  const mostEngaged = await sql<any[]>`
+  `,
+  sql<any[]>`
     select distinct on (platform,account_id)
       platform,account_id,provider_post_id,caption,permalink,published_at,
       likes_count,comments_count,shares_count,
@@ -566,7 +568,8 @@ export async function metaAccountData(sql: Sql) {
     from marketing.meta_external_posts
     where is_deleted=false and (likes_count is not null or comments_count is not null or shares_count is not null)
     order by platform,account_id,engagement_total desc,published_at desc,provider_post_id desc
-  `;
+  `,
+  ]);
   return activeAccounts.map((account: any) => {
     const history = snapshots.filter((row: any) => row.platform === account.platform && row.account_id === account.account_id);
     const current = history[history.length - 1];

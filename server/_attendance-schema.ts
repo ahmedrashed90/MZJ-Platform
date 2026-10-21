@@ -341,124 +341,30 @@ async function migrateLegacyMarketingAttendance() {
   `;
 }
 
+/**
+ * Serverless requests are not a safe place for unconditional DDL.
+ * The previous implementation executed ALTER TABLE / CREATE INDEX and
+ * re-imported legacy attendance rows on EVERY cold start even when all
+ * tables were already current. Those AccessExclusiveLock requests could
+ * stall unrelated marketing, CRM, and authentication API reads.
+ *
+ * Keep all actual schema and attendance business rules unchanged. Only an
+ * outdated schema is migrated, once under the existing advisory lock.
+ */
 export function ensureAttendanceSchema() {
   if (!attendanceSchemaPromise) {
     attendanceSchemaPromise = (async () => {
       await ensureAccessControlSchema();
-      if (!(await attendanceSchemaReady())) {
-        await withDatabaseAdvisoryLock(
-          `mzj:attendance-schema:${ATTENDANCE_SCHEMA_VERSION}`,
-          async () => {
-            if (await attendanceSchemaReady()) return;
-            await runSqlScript(ATTENDANCE_SCHEMA_SQL);
-            if (!(await attendanceSchemaReady())) throw new Error("ATTENDANCE_SCHEMA_NOT_READY");
-          },
-        );
-      } else {
-        await runSqlScript(String.raw`
-          create table if not exists core.attendance_settings (
-            id smallint primary key default 1 check (id = 1),
-            enforcement_enabled boolean not null default false,
-            official_day_end time not null default '21:00',
-            friday_start_time time,
-            friday_end_time time,
-            updated_by uuid references core.users(id) on delete set null,
-            updated_at timestamptz not null default now()
-          );
-          alter table core.attendance_settings add column if not exists official_day_end time not null default '21:00';
-          alter table core.attendance_settings add column if not exists friday_start_time time;
-          alter table core.attendance_settings add column if not exists friday_end_time time;
-          alter table core.attendance_user_schedules add column if not exists period_overrides jsonb not null default '{}'::jsonb;
-          alter table core.attendance_user_schedules add column if not exists attendance_branch_name text;
-          alter table core.attendance_user_schedules add column if not exists daily_work_hours numeric(5,2);
-          alter table core.attendance_records add column if not exists early_departure_authorized_at timestamptz;
-          alter table core.attendance_records add column if not exists early_departure_authorized_by uuid references core.users(id) on delete set null;
-          alter table core.attendance_records add column if not exists early_departure_from_at timestamptz;
-          alter table core.attendance_records add column if not exists early_departure_to_at timestamptz;
-          create table if not exists core.attendance_early_departure_permissions (
-            id uuid primary key default gen_random_uuid(),
-            user_id uuid not null references core.users(id) on delete cascade,
-            work_date date not null,
-            from_at timestamptz not null,
-            to_at timestamptz not null,
-            authorized_by uuid references core.users(id) on delete set null,
-            authorized_at timestamptz not null default now(),
-            created_at timestamptz not null default now(),
-            updated_at timestamptz not null default now(),
-            check (to_at > from_at)
-          );
-          alter table core.attendance_early_departure_permissions add column if not exists permission_type text not null default 'vacation';
-          alter table core.attendance_early_departure_permissions add column if not exists reason text not null default '';
-          alter table core.attendance_early_departure_permissions add column if not exists period_id text not null default '';
-          do $$
-          begin
-            if exists (
-              select 1 from pg_constraint
-              where conname='attendance_early_departure_permissions_permission_type_check'
-                and conrelid='core.attendance_early_departure_permissions'::regclass
-                and position('exceptional' in pg_get_constraintdef(oid))=0
-            ) then
-              alter table core.attendance_early_departure_permissions
-                drop constraint attendance_early_departure_permissions_permission_type_check;
-            end if;
-            if not exists (
-              select 1 from pg_constraint
-              where conname='attendance_early_departure_permissions_permission_type_check'
-                and conrelid='core.attendance_early_departure_permissions'::regclass
-            ) then
-              alter table core.attendance_early_departure_permissions
-                add constraint attendance_early_departure_permissions_permission_type_check
-                check (permission_type in ('departure','vacation','exceptional'));
-            end if;
-          end $$;
-          drop index if exists core.attendance_early_departure_user_day_unique;
-          create unique index if not exists attendance_early_departure_user_day_period_unique
-            on core.attendance_early_departure_permissions(user_id,work_date,period_id);
-          create index if not exists attendance_early_departure_date_idx
-            on core.attendance_early_departure_permissions(work_date desc,user_id);
-          do $$
-          begin
-            if exists (
-              select 1 from pg_constraint
-              where conname='attendance_records_checkout_source_check'
-                and conrelid='core.attendance_records'::regclass
-                and position('authorized' in pg_get_constraintdef(oid))=0
-            ) then
-              alter table core.attendance_records drop constraint attendance_records_checkout_source_check;
-            end if;
-            if not exists (
-              select 1 from pg_constraint
-              where conname='attendance_records_checkout_source_check'
-                and conrelid='core.attendance_records'::regclass
-            ) then
-              alter table core.attendance_records
-                add constraint attendance_records_checkout_source_check
-                check (checkout_source in ('manual','auto','legacy','authorized'));
-            end if;
-          end $$;
-          do $$
-          begin
-            if not exists (
-              select 1 from pg_constraint
-              where conname='attendance_user_schedules_daily_work_hours_check'
-                and conrelid='core.attendance_user_schedules'::regclass
-            ) then
-              alter table core.attendance_user_schedules
-                add constraint attendance_user_schedules_daily_work_hours_check
-                check (daily_work_hours is null or (daily_work_hours > 0 and daily_work_hours <= 24));
-            end if;
-          end $$;
-          insert into core.attendance_settings(id,enforcement_enabled,official_day_end) values(1,false,'21:00')
-          on conflict(id) do nothing;
-          insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
-          ('core','attendance','الحضور والانصراف','/attendance',15,true)
-          on conflict(system_code,code) do update
-          set name_ar=excluded.name_ar,route=excluded.route,sort_order=excluded.sort_order,is_active=true,updated_at=now();
-          update core.system_pages set is_active=false,updated_at=now() where system_code='marketing' and code='attendance';
-          update core.permissions set is_active=false where code in ('marketing.attendance.view','marketing.attendance.manage');
-        `);
-      }
-      await migrateLegacyMarketingAttendance();
+      if (await attendanceSchemaReady()) return;
+      await withDatabaseAdvisoryLock(
+        `mzj:attendance-schema:${ATTENDANCE_SCHEMA_VERSION}`,
+        async () => {
+          if (await attendanceSchemaReady()) return;
+          await runSqlScript(ATTENDANCE_SCHEMA_SQL);
+          if (!(await attendanceSchemaReady())) throw new Error("ATTENDANCE_SCHEMA_NOT_READY");
+          await migrateLegacyMarketingAttendance();
+        },
+      );
     })().catch((error) => {
       attendanceSchemaPromise = null;
       throw error;
