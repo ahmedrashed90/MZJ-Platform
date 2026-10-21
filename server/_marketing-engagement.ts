@@ -976,12 +976,10 @@ export async function refreshEngagementMetrics(sql: ReturnType<typeof getSql>, i
 }
 
 export async function engagementData(sql: ReturnType<typeof getSql>) {
+  // Read-only page load: backfill, legacy CRM repair and reassignments are
+  // deliberate write/maintenance actions in refreshEngagementMetrics().
+  // Running them on every read serializes dashboard loading on DB locks.
   await ensureCrmSchema();
-  await backfillPublishedPosts(sql);
-  await cleanupLegacyTestEngagementRows(sql);
-  await repairStoredEngagementSources(sql);
-  await repairLegacySocialMessagingIdentity(sql);
-  await repairUnassignedSocialEngagementAssignments(sql);
   const rows = await sql<any[]>`
     select pp.*,pp.id::text,pp.schedule_id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
       pp.archived_by::text,pp.deleted_by::text,

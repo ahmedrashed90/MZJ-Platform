@@ -108,14 +108,29 @@ export function GoogleAdsPanel() {
   }
 
   return <div className="marketing-google-ads marketing-meta-ads">
-    <section className="panel marketing-meta-ads-intro">
-      <header><div><h3><GoogleLogo size={24} weight="bold"/> Google Ads — الحملات الممولة</h3><p>قراءة مباشرة للحسابات المختارة من نفس Google المستخدم في YouTube، دون تغيير إعدادات أو توكنات YouTube أو Meta.</p></div>
-        <div className="marketing-google-ads-action-row">
-          {canCreate && <button type="button" className="primary-button" onClick={() => setShowCreate(value => !value)}><PlusCircle size={18}/>حملة Search جديدة</button>}
-          <button type="button" className="secondary-button" onClick={() => void load()} disabled={loading}>{loading ? 'جاري التحديث...' : <><ArrowClockwise size={18}/>تحديث من Google</>}</button>
+    <section className="panel marketing-meta-ads-intro marketing-google-ads-intro">
+      <header className="marketing-google-ads-hero">
+        <div className="marketing-google-ads-heading">
+          <span className="marketing-google-ads-logo" aria-hidden="true"><GoogleLogo size={27} weight="bold" /></span>
+          <span className="marketing-google-ads-heading-text">
+            <h3>حملات Google Ads</h3>
+            <p>إدارة الحملات الممولة، قياس الإنفاق والتحويلات، ومقارنة الأداء بين الحسابات الإعلانية.</p>
+            <small>حساب Google الموحد مع YouTube — مع الحفاظ على ربط ونشر YouTube مستقلًا.</small>
+          </span>
+        </div>
+        <div className="marketing-google-ads-actions">
+          <span className={`marketing-google-ads-connection-badge ${loading ? 'pending' : data?.status === 'ready' ? 'connected' : 'needs-setup'}`}>
+            {loading ? 'جاري جلب الحملات' : data?.status === 'ready' ? `${reports.length} حساب جاهز` : 'يلزم التحقق من الربط'}
+          </span>
+          <div className="marketing-google-ads-action-row">
+            {canCreate && <button type="button" className="primary-button" onClick={() => setShowCreate(value => !value)}><PlusCircle size={18}/>حملة Search جديدة</button>}
+            <button type="button" className="secondary-button" onClick={() => void load()} disabled={loading}>
+              <ArrowClockwise size={18} className={loading ? 'marketing-spin' : ''} />{loading ? 'جاري التحديث' : 'تحديث البيانات'}
+            </button>
+          </div>
         </div>
       </header>
-      <div className="marketing-meta-ads-filters">
+      <div className="marketing-meta-ads-filters marketing-google-ads-filters">
         <label><span>الفترة</span><select value={preset} onChange={event => setPreset(event.target.value as Preset)}>{PRESETS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         {preset === 'custom' && <><label><span>من</span><input type="date" max={dateTo || undefined} value={dateFrom} onChange={event => setDateFrom(event.target.value)}/></label><label><span>إلى</span><input type="date" min={dateFrom || undefined} value={dateTo} onChange={event => setDateTo(event.target.value)}/></label></>}
         <label><span>حساب Google Ads</span><select value={accountId} onChange={event => setAccountId(event.target.value)}><option value="">كل الحسابات المختارة</option>{(data?.accounts || []).filter(account => !account.manager).map(account => <option key={account.id} value={account.id}>{account.name} — {account.id} ({account.currency})</option>)}</select></label>
@@ -123,7 +138,15 @@ export function GoogleAdsPanel() {
         <div className="marketing-engagement-search"><MagnifyingGlass size={18}/><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="بحث باسم الحملة أو الإعلان أو الحساب"/></div>
       </div>
       {customDateError && <MarketingAlert>راجع فترة التاريخ: اختار تاريخ البداية والنهاية بالترتيب الصحيح.</MarketingAlert>}
-      {data?.note && <MarketingAlert type="info">{data.note}</MarketingAlert>}
+      {data?.status !== 'ready' && !loading && (data?.status === 'needs_connection' || data?.status === 'needs_account') && (
+        <div className="marketing-google-ads-setup-banner" role="status">
+          <div className="marketing-google-ads-setup-icon"><LinkSimple size={22} /></div>
+          <div><strong>{data.status === 'needs_account' ? 'اختيار الحسابات الإعلانية مطلوب' : 'Google Ads غير مرتبط بعد'}</strong>
+            <p>{data.note || 'أكمل ربط Google Ads في إعدادات التسويق، ثم اختر الحسابين الإعلانيين.'}</p></div>
+          <a className="secondary-button small" href="/settings?section=marketing&tab=platforms">فتح ربط المنصات</a>
+        </div>
+      )}
+      {data?.note && data.status !== 'needs_connection' && data.status !== 'needs_account' && <MarketingAlert type="info">{data.note}</MarketingAlert>}
       {error && <MarketingAlert>{error}</MarketingAlert>}
       {message && <MarketingAlert type="success">{message}</MarketingAlert>}
       {(data?.errors || []).map(item => <MarketingAlert key={item.accountId}>{item.accountId}: {item.message}</MarketingAlert>)}
@@ -186,6 +209,9 @@ export function GoogleAdsPanel() {
         })}
       </div>
     </>}
-    {loading && !data && <section className="panel">جاري تحميل حملات Google Ads...</section>}
+    {loading && !data && <section className="panel marketing-google-ads-loading-card" role="status" aria-live="polite">
+      <ArrowClockwise size={21} className="marketing-spin" />
+      <div><strong>جاري قراءة نتائج Google Ads...</strong><small>يمكنك التنقل في الصفحة، وسيظهر كل حساب بمجرد انتهاء القراءة من Google.</small></div>
+    </section>}
   </div>;
 }

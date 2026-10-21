@@ -1239,8 +1239,8 @@ update marketing.schema_state set version=greatest(version,2),updated_at=now() w
 commit;`;
 
 // Existing v2 databases only need four provider check-constraint extensions.
-const MARKETING_SCHEMA_V3_SQL = String.raw`-- Add Google Ads to existing provider lists without touching YouTube or Meta tokens.
-begin;
+const MARKETING_SCHEMA_V3_SQL = String.raw`begin;
+-- Add Google Ads to existing provider lists without touching YouTube or Meta tokens.
 alter table marketing.platform_connections drop constraint if exists platform_connections_platform_check;
 alter table marketing.platform_connections add constraint platform_connections_platform_check
   check(platform in ('facebook','instagram','tiktok','youtube','google_ads'));

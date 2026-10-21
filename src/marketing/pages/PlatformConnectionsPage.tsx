@@ -176,11 +176,12 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
     try {
       const result = await marketingFetch<ConnectionsPayload>("/api/marketing/platform-connections");
       setPayload(result);
+      // Provider status and buttons are ready immediately; Zoho's independent
+      // status endpoint must never block the entire platforms grid.
+      setLoading("");
       if (result.canManage) {
-        try {
-          const zohoStatus = await marketingFetch<{ ok: true } & ZohoConnectionStatus>("/api/integrations/zoho/status");
-          setZoho(zohoStatus);
-        } catch { setZoho(null); }
+        void marketingFetch<{ ok: true } & ZohoConnectionStatus>("/api/integrations/zoho/status")
+          .then(status => setZoho(status)).catch(() => setZoho(null));
       } else setZoho(null);
       const google = result.providers.find((item) => item.provider === "google_ads");
       setSelectedGoogleAdsAccounts(google?.selectedAccountIds || []);
@@ -389,6 +390,18 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
       </section>
 
       <div className="marketing-connections-grid marketing-connections-grid-rebuilt">
+        {!payload ? (['meta', 'tiktok', 'youtube', 'google_ads'] as ProviderCode[]).map(provider => (
+          <article key={provider} className="marketing-connection-card rebuilt marketing-connection-placeholder" aria-busy={loading === 'all'}>
+            <header className="marketing-connection-card-head">
+              <div className={`marketing-provider-logo ${provider}`}>{providerIcon(provider)}</div>
+              <div className="marketing-provider-title">
+                <h2>{providerLabels[provider]}</h2>
+                <span className="marketing-connection-status disconnected">{loading === 'all' ? 'جاري تحميل حالة الربط' : 'تعذر قراءة حالة الربط'}</span>
+              </div>
+            </header>
+            <p>{loading === 'all' ? 'بنجمع بيانات الحساب والصلاحيات من السيرفر...' : 'بيانات الربط محفوظة؛ أعد المحاولة بعد حل اتصال قاعدة البيانات.'}</p>
+          </article>
+        )) : null}
         {payload?.canManage ? (
           <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
             <header className="marketing-connection-card-head">

@@ -142,6 +142,9 @@ function sourceLabel(platform: string) {
 }
 const VISIBLE_META_POSTS_PER_PLATFORM = 5;
 const AUTO_META_RETRY_DELAY_MS = 12_000;
+const POST_PAGE_SIZE = 40;
+const ENGAGEMENT_PAGE_SIZE = 30;
+const RESULT_PAGE_SIZE = 40;
 
 type DirectMetaResult = {
   id?: string;
@@ -228,6 +231,9 @@ export function EngagementPage() {
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
   const [postOrigin, setPostOrigin] = useState<PostOrigin>("all");
   const [engagementStatus, setEngagementStatus] = useState<RecordStatus>("active");
+  const [postPage, setPostPage] = useState(1);
+  const [eventPage, setEventPage] = useState(1);
+  const [resultPage, setResultPage] = useState(1);
   const canRefresh = hasPermission(user, "marketing.engagement.refresh");
   const canManage = hasPermission(user, "marketing.publish.now");
   const canSubscribeWebhook = hasPermission(user, "marketing.engagement.subscribe");
@@ -296,13 +302,15 @@ export function EngagementPage() {
   }
 
   useEffect(() => {
+    // Paid campaigns load independently via MetaAdsPanel / GoogleAdsPanel.
+    // Never block the paid-campaign view on the organic engagement snapshot.
+    if (view === "meta_ads") return;
     void load();
-    // Updates appear while this page stays open, without clicking Refresh.
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(true);
     }, 60_000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [view]);
   useEffect(() => {
     mountedPage.current = true;
     return () => { mountedPage.current = false; };
@@ -401,6 +409,15 @@ export function EngagementPage() {
       return matchesSearch && matchesPlatform;
     });
   }, [data, platform, search, view]);
+
+  // Render bounded page sizes instead of thousands of table/feed elements.
+  // All filtered data and original totals remain available through pagination.
+  useEffect(() => { setPostPage(1); }, [platform, postOrigin, postStatus, search]);
+  useEffect(() => { setEventPage(1); }, [platform, engagementStatus, search]);
+  useEffect(() => { setResultPage(1); }, [platform, search, view]);
+  const visiblePosts = useMemo(() => rows.slice((postPage - 1) * POST_PAGE_SIZE, postPage * POST_PAGE_SIZE), [rows, postPage]);
+  const visibleEvents = useMemo(() => engagements.slice((eventPage - 1) * ENGAGEMENT_PAGE_SIZE, eventPage * ENGAGEMENT_PAGE_SIZE), [engagements, eventPage]);
+  const visibleResults = useMemo(() => resultRows.slice((resultPage - 1) * RESULT_PAGE_SIZE, resultPage * RESULT_PAGE_SIZE), [resultRows, resultPage]);
 
   const resultSummary = useMemo(() => resultRows.reduce((total, result) => ({
     sources: total.sources + 1,
@@ -616,7 +633,7 @@ export function EngagementPage() {
             <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>المحتوى الخارجي للعرض والتحليل فقط ولا ينشئ عملاء CRM، وتقارير الحملات والأجندات تظل مرتبطة بالنشر الداخلي.</small></div>
           </div>
           <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>المصدر / الحملة</th><th>المحتوى / الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
-            {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
+            {visiblePosts.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
               <td><span className={`marketing-platform-chip ${row.platform}`}>{platformIcon(row.platform, 17)}{platformLabel(row.platform)}</span></td>
               <td><b>{row.publication_origin === "meta" ? "Meta مباشرة" : row.source_name}</b><small>{row.publication_origin === "meta" ? "غير مرتبط بحملة أو أجندة" : row.task_name}</small></td>
               <td><b title={row.caption || row.creative_name} className="marketing-meta-post-caption">{row.publication_origin === "meta" ? (row.caption || "منشور بدون نص") : row.creative_name}</b><small>{row.post_type_name || "نوع النشر غير مسجل"}</small></td>
@@ -637,6 +654,12 @@ export function EngagementPage() {
             </tr>)}
             {!rows.length ? <tr><td colSpan={11} className="empty-cell">{loading ? "جاري التحميل..." : postStatus === "archived" ? "لا توجد منشورات في الأرشيف" : "لا توجد منشورات مطابقة"}</td></tr> : null}
           </tbody></table></div>
+          {rows.length > POST_PAGE_SIZE && <div className="marketing-engagement-pagination" aria-label="صفحات المنشورات">
+            <span>عرض {count((postPage-1)*POST_PAGE_SIZE+1)}–{count(Math.min(postPage*POST_PAGE_SIZE,rows.length))} من {count(rows.length)} منشور</span>
+            <button type="button" disabled={postPage===1} onClick={()=>setPostPage(page=>Math.max(1,page-1))}>السابق</button>
+            <strong>{count(postPage)} / {count(Math.ceil(rows.length/POST_PAGE_SIZE))}</strong>
+            <button type="button" disabled={postPage*POST_PAGE_SIZE>=rows.length} onClick={()=>setPostPage(page=>page+1)}>التالي</button>
+          </div>}
         </section>
 
         <section className="panel marketing-engagement-panel marketing-interactions-panel">
@@ -647,7 +670,7 @@ export function EngagementPage() {
             </div>
           </header>
           <div className="marketing-engagement-feed">
-            {engagements.map((item: any) => {
+            {visibleEvents.map((item: any) => {
               const isLike = item.engagement_type === "like";
               return <article key={item.id} className={item.archived_at ? "is-archived" : ""}>
               <div className={`marketing-engagement-event-icon ${item.platform} ${isLike ? "like" : "comment"}`}>
@@ -673,6 +696,12 @@ export function EngagementPage() {
             </article>;})}
             {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تفاعلات في الأرشيف" : "لم تصل تفاعلات مطابقة بعد"}</div> : null}
           </div>
+          {engagements.length > ENGAGEMENT_PAGE_SIZE && <div className="marketing-engagement-pagination" aria-label="صفحات التفاعلات">
+            <span>عرض {count((eventPage-1)*ENGAGEMENT_PAGE_SIZE+1)}–{count(Math.min(eventPage*ENGAGEMENT_PAGE_SIZE,engagements.length))} من {count(engagements.length)} تفاعل</span>
+            <button type="button" disabled={eventPage===1} onClick={()=>setEventPage(page=>Math.max(1,page-1))}>السابق</button>
+            <strong>{count(eventPage)} / {count(Math.ceil(engagements.length/ENGAGEMENT_PAGE_SIZE))}</strong>
+            <button type="button" disabled={eventPage*ENGAGEMENT_PAGE_SIZE>=engagements.length} onClick={()=>setEventPage(page=>page+1)}>التالي</button>
+          </div>}
         </section>
       </> : view === "accounts" ? <>
         <section className="marketing-meta-account-intro">
@@ -737,7 +766,7 @@ export function EngagementPage() {
             <div className="marketing-engagement-filter-note"><strong>أرقام موحدة</strong><small>نفس النتائج تظهر داخل قاعدة البيانات بدون حسابات منفصلة أو تكرار.</small></div>
           </div>
           <div className="marketing-result-list-wrap"><table className="marketing-result-list-table"><thead><tr><th>{view === "campaigns" ? "الحملة" : "الأجندة"}</th><th>الفترة</th><th>المنشورات</th><th>المشاهدات</th><th>التفاعلات</th><th>عملاء CRM</th><th>تم البيع</th><th>أفضل منصة</th><th>أفضل كرييتيف</th><th>التفاصيل</th></tr></thead><tbody>
-            {resultRows.map((result) => {
+            {visibleResults.map((result) => {
               const topPlatform = bestPlatform(result);
               return <tr key={`${result.sourceType}-${result.sourceId}`}>
                 <td><b>{result.name}</b><small>{result.code || (result.sourceType === "agenda" ? "أجندة" : "حملة")}</small></td>
@@ -754,6 +783,12 @@ export function EngagementPage() {
             })}
             {!resultRows.length ? <tr><td colSpan={10}><div className="marketing-database-empty">{loading ? "جاري تحميل النتائج..." : "لا توجد نتائج مطابقة."}</div></td></tr> : null}
           </tbody></table></div>
+          {resultRows.length > RESULT_PAGE_SIZE && <div className="marketing-engagement-pagination" aria-label="صفحات نتائج الحملات والأجندات">
+            <span>عرض {count((resultPage-1)*RESULT_PAGE_SIZE+1)}–{count(Math.min(resultPage*RESULT_PAGE_SIZE,resultRows.length))} من {count(resultRows.length)} نتيجة</span>
+            <button type="button" disabled={resultPage===1} onClick={()=>setResultPage(page=>Math.max(1,page-1))}>السابق</button>
+            <strong>{count(resultPage)} / {count(Math.ceil(resultRows.length/RESULT_PAGE_SIZE))}</strong>
+            <button type="button" disabled={resultPage*RESULT_PAGE_SIZE>=resultRows.length} onClick={()=>setResultPage(page=>page+1)}>التالي</button>
+          </div>}
         </section>
       </>}
     </div>

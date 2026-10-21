@@ -10,7 +10,7 @@ export function PaidAdsPanel() {
   const [selected, setSelected] = useState<ProviderFilter>('all');
   return <div className="marketing-paid-ads-hub">
     <section className="panel marketing-paid-ads-header">
-      <div><h3>الحملات الإعلانية — جميع المنصات</h3><p>الحملات والإحصائيات من حسابات Meta وGoogle Ads في صفحة واحدة. لكل منصة مصدر قياس مستقل دون تكرار أو تعديل أرقامها.</p></div>
+      <div className="marketing-paid-ads-headline"><h3>الحملات الممولة</h3><p>متابعة موحدة لنتائج Meta وGoogle Ads، مع الحفاظ على مصدر بيانات كل منصة وعملة كل حساب.</p><small>تفاعل المنشورات في Facebook وInstagram وYouTube وTikTok وSnapchat يظل في تبويبات تفاعل النشر والحسابات.</small></div>
       <div className="marketing-paid-ads-filter" role="group" aria-label="فلتر المنصة الإعلانية">
         <button type="button" className={selected === 'all' ? 'active' : ''} aria-pressed={selected === 'all'} onClick={() => setSelected('all')}>كل المنصات</button>
         <button type="button" className={selected === 'meta' ? 'active' : ''} aria-pressed={selected === 'meta'} onClick={() => setSelected('meta')}><FacebookLogo size={17}/>Meta</button>
