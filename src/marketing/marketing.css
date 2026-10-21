@@ -6440,3 +6440,77 @@
 .marketing-engagement-pagination button { min-height:33px;padding:6px 13px;border:1px solid var(--line);border-radius:8px;background:var(--surface,#fff);color:var(--ink);font:inherit;cursor:pointer;font-weight:800; }
 .marketing-engagement-pagination button:hover:not(:disabled) { border-color:var(--brand);color:var(--brand); }
 .marketing-engagement-pagination button:disabled { opacity:.48;cursor:default; }
+
+/* TikTok Ads paid campaigns: separate visual namespace; existing provider CSS untouched. */
+.marketing-tiktok-ads { display:grid;gap:16px;min-width:0;width:100%; }
+.marketing-tiktok-ads .marketing-tiktok-hero { display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;padding:21px 23px;border-radius:17px; }
+.marketing-tiktok-heading { display:flex;align-items:flex-start;gap:14px;flex:1 1 320px;min-width:0; }
+.marketing-tiktok-mark { flex:none;width:50px;height:50px;display:grid;place-items:center;border:1px solid #dedfe2;background:#fff;border-radius:14px;color:#161718; }
+.marketing-tiktok-heading h3 { margin:0 0 4px;font-size:20px;font-weight:900;color:var(--ink); }
+.marketing-tiktok-heading p { margin:0;color:var(--muted);font-size:13px;line-height:1.75; }
+.marketing-tiktok-heading small { display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.8; }
+.marketing-tiktok-hero-actions { display:flex;flex-direction:column;gap:11px;align-items:flex-end; }
+.marketing-tiktok-badge { padding:6px 11px;border:1px solid #e7ded9;border-radius:40px;background:#fcf8f5;color:#89543c;font-size:11px;font-weight:800; }
+.marketing-tiktok-badge.ready { color:#18704b;border-color:#bde2ce;background:#effaf3; }
+.marketing-tiktok-buttons,.marketing-tiktok-row-actions { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
+.marketing-tiktok-buttons button,.marketing-tiktok-row-actions button,.marketing-tiktok-row-actions a { display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:37px; }
+.marketing-tiktok-connect { display:grid;gap:14px;padding:22px; }
+.marketing-tiktok-connect-title { display:flex;align-items:flex-start;gap:12px; }
+.marketing-tiktok-connect-title > svg { color:var(--brand);flex:none;margin-top:2px; }
+.marketing-tiktok-connect-title h4 { margin:0;font-size:16px; }
+.marketing-tiktok-connect-title p { margin:7px 0 0;line-height:1.85;color:var(--muted);font-size:12px; }
+.marketing-tiktok-connect-fields { display:grid;grid-template-columns:repeat(2,minmax(230px,1fr));gap:13px; }
+.marketing-tiktok-connect-fields label,.marketing-tiktok-filters label,.marketing-tiktok-dates label { display:grid;gap:7px;min-width:0;font-size:12px;font-weight:800;color:var(--ink); }
+.marketing-tiktok-connect-fields input,.marketing-tiktok-filters input,.marketing-tiktok-filters select { width:100%;min-width:0;min-height:43px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit; }
+.marketing-tiktok-connect > small { color:var(--muted);line-height:1.7; }
+.marketing-tiktok-notice { display:flex;gap:10px;align-items:flex-start;padding:12px 15px;border-radius:12px;font-size:12px;line-height:1.85; }
+.marketing-tiktok-notice svg { flex:none;margin-top:3px; }
+.marketing-tiktok-notice.error { background:#fff2ef;border:1px solid #f0cbc3;color:#904035; }
+.marketing-tiktok-notice.success { background:#eff9f3;border:1px solid #d1e8d8;color:#236b49; }
+.marketing-tiktok-filters { display:grid;grid-template-columns:repeat(3,minmax(135px,1fr)) minmax(200px,1.3fr);gap:12px;padding:17px;align-items:end; }
+.marketing-tiktok-search > div { display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);padding-inline:10px;border-radius:10px; }
+.marketing-tiktok-search > div input { border:0;padding-inline:0; }
+.marketing-tiktok-search > div svg { color:var(--muted);flex:none; }
+.marketing-tiktok-dates { display:flex;gap:10px;grid-column:1/-1; }
+.marketing-tiktok-dates label { flex:1 1 180px; }
+.marketing-tiktok-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px; }
+.marketing-tiktok-stats article { display:grid;align-content:start;gap:7px;min-height:119px;padding:17px;background:var(--surface,#fff);border:1px solid var(--line);border-radius:14px;min-width:0; }
+.marketing-tiktok-stats article svg { color:var(--brand); }
+.marketing-tiktok-stats article span { color:var(--muted);font-size:12px;font-weight:800; }
+.marketing-tiktok-stats article strong { font-size:23px;line-height:1.25;color:var(--ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere; }
+.marketing-tiktok-stats article small { color:var(--muted);font-size:11px;line-height:1.6; }
+.marketing-tiktok-table-panel { padding:18px 20px;min-width:0; }
+.marketing-tiktok-table-panel > header { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px; }
+.marketing-tiktok-table-panel > header h4 { margin:0 0 4px;font-size:17px; }
+.marketing-tiktok-table-panel > header p,.marketing-tiktok-table-panel > header small { margin:0;color:var(--muted);font-size:12px; }
+.marketing-tiktok-table-scroll { overflow:auto;max-width:100%;border:1px solid var(--line);border-radius:12px; }
+.marketing-tiktok-table { width:100%;border-collapse:collapse;min-width:1320px;text-align:right;font-size:12px; }
+.marketing-tiktok-table th { position:sticky;top:0;z-index:1;padding:13px 10px;background:#f7f5f3;white-space:nowrap;font-weight:850;color:var(--ink);border-bottom:1px solid var(--line); }
+.marketing-tiktok-table td { padding:12px 10px;vertical-align:middle;border-bottom:1px solid var(--line);color:var(--ink); }
+.marketing-tiktok-table tbody tr:last-child td { border-bottom:0; }
+.marketing-tiktok-table tbody tr:hover { background:var(--surface-soft,#faf8f7); }
+.marketing-tiktok-table td:first-child { min-width:230px;max-width:340px; }
+.marketing-tiktok-table td:first-child strong { display:block;font-weight:850;overflow-wrap:anywhere; }
+.marketing-tiktok-table td:first-child small { display:block;margin-top:5px;font-size:10px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere; }
+.marketing-tiktok-table .numeric { font-variant-numeric:tabular-nums;white-space:nowrap; }
+.marketing-tiktok-status { display:inline-flex;padding:5px 9px;border-radius:8px;font-size:11px;white-space:nowrap;font-weight:850;background:#f4f0ed;color:#7f6254; }
+.marketing-tiktok-status.active { background:#e6f6ed;color:#23784c; }
+.marketing-tiktok-status.limit { background:#fff3d9;color:#8c6023; }
+.marketing-tiktok-row-actions { flex-wrap:nowrap; }
+.marketing-tiktok-empty { display:flex;align-items:center;gap:9px;padding:25px;color:var(--muted);font-size:13px;line-height:1.7; }
+.marketing-tiktok-pagination { display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;color:var(--muted);font-size:12px;font-weight:800; }
+.marketing-tiktok-warning { display:flex;align-items:flex-start;gap:9px;margin:0;padding:12px 15px;background:#fffbf0;border:1px solid #f0dfb5;color:#805e26;border-radius:11px;font-size:12px;line-height:1.75; }
+.marketing-tiktok-warning svg { flex:none;margin-top:2px; }
+.marketing-tiktok-disclaimer { margin:0;color:var(--muted);font-size:11px;line-height:1.8; }
+.marketing-tiktok-ads button:focus-visible,.marketing-tiktok-ads a:focus-visible,.marketing-tiktok-ads input:focus-visible,.marketing-tiktok-ads select:focus-visible { outline:2px solid var(--brand);outline-offset:2px; }
+@media (max-width:1100px) { .marketing-tiktok-stats { grid-template-columns:repeat(3,minmax(0,1fr)); } .marketing-tiktok-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:720px) { .marketing-tiktok-ads .marketing-tiktok-hero { padding:16px; } .marketing-tiktok-hero-actions { align-items:flex-start;width:100%; } .marketing-tiktok-connect-fields { grid-template-columns:1fr; } .marketing-tiktok-filters { grid-template-columns:1fr; } .marketing-tiktok-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .marketing-tiktok-table-panel { padding:13px; } }
+
+.marketing-tiktok-create { display:grid;gap:13px;padding:22px; }
+.marketing-tiktok-create h4 { margin:0;font-size:16px; }
+.marketing-tiktok-create p { margin:0;color:var(--muted);font-size:12px;line-height:1.8; }
+.marketing-tiktok-create-fields { display:grid;grid-template-columns:repeat(2,minmax(230px,1fr));gap:13px; }
+.marketing-tiktok-create-fields label { display:grid;gap:7px;min-width:0;font-size:12px;font-weight:800; }
+.marketing-tiktok-create-fields input,.marketing-tiktok-create-fields select { width:100%;min-width:0;min-height:43px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit; }
+.marketing-tiktok-create > small { color:var(--muted); }
+@media (max-width:720px) { .marketing-tiktok-create-fields { grid-template-columns:1fr; } }
