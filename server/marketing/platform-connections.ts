@@ -11,6 +11,7 @@ import {
   listPlatformConnections,
   loadYouTubePublishOptions,
   saveYouTubePublishSettings,
+  saveGoogleAdsAccountSelection,
   selectMetaPage,
   startPlatformOAuth,
   validatePlatformConnection,
@@ -74,6 +75,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (action === "cancel_oauth_draft") return response.status(200).json(await cancelPlatformConnectionDraft(sql, user, body.provider));
     if (action === "validate") return response.status(200).json(await validatePlatformConnection(sql, user, request, body.provider));
     if (action === "disconnect") return response.status(200).json(await disconnectPlatformConnection(sql, user, body.provider));
+    if (action === "save_google_ads_accounts") return response.status(200).json(await saveGoogleAdsAccountSelection(sql, user, body.accountIds));
     if (action === "youtube_publish_options") return response.status(200).json(await loadYouTubePublishOptions(sql));
     if (action === "save_youtube_publish_settings") return response.status(200).json(await saveYouTubePublishSettings(sql, user, body.settings));
     return response.status(400).json({ ok: false, error: "الإجراء غير مدعوم" });

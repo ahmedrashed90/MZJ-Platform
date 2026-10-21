@@ -73,7 +73,7 @@ import type { PermissionUser } from "../server/_access-control.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
-function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube"): ApiHandler {
+function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube" | "google_ads"): ApiHandler {
   return (request, response) => {
     request.query.provider = provider;
     return platformConnectionsHandler(request, response);
@@ -148,6 +148,7 @@ const routes = new Map<string, ApiHandler>([
   ["marketing/platform-connections/callback/meta", platformConnectionCallback("meta")],
   ["marketing/platform-connections/callback/tiktok", platformConnectionCallback("tiktok")],
   ["marketing/platform-connections/callback/youtube", platformConnectionCallback("youtube")],
+  ["marketing/platform-connections/callback/google_ads", platformConnectionCallback("google_ads")],
   ["activity", activityHandler],
   ["notifications", notificationsHandler],
   ["notification-settings", notificationSettingsHandler],

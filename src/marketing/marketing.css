@@ -6309,3 +6309,57 @@
 .marketing-meta-ads-manager-help { flex-basis:100%; color:var(--muted); line-height:1.7; }
 .marketing-meta-ads-manager-success { color:#177146; flex-basis:100%; }
 .marketing-meta-ads-manager-error { color:#b32525; flex-basis:100%; }
+
+/* Google Ads: additive provider connection and unified paid-campaign dashboard. */
+.marketing-google-ads-mark { display:inline-flex;align-items:baseline;font-size:27px;font-weight:900;letter-spacing:-1.2px;color:#4285f4; }
+.marketing-google-ads-mark span { margin-inline-start:3px;font-size:12px;letter-spacing:0;color:#4285f4; }
+.marketing-google-ads-selector { padding:14px;border:1px solid var(--line);border-radius:14px;display:grid;gap:12px;background:#faf8f7; }
+.marketing-google-ads-selector h3 { margin:0;font-size:14px; }
+.marketing-google-ads-context { display:grid;gap:4px; }
+.marketing-google-ads-context small { color:var(--muted);line-height:1.7; }
+.marketing-google-ads-accounts { display:grid;gap:9px; }
+.marketing-google-ads-accounts label { display:flex;align-items:center;gap:11px;background:white;border:1px solid var(--line);border-radius:12px;padding:9px;cursor:pointer; }
+.marketing-google-ads-accounts label.selected { border-color:var(--brand);background:#fff8f5; }
+.marketing-google-ads-accounts label span { display:grid;gap:4px;min-width:0; }
+.marketing-google-ads-accounts label small { color:var(--muted);direction:ltr;text-align:right; }
+.marketing-paid-ads-hub,.marketing-google-ads { display:grid;gap:16px;min-width:0; }
+.marketing-paid-ads-header { display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap; }
+.marketing-paid-ads-header h3 { margin:0 0 6px;font-size:20px; }
+.marketing-paid-ads-header p { margin:0;color:var(--muted);line-height:1.8; }
+.marketing-paid-ads-filter { display:flex;align-items:center;flex-wrap:wrap;gap:8px; }
+.marketing-paid-ads-filter button { display:inline-flex;align-items:center;gap:6px;padding:10px 14px;background:#fff;border:1px solid var(--line);border-radius:10px;cursor:pointer;font-family:inherit;font-weight:800;color:var(--ink); }
+.marketing-paid-ads-filter button.active { background:var(--brand);border-color:var(--brand);color:#fff; }
+.marketing-google-ads-intro h3,.marketing-google-ads .marketing-meta-ads-intro h3 { display:flex;gap:8px;align-items:center;margin:0 0 7px;font-size:19px; }
+.marketing-google-ads .marketing-meta-ads-intro header p { color:var(--muted);line-height:1.8;margin:0; }
+.marketing-google-ads-action-row { display:flex;align-items:center;gap:9px;flex-wrap:wrap; }
+.marketing-google-ads-action-row button { display:inline-flex;align-items:center;gap:7px; }
+.marketing-google-ads-account-reports { display:grid;gap:15px; }
+.marketing-google-ads-account > header { display:flex;align-items:center;flex-wrap:wrap;gap:13px;justify-content:space-between;margin-bottom:13px; }
+.marketing-google-ads-account > header h3 { margin:0 0 4px;font-size:18px; }
+.marketing-google-ads-account > header small { color:var(--muted); }
+.marketing-google-ads-chart { display:grid;gap:9px;margin-bottom:18px;padding:13px;border:1px solid var(--line);border-radius:12px; }
+.marketing-google-ads-chart-row { display:grid;grid-template-columns:minmax(140px,2fr) minmax(90px,3fr) 60px;align-items:center;gap:11px;font-size:12px; }
+.marketing-google-ads-chart-row > span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.marketing-google-ads-chart-row > strong { font-weight:800;font-variant-numeric:tabular-nums; }
+.marketing-google-ads-track { height:10px;border-radius:7px;background:#f0e5df;overflow:hidden; }
+.marketing-google-ads-track i { display:block;height:100%;background:var(--brand);border-radius:7px; }
+.marketing-google-ads-campaign-list { display:grid;gap:10px; }
+.marketing-google-ads-campaign { border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden; }
+.marketing-google-ads-campaign > summary { list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;padding:14px 16px; }
+.marketing-google-ads-campaign > summary::-webkit-details-marker { display:none; }
+.marketing-google-ads-campaign > summary > div { display:grid;gap:5px;flex:1;min-width:180px; }
+.marketing-google-ads-campaign > summary small { color:var(--muted);font-size:12px; }
+.marketing-google-ads-status { border-radius:20px;padding:5px 12px;background:#fff1df;color:#975319;font-size:12px;font-weight:800; }
+.marketing-google-ads-status.active { background:#e4f5e9;color:#176633; }
+.marketing-google-ads-campaign-content { padding:16px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:12px; }
+.marketing-google-ads-campaign-content > .marketing-meta-ads-metrics { width:100%; }
+.marketing-google-ads-campaign-content > h4,.marketing-google-ads-campaign-content > ul,.marketing-google-ads-campaign-content > p { flex-basis:100%;margin:0; }
+.marketing-google-ads-disclaimer { line-height:1.8;color:var(--muted);font-size:12px; }
+.marketing-google-ads-create { display:grid;gap:14px; }
+.marketing-google-ads-create h3 { margin:0;font-size:18px; }
+.marketing-google-ads-create p { margin:0;color:var(--muted);line-height:1.8; }
+.marketing-google-ads-form { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px; }
+.marketing-google-ads-form label { display:grid;gap:6px;font-size:13px;font-weight:800;min-width:0; }
+.marketing-google-ads-form label.wide { grid-column:1/-1; }
+.marketing-google-ads-form input,.marketing-google-ads-form textarea { padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:white;font-family:inherit;min-width:0;resize:vertical; }
+@media(max-width:760px) { .marketing-google-ads-form { grid-template-columns:1fr; }.marketing-google-ads-chart-row { grid-template-columns:minmax(85px,2fr) minmax(65px,3fr) 45px;gap:5px; } }

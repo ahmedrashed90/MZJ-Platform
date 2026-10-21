@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
-const MARKETING_SCHEMA_VERSION = 2;
+const MARKETING_SCHEMA_VERSION = 3;
 
 const MARKETING_SCHEMA_SQL = String.raw`begin;
 
@@ -574,11 +574,11 @@ create table if not exists marketing.platform_connections (
   connected_by uuid references core.users(id),
   disconnected_by uuid references core.users(id),
   updated_by uuid references core.users(id),
-  constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube'))
+  constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube','google_ads'))
 );
 
 alter table marketing.platform_connections drop constraint if exists platform_connections_platform_check;
-alter table marketing.platform_connections add constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube'));
+alter table marketing.platform_connections add constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube','google_ads'));
 alter table marketing.platform_connections add column if not exists scopes jsonb not null default '[]'::jsonb;
 alter table marketing.platform_connections add column if not exists metadata jsonb not null default '{}'::jsonb;
 alter table marketing.platform_connections add column if not exists refresh_token_encrypted text;
@@ -593,7 +593,7 @@ alter table marketing.platform_connections add column if not exists disconnected
 
 create table if not exists marketing.platform_oauth_states (
   state_hash text primary key,
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   user_id uuid not null references core.users(id) on delete cascade,
   return_origin text not null,
   return_path text not null default '/marketing/platforms',
@@ -605,7 +605,7 @@ create index if not exists marketing_platform_oauth_states_expiry_idx on marketi
 
 create table if not exists marketing.platform_connection_drafts (
   id uuid primary key default gen_random_uuid(),
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   user_id uuid not null references core.users(id) on delete cascade,
   payload_encrypted text not null,
   public_payload jsonb not null default '{}'::jsonb,
@@ -617,7 +617,7 @@ create index if not exists marketing_platform_connection_drafts_expiry_idx on ma
 
 create table if not exists marketing.platform_connection_events (
   id uuid primary key default gen_random_uuid(),
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   action text not null,
   status text not null,
   account_name text,
@@ -1218,7 +1218,7 @@ create table if not exists marketing.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into marketing.schema_state(id,version,updated_at) values(1,2,now())
+insert into marketing.schema_state(id,version,updated_at) values(1,3,now())
 on conflict(id) do update set version=greatest(marketing.schema_state.version,excluded.version),updated_at=excluded.updated_at;
 
 commit;
@@ -1236,6 +1236,24 @@ create table if not exists marketing.meta_ads_campaign_managers (
   primary key(account_id,campaign_id)
 );
 update marketing.schema_state set version=greatest(version,2),updated_at=now() where id=1;
+commit;`;
+
+// Existing v2 databases only need four provider check-constraint extensions.
+const MARKETING_SCHEMA_V3_SQL = String.raw`-- Add Google Ads to existing provider lists without touching YouTube or Meta tokens.
+begin;
+alter table marketing.platform_connections drop constraint if exists platform_connections_platform_check;
+alter table marketing.platform_connections add constraint platform_connections_platform_check
+  check(platform in ('facebook','instagram','tiktok','youtube','google_ads'));
+alter table marketing.platform_oauth_states drop constraint if exists platform_oauth_states_provider_check;
+alter table marketing.platform_oauth_states add constraint platform_oauth_states_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+alter table marketing.platform_connection_events drop constraint if exists platform_connection_events_provider_check;
+alter table marketing.platform_connection_events add constraint platform_connection_events_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+alter table marketing.platform_connection_drafts drop constraint if exists platform_connection_drafts_provider_check;
+alter table marketing.platform_connection_drafts add constraint platform_connection_drafts_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+update marketing.schema_state set version=greatest(version,3),updated_at=now() where id=1;
 commit;`;
 
 async function marketingSchemaVersion(): Promise<number> {
@@ -1258,7 +1276,11 @@ export async function ensureMarketingSchema() {
       await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
         const version = await marketingSchemaVersion();
         if (version < MARKETING_SCHEMA_VERSION) {
-          await runSqlScript(version >= 1 ? MARKETING_SCHEMA_V2_SQL : MARKETING_SCHEMA_SQL);
+          if (version === 0) await runSqlScript(MARKETING_SCHEMA_SQL);
+          else {
+            if (version < 2) await runSqlScript(MARKETING_SCHEMA_V2_SQL);
+            await runSqlScript(MARKETING_SCHEMA_V3_SQL);
+          }
         }
       });
     })().catch(error => { ready = null; throw error; });

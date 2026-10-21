@@ -39,7 +39,8 @@ import {
 import { marketingDate, marketingFetch } from "../api";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 
-type ProviderCode = "meta" | "tiktok" | "youtube";
+type ProviderCode = "meta" | "tiktok" | "youtube" | "google_ads";
+type GoogleAdAccount = { id: string; name: string; currency: string; timeZone: string; manager: boolean; loginCustomerId: string };
 type ConnectionAsset = {
   connected: boolean;
   accountName: string;
@@ -84,6 +85,11 @@ type ProviderConnection = {
   }>;
   assets: Record<string, ConnectionAsset | null>;
   publishSettings?: YouTubePublishSettings;
+  adAccounts?: GoogleAdAccount[];
+  selectedAccountIds?: string[];
+  discoveryWarnings?: string[];
+  youtubeConnected?: boolean;
+  youtubeChannel?: string;
 };
 type ConnectionEvent = {
   id: string;
@@ -116,7 +122,7 @@ type ZohoConnectionStatus = {
   lastError: string;
 };
 
-const providerLabels: Record<ProviderCode, string> = { meta: "Meta", tiktok: "TikTok", youtube: "YouTube" };
+const providerLabels: Record<ProviderCode, string> = { meta: "Meta", tiktok: "TikTok", youtube: "YouTube", google_ads: "Google Ads" };
 const actionLabels: Record<string, string> = {
   oauth_started: "بدء الربط",
   oauth_callback: "استجابة الربط",
@@ -127,6 +133,7 @@ const actionLabels: Record<string, string> = {
   disconnected: "فصل الربط",
   oauth_cancelled: "إلغاء الربط المعلق",
   settings_saved: "حفظ إعدادات النشر",
+  accounts_selected: "تحديد الحسابات الإعلانية",
 };
 
 function statusText(provider: ProviderConnection) {
@@ -146,6 +153,7 @@ function formatDate(value?: string | null) { return value ? marketingDate(value,
 function providerIcon(provider: ProviderCode, size = 28) {
   if (provider === "tiktok") return <TiktokLogo size={size} weight="fill" />;
   if (provider === "youtube") return <YoutubeLogo size={size} weight="fill" />;
+  if (provider === "google_ads") return <span aria-label="Google Ads" className="marketing-google-ads-mark">G<span>Ads</span></span>;
   return <span className="marketing-meta-icons"><FacebookLogo size={size} weight="fill" /><InstagramLogo size={size} weight="fill" /></span>;
 }
 
@@ -156,6 +164,8 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState<ProviderCode | "page" | "zoho" | "all" | "">("all");
   const [selectedPageId, setSelectedPageId] = useState("");
+  const [selectedGoogleAdsAccounts, setSelectedGoogleAdsAccounts] = useState<string[]>([]);
+  const [savingGoogleAccounts, setSavingGoogleAccounts] = useState(false);
   const [youtubeSettingsOpen, setYoutubeSettingsOpen] = useState(false);
   const [youtubeSettingsLoading, setYoutubeSettingsLoading] = useState(false);
   const [youtubeSettings, setYoutubeSettings] = useState<YouTubePublishSettings>(YOUTUBE_PUBLISH_DEFAULTS);
@@ -172,6 +182,8 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
           setZoho(zohoStatus);
         } catch { setZoho(null); }
       } else setZoho(null);
+      const google = result.providers.find((item) => item.provider === "google_ads");
+      setSelectedGoogleAdsAccounts(google?.selectedAccountIds || []);
       const meta = result.providers.find((item) => item.provider === "meta");
       setSelectedPageId((current) => current || (meta?.requiresSelection && meta.availablePages.length === 1 ? meta.availablePages[0].id : ""));
     } catch (failure) {
@@ -300,6 +312,20 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
     } finally { setLoading(""); }
   }
 
+  async function saveGoogleAdsAccounts() {
+    if (!selectedGoogleAdsAccounts.length) { setError("اختر حسابًا إعلانيًا واحدًا على الأقل"); return; }
+    setSavingGoogleAccounts(true); setError(""); setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing/platform-connections", {
+        method: "POST", body: JSON.stringify({ action: "save_google_ads_accounts", accountIds: selectedGoogleAdsAccounts }),
+      });
+      setMessage(result.message);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر حفظ حسابات Google Ads");
+    } finally { setSavingGoogleAccounts(false); }
+  }
+
   async function copyRedirect(value: string) {
     try { await navigator.clipboard.writeText(value); setMessage("تم نسخ رابط Callback"); }
     catch { setError("تعذر نسخ الرابط"); }
@@ -412,6 +438,33 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
                   <div className={metaFacebook?.connected ? "active" : ""}><FacebookLogo size={20} weight="fill" /><span><strong>Facebook</strong><small>{metaFacebook?.pageName || "غير مربوط"}</small></span></div>
                   <div className={metaInstagram?.connected ? "active" : "warning"}><InstagramLogo size={20} weight="fill" /><span><strong>Instagram</strong><small>{metaInstagram?.connected ? `@${metaInstagram.username || metaInstagram.accountName}` : metaInstagram?.lastError || "غير مرتبط بالصفحة"}</small></span></div>
                 </div>
+              ) : null}
+
+              {provider.provider === "google_ads" && provider.connected ? (
+                <section className="marketing-google-ads-selector" aria-label="حسابات Google Ads المرتبطة">
+                  <div className="marketing-google-ads-context">
+                    <strong>حساب Google المرتبط: <bdi dir="auto">{provider.accountName}</bdi></strong>
+                    <small>استخدم نفس Gmail المربوط في YouTube. ربط YouTube الحالي يظل مستقلًا ولا يتم تغييره أو فصل توكناته.</small>
+                    {provider.youtubeConnected ? <small>قناة YouTube الحالية: {provider.youtubeChannel || "متصلة"}</small> : null}
+                  </div>
+                  <h3>الحسابات الإعلانية المتاحة</h3>
+                  {(provider.adAccounts || []).filter((account) => !account.manager).length ? (
+                    <div className="marketing-google-ads-accounts">
+                      {(provider.adAccounts || []).filter(account => !account.manager).map(account => (
+                        <label key={`${account.id}-${account.loginCustomerId}`} className={selectedGoogleAdsAccounts.includes(account.id) ? "selected" : ""}>
+                          <input type="checkbox" checked={selectedGoogleAdsAccounts.includes(account.id)} disabled={!payload?.canManage || savingGoogleAccounts} onChange={event => setSelectedGoogleAdsAccounts(current => event.target.checked ? [...new Set([...current, account.id])] : current.filter(id => id !== account.id))} />
+                          <span><strong>{account.name || account.id}</strong><small dir="ltr">{account.id} • {account.currency || "—"}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : <p>مفيش حسابات إعلانية ظاهرة حاليًا. اضغط «فحص الربط» أو راجع صلاحيات Google Ads على Gmail.</p>}
+                  {provider.discoveryWarnings?.length ? <details className="marketing-connection-scopes"><summary>تنبيهات اكتشاف الحسابات ({provider.discoveryWarnings.length})</summary><div>{provider.discoveryWarnings.map((item, index) => <small key={index}>{item}</small>)}</div></details> : null}
+                  {payload?.canManage && (provider.adAccounts || []).some(account => !account.manager) ? (
+                    <button type="button" className="secondary" disabled={savingGoogleAccounts || !selectedGoogleAdsAccounts.length} onClick={() => void saveGoogleAdsAccounts()}>
+                      {savingGoogleAccounts ? <SpinnerGap size={17} className="marketing-spin" /> : <FloppyDisk size={17} />}حفظ الحسابات المختارة ({selectedGoogleAdsAccounts.length})
+                    </button>
+                  ) : null}
+                </section>
               ) : null}
 
               {provider.scopes.length ? <details className="marketing-connection-scopes"><summary>الصلاحيات الممنوحة ({provider.scopes.length})</summary><div>{provider.scopes.map((scope) => <code key={scope}>{scope}</code>)}</div></details> : null}

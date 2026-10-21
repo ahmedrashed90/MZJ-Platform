@@ -111,7 +111,7 @@ check(styles.includes('marketing-meta-ads-chart-tooltip') && styles.includes('ma
 check(front.includes('aria-pressed={activeCampaignKey === point.key}') && front.includes('onClick={() => setActiveCampaignKey(') && front.includes('role="group"'), 'Every chart column is an accessible click target with independent active state');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
-check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 2'), 'Dedicated additive schema migration persists manager names');
+check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 3'), 'Dedicated additive schema migration persists manager names');
 check(route.includes("action==='save_meta_ads_campaign_manager'") && route.includes("hasPermission(user,'marketing.engagement.view')") && route.includes("hasPermission(user,'marketing.campaign.edit')"), 'Server requires authenticated marketing permissions before save');
 
 const schemaCompiled = ts.transpileModule(schema, { fileName: '_marketing-schema.ts', compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -128,7 +128,7 @@ async function simulatedSchemaSetup(initialVersion) {
   vm.runInNewContext(schemaCompiled, { exports, console,
     require: name => name === './_db.js' ? {
       getSql: () => sql,
-      runSqlScript: async content => { migrations.push(content); version = 2; },
+      runSqlScript: async content => { migrations.push(content); version += 1; },
       withDatabaseAdvisoryLock: async (_name, fn) => fn(),
     } : (() => { throw new Error(name); })(),
   }, { timeout: 4000 });
@@ -136,10 +136,11 @@ async function simulatedSchemaSetup(initialVersion) {
   return migrations;
 }
 const upgradeV1 = await simulatedSchemaSetup(1);
-check(upgradeV1.length === 1 && upgradeV1[0].includes('create table if not exists marketing.meta_ads_campaign_managers') && !upgradeV1[0].includes('marketing.work_tasks'), 'Existing v1 databases run only the lightweight manager-table migration');
+check(upgradeV1.length === 2 && upgradeV1[0].includes('create table if not exists marketing.meta_ads_campaign_managers') && upgradeV1[1].includes('platform_connections_platform_check') && !upgradeV1[0].includes('marketing.work_tasks'), 'Existing v1 databases run only the lightweight manager-table migration');
 const upgradeV0 = await simulatedSchemaSetup(0);
 check(upgradeV0.length === 1 && upgradeV0[0].includes('marketing.departments') && upgradeV0[0].includes('meta_ads_campaign_managers'), 'Fresh databases include the manager table in full schema bootstrap');
-check((await simulatedSchemaSetup(2)).length === 0, 'Current databases never rerun Marketing DDL on regular requests');
+check((await simulatedSchemaSetup(2)).length === 1, 'Legacy v2 databases run only the narrow Google provider migration');
+check((await simulatedSchemaSetup(3)).length === 0, 'Current databases never rerun Marketing DDL on regular requests');
 // Render the actual TSX card functions with a small JSX runtime mock to catch
 // layout/data regressions beyond string-based source checks.
 const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsPanel()', 'export const __campaignMetricCardForTest = CampaignMetricCard;\nexport const __campaignNameForTest = campaignDisplayName;\nexport const __campaignNameTextForTest = CampaignNameText;\nexport function MetaAdsPanel()'), {
