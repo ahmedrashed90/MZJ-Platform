@@ -535,5 +535,195 @@ export async function createPausedTikTokAdsCampaign(sql: Sql, input: Json) {
   });
 }
 
+/**
+ * Manual Lead Generation campaign construction. All writes are PAUSED.
+ * This is intentionally a step-by-step workflow: the operator receives the ID
+ * after each provider write, so a timeout never automatically repeats a write.
+ * MCP input schemas are read live from tool_get before using a write tool.
+ */
+const BUILD_TOOLS = ['campaign_create', 'adgroup_create', 'ad_create'] as const;
+type BuildTool = typeof BUILD_TOOLS[number];
+function toolDefinition(result: unknown, name: string): Json | null {
+  const raw = Array.isArray(result) ? result : Array.isArray(object(result).tools) ? object(result).tools
+    : Array.isArray(object(object(result).data).list) ? object(result.data).list : [result];
+  const found = raw.map(object).find(item => clean(item.name || item.tool_name) === name);
+  return found || null;
+}
+function toolSchema(definition: Json | null): Json {
+  return object(definition?.inputSchema || definition?.input_schema || definition?.parameters || definition?.schema);
+}
+async function buildToolDefinitions(token: string): Promise<Record<BuildTool, Json | null>> {
+  const result: Record<BuildTool, Json | null> = { campaign_create: null, adgroup_create: null, ad_create: null };
+  // TikTok's progressive MCP server discovers the full parameter contract on demand.
+  const response = await callMcpRaw(token, 'tool_get', { tool_name_list: [...BUILD_TOOLS] }, 15_000);
+  for (const name of BUILD_TOOLS) result[name] = toolDefinition(response, name);
+  return result;
+}
+function assertBuildTool(definition: Json | null, name: BuildTool, values: Json) {
+  if (!definition) throw new Error(`TikTok MCP لم يوفر أداة ${name} لهذا الربط؛ لم يتم إرسال أي طلب إنشاء.`);
+  const schema = toolSchema(definition);
+  const props = object(schema.properties);
+  if (!Object.keys(props).length) throw new Error(`تعذر التحقق من مخطط ${name} لدى TikTok MCP؛ لن ننشئ عناصر بحقول غير مؤكدة.`);
+  const required = Array.isArray(schema.required) ? schema.required.map(clean) : [];
+  const missing = required.filter(key => values[key] === undefined || values[key] === null || values[key] === '');
+  if (missing.length) throw new Error(`TikTok يتطلب إعدادات إضافية لـ ${name}: ${missing.join(', ')}`);
+  const unknown = Object.keys(values).filter(key => !(key in props));
+  if (unknown.length) throw new Error(`TikTok MCP لا يقبل الحقول التالية في ${name}: ${unknown.join(', ')}`);
+}
+function positiveBudget(value: unknown) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 50 || number > 10_000_000) throw new Error('الميزانية يجب أن تكون 50 أو أكثر بعملة الحساب وتخضع لحدود TikTok');
+  return number;
+}
+function safeName(value: unknown, field: string) {
+  const name = clean(value);
+  if (name.length < 3 || name.length > 120 || /[<>]/.test(name)) throw new Error(`${field} مطلوب من 3 إلى 120 حرفًا`);
+  return name;
+}
+function digitsList(value: unknown, field: string) {
+  const entries = Array.isArray(value) ? value : clean(value).split(/[\s,،]+/).filter(Boolean);
+  if (!entries.length || entries.length > 30 || entries.some(entry => !/^\d{1,25}$/.test(clean(entry)))) throw new Error(`${field} يجب أن يحتوي على معرفات TikTok صحيحة`);
+  return entries.map(clean);
+}
+function tiktokDateTime(value: unknown, field: string) {
+  const text = clean(value);
+  // TikTok accepts the advertiser-account's local wall clock, not a UTC offset.
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text) || !Number.isFinite(Date.parse(text.replace(' ', 'T')+'Z'))) throw new Error(`${field} غير صالح`);
+  return text;
+}
+async function ownedAccount(token: string, input: unknown) {
+  const id = advertiserId(input);
+  if (!id || !(await discoverAccounts(token)).some(account => account.id === id)) throw new Error('الحساب الإعلاني غير مصرح به في TikTok Ads');
+  return id;
+}
+async function stoppedCampaign(token: string, accountId: string, input: unknown) {
+  const id = campaignId(input);
+  if (!id) throw new Error('رقم الحملة غير صالح');
+  const result = await execute(token, 'campaign_get', { advertiser_id: accountId, filtering: { campaign_ids: [id] }, page: 1, page_size: 10 });
+  const campaign = list(object(result.data).list).find(row => clean(row.campaign_id) === id);
+  if (!campaign || clean(campaign.objective_type) !== 'LEAD_GENERATION' || clean(campaign.operation_status) !== 'DISABLE') throw new Error('لازم تختار حملة Lead Generation متوقفة وموجودة في نفس الحساب');
+  if (clean(campaign.campaign_automation_type) === 'UPGRADED_SMART_PLUS') throw new Error('الحملة Smart+ وتحتاج أدوات Smart+ المختلفة. هذا المسار للحملات اليدوية فقط.');
+  return campaign;
+}
+async function adgroupForCampaign(token: string, accountId: string, campaignIdValue: string, input: unknown) {
+  const id = campaignId(input);
+  if (!id) throw new Error('رقم المجموعة الإعلانية غير صالح');
+  const result = await execute(token, 'adgroup_get', { advertiser_id: accountId, filtering: { adgroup_ids: [id] }, page: 1, page_size: 20 });
+  const group = list(object(result.data).list).find(row => clean(row.adgroup_id) === id && clean(row.campaign_id) === campaignIdValue);
+  if (!group) throw new Error('المجموعة الإعلانية غير موجودة تحت الحملة المحددة');
+  return group;
+}
+async function safeLibrary(token: string, name: string, params: Json): Promise<Json[]> {
+  try {
+    const result = await execute(token, name, params, 11_000);
+    const data = object(result.data);
+    return list(data.list || data.identities || data.pages || data.videos || data.materials);
+  } catch { return []; } // Optional libraries may be unavailable for some advertisers.
+}
+export async function tiktokAdsBuilderOptions(sql: Sql, input: Json) {
+  return withTikTokAuth(sql, async token => {
+    const accountId = await ownedAccount(token, input.accountId);
+    const definitions = await buildToolDefinitions(token);
+    const availability = Object.fromEntries(BUILD_TOOLS.map(name => [name, Boolean(definitions[name] && Object.keys(toolSchema(definitions[name]).properties || {}).length)]));
+    const campaign = input.campaignId ? await stoppedCampaign(token, accountId, input.campaignId) : null;
+    const groups = campaign ? await safeLibrary(token, 'adgroup_get', { advertiser_id: accountId, filtering: { campaign_ids: [campaign.campaign_id] }, page: 1, page_size: 100 }) : [];
+    // Only the short, non-sensitive fields required by the form leave the server.
+    const [identities, videos, forms] = await Promise.all([
+      safeLibrary(token, 'identity_get', { advertiser_id: accountId, page: 1, page_size: 100 }),
+      safeLibrary(token, 'file_video_ad_search', { advertiser_id: accountId, page: 1, page_size: 100 }),
+      safeLibrary(token, 'page_get', { advertiser_id: accountId, business_type: 'LEAD_GEN', page: 1, page_size: 100 }),
+    ]);
+    return { ok: true, available: availability,
+      adgroups: groups.filter(group => clean(group.campaign_id) === clean(input.campaignId)).map(group => ({ id: clean(group.adgroup_id), name: clean(group.adgroup_name), status: clean(group.operation_status) })),
+      identities: identities.map(item => ({ id: clean(item.identity_id), name: clean(item.display_name || item.identity_name || item.identity_id), type: clean(item.identity_type), bcId: clean(item.identity_authorized_bc_id) })).filter(item => item.id),
+      videos: videos.map(item => ({ id: clean(item.video_id || item.id), name: clean(item.file_name || item.video_name || item.name || item.video_id) })).filter(item => item.id),
+      forms: forms.map(item => ({ id: clean(item.page_id), name: clean(item.page_name || item.name || item.page_id) })).filter(item => item.id),
+      note: 'يتم التحقق من أدوات الإنشاء وصلاحية الحساب عند كل خطوة. لا يتم تشغيل أي إعلان تلقائيًا.' };
+  });
+}
+export async function createPausedTikTokAdsAdGroup(sql: Sql, input: Json) {
+  const name = safeName(input.name, 'اسم المجموعة الإعلانية');
+  const locations = digitsList(input.locationIds, 'المواقع');
+  const start = tiktokDateTime(input.startTime, 'بداية الحملة');
+  const end = tiktokDateTime(input.endTime, 'نهاية الحملة');
+  if (end <= start) throw new Error('نهاية الحملة يجب أن تكون بعد البداية');
+  const budget = positiveBudget(input.budget);
+  const ages = Array.isArray(input.ageGroups) ? input.ageGroups.map(clean) : [];
+  const allowedAges = ['AGE_18_24','AGE_25_34','AGE_35_44','AGE_45_54','AGE_55_100'];
+  if (!ages.length || ages.some(age => !allowedAges.includes(age))) throw new Error('حدد فئة عمرية واحدة على الأقل');
+  const gender = clean(input.gender);
+  if (!['GENDER_UNLIMITED','GENDER_MALE','GENDER_FEMALE'].includes(gender)) throw new Error('الجنس غير صالح');
+  return withTikTokAuth(sql, async token => {
+    const accountId = await ownedAccount(token, input.accountId);
+    const campaign = await stoppedCampaign(token, accountId, input.campaignId);
+    const definitions = await buildToolDefinitions(token);
+    const params: Json = {
+      advertiser_id: accountId, campaign_id: clean(campaign.campaign_id), adgroup_name: name,
+      promotion_type: 'LEAD_GENERATION', promotion_target_type: 'INSTANT_PAGE',
+      placement_type: 'PLACEMENT_TYPE_NORMAL', placements: ['PLACEMENT_TIKTOK'],
+      location_ids: locations, age_groups: ages, gender,
+      budget_mode: clean(input.budgetMode) === 'BUDGET_MODE_TOTAL' ? 'BUDGET_MODE_TOTAL' : 'BUDGET_MODE_DAY', budget,
+      schedule_type: 'SCHEDULE_START_END', schedule_start_time: start, schedule_end_time: end,
+      optimization_goal: 'LEAD_GENERATION', bid_type: 'BID_TYPE_NO_BID', billing_event: 'OCPM', pacing: 'PACING_MODE_SMOOTH',
+      operation_status: 'DISABLE',
+    };
+    // Optional on some versions; omitting it retains TikTok's Instant Form default.
+    if (!Object.keys(object(toolSchema(definitions.adgroup_create).properties)).includes('promotion_target_type')) delete params.promotion_target_type;
+    assertBuildTool(definitions.adgroup_create, 'adgroup_create', params);
+    const result = await execute(token, 'adgroup_create', params, 24_000);
+    const id = campaignId(object(result.data).adgroup_id);
+    if (!id) throw new Error('TikTok لم يرجع رقم المجموعة. راجع الحملة قبل إعادة الطلب لمنع التكرار.');
+    resetCache();
+    return { ok: true, accountId, campaignId: clean(campaign.campaign_id), adgroupId: id,
+      message: 'تم إنشاء المجموعة الإعلانية متوقفة. الخطوة التالية اختيار الفيديو والنموذج وإنشاء الإعلان.' };
+  });
+}
+export async function createPausedTikTokAdsAd(sql: Sql, input: Json) {
+  const name = safeName(input.name, 'اسم الإعلان');
+  const text = clean(input.text);
+  if (!text || text.length > 2000) throw new Error('نص الإعلان مطلوب وأقصى طول له 2000 حرف');
+  const identityId = clean(input.identityId), identityType = clean(input.identityType);
+  const videoId = clean(input.videoId), imageId = clean(input.imageId);
+  const pageId = clean(input.pageId);
+  if (!identityId || !identityType || !/^[A-Za-z0-9_-]{4,120}$/.test(videoId) || !/^\d{1,25}$/.test(pageId)) throw new Error('حدد هوية TikTok وفيديو مرفوعًا ونموذج ليدات صالحًا');
+  if (imageId && !/^[A-Za-z0-9_-]{4,120}$/.test(imageId)) throw new Error('رقم صورة غلاف الفيديو غير صالح');
+  const cta = clean(input.callToAction || 'LEARN_MORE');
+  if (!['LEARN_MORE','SIGN_UP','CONTACT_US','APPLY_NOW','GET_QUOTE','BOOK_NOW','SUBSCRIBE','VIEW_MORE'].includes(cta)) throw new Error('زر الدعوة للإجراء غير مدعوم');
+  return withTikTokAuth(sql, async token => {
+    const accountId = await ownedAccount(token, input.accountId);
+    const campaign = await stoppedCampaign(token, accountId, input.campaignId);
+    const group = await adgroupForCampaign(token, accountId, clean(campaign.campaign_id), input.adgroupId);
+    const definitions = await buildToolDefinitions(token);
+    const creative: Json = {
+      ad_name: name, identity_type: identityType, identity_id: identityId,
+      ad_format: 'SINGLE_VIDEO', video_id: videoId, ad_text: text, call_to_action: cta,
+      page_id: pageId, operation_status: 'DISABLE',
+    };
+    if (imageId) creative.image_ids = [imageId];
+    if (clean(input.identityAuthorizedBcId)) creative.identity_authorized_bc_id = clean(input.identityAuthorizedBcId);
+    const params = { advertiser_id: accountId, adgroup_id: clean(group.adgroup_id), creatives: [creative] };
+    const definition = definitions.ad_create;
+    const schema = toolSchema(definition);
+    const rawCreativeSchema = object(object(object(schema.properties).creatives).items);
+    const ref = clean(rawCreativeSchema.$ref);
+    const refName = ref.startsWith('#/$defs/') ? ref.slice(8) : ref.startsWith('#/definitions/') ? ref.slice(14) : '';
+    const creativeSchema = refName ? object(object(schema.$defs || schema.definitions)[refName]) : rawCreativeSchema;
+    if (!object(creativeSchema.properties).operation_status) throw new Error('TikTok MCP لا يؤكد إمكانية إنشاء إعلان متوقف. لم نرسل طلب الإنشاء حفاظًا على الميزانية.');
+    const allowed = object(creativeSchema.properties);
+    const unknown = Object.keys(creative).filter(key => !(key in allowed));
+    if (unknown.length) throw new Error(`TikTok MCP لا يقبل إعدادات الإعلان: ${unknown.join(', ')}`);
+    const required = Array.isArray(creativeSchema.required) ? creativeSchema.required.map(clean) : [];
+    if (required.some(key => creative[key] === undefined)) throw new Error(`إعدادات الإعلان ناقصة: ${required.filter(key => creative[key] === undefined).join(', ')}`);
+    assertBuildTool(definition, 'ad_create', params);
+    const result = await execute(token, 'ad_create', params, 26_000);
+    const data = object(result.data);
+    const ids = Array.isArray(data.ad_ids) ? data.ad_ids.map(campaignId).filter(Boolean) : [];
+    if (!ids.length) throw new Error('TikTok لم يرجع رقم الإعلان. راجع المجموعة قبل إعادة الطلب لمنع التكرار.');
+    resetCache();
+    return { ok: true, accountId, campaignId: clean(campaign.campaign_id), adgroupId: clean(group.adgroup_id), adIds: ids,
+      message: 'تم إنشاء الإعلان متوقفًا داخل الحملة. راجع تفاصيله قبل تشغيل أي صرف إعلاني.' };
+  });
+}
+
 /** Testable pure pieces; never includes tokens. */
 export const tiktokAdsTestHelpers = { period, parseSse, unpackMcpResult, getAuthorizedAccountsResponse, reportValuesFromRow, advertiserId, campaignId };

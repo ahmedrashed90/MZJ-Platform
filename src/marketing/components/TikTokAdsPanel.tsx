@@ -10,6 +10,18 @@ type Campaign = { id: string; accountId: string; name: string; status: string; d
 type AccountReport = { account: AdsAccount; campaigns: Campaign[]; warnings: string[]; incomplete: boolean; metricsAvailable: boolean };
 type AdsResponse = { ok: true; status: 'ready' | 'needs_connection' | 'needs_account' | 'failed'; accounts: AdsAccount[]; reports: AccountReport[]; errors: { accountId: string; message: string }[]; dateRange: { since: string; until: string }; syncedAt: string; note: string };
 type Preset = 'today' | 'yesterday' | 'last_7d' | 'last_30d' | 'this_month' | 'custom';
+type BuildItem = { id: string; name: string; type?: string; bcId?: string; status?: string };
+type BuildOptions = { ok: true; available: { campaign_create: boolean; adgroup_create: boolean; ad_create: boolean }; adgroups: BuildItem[]; identities: BuildItem[]; videos: BuildItem[]; forms: BuildItem[]; note: string };
+const AGE_CHOICES = [
+  { value: 'AGE_18_24', label: '18–24' }, { value: 'AGE_25_34', label: '25–34' },
+  { value: 'AGE_35_44', label: '35–44' }, { value: 'AGE_45_54', label: '45–54' }, { value: 'AGE_55_100', label: '55+' },
+];
+function localTimeInput(hoursFromNow: number) {
+  const d = new Date(Date.now() + hoursFromNow * 3600000);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function toAccountTime(value: string) { return value ? `${value.replace('T',' ')}:00` : ''; }
+
 
 const PRESETS: { value: Preset; label: string }[] = [
   { value: 'today', label: 'اليوم' }, { value: 'yesterday', label: 'أمس' },
@@ -67,6 +79,14 @@ export function TikTokAdsPanel() {
   const [showConnect, setShowConnect] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState({ name: '', objective: 'LEAD_GENERATION', budgetMode: 'BUDGET_MODE_DAY', budget: '100' });
+  const [buildStage, setBuildStage] = useState<'campaign' | 'adgroup' | 'ad'>('campaign');
+  const [builder, setBuilder] = useState<BuildOptions | null>(null);
+  const [builderLoading, setBuilderLoading] = useState(false);
+  const [campaignId, setCampaignId] = useState('');
+  const [adgroupId, setAdgroupId] = useState('');
+  const [groupDraft, setGroupDraft] = useState({ name: '', budget: '100', budgetMode: 'BUDGET_MODE_DAY', locationIds: '', gender: 'GENDER_UNLIMITED', ageGroups: ['AGE_25_34','AGE_35_44','AGE_45_54'], startTime: localTimeInput(3), endTime: localTimeInput(24*7) });
+  const [adDraft, setAdDraft] = useState({ name: '', text: '', videoId: '', imageId: '', identityId: '', identityType: '', identityAuthorizedBcId: '', pageId: '', callToAction: 'LEARN_MORE' });
+
   const [clientId, setClientId] = useState(EXISTING_MCP_CLIENT_ID);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const requestId = useRef(0);
@@ -102,6 +122,23 @@ export function TikTokAdsPanel() {
   }, [load]);
   useEffect(() => { setPage(1); }, [accountId, search, statusFilter, preset]);
 
+  const builderAccount = accountId || (data?.accounts.length === 1 ? data.accounts[0].id : '');
+  const loadBuilder = useCallback(async (id: string, selectedCampaign = '') => {
+    if (!id) { setBuilder(null); return; }
+    setBuilderLoading(true);
+    try {
+      const result = await marketingFetch<BuildOptions>(`/api/marketing${marketingQuery({resource:'tiktok_ads_builder',accountId:id,campaignId:selectedCampaign})}`);
+      setBuilder(result);
+    } catch (failure) { setBuilder(null); setError(failure instanceof Error ? failure.message : 'تعذر فحص أدوات إنشاء TikTok Ads'); }
+    finally { setBuilderLoading(false); }
+  }, []);
+  useEffect(() => {
+    if (!showCreate || !builderAccount) return;
+    void loadBuilder(builderAccount, campaignId);
+  }, [showCreate, builderAccount, campaignId, loadBuilder]);
+  useEffect(() => { setCampaignId(''); setAdgroupId(''); setBuildStage('campaign'); setBuilder(null); }, [accountId]);
+
+
   const rows = useMemo(() => (data?.reports || []).flatMap(report => report.campaigns.map(campaign => ({ account: report.account, campaign })))
     .filter(row => statusFilter === 'all' || row.campaign.status === statusFilter)
     .filter(row => !search.trim() || `${row.campaign.name} ${row.campaign.id} ${row.account.name} ${row.campaign.objective}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
@@ -127,10 +164,46 @@ export function TikTokAdsPanel() {
       const result = await marketingFetch<{ message: string }>('/api/marketing', {
         method: 'POST', body: JSON.stringify({ action: 'tiktok_ads_create_campaign', accountId: target.id, name: draft.name, objective: draft.objective, budgetMode: draft.budgetMode, budget: Number(draft.budget) }),
       });
-      setMessage(result.message); setShowCreate(false);
-      setDraft({ name: '', objective: 'LEAD_GENERATION', budgetMode: 'BUDGET_MODE_DAY', budget: '100' });
+      setMessage(result.message);
+      setCampaignId((result as { campaignId?: string }).campaignId || '');
+      setBuildStage('adgroup');
+      setGroupDraft(current => ({ ...current, name: `${draft.name} | المجموعة الإعلانية` }));
       await load(true);
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إنشاء مسودة الحملة'); }
+    finally { setBusy(''); }
+  }
+
+  async function createAdgroup() {
+    if (!builderAccount || !campaignId) return;
+    if (!window.confirm(`إنشاء مجموعة إعلانية متوقفة تحت الحملة ${campaignId}؟ لن يتم تشغيل أي إعلان.`)) return;
+    setBusy('adgroup'); setError(''); setMessage('');
+    try {
+      const result = await marketingFetch<{ adgroupId: string; message: string }>('/api/marketing', { method:'POST', body:JSON.stringify({
+        action:'tiktok_ads_create_adgroup',accountId:builderAccount,campaignId,name:groupDraft.name,
+        locationIds:groupDraft.locationIds,ageGroups:groupDraft.ageGroups,gender:groupDraft.gender,
+        budgetMode:groupDraft.budgetMode,budget:Number(groupDraft.budget),startTime:toAccountTime(groupDraft.startTime),endTime:toAccountTime(groupDraft.endTime),
+      }) });
+      setAdgroupId(result.adgroupId); setBuildStage('ad'); setMessage(result.message);
+      setAdDraft(current => ({...current,name:`${draft.name || groupDraft.name} | الإعلان`}));
+      await loadBuilder(builderAccount,campaignId);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إنشاء المجموعة. تحقق من TikTok قبل إعادة الطلب.'); }
+    finally { setBusy(''); }
+  }
+
+  async function createAd() {
+    if (!builderAccount || !campaignId || !adgroupId) return;
+    if (!window.confirm(`إنشاء الإعلان «${adDraft.name}» متوقفًا تحت المجموعة ${adgroupId}؟ لن يتم تشغيل أي ميزانية.`)) return;
+    setBusy('ad'); setError(''); setMessage('');
+    try {
+      const result = await marketingFetch<{ adIds: string[]; message: string }>('/api/marketing', { method:'POST', body:JSON.stringify({
+        action:'tiktok_ads_create_ad',accountId:builderAccount,campaignId,adgroupId,
+        name:adDraft.name,text:adDraft.text,videoId:adDraft.videoId,imageId:adDraft.imageId,
+        identityId:adDraft.identityId,identityType:adDraft.identityType,identityAuthorizedBcId:adDraft.identityAuthorizedBcId,
+        pageId:adDraft.pageId,callToAction:adDraft.callToAction,
+      }) });
+      setMessage(`${result.message} رقم الإعلان: ${result.adIds.join(', ')}`);
+      setShowCreate(false); await load(true);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إنشاء الإعلان. تحقق من TikTok قبل إعادة الطلب.'); }
     finally { setBusy(''); }
   }
 
@@ -188,7 +261,7 @@ export function TikTokAdsPanel() {
       <div className="marketing-tiktok-hero-actions">
         <span className={`marketing-tiktok-badge ${data?.status === 'ready' ? 'ready' : ''}`}>{loading ? 'جارٍ جلب البيانات' : data?.status === 'ready' ? `${reports.length} حساب متصل` : 'الربط مطلوب'}</span>
         <div className="marketing-tiktok-buttons">
-          {canCreate && data?.status === 'ready' && <button className="primary-button" type="button" onClick={() => setShowCreate(value => !value)}><PlusCircle size={17}/>مسودة حملة جديدة</button>}
+          {canCreate && data?.status === 'ready' && <button className="primary-button" type="button" onClick={() => setShowCreate(value => !value)}><PlusCircle size={17}/>إنشاء حملة كاملة</button>}
           {canManage && <button className="secondary-button" type="button" onClick={() => setShowConnect(value => !value)}>{data?.status === 'ready' ? 'تجديد ربط MCP' : 'ربط TikTok Ads'}</button>}
           <button className="secondary-button" type="button" onClick={() => void load(true)} disabled={loading}><ArrowClockwise size={17} className={loading ? 'marketing-spin' : ''}/>{loading ? 'جارٍ التحديث' : 'تحديث الآن'}</button>
         </div>
@@ -199,16 +272,62 @@ export function TikTokAdsPanel() {
     {message && <section className="marketing-tiktok-notice success" role="status"><CheckCircle size={19}/><span>{message}</span></section>}
 
     {showCreate && canCreate && data?.status === 'ready' && <section className="panel marketing-tiktok-create">
-      <h4>إنشاء مسودة حملة متوقفة</h4>
-      <p>أنشئ الحملة الأساسية فقط بدون مجموعات إعلانية أو إعلانات. لن يبدأ الصرف إلا بعد إكمال إعداداتها وتشغيلها صراحة.</p>
-      <div className="marketing-tiktok-create-fields">
-        <label>اسم الحملة<input value={draft.name} maxLength={120} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} placeholder="مثال: MZJ | Sonata | October 2026"/></label>
-        <label>الهدف<select value={draft.objective} onChange={event => setDraft(current => ({ ...current, objective: event.target.value }))}><option value="LEAD_GENERATION">عملاء محتملون (Leads)</option><option value="TRAFFIC">زيارات</option><option value="REACH">وصول</option><option value="VIDEO_VIEWS">مشاهدات فيديو</option></select></label>
-        <label>نوع الميزانية<select value={draft.budgetMode} onChange={event => setDraft(current => ({ ...current, budgetMode: event.target.value }))}><option value="BUDGET_MODE_DAY">يومية</option><option value="BUDGET_MODE_TOTAL">إجمالية</option></select></label>
-        <label>الميزانية بعملة الحساب<input type="number" min="50" step="1" value={draft.budget} onChange={event => setDraft(current => ({ ...current, budget: event.target.value }))}/></label>
+      <header className="marketing-tiktok-build-header"><div><h4>إنشاء حملة TikTok للتمويل</h4><p>ثلاث خطوات: الحملة ← المجموعة الإعلانية ← الإعلان. كل العناصر تُنشأ متوقفة ولا يبدأ الصرف إلا بعد اعتماد التشغيل.</p></div><button type="button" className="secondary-button" onClick={() => setShowCreate(false)}>إغلاق</button></header>
+      <div className="marketing-tiktok-build-steps" aria-label="مراحل إعداد الحملة">
+        {(['campaign','adgroup','ad'] as const).map((stage,index) => <span key={stage} className={buildStage === stage ? 'active' : ''}>{index+1}. {['الحملة','الجمهور والميزانية','الإعلان والفيديو'][index]}</span>)}
       </div>
-      <div className="marketing-tiktok-buttons"><button type="button" className="primary-button" disabled={busy === 'create' || !draft.name.trim() || !accountId} onClick={() => void createDraft()}>{busy === 'create' ? 'جارٍ إنشاء المسودة…' : 'إنشاء الحملة المتوقفة'}</button><button type="button" className="secondary-button" onClick={() => setShowCreate(false)}>إلغاء</button></div>
-      {!accountId && <small>اختار حساب TikTok واحدًا من فلتر «الحساب الإعلاني» بالأسفل قبل الإنشاء.</small>}
+      <label>الحساب الإعلاني<select value={accountId} onChange={event => setAccountId(event.target.value)}><option value="">اختر الحساب</option>{data.accounts.map(account => <option key={account.id} value={account.id}>{account.name} — {account.id}</option>)}</select></label>
+      {!builderAccount && <p className="marketing-tiktok-warning">اختر الحساب الإعلاني لإعداد الحملة.</p>}
+      {builderLoading && <p className="marketing-tiktok-build-note">جارٍ فحص أدوات TikTok MCP والحساب الإعلاني…</p>}
+      {builder && <p className="marketing-tiktok-build-note">الأدوات: Campaign {builder.available.campaign_create ? '✓':'غير متاح'} · Ad Group {builder.available.adgroup_create ? '✓':'غير متاح'} · Ad {builder.available.ad_create ? '✓':'غير متاح'}. لن يُرسل طلب إنشاء إذا لم يتأكد النظام من دعم الأداة.</p>}
+      {buildStage === 'campaign' && <>
+        <h4>1 — الحملة الأساسية</h4>
+        <div className="marketing-tiktok-create-fields">
+          <label>اسم الحملة<input value={draft.name} maxLength={120} onChange={event => setDraft(current => ({...current,name:event.target.value}))} placeholder="مثال: MZJ | تمويل سوناتا 2026"/></label>
+          <label>الهدف<select value={draft.objective} onChange={event => setDraft(current => ({...current,objective:event.target.value}))}><option value="LEAD_GENERATION">جمع ليدات التمويل (Instant Form)</option></select></label>
+          <label>نوع ميزانية الحملة<select value={draft.budgetMode} onChange={event => setDraft(current => ({...current,budgetMode:event.target.value}))}><option value="BUDGET_MODE_DAY">يومية</option><option value="BUDGET_MODE_TOTAL">إجمالية</option></select></label>
+          <label>الميزانية بعملة الحساب<input type="number" min="50" value={draft.budget} onChange={event => setDraft(current => ({...current,budget:event.target.value}))}/></label>
+        </div>
+        <div className="marketing-tiktok-buttons"><button className="primary-button" type="button" disabled={!!busy || !builderAccount || !builder?.available.campaign_create || !draft.name.trim()} onClick={() => void createDraft()}>{busy === 'create' ? 'جارٍ إنشاء الحملة…' : 'إنشاء الحملة المتوقفة والمتابعة'}</button></div>
+        <p>لو عندك حملة Lead Generation متوقفة بالفعل، اختارها لإكمال إعدادها بدل إنشاء حملة مكررة:</p>
+        <label>حملة متوقفة موجودة<select value={campaignId} onChange={event => {setCampaignId(event.target.value);setAdgroupId('');}}><option value="">اختيار حملة موجودة</option>{rows.filter(row => row.account.id === builderAccount && row.campaign.status === 'DISABLE' && row.campaign.objective === 'LEAD_GENERATION' && row.campaign.type !== 'UPGRADED_SMART_PLUS').map(row => <option key={row.campaign.id} value={row.campaign.id}>{row.campaign.name} — {row.campaign.id}</option>)}</select></label>
+        {campaignId && <button type="button" className="secondary-button" onClick={() => setBuildStage('adgroup')}>متابعة الحملة المختارة</button>}
+      </>}
+      {buildStage === 'adgroup' && <>
+        <h4>2 — المجموعة الإعلانية والجمهور</h4>
+        <p>الحملة: <bdi dir="ltr">{campaignId}</bdi> · يتم استهداف TikTok فقط وجمع البيانات من Instant Form.</p>
+        <div className="marketing-tiktok-create-fields">
+          <label>اسم المجموعة<input value={groupDraft.name} maxLength={120} onChange={event => setGroupDraft(current => ({...current,name:event.target.value}))}/></label>
+          <label>معرّفات المواقع المستهدفة في TikTok<input dir="ltr" value={groupDraft.locationIds} onChange={event => setGroupDraft(current => ({...current,locationIds:event.target.value}))} placeholder="Location IDs — مفصولة بفاصلة"/></label>
+          <label>الجنس<select value={groupDraft.gender} onChange={event => setGroupDraft(current => ({...current,gender:event.target.value}))}><option value="GENDER_UNLIMITED">الكل</option><option value="GENDER_MALE">رجال</option><option value="GENDER_FEMALE">نساء</option></select></label>
+          <label>نوع ميزانية المجموعة<select value={groupDraft.budgetMode} onChange={event => setGroupDraft(current => ({...current,budgetMode:event.target.value}))}><option value="BUDGET_MODE_DAY">يومية</option><option value="BUDGET_MODE_TOTAL">إجمالية</option></select></label>
+          <label>ميزانية المجموعة بعملة الحساب<input type="number" min="50" value={groupDraft.budget} onChange={event => setGroupDraft(current => ({...current,budget:event.target.value}))}/></label>
+          <label>تاريخ ووقت البداية<input type="datetime-local" value={groupDraft.startTime} onChange={event => setGroupDraft(current => ({...current,startTime:event.target.value}))}/></label>
+          <label>تاريخ ووقت النهاية<input type="datetime-local" value={groupDraft.endTime} onChange={event => setGroupDraft(current => ({...current,endTime:event.target.value}))}/></label>
+        </div>
+        <div className="marketing-tiktok-build-ages"><strong>الفئات العمرية</strong><div>{AGE_CHOICES.map(age => <label key={age.value}><input type="checkbox" checked={groupDraft.ageGroups.includes(age.value)} onChange={event => setGroupDraft(current => ({...current,ageGroups:event.target.checked ? [...current.ageGroups,age.value] : current.ageGroups.filter(item => item !== age.value)}))}/>{age.label}</label>)}</div></div>
+        <small>التاريخ والوقت بتوقيت الحساب الإعلاني في TikTok، وليس تحويلًا تلقائيًا من توقيت المتصفح. معرّفات المواقع يجب أن تكون من TikTok Targeting.</small>
+        <div className="marketing-tiktok-buttons"><button type="button" className="primary-button" disabled={!!busy || !builder?.available.adgroup_create || !campaignId || !groupDraft.locationIds.trim() || !groupDraft.ageGroups.length || !groupDraft.name.trim()} onClick={() => void createAdgroup()}>{busy === 'adgroup' ? 'جارٍ إنشاء المجموعة…' : 'إنشاء المجموعة المتوقفة'}</button><button type="button" className="secondary-button" onClick={() => setBuildStage('campaign')}>السابق</button></div>
+        {!!builder?.adgroups.length && <label>أو أكمل مجموعة موجودة تحت نفس الحملة<select value={adgroupId} onChange={event => setAdgroupId(event.target.value)}><option value="">اختر المجموعة</option>{builder.adgroups.filter(group => group.status === 'DISABLE').map(group => <option key={group.id} value={group.id}>{group.name} — {group.id}</option>)}</select></label>}
+        {adgroupId && <button type="button" className="secondary-button" onClick={() => setBuildStage('ad')}>متابعة إلى الإعلان</button>}
+      </>}
+      {buildStage === 'ad' && <>
+        <h4>3 — الإعلان والكرييتيف ونموذج الليدات</h4>
+        <p>المجموعة: <bdi dir="ltr">{adgroupId}</bdi> · الفيديو لازم يكون مرفوعًا إلى مكتبة TikTok Ads، ونموذج الليدات موجودًا على الحساب.</p>
+        <div className="marketing-tiktok-create-fields">
+          <label>اسم الإعلان<input value={adDraft.name} maxLength={120} onChange={event => setAdDraft(current => ({...current,name:event.target.value}))}/></label>
+          <label>فيديو TikTok Ads<select value={adDraft.videoId} onChange={event => setAdDraft(current => ({...current,videoId:event.target.value}))}><option value="">اختر فيديو من المكتبة</option>{builder?.videos.map(video => <option key={video.id} value={video.id}>{video.name} — {video.id}</option>)}</select><input dir="ltr" placeholder="أو اكتب Video ID" value={adDraft.videoId} onChange={event => setAdDraft(current => ({...current,videoId:event.target.value}))}/></label>
+          <label>هوية الحساب<select value={adDraft.identityId} onChange={event => {const found=builder?.identities.find(item => item.id === event.target.value);setAdDraft(current => ({...current,identityId:event.target.value,identityType:found?.type || current.identityType,identityAuthorizedBcId:found?.bcId || ''}));}}><option value="">اختر الهوية</option>{builder?.identities.map(identity => <option key={identity.id} value={identity.id}>{identity.name} — {identity.type}</option>)}</select><input dir="ltr" placeholder="أو اكتب Identity ID" value={adDraft.identityId} onChange={event => setAdDraft(current => ({...current,identityId:event.target.value}))}/></label>
+          <label>نوع الهوية<input dir="ltr" value={adDraft.identityType} onChange={event => setAdDraft(current => ({...current,identityType:event.target.value}))} placeholder="CUSTOMIZED_USER / BC_AUTH_TT"/></label>
+          <label>نموذج الليدات<select value={adDraft.pageId} onChange={event => setAdDraft(current => ({...current,pageId:event.target.value}))}><option value="">اختر Instant Form</option>{builder?.forms.map(form => <option key={form.id} value={form.id}>{form.name} — {form.id}</option>)}</select><input dir="ltr" placeholder="أو اكتب Page ID" value={adDraft.pageId} onChange={event => setAdDraft(current => ({...current,pageId:event.target.value}))}/></label>
+          <label>زر الدعوة للإجراء<select value={adDraft.callToAction} onChange={event => setAdDraft(current => ({...current,callToAction:event.target.value}))}><option value="LEARN_MORE">اعرف المزيد</option><option value="SIGN_UP">سجل الآن</option><option value="CONTACT_US">تواصل معنا</option><option value="APPLY_NOW">قدّم الآن</option><option value="GET_QUOTE">اطلب عرض سعر</option></select></label>
+          <label>صورة الغلاف (Image ID عند الحاجة)<input dir="ltr" value={adDraft.imageId} onChange={event => setAdDraft(current => ({...current,imageId:event.target.value}))} placeholder="اختياري حسب متطلبات TikTok"/></label>
+          <label>معرّف Business Center للهوية (عند الحاجة)<input dir="ltr" value={adDraft.identityAuthorizedBcId} onChange={event => setAdDraft(current => ({...current,identityAuthorizedBcId:event.target.value}))}/></label>
+        </div>
+        <label className="marketing-tiktok-build-text">نص الإعلان<textarea rows={3} value={adDraft.text} maxLength={2000} onChange={event => setAdDraft(current => ({...current,text:event.target.value}))} placeholder="مثال: اكتشف خيارات تمويل سوناتا 2026. سجّل بياناتك لمعرفة التفاصيل."/></label>
+        <div className="marketing-tiktok-buttons"><button type="button" className="primary-button" disabled={!!busy || !builder?.available.ad_create || !adgroupId || !adDraft.name.trim() || !adDraft.videoId || !adDraft.identityId || !adDraft.identityType || !adDraft.pageId || !adDraft.text.trim()} onClick={() => void createAd()}>{busy === 'ad' ? 'جارٍ إنشاء الإعلان…' : 'إنشاء الإعلان متوقفًا للمراجعة'}</button><button type="button" className="secondary-button" onClick={() => setBuildStage('adgroup')}>السابق</button></div>
+        <small>إنشاء الإعلان لا يرفع ملفات MZJ إلى مكتبة TikTok تلقائيًا ولا ينشئ نموذج ليدات جديدًا. لو مفيش فيديو أو نموذج جاهز، لن يُنشأ إعلان ناقص.</small>
+      </>}
     </section>}
 
     {showConnect && canManage && <section className="panel marketing-tiktok-connect">

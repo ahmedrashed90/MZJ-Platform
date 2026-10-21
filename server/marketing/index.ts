@@ -45,7 +45,7 @@ import { metaAdsData, saveMetaAdsCampaignManager } from "../_marketing-meta-ads.
 import { googleAdsData, createPausedGoogleAdsSearchCampaign, changeGoogleAdsCampaignStatus } from "../_marketing-google-ads.js";
 import { marketingSocialAccountsOverview } from "../_marketing-social-accounts.js";
 import { bulkPublishConfigured, scheduleBulkPublishTikTok } from "../_marketing-bulkpublish.js";
-import { tiktokAdsData, linkTikTokAdsToken, disconnectTikTokAds, changeTikTokAdsCampaignStatus, createPausedTikTokAdsCampaign } from "../_marketing-tiktok-ads.js";
+import { tiktokAdsData, linkTikTokAdsToken, disconnectTikTokAds, changeTikTokAdsCampaignStatus, createPausedTikTokAdsCampaign, tiktokAdsBuilderOptions, createPausedTikTokAdsAdGroup, createPausedTikTokAdsAd } from "../_marketing-tiktok-ads.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -4469,7 +4469,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   // Server timing is emitted only for slow, safe GET reads. No user IDs,
   // tokens, payloads or query parameters are logged.
   const monitoredResource = String(request.query.resource || "");
-  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads", "tiktok_ads"].includes(monitoredResource)) {
+  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads", "tiktok_ads", "tiktok_ads_builder"].includes(monitoredResource)) {
     const started = Date.now();
     response.once("finish", () => {
       const elapsed = Date.now() - started;
@@ -4540,6 +4540,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='social_accounts_overview'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض الحسابات'});return response.status(200).json(await marketingSocialAccountsOverview(sql));}
       if(resource==='tiktok_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات TikTok'});return response.status(200).json(await tiktokAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo,request.query.refresh));}
+      if(resource==='tiktok_ads_builder'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء إعلانات TikTok'});return response.status(200).json(await tiktokAdsBuilderOptions(sql,{accountId:request.query.accountId,campaignId:request.query.campaignId}));}
       if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql,request.query.view);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
@@ -4575,6 +4576,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='tiktok_ads_create_campaign'){
       if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء حملات TikTok Ads'});
       result=await createPausedTikTokAdsCampaign(sql,body);
+    }
+    else if(action==='tiktok_ads_create_adgroup'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء مجموعات TikTok Ads'});
+      result=await createPausedTikTokAdsAdGroup(sql,body);
+    }
+    else if(action==='tiktok_ads_create_ad'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء إعلانات TikTok Ads'});
+      result=await createPausedTikTokAdsAd(sql,body);
     }
     else if(action==='google_ads_create_search'){
       if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء حملات Google Ads'});
