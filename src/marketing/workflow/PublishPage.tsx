@@ -10,7 +10,7 @@ import type { WorkCapabilities, WorkPlanLine, WorkProduct, WorkFormat } from '..
 import { normalizeYouTubePublishOptions, YOUTUBE_CATEGORY_FALLBACKS, type YouTubePublishOptions, type YouTubePublishSettings, type YouTubeOptionItem } from '../../../shared/youtube-publishing';
 const ManualPublishPage = lazy(() => import('../pages/ManualPublishPage').then(module => ({ default: module.ManualPublishPage })));
 
-type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions } };
+type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string; postId?: number; scheduledAt?: string; url?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions; publishTime?: string } };
 type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities };
 type ProductDraft = { product_id: string; format_ids: string[]; caption: string; hashtags: string; updated_at: string };
 type PublishingData = { products: WorkProduct[]; lines: WorkPlanLine[]; drafts: ProductDraft[]; capabilities: WorkCapabilities };
@@ -141,12 +141,18 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     ? [...data.product.formats, data.plannedFormat] : data.product.formats;
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
+  const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
+  const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
+  const [rescheduleTime, setRescheduleTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const originalYouTube = normalizeYouTubePublishOptions(data.targets.find(target => target.platform_code === 'youtube')?.publish_options?.youtube || {}, data.youtubeDefaults, { title: data.line.caption, description: [data.line.caption, data.line.hashtags].filter(Boolean).join('\n\n') });
   const [youtube, setYouTube] = useState(originalYouTube);
   const [categories, setCategories] = useState<YouTubeOptionItem[]>(YOUTUBE_CATEGORY_FALLBACKS), [playlists, setPlaylists] = useState<YouTubeOptionItem[]>([]);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const isYouTube = availableFormats.some(format => format.platform_code === 'youtube' && formatIds.includes(format.id));
-  const locked = data.targets.some(target => ['published', 'processing', 'verification_required'].includes(target.status));
+  const isTikTok = availableFormats.some(format => format.platform_code === 'tiktok' && formatIds.includes(format.id));
+  const tiktokTargets = data.targets.filter(target => target.platform_code === 'tiktok' && target.status !== 'cancelled');
+  const hasTikTokWaiting = tiktokTargets.some(target => target.status === 'waiting');
+  const locked = data.targets.some(target => ['published', 'scheduled', 'processing', 'verification_required'].includes(target.status));
   useEffect(() => {
     if (!isYouTube) return;
     let active = true;
@@ -156,8 +162,47 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return;
     setBusy(true); setError(''); setMessage('');
-    try { await workPost('save_prep', { lineId: data.line.id, version: data.line.version, formatIds, caption, hashtags, youtubeOptions: youtube }); await refresh(); setMessage(W.saved); }
+    try { await workPost('save_prep', { lineId: data.line.id, version: data.line.version, formatIds, caption, hashtags, youtubeOptions: youtube, publishTime }); await refresh(); setMessage(W.saved); }
     catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function activateTikTok() {
+    if (busy || !isTikTok || !data.capabilities.publish) return;
+    if (caption !== data.line.caption || hashtags !== data.line.hashtags ||
+      tiktokTargets.some(target => (target.publish_options?.publishTime || '20:00') !== publishTime)) {
+      setError('احفظ الكابشن والهاشتاج ووقت النشر أولًا قبل الضغط على نشر.'); return;
+    }
+    if (!window.confirm(`جدولة فيديو TikTok على التاريخ ${showDate(data.line.scheduled_on)} الساعة ${publishTime} بتوقيت السعودية؟\nلن يتم نشره الآن. سيتم تفعيل جدول النشر بالكامل حسب تواريخه.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await workPost<{ message?: string; errors?: string[] }>('activate_plan', { planId: data.line.plan_id });
+      setMessage(result.message || 'تم إرسال الجدولة');
+      if (result.errors?.length) setError(result.errors.join('؛ '));
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function checkTikTok(target: PublishTarget) {
+    if (busy) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await workPost<{ message?: string; status: string }>('tiktok_status', { scheduleId: target.schedule_id });
+      setMessage(result.message || (result.status === 'published' ? 'تم النشر' : 'لم يحن موعد النشر بعد'));
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function updateTikTokSchedule(target: PublishTarget) {
+    if (busy || !data.capabilities.publish || !data.capabilities.prepare) return;
+    if (!window.confirm(`تغيير موعد المنشور المجدول نفسه إلى ${rescheduleDate} الساعة ${rescheduleTime} بتوقيت السعودية؟\nلن يتم إنشاء منشور TikTok جديد.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await workPost<{ message?: string }>('tiktok_reschedule', {
+        scheduleId: target.schedule_id, date: rescheduleDate, time: rescheduleTime,
+      });
+      setMessage(result.message || 'تم تعديل موعد الجدولة');
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
   async function resetAfterCheck(target: PublishTarget) {
@@ -174,10 +219,12 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
     </details>
+    {isTikTok && <div className="mkw-tiktok-schedule-editor"><div><strong>جدولة TikTok</strong><p>اختر وقت النشر مع تاريخ الجدول. الضغط على نشر يرسل الفيديو إلى BulkPublish لينشر تلقائيًا في موعده، وليس فورًا.</p></div><Field label="وقت نشر TikTok (السعودية)"><input type="time" required value={publishTime} disabled={busy || !data.capabilities.prepare || locked} onChange={event => setPublishTime(event.target.value)} /></Field></div>}
     {isYouTube && <fieldset disabled={busy || !data.capabilities.prepare || locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><YouTubeOptionsFields value={youtube} onChange={setYouTube} categories={categories} playlists={playlists} loading={false} /></fieldset>}
     {data.capabilities.prepare && !locked && <footer className="mkw-form-footer"><button type="submit" className="primary" disabled={busy}>{busy ? W.loading : W.save}</button></footer>}
+    {isTikTok && data.capabilities.publish && hasTikTokWaiting && <div className="mkw-tiktok-publish-actions"><button type="button" className="primary" disabled={busy || !data.capabilities.prepare} onClick={() => void activateTikTok()}><PaperPlaneTilt size={17}/> نشر في التاريخ والوقت المحددين</button><small>يلزم تجهيز جميع بنود جدول النشر قبل التفعيل.</small></div>}
     {data.line.kind === 'campaign' && <div className="mkw-muted">{W.fundingPlan}</div>}
-    {data.line.platform_code && !['facebook', 'instagram', 'youtube'].includes(data.line.platform_code) && <WorkAlert>يمكن حفظ التجهيز لهذه المنصة، لكن النشر التلقائي غير متاح لها عبر الربط الحالي. لا يُعتبر تجهيز المحتوى نشرًا فعليًا.</WorkAlert>}
-    <div className="mkw-upload-section">{data.targets.filter(target => target.status !== 'cancelled').map(target => <article className="mkw-upload-format" key={target.id}><div className="mkw-section-title"><strong>{target.platform_name} - {target.post_type_name}</strong><Status value={target.status} /></div>{target.publish_result?.error && <WorkAlert>{target.publish_result.error}</WorkAlert>}{data.capabilities.publish && data.capabilities.prepare && (target.status === 'verification_required' || (target.status === 'processing' && !!target.updated_at && Date.now() - new Date(target.updated_at).getTime() > 900000)) && <button type="button" className="secondary" disabled={busy} onClick={() => void resetAfterCheck(target)}>{W.resetAfterCheck}</button>}</article>)}</div>
+    {data.line.platform_code && !['facebook', 'instagram', 'youtube', 'tiktok'].includes(data.line.platform_code) && <WorkAlert>يمكن حفظ التجهيز لهذه المنصة، لكن النشر التلقائي غير متاح لها عبر الربط الحالي. لا يُعتبر تجهيز المحتوى نشرًا فعليًا.</WorkAlert>}
+    <div className="mkw-upload-section">{data.targets.filter(target => target.status !== 'cancelled').map(target => <article className="mkw-upload-format" key={target.id}><div className="mkw-section-title"><strong>{target.platform_name} - {target.post_type_name}</strong><Status value={target.status} /></div>{target.publish_result?.error && <WorkAlert>{target.publish_result.error}</WorkAlert>}{target.platform_code === 'tiktok' && target.status === 'scheduled' && <div className="mkw-tiktok-scheduled-state"><p>المنشور مجدول عبر BulkPublish{target.publish_result.scheduledAt ? ` · ${new Date(target.publish_result.scheduledAt).toLocaleString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh', hour12: true })}` : ''}. لم يتم تأكيد نشره بعد.</p><button type="button" className="secondary" disabled={busy} onClick={() => void checkTikTok(target)}>التحقق من حالة النشر</button>{data.capabilities.publish && data.capabilities.prepare && <div className="mkw-tiktok-reschedule"><Field label="تاريخ النشر الجديد"><input type="date" value={rescheduleDate} disabled={busy || data.targets.filter(item => item.status !== 'cancelled').length > 1} onChange={event => setRescheduleDate(event.target.value)} /></Field><Field label="وقت النشر الجديد (السعودية)"><input type="time" value={rescheduleTime} disabled={busy} onChange={event => setRescheduleTime(event.target.value)} /></Field><button type="button" className="secondary" disabled={busy || (rescheduleDate === String(data.line.scheduled_on).slice(0,10) && rescheduleTime === (target.publish_options?.publishTime || '20:00'))} onClick={() => void updateTikTokSchedule(target)}>تحديث الموعد دون تكرار</button></div>}</div>}{target.platform_code === 'tiktok' && target.status === 'published' && !!target.publish_result?.url && <a href={target.publish_result.url} target="_blank" rel="noreferrer">فتح فيديو TikTok المنشور</a>}{data.capabilities.publish && data.capabilities.prepare && (target.status === 'verification_required' || (target.status === 'processing' && !!target.updated_at && Date.now() - new Date(target.updated_at).getTime() > 900000)) && <button type="button" className="secondary" disabled={busy} onClick={() => void resetAfterCheck(target)}>{W.resetAfterCheck}</button>}</article>)}</div>
   </form>;
 }

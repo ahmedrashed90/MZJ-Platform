@@ -3,6 +3,7 @@ import { FacebookLogo, GoogleLogo, TiktokLogo } from '@phosphor-icons/react';
 import { MetaAdsPanel } from './MetaAdsPanel';
 import { GoogleAdsPanel } from './GoogleAdsPanel';
 import { TikTokAdsPanel } from './TikTokAdsPanel';
+import { OrganicCampaignResults } from './OrganicCampaignResults';
 
 type ProviderFilter = 'all' | 'meta' | 'google' | 'tiktok';
 
@@ -36,6 +37,7 @@ export function PaidAdsPanel() {
         <button type="button" className={selected === 'tiktok' ? 'active' : ''} aria-pressed={selected === 'tiktok'} onClick={() => setSelected('tiktok')}><TiktokLogo size={17} weight="fill"/>TikTok Ads</button>
       </div>
     </section>
+    {selected === 'all' && <OrganicCampaignResults />}
     {(selected === 'all' || selected === 'meta') && <section aria-label="حملات Meta الممولة"><MetaAdsPanel /></section>}
     {(selected === 'google' || (selected === 'all' && googleReady)) && <section aria-label="حملات Google Ads الممولة"><GoogleAdsPanel /></section>}
     {(selected === 'tiktok' || (selected === 'all' && tiktokReady)) && <section aria-label="حملات TikTok Ads الممولة"><TikTokAdsPanel /></section>}

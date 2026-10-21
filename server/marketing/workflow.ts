@@ -1,3 +1,4 @@
+import { bulkPublishConfigured, riyadhPublishIso, bulkPublishTikTokStatus, rescheduleBulkPublishTikTok } from '../_marketing-bulkpublish.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
 import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
@@ -693,6 +694,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     i.idea_name,i.media_kind,t.task_no,t.name as task_name,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
+    (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='scheduled') as scheduled_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status in('failed','verification_required')) as failed_count
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
@@ -706,7 +708,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
       )) and (
       ${productManager(user)} or ${isManager(user)} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     order by l.scheduled_on,p.created_at desc,l.id`;
-  return rows.map(row => ({ ...row, status: row.prepared_count && row.published_count === row.prepared_count ? 'published' : row.failed_count ? 'failed' : row.prepared_count ? 'prepared' : 'waiting' }));
+  return rows.map(row => ({ ...row, status: row.prepared_count && row.published_count === row.prepared_count ? 'published' : row.failed_count ? 'failed' : row.scheduled_count ? 'scheduled' : row.prepared_count ? 'prepared' : 'waiting' }));
 }
 
 /** Native campaigns share their ID with the existing marketing.campaigns adapter.
@@ -865,6 +867,8 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   if (visible.post_type_id && (selected.length !== 1 || selected[0] !== visible.post_type_id)) throw new Error('نوع النشر يجب أن يطابق جدول النشر المحفوظ');
   const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
   if (!caption || !hashtags) throw new Error(W.requiredFields);
+  const publishTime = text(body.publishTime || '20:00', 5);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(publishTime)) throw new Error('وقت النشر يجب أن يكون بصيغة ساعة ودقيقة بتوقيت السعودية');
   const defaults = await services.youtubeDefaults(sql);
   const youtube = normalizeYouTubePublishOptions(body.youtubeOptions, defaults, { title: caption, description: [caption, hashtags].join('\n\n') });
   return sql.begin(async tx => {
@@ -880,8 +884,8 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     const existing = await tx<any[]>`select target.*,s.status,s.caption,s.hashtags,s.publish_options from marketing.work_publish_targets target
       join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=${lineId}::uuid for update of s`;
     for (const target of existing) {
-      if (['published', 'processing', 'verification_required'].includes(target.status)) {
-        if (!selected.includes(target.post_type_id) || target.caption !== caption || target.hashtags !== hashtags) throw new Error(W.unpublishedOnly);
+      if (['published', 'scheduled', 'processing', 'verification_required'].includes(target.status)) {
+        if (!selected.includes(target.post_type_id) || target.caption !== caption || target.hashtags !== hashtags || (target.status === 'scheduled' && text(target.publish_options?.publishTime || '20:00') !== publishTime)) throw new Error('المنشور مجدول فعليًا في BulkPublish؛ لا يمكن تعديل محتواه أو موعده من تجهيز النشر بعد إرساله للجدولة.');
       }
     }
     let adapter: any;
@@ -911,9 +915,9 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
         where pt.id=${formatId}::uuid and pt.platform_id=${format.platform_id}::uuid and pt.is_active=true and p.is_active=true`;
       if (!currentFormat) throw new Error(W.selectFormats);
       const old = existing.find(t => t.post_type_id === formatId);
-      if (old && ['published', 'processing', 'verification_required'].includes(old.status)) continue;
+      if (old && ['published', 'scheduled', 'processing', 'verification_required'].includes(old.status)) continue;
       const options = { workflowProductId: line.product_id, workflowLineId: lineId, workflowKind: line.kind,
-        format: normalizeMarketingPublishFormat(format.name), youtube };
+        format: normalizeMarketingPublishFormat(format.name), youtube, publishTime };
       let scheduleId: string;
       if (old) {
         scheduleId = old.schedule_id;
@@ -933,7 +937,7 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     }
     for (const old of existing.filter(t => !selected.includes(t.post_type_id))) {
       await tx`update marketing.publish_schedule set status='cancelled',updated_at=now() where id=${old.schedule_id}::uuid
-        and status not in('published','processing','verification_required')`;
+        and status not in('published','scheduled','processing','verification_required')`;
     }
     await tx`update marketing.work_plan_items set caption=${caption},hashtags=${hashtags},version=version+1,updated_at=now() where id=${lineId}::uuid`;
     return { ok: true, message: W.saved };
@@ -982,7 +986,7 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
         join marketing.platform_post_types pt on pt.id=s.post_type_id
         where s.id=${scheduleId}::uuid for update of s`;
       if (!schedule || schedule.status === 'cancelled') throw new Error(W.notFound);
-      if (schedule.status === 'published') return { alreadyPublished: true, schedule };
+      if (schedule.status === 'published' || schedule.status === 'scheduled') return { alreadyPublished: schedule.status === 'published', alreadyScheduled: schedule.status === 'scheduled', schedule };
       if (['processing', 'verification_required'].includes(schedule.status)) throw new Error(W.unpublishedOnly);
       if (!['waiting','failed'].includes(schedule.status)) throw new Error(W.immutable);
       const [activePlan] = await tx<any[]>`select 1 from marketing.work_publish_targets target
@@ -993,15 +997,16 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
         where target.schedule_id=${scheduleId}::uuid and plan.activated_at is not null
           and plan.is_deleted=false and line.is_deleted=false and task.is_deleted=false`;
       if (!activePlan) throw new Error('النشر غير مفعل أو تم إلغاء جدول النشر');
-      if (!['facebook', 'instagram', 'youtube'].includes(schedule.platform_code)) throw new Error(W.invalid);
+      if (!['facebook', 'instagram', 'youtube', 'tiktok'].includes(schedule.platform_code)) throw new Error(W.invalid);
       if (!text(schedule.caption) || !text(schedule.hashtags)) throw new Error(W.requiredFields);
-      if (workDate(schedule.publish_date) > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Riyadh' })) throw new Error('موعد النشر لم يحن بعد');
+      if (schedule.platform_code === 'tiktok') riyadhPublishIso(workDate(schedule.publish_date), text(schedule.publish_options?.publishTime || '20:00'));
+      else if (workDate(schedule.publish_date) > new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Riyadh' })) throw new Error('موعد النشر لم يحن بعد');
       await services.validatePublishItem(tx as any, schedule);
       await tx`update marketing.publish_schedule set status='processing',updated_at=now()
         where id=${scheduleId}::uuid and status in('waiting','failed')`;
       return { alreadyPublished: false, schedule };
     });
-    if (claimed.alreadyPublished) return { ok: true, alreadyPublished: true, result: claimed.schedule.publish_result };
+    if (claimed.alreadyPublished || claimed.alreadyScheduled) return { ok: true, alreadyPublished: claimed.alreadyPublished, alreadyScheduled: claimed.alreadyScheduled, result: claimed.schedule.publish_result };
     try {
       const result = await services.publishItem(sql, claimed.schedule, user);
       return { ok: true, result, message: W.published };
@@ -1039,11 +1044,98 @@ async function resetPublicationAfterCheck(sql: Sql, user: SessionUser, body: Row
 }
 
 
-async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row) {
+/** Read provider status only when a user explicitly requests verification. */
+async function checkScheduledTikTok(sql: Sql, user: SessionUser, body: Row) {
+  requirePermission(user, 'marketing.publish_prep.view');
+  const scheduleId = id(body.scheduleId);
+  const [target] = await sql<any[]>`select target.line_id,s.status,s.publish_result,p.code as platform_code
+    from marketing.work_publish_targets target
+    join marketing.publish_schedule s on s.id=target.schedule_id
+    join marketing.platforms p on p.id=s.platform_id
+    where target.schedule_id=${scheduleId}::uuid`;
+  if (!target || target.platform_code !== 'tiktok' || !(await planLines(sql, user)).some(line => line.id === target.line_id)) throw new Error(W.notFound);
+  if (target.status === 'published') return { ok: true, status: 'published', result: target.publish_result };
+  if (target.status !== 'scheduled' || target.publish_result?.provider !== 'bulkpublish') throw new Error('لا يوجد منشور TikTok مجدول للتحقق منه');
+  const postId = Number(target.publish_result.postId);
+  const latest = await bulkPublishTikTokStatus(postId);
+  if (latest.status === 'published') {
+    const [changed] = await sql<any[]>`update marketing.publish_schedule
+      set status='published', published_at=coalesce(${latest.publishedAt || null}::timestamptz,now()), publish_result=coalesce(publish_result,'{}'::jsonb) || ${sql.json({ providerStatus:'published', verifiedAt:new Date().toISOString(), url:latest.url })}::jsonb, updated_at=now()
+      where id=${scheduleId}::uuid and status='scheduled' and publish_result->>'postId'=${String(postId)} returning id`;
+    if (changed) await sql`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by)
+      values(${scheduleId}::uuid,'tiktok','published',${sql.json({ postId, url:latest.url })},${user.id}::uuid)`;
+    return { ok: true, status: 'published', result: latest, message: 'أكد BulkPublish نشر المنشور على TikTok' };
+  }
+  if (['failed','error','rejected'].includes(latest.status) || ['failed','error','rejected'].includes(latest.providerStatus)) {
+    await sql`update marketing.publish_schedule set status='verification_required',
+      publish_result=coalesce(publish_result,'{}'::jsonb) || ${sql.json({ providerStatus:latest.status, error:'أبلغ BulkPublish بفشل النشر، يلزم التأكد قبل إعادة المحاولة' })}::jsonb,
+      updated_at=now() where id=${scheduleId}::uuid and status='scheduled'`;
+    return { ok: true, status:'verification_required', result:latest, message:'أبلغ BulkPublish بفشل النشر. تحقق من الحالة قبل إعادة المحاولة.' };
+  }
+  return { ok: true, status:'scheduled', result:latest, message:latest.status ? `حالة BulkPublish الحالية: ${latest.status}` : 'لم يرجع BulkPublish حالة نهائية؛ يظل المنشور مجدولًا' };
+}
+
+/** Reschedule an already queued TikTok post in place: never create a second post. */
+async function rescheduleWorkflowTikTok(sql: Sql, user: SessionUser, body: Row) {
+  requirePermission(user, 'marketing.publish.now');
+  requirePermission(user, 'marketing.publish_prep.manage');
+  const scheduleId = id(body.scheduleId);
+  const newDate = text(body.date, 10), newTime = text(body.time, 5);
+  const newInstant = riyadhPublishIso(newDate, newTime);
+  return withDatabaseAdvisoryLock(`mzj:marketing:work-publish:${scheduleId}`, async () => {
+    const [target] = await sql<any[]>`select s.id,s.status,s.publish_date::text,s.publish_options,s.publish_result,s.caption,s.hashtags,s.creative_id,
+      target.line_id,l.scheduled_on::text,p.activated_at,platform.code as platform_code,
+      (select count(*)::int from marketing.work_publish_targets sibling join marketing.publish_schedule other on other.id=sibling.schedule_id
+       where sibling.line_id=target.line_id and other.status<>'cancelled') as active_targets
+      from marketing.work_publish_targets target
+      join marketing.work_plan_items l on l.id=target.line_id
+      join marketing.work_plans p on p.id=l.plan_id
+      join marketing.publish_schedule s on s.id=target.schedule_id
+      join marketing.platforms platform on platform.id=s.platform_id
+      where target.schedule_id=${scheduleId}::uuid and p.is_deleted=false and l.is_deleted=false`;
+    if (!target || !(await planLines(sql, user)).some(line => line.id === target.line_id)) throw new Error(W.notFound);
+    if (target.platform_code !== 'tiktok' || target.status !== 'scheduled' || target.publish_result?.provider !== 'bulkpublish') {
+      throw new Error('يمكن تعديل موعد منشور TikTok مجدول فقط، قبل اكتمال النشر');
+    }
+    if (newDate !== target.publish_date && Number(target.active_targets) !== 1) {
+      throw new Error('هذا المنتج له أكثر من منصة نشر؛ لتغيير التاريخ عدّل موعد الجدول المشترك أولًا. يمكنك تغيير وقت TikTok فقط هنا.');
+    }
+    const result = target.publish_result;
+    const mediaIds = Array.isArray(result.mediaIds) ? result.mediaIds.map(Number) : [Number(result.mediaId)];
+    const postId = Number(result.postId);
+    let providerResult: { postId: number; status: 'scheduled'; scheduledAt: string };
+    try {
+      providerResult = await rescheduleBulkPublishTikTok({ postId, channelId: Number(result.channelId), mediaIds,
+        date: newDate, time: newTime, caption: [text(target.caption), text(target.hashtags)].filter(Boolean).join('\n\n') });
+    } catch (error) {
+      // PUT may have succeeded despite a network timeout. Never retry blindly.
+      const message = error instanceof Error ? error.message : W.failed;
+      await sql`update marketing.publish_schedule set status='verification_required',updated_at=now(),
+        publish_result=coalesce(publish_result,'{}'::jsonb) || ${sql.json({ error: `تعديل الموعد يحتاج مراجعة BulkPublish: ${message}`, verificationRequired: true })}::jsonb
+        where id=${scheduleId}::uuid and status='scheduled'`;
+      throw new Error(`تعذر تأكيد تغيير الموعد. راجع المنشور رقم ${postId} في BulkPublish قبل إعادة المحاولة: ${message}`);
+    }
+    await sql.begin(async tx => {
+      await tx`update marketing.publish_schedule set publish_date=${newDate}::date,
+        publish_options=coalesce(publish_options,'{}'::jsonb) || ${tx.json({ publishTime: newTime })}::jsonb,
+        publish_result=coalesce(publish_result,'{}'::jsonb) || ${tx.json({ scheduledAt: providerResult.scheduledAt, status: 'scheduled' })}::jsonb,
+        updated_at=now() where id=${scheduleId}::uuid and status='scheduled'`;
+      if (newDate !== target.publish_date) {
+        await tx`update marketing.work_plan_items set scheduled_on=${newDate}::date,version=version+1,updated_at=now() where id=${target.line_id}::uuid`;
+        await tx`update marketing.creatives set schedule_day=${newDate}::date where id=${target.creative_id}::uuid`;
+      }
+      await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by)
+        values(${scheduleId}::uuid,'tiktok','rescheduled',${tx.json({ postId, scheduledAt: providerResult.scheduledAt })},${user.id}::uuid)`;
+    });
+    return { ok: true, id: scheduleId, status: 'scheduled', scheduledAt: newInstant, message: 'تم تغيير موعد TikTok المجدول دون إنشاء منشور جديد' };
+  });
+}
+
+async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row, services: WorkflowServices) {
   requirePermission(user, 'marketing.publish.now');
   requirePermission(user, 'marketing.publish_prep.view');
   const planId = id(body.planId);
-  return sql.begin(async tx => {
+  const activated = await sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
     const [plan] = await tx<any[]>`select id,created_by,activated_at from marketing.work_plans
@@ -1058,12 +1150,22 @@ async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row) {
       join marketing.publish_schedule s on s.id=target.schedule_id
       join marketing.platforms p on p.id=s.platform_id
       where line.plan_id=${planId}::uuid and line.is_deleted=false
-        and (p.code not in ('facebook','instagram','youtube') or s.status='cancelled') limit 1`;
+        and (p.code not in ('facebook','instagram','youtube','tiktok') or s.status='cancelled') limit 1`;
     if (unsupported) throw new Error('المنصة المحددة لا تدعم النشر التلقائي عبر الربط الحالي');
+    const [hasTikTok] = await tx<any[]>`select 1 from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms p on p.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and p.code='tiktok' limit 1`;
+    if (hasTikTok && !bulkPublishConfigured()) throw new Error('أضف BULKPUBLISH_API_KEY إلى Vercel لتفعيل الجدولة على TikTok');
     await tx`update marketing.work_plans set activated_at=coalesce(activated_at,now()),
       activated_by=${user.id}::uuid,updated_at=now() where id=${planId}::uuid`;
-    return { ok: true, id: planId, message: 'تم تفعيل النشر حسب تواريخ جدول النشر' };
+    const tiktokTargets = await tx<any[]>`select target.schedule_id::text from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms platform on platform.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and platform.code='tiktok' order by s.publish_date,s.id`;
+    return { ok: true, id: planId, tiktokTargets, message: 'تم تفعيل النشر حسب تواريخ جدول النشر' };
   });
+  const outcomes: string[] = [];
+  for (const target of activated.tiktokTargets) {
+    try { await publishTarget(sql, user, { scheduleId: target.schedule_id }, services); }
+    catch (error) { outcomes.push(error instanceof Error ? error.message : W.failed); }
+  }
+  return { ok: true, id: planId, scheduledTikTok: activated.tiktokTargets.length - outcomes.length, errors: outcomes,
+    message: outcomes.length ? `تم تفعيل الخطة وجدولة ${activated.tiktokTargets.length - outcomes.length} منشور TikTok، وتعذر جدولة ${outcomes.length}؛ راجع التفاصيل قبل إعادة المحاولة.` : activated.tiktokTargets.length ? `تم تفعيل الخطة وجدولة ${activated.tiktokTargets.length} منشور TikTok عبر BulkPublish في مواعيدها المحددة.` : activated.message };
 }
 
 /** Invoked by protected cron only. A pending scheduled post is attempted once;
@@ -1077,7 +1179,8 @@ export async function runDueWorkflowPublications(sql: Sql, services: WorkflowSer
     join marketing.work_items item on item.id=line.product_id
     join marketing.work_tasks task on task.id=item.task_id
     join marketing.publish_schedule s on s.id=target.schedule_id
-    where p.activated_at is not null and p.is_deleted=false and line.is_deleted=false
+    join marketing.platforms publish_platform on publish_platform.id=s.platform_id
+    where publish_platform.code<>'tiktok' and p.activated_at is not null and p.is_deleted=false and line.is_deleted=false
       and task.is_deleted=false and s.status='waiting'
       and s.publish_date <= (now() at time zone 'Asia/Riyadh')::date
     order by s.publish_date,s.created_at,s.id limit 12`;
@@ -1195,13 +1298,15 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_commit_upload') result = await commitUpload(sql, body, user);
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
-    else if (action === 'work_activate_plan') result = await activateWorkflowPlan(sql, user, body);
+    else if (action === 'work_activate_plan') result = await activateWorkflowPlan(sql, user, body, services);
     else if (action === 'work_delete_campaign') result = await deleteWorkflowCampaign(sql, user, id(body.id));
     else if (action === 'work_delete_task') result = await deleteWorkflowTask(sql, user, id(body.id));
     else if (action === 'work_save_product_draft') result = await saveProductDraft(sql, user, body);
     else if (action === 'work_save_prep') result = await savePreparation(sql, user, body, services);
     else if (action === 'work_reset_publication') result = await resetPublicationAfterCheck(sql, user, body);
     else if (action === 'work_publish') result = await publishTarget(sql, user, body, services);
+    else if (action === 'work_tiktok_status') result = await checkScheduledTikTok(sql, user, body);
+    else if (action === 'work_tiktok_reschedule') result = await rescheduleWorkflowTikTok(sql, user, body);
     else { response.status(404).json({ ok: false, error: W.notFound }); return true; }
     // Audit metadata, never inline attachment bytes or provider credentials.
     await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)

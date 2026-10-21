@@ -24,7 +24,7 @@ export type WorkPlanLine = {
   id: string; plan_id: string; plan_no: string; kind: WorkPlanKind; name: string; scheduled_on: string;
   post_type_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
   product_id: string; idea_name: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
-  prepared_count: number; published_count: number; failed_count: number; status: string; files?: WorkFile[];
+  prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
 };
 export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };
 
@@ -32,7 +32,7 @@ export type WorkCapabilities = { createTask: boolean; editTask: boolean; review:
  * Work plans created before platform selection may not contain platform_code.
  * Such plans remain editable but cannot be activated for automatic publishing. */
 export function workPlatformSupportsAutoPublish(platformCode: WorkPlanLine['platform_code']): boolean {
-  return typeof platformCode === 'string' && ['facebook', 'instagram', 'youtube'].includes(platformCode);
+  return typeof platformCode === 'string' && ['facebook', 'instagram', 'youtube', 'tiktok'].includes(platformCode);
 }
 
 export function supportsWorkMedia(kind: WorkMediaKind, postTypeName: string): boolean {

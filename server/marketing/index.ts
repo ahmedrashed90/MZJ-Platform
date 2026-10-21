@@ -43,6 +43,8 @@ import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delive
 import { autoRefreshExternalMetaMetrics, refreshExternalMetaMetrics, syncMetaEngagement } from "../_marketing-meta-sync.js";
 import { metaAdsData, saveMetaAdsCampaignManager } from "../_marketing-meta-ads.js";
 import { googleAdsData, createPausedGoogleAdsSearchCampaign, changeGoogleAdsCampaignStatus } from "../_marketing-google-ads.js";
+import { marketingSocialAccountsOverview } from "../_marketing-social-accounts.js";
+import { bulkPublishConfigured, scheduleBulkPublishTikTok } from "../_marketing-bulkpublish.js";
 import { tiktokAdsData, linkTikTokAdsToken, disconnectTikTokAds, changeTikTokAdsCampaignStatus, createPausedTikTokAdsCampaign } from "../_marketing-tiktok-ads.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
@@ -3648,6 +3650,12 @@ async function validateWorkflowPublication(sql:ReturnType<typeof getSql>,schedul
   if(!files.length)throw new Error(W.incompleteFiles);
   const format=normalizeMarketingPublishFormat(schedule.publish_options?.format||schedule.post_type_name);
   assertPublishMedia(clean(schedule.platform_code),format,files);
+  if(schedule.platform_code==='tiktok') {
+    if(!bulkPublishConfigured())throw new Error('النشر المجدول على TikTok يحتاج BULKPUBLISH_API_KEY في إعدادات Vercel');
+    if(format==='story')throw new Error('TikTok لا يدعم نشر Story مباشرًا عبر BulkPublish؛ اختر فيديو أو منشور صور');
+    if(files.length>35 || (files.some(looksVideo)&&files.length!==1))throw new Error('TikTok يقبل فيديو واحدًا أو من 1 إلى 35 صورة في المنشور');
+    return;
+  }
   const [connection]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
   if(!connection?.connected)throw new Error(W.connectionMissing);
   if(schedule.platform_code==='facebook'){
@@ -3668,8 +3676,9 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   if(!clean(schedule.post_type_name))throw new Error(`نوع النشر غير محدد لمنصة ${schedule.platform_name||schedule.platform_code}`);
   if(!clean(schedule.caption))throw new Error("الكابشن غير موجود");
   if(!clean(schedule.hashtags))throw new Error("الهاشتاج غير موجود");
-  const[conn]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
-  if(!conn||!conn.connected)throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
+  const isBulkPublishTikTok=schedule.platform_code==='tiktok';
+  const [conn]=isBulkPublishTikTok?[]:await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
+  if(!isBulkPublishTikTok&&(!conn||!conn.connected))throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
   const files=await finalMediaFilesForSchedule(sql,schedule);
   if(!files.length)throw new Error("الملف النهائي غير موجود");
   const publishOptions=objectValue(schedule.publish_options);
@@ -3678,6 +3687,19 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),multipleImages=files.length>1;
   let result:any;
 
+  if(isBulkPublishTikTok){
+    if(publishFormat==='story')throw new Error('TikTok لا يدعم Story مباشرًا عبر BulkPublish؛ اختر فيديو أو منشور صور');
+    if(files.length>35 || (files.some(looksVideo)&&files.length!==1))throw new Error('TikTok يقبل فيديو واحدًا أو من 1 إلى 35 صورة');
+    const approvedMedia=[];
+    for(const approved of files)approvedMedia.push({fileName:clean(approved.original_name),mimeType:clean(approved.mime_type),fileUrl:await finalMediaDeliveryUrl(sql,approved)});
+    result=await scheduleBulkPublishTikTok({date:isoDate(schedule.publish_date),time:clean(publishOptions.publishTime)||'20:00',caption:clean(schedule.caption),hashtags:clean(schedule.hashtags),files:approvedMedia});
+    const scheduledResult={...result,publishFormat,postTypeName:clean(schedule.post_type_name)};
+    await sql.begin(async tx=>{
+      await tx`update marketing.publish_schedule set status='scheduled',publish_result=${tx.json(dbJson(scheduledResult))},updated_at=now() where id=${schedule.id}::uuid and status='processing'`;
+      await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by) values(${schedule.id}::uuid,'tiktok','scheduled',${tx.json(dbJson(scheduledResult))},${user.id}::uuid)`;
+    });
+    return scheduledResult;
+  }
   if(schedule.platform_code==='facebook'){
     const pageId=clean(conn.page_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
@@ -4516,6 +4538,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
       if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
+      if(resource==='social_accounts_overview'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض الحسابات'});return response.status(200).json(await marketingSocialAccountsOverview(sql));}
       if(resource==='tiktok_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات TikTok'});return response.status(200).json(await tiktokAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo,request.query.refresh));}
       if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql,request.query.view);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));

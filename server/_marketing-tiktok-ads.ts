@@ -443,6 +443,17 @@ async function accountReport(token: string, account: TikTokAdsAccount, since: st
   return report;
 }
 
+/** Account identity only: do not load expensive campaign or report data in the followers tab. */
+export async function tiktokAdsAccountsOverview(sql: Sql) {
+  if (!await readCredentials(sql)) return { connected: false, accounts: [] as TikTokAdsAccount[], note: 'TikTok Ads غير مربوط.' };
+  try {
+    const accounts = await withTikTokAuth(sql, token => discoverAccounts(token));
+    return { connected: accounts.length > 0, accounts, note: accounts.length ? '' : 'لا توجد حسابات إعلانية متاحة.' };
+  } catch (error) {
+    return { connected: false, accounts: [] as TikTokAdsAccount[], note: sanitizedError(error instanceof Error ? error.message : error) };
+  }
+}
+
 export async function tiktokAdsData(sql: Sql, presetInput: unknown, accountInput: unknown, fromInput: unknown, toInput: unknown, refreshInput: unknown) {
   const dates = period(presetInput, fromInput, toInput);
   const base = { ok: true, status: 'needs_connection', accounts: [] as TikTokAdsAccount[], reports: [] as Json[], errors: [] as Json[],

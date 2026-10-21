@@ -27,6 +27,7 @@ import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { PaidAdsPanel } from "../components/PaidAdsPanel";
+import { ConnectedAccountsOverview } from "../components/ConnectedAccountsOverview";
 import {
   marketingResultCount,
   marketingResultPlatformLabel,
@@ -110,7 +111,7 @@ type Payload = {
 type RecordStatus = "active" | "archived" | "all";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
-type PageView = "engagement" | "accounts" | "campaigns" | "agendas" | "meta_ads";
+type PageView = "engagement" | "accounts" | "agendas" | "meta_ads";
 type PostOrigin = "all" | "system" | "meta";
 
 const EMPTY_SUMMARY: EngagementSummary = {
@@ -201,7 +202,7 @@ function processingLabel(status: string) {
   return "قيد المعالجة";
 }
 function pageView(value: string | null): PageView {
-  return value === "campaigns" || value === "agendas" || value === "accounts" || value === "meta_ads" ? value : "engagement";
+  return value === "campaigns" ? "meta_ads" : value === "agendas" || value === "accounts" || value === "meta_ads" ? value : "engagement";
 }
 function bestPlatform(result: EngagementResultGroup) {
   return [...result.platforms].sort((a, b) => b.engagements - a.engagements || b.posts - a.posts)[0];
@@ -418,7 +419,7 @@ export function EngagementPage() {
   }), [data, engagementStatus, platform, search]);
 
   const resultRows = useMemo(() => {
-    const collection = view === "campaigns" ? data?.results.campaigns || [] : view === "agendas" ? data?.results.agendas || [] : [];
+    const collection = view === "agendas" ? data?.results.agendas || [] : [];
     const needle = search.trim().toLowerCase();
     return collection.filter((result) => {
       const matchesSearch = !needle || `${result.name} ${result.code} ${result.bestCreative?.name || ""}`.toLowerCase().includes(needle);
@@ -598,7 +599,7 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة المنشورات والتفاعل والحملات الممولة من Meta وGoogle Ads في صفحة واحدة، مع الحفاظ على مؤشرات كل منصة بشكل مستقل."
+    description="متابعة أداء المنشورات والحسابات والحملات الممولة عبر المنصات المرتبطة، مع فصل نتائج كل منصة بوضوح."
     actions={<div className="marketing-engagement-actions">
       {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
@@ -614,8 +615,7 @@ export function EngagementPage() {
       <div className="marketing-engagement-view-tabs" role="tablist" aria-label="أقسام تفاعل النشر">
         <button type="button" className={view === "engagement" ? "active" : ""} onClick={() => changeView("engagement")}>تفاعل النشر</button>
         <button type="button" className={view === "accounts" ? "active" : ""} onClick={() => changeView("accounts")}>الحسابات والمتابعون</button>
-        <button type="button" className={view === "campaigns" ? "active" : ""} onClick={() => changeView("campaigns")}>نتائج الحملات</button>
-        <button type="button" className={view === "meta_ads" ? "active" : ""} onClick={() => changeView("meta_ads")}>الحملات الممولة (Meta + Google)</button>
+        <button type="button" className={view === "meta_ads" ? "active" : ""} onClick={() => changeView("meta_ads")}>الحملات الممولة</button>
         <button type="button" className={view === "agendas" ? "active" : ""} onClick={() => changeView("agendas")}>نتائج الأجندات</button>
       </div>
 
@@ -722,9 +722,11 @@ export function EngagementPage() {
         </section>
       </> : view === "accounts" ? <>
         <section className="marketing-meta-account-intro">
-          <div><h3>متابعو حسابات Meta</h3><p>العدد الحالي من الحسابات المرتبطة وتاريخ النمو منذ أول مزامنة داخل السيستم؛ لا يتم اختلاق بيانات سابقة.</p></div>
+          <div><h3>الحسابات والمتابعون</h3><p>ملخص الحسابات المرتبطة وأرقام المتابعة الحقيقية؛ تفاصيل Meta محفوظة دون تغيير.</p></div>
           {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={17} /> تحديث الحسابات والمنشورات</button> : null}
         </section>
+        <ConnectedAccountsOverview />
+        <h3 className="marketing-meta-section-heading">Facebook وInstagram</h3>
         <div className="marketing-meta-accounts-grid">
           {(data?.accounts || []).map((account) => <article key={`${account.platform}-${account.accountId}`} className="panel marketing-meta-account-card">
             <header className="marketing-meta-account-heading">
@@ -739,6 +741,7 @@ export function EngagementPage() {
               <div><span>{account.platform === "facebook" ? "تفاعلات المنشورات (Reactions)" : "إعجابات المنشورات"}</span><strong>{optionalCount(account.likesTotal)}</strong><small>من {count(account.likesMeasuredCount)} منشور تمت قراءة إعجاباته</small></div>
               {account.platform === "facebook" && <div><span>إعجابات صفحة Facebook</span><strong>{optionalCount(account.fans)}</strong></div>}
             </div>
+            <details className="marketing-meta-account-extra"><summary>أعلى المنشورات وتطور المتابعين</summary>
             <section className="marketing-meta-top-post" aria-label={`أعلى منشور تفاعلًا في ${platformLabel(account.platform)}`}>
               <div className="marketing-meta-top-post-title"><Heart size={17}/><strong>أعلى بوست تفاعلًا</strong><span>{account.topPost ? `${count(account.topPost.engagementTotal)} تفاعل` : "—"}</span></div>
               {account.topPost ? <>
@@ -757,6 +760,7 @@ export function EngagementPage() {
                 </LineChart>
               </ResponsiveContainer>
             </div> : <div className="marketing-meta-chart-empty"><ChartLineUp size={18} /> يبدأ الرسم البياني بعد حفظ بيانات يومين مختلفين.</div>}
+            </details>
             <footer className="marketing-meta-account-footer">
               <span>تمت قراءة {count(account.discoveredCount)} منشور · آخر تحديث: {account.state?.last_success_at ? marketingDate(account.state.last_success_at, true) : "لم تبدأ المزامنة"}</span>
               <span>{account.state?.backfill_complete ? "اكتمل الأرشيف المتاح" : "استيراد الأرشيف جارٍ على دفعات"}</span>
@@ -769,7 +773,7 @@ export function EngagementPage() {
         <p className="marketing-meta-account-disclaimer">عدد محتوى Facebook ومجموع التفاعلات وأعلى منشور محسوبة من المنشورات التي اكتملت مزامنتها بالفعل؛ الأرقام قد تزيد مع استيراد الأرشيف أو تحديث تفاعل المنشورات. تفاعلات Facebook تشمل جميع أنواع Reactions، وليست زر Like وحده.</p>
       </> : <>
         <section className="marketing-engagement-stats marketing-result-summary-stats">
-          <article><LinkSimple size={24} /><span>{view === "campaigns" ? "الحملات" : "الأجندات"}</span><strong>{data ? marketingResultCount(resultSummary.sources) : "—"}</strong><small>بها منشورات أو نتائج محفوظة</small></article>
+          <article><LinkSimple size={24} /><span>{"الأجندات"}</span><strong>{data ? marketingResultCount(resultSummary.sources) : "—"}</strong><small>بها منشورات أو نتائج محفوظة</small></article>
           <article><LinkSimple size={24} /><span>إجمالي المنشورات</span><strong>{data ? marketingResultCount(resultSummary.posts) : "—"}</strong><small>كل المنصات</small></article>
           <article><Heart size={24} /><span>إجمالي التفاعلات</span><strong>{data ? marketingResultCount(resultSummary.engagements) : "—"}</strong><small>إعجابات + تعليقات + مشاركات</small></article>
           <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{data ? marketingResultCount(resultSummary.crmLeads) : "—"}</strong><small>عملاء مختلفون</small></article>
@@ -777,13 +781,13 @@ export function EngagementPage() {
         </section>
 
         <section className="panel marketing-engagement-panel marketing-results-panel">
-          <header><div><h3>{view === "campaigns" ? "نتائج الحملات" : "نتائج الأجندات"}</h3><p>تجميع موحد لنتائج Facebook وInstagram وYouTube وتجهيز TikTok وSnapchat من نفس مصدر البيانات.</p></div></header>
+          <header><div><h3>{"نتائج الأجندات"}</h3><p>تجميع موحد لنتائج Facebook وInstagram وYouTube وتجهيز TikTok وSnapchat من نفس مصدر البيانات.</p></div></header>
           <div className="marketing-engagement-control-panel marketing-results-control-panel">
-            <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`بحث باسم ${view === "campaigns" ? "الحملة" : "الأجندة"} أو الكود أو الكرييتيف`} /></div>
+            <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`بحث باسم ${"الأجندة"} أو الكود أو الكرييتيف`} /></div>
             <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
             <div className="marketing-engagement-filter-note"><strong>أرقام موحدة</strong><small>نفس النتائج تظهر داخل قاعدة البيانات بدون حسابات منفصلة أو تكرار.</small></div>
           </div>
-          <div className="marketing-result-list-wrap"><table className="marketing-result-list-table"><thead><tr><th>{view === "campaigns" ? "الحملة" : "الأجندة"}</th><th>الفترة</th><th>المنشورات</th><th>المشاهدات</th><th>التفاعلات</th><th>عملاء CRM</th><th>تم البيع</th><th>أفضل منصة</th><th>أفضل كرييتيف</th><th>التفاصيل</th></tr></thead><tbody>
+          <div className="marketing-result-list-wrap"><table className="marketing-result-list-table"><thead><tr><th>{"الأجندة"}</th><th>الفترة</th><th>المنشورات</th><th>المشاهدات</th><th>التفاعلات</th><th>عملاء CRM</th><th>تم البيع</th><th>أفضل منصة</th><th>أفضل كرييتيف</th><th>التفاصيل</th></tr></thead><tbody>
             {visibleResults.map((result) => {
               const topPlatform = bestPlatform(result);
               return <tr key={`${result.sourceType}-${result.sourceId}`}>
