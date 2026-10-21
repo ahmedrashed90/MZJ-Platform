@@ -86,7 +86,8 @@ for(const source of [connections,adsPanel,connectionUi,app,paid])compile(source,
 check(connections.includes('GOOGLE_ADS_CLIENT_ID')&&connections.includes('googleAdsDiscover'),'Google OAuth uses Explorer-eligible Ads app credentials');
 check(connections.includes("platform='youtube'")&&connections.includes("platform='google_ads'"),'Google Ads and YouTube have separate encrypted connection storage');
 check(connectionUi.includes('save_google_ads_accounts')&&connectionUi.includes('selectedGoogleAdsAccounts'),'Google Ads account multi-selection is usable in connection UI');
-check(app.includes('<PaidAdsPanel />')&&paid.includes('<MetaAdsPanel />')&&paid.includes('<GoogleAdsPanel />'),'Unified engagement tab displays Google and the original Meta panel');
+check(app.includes('view === "report" ? <CampaignReportPage />') && !app.includes('<PaidAdsPanel />') && paid.includes('<MetaAdsPanel />') && paid.includes('<GoogleAdsPanel />') && connectionUi.includes('provider.provider === "google_ads"'), 'Unified campaign report replaces duplicate paid tabs while Meta and Google connections stay available');
+check(app.includes('const visiblePosts = useMemo(') && app.includes('const visibleEvents = useMemo('), 'Organic post and engagement lists retain their own pagination after moving paid campaign reports');
 check(schema.includes('MARKETING_SCHEMA_VERSION = 3')&&schema.includes('MARKETING_SCHEMA_V3_SQL'),'Live database safely upgrades OAuth provider constraints');
 check(!adsPanel.includes('META_ADS_ACCESS_TOKEN')&&paid.includes('setSelected'),'New Google UI is isolated with a unified provider filter');
 console.log(`${passed}/${passed} Google Ads mocked API, campaign publishing, YouTube isolation and unified UI checks passed. No live provider calls.`);

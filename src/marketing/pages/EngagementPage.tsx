@@ -413,6 +413,11 @@ export function EngagementPage() {
       && (!search || haystack.includes(search.toLowerCase()));
   }), [data, engagementStatus, platform, search]);
 
+  // The two paginated collections are independent; changing one tab's filter
+  // must not change the other collection or trigger an unrelated API request.
+  const visiblePosts = useMemo(() => rows.slice((postPage - 1) * POST_PAGE_SIZE, postPage * POST_PAGE_SIZE), [rows, postPage]);
+  const visibleEvents = useMemo(() => engagements.slice((eventPage - 1) * ENGAGEMENT_PAGE_SIZE, eventPage * ENGAGEMENT_PAGE_SIZE), [engagements, eventPage]);
+
   useEffect(() => { setPostPage(1); }, [platform, postOrigin, postStatus, search]);
   useEffect(() => { setEventPage(1); }, [platform, engagementStatus, search]);
   function changeView(next: PageView) {
