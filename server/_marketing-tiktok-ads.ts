@@ -19,7 +19,7 @@ export type TikTokAdsAccount = { id: string; name: string; currency: string; tim
 export type TikTokAdsMetrics = {
   spend: number | null; impressions: number | null; clicks: number | null;
   ctr: number | null; conversions: number | null; leads: number | null;
-  costPerLead: number | null;
+  costPerLead: number | null; interactions: number | null;
 };
 export type TikTokAdsCampaign = {
   id: string; accountId: string; name: string; status: string; deliveryStatus: string;
@@ -194,7 +194,7 @@ async function execute(accessToken: string, name: string, params: Json, timeout?
 
 let cachedAccounts: { expiresAt: number; accounts: TikTokAdsAccount[] } | null = null;
 const reportCache = new Map<string, { expiresAt: number; report: Json }>();
-function resetCache() { cachedAccounts = null; reportCache.clear(); }
+function resetCache() { cachedAccounts = null; reportCache.clear(); reportSelectionCache.clear(); }
 
 function getAuthorizedAccountsResponse(response: Json): TikTokAdsAccount[] {
   return list(object(response.data).list)
@@ -326,7 +326,11 @@ async function campaignsForAccount(token: string, account: TikTokAdsAccount) {
 }
 
 const BASIC_METRICS = ['spend', 'impressions', 'clicks', 'ctr', 'conversion'];
+// Probe only attributed lead events. General conversion is not synonymous with lead.
 const LEAD_METRIC_CANDIDATES = ['onsite_conversion.lead', 'onsite_conversion.lead_grouped', 'onsite_conversion.total_lead', 'lead', 'total_lead'];
+const INTERACTION_COMPONENTS = ['likes', 'comments', 'shares'];
+const INTERACTION_AGGREGATES = ['engagements', 'engagement'];
+const reportSelectionCache = new Map<string, { lead: string | null; interactionFields: string[]; expires: number }>();
 let cachedReportSpec: { expiresAt: number; allowed: Set<string> | null } | null = null;
 let reportSpecInFlight: Promise<Set<string> | null> | null = null;
 async function getReportMetricOptions(token: string): Promise<Set<string> | null> {
@@ -349,67 +353,89 @@ async function getReportMetricOptions(token: string): Promise<Set<string> | null
   finally { if (reportSpecInFlight === promise) reportSpecInFlight = null; }
 }
 
-function reportValuesFromRow(row: Json, leadMetric: string | null): TikTokAdsMetrics {
+function reportValuesFromRow(row: Json, leadMetric: string | null, interactionFields: string[]): TikTokAdsMetrics {
   const metrics = object(row.metrics);
   const spend = amount(metrics.spend);
   const impressions = amount(metrics.impressions);
   const clicks = amount(metrics.clicks);
   const conversions = amount(metrics.conversion);
+  // A metric requested but omitted in a row is unknown, not zero.
   const leads = leadMetric ? amount(metrics[leadMetric]) : null;
   const ctr = amount(metrics.ctr) ?? (clicks !== null && impressions ? clicks / impressions * 100 : null);
-  return { spend, impressions, clicks, ctr, conversions, leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null };
+  const interactions = interactionFields.length === 1
+    ? amount(metrics[interactionFields[0]])
+    : interactionFields.length === 3 && interactionFields.every(name => amount(metrics[name]) !== null)
+      ? interactionFields.reduce((sum, name) => sum + (amount(metrics[name]) || 0), 0) : null;
+  return { spend, impressions, clicks, ctr, conversions, leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null, interactions };
 }
 
 async function reportForAccount(token: string, account: TikTokAdsAccount, since: string, until: string) {
   const allowed = await getReportMetricOptions(token);
-  // When TikTok omits the metric enum, probe the documented instant-lead
-  // metric once. If unavailable, retry without it and show leads as unknown.
-  const leadMetric = LEAD_METRIC_CANDIDATES.find(metric => allowed?.has(metric)) || (!allowed ? 'onsite_conversion.lead' : null);
-  const selected = [...BASIC_METRICS.filter(metric => !allowed || allowed.has(metric)), ...(leadMetric ? [leadMetric] : [])];
-  // TikTok's integrated report accepts campaign dimensions and returns values
-  // by campaign_id. Generic 'conversion' is NOT silently counted as leads.
+  const saved = reportSelectionCache.get(account.id);
+  const availableLeads = LEAD_METRIC_CANDIDATES.filter(metric => !allowed || allowed.has(metric));
+  const potentialLeads = saved && saved.expires > Date.now()
+    ? [saved.lead] : availableLeads.slice(0, allowed ? availableLeads.length : 4).concat(null);
+  // Only compare actual ad engagements, never all impressions or video views.
+  const socialFields = INTERACTION_AGGREGATES.find(metric => allowed?.has(metric));
+  const initialSocial = saved && saved.expires > Date.now() ? saved.interactionFields
+    : socialFields ? [socialFields] : (!allowed || INTERACTION_COMPONENTS.every(metric => allowed.has(metric))) ? INTERACTION_COMPONENTS : [];
+  const base = BASIC_METRICS.filter(metric => !allowed || allowed.has(metric));
+  let chosenLead: string | null = null;
+  let interactionFields = [...initialSocial];
+  let selected = [...base];
   const metricsById = new Map<string, TikTokAdsMetrics>();
   let incomplete = false;
-  let page = 1;
-  let retryStep = 0;
-  while (page <= MAX_CAMPAIGN_PAGES) {
-    let payload: Json;
-    try {
-      payload = await execute(token, 'report_integrated_get', {
-        advertiser_id: account.id, report_type: 'BASIC', data_level: 'AUCTION_CAMPAIGN',
-        dimensions: ['campaign_id'], metrics: selected,
-        start_date: since, end_date: until, page, page_size: 1000,
-      }, 21_000);
-    } catch (error) {
-      // First remove just the optional lead metric; preserve conversion.
-      // Only then try the bare traffic/spend metrics if the account rejects
-      // conversions too. A failed optional measure cannot blank a campaign.
-      const fallback = retryStep === 0 && leadMetric && selected.includes(leadMetric)
-        ? selected.filter(metric => metric !== leadMetric)
-        : ['spend', 'impressions', 'clicks'].filter(metric => !allowed || allowed.has(metric));
-      if (retryStep >= 2 || selected.join() === fallback.join()) throw error;
-      selected.splice(0, selected.length, ...fallback);
-      retryStep++;
-      page = 1;
+  let succeeded = false;
+  let lastError: unknown = null;
+  // Try lead metrics until TikTok confirms a supported value. This prevents
+  // permanently hiding leads because a single candidate is rejected.
+  const leadCandidates = potentialLeads.length ? potentialLeads : [null];
+  for (const leadCandidate of leadCandidates) {
+    const tryFields = [...initialSocial];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      selected = [...base, ...(leadCandidate ? [leadCandidate] : []), ...tryFields];
+      let page = 1;
       metricsById.clear();
-      continue;
+      try {
+        while (page <= MAX_CAMPAIGN_PAGES) {
+          const payload = await execute(token, 'report_integrated_get', {
+            advertiser_id: account.id, report_type: 'BASIC', data_level: 'AUCTION_CAMPAIGN',
+            dimensions: ['campaign_id'], metrics: selected,
+            start_date: since, end_date: until, page, page_size: 1000,
+          }, 21_000);
+          const data = object(payload.data);
+          for (const row of list(data.list)) {
+            const id = campaignId(object(row.dimensions).campaign_id || row.campaign_id);
+            if (!id) continue;
+            metricsById.set(id, reportValuesFromRow(row, leadCandidate, tryFields));
+          }
+          const info = object(data.page_info);
+          const pages = Number(info.total_page) || 0;
+          if (pages <= page || !list(data.list).length) break;
+          if (page >= MAX_CAMPAIGN_PAGES) { incomplete = true; break; }
+          page++;
+        }
+        succeeded = true; chosenLead = leadCandidate; interactionFields = tryFields;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (tryFields.length) { tryFields.splice(0, tryFields.length); continue; }
+        if (base.includes('conversion') && attempt === 0 && !leadCandidate) {
+          // Conversion can be restricted without affecting spend and traffic.
+          base.splice(base.indexOf('conversion'), 1);
+          continue;
+        }
+        break;
+      }
     }
-    const data = object(payload.data);
-    for (const row of list(data.list)) {
-      const id = campaignId(object(row.dimensions).campaign_id || row.campaign_id);
-      if (!id) continue;
-      metricsById.set(id, reportValuesFromRow(row, selected.includes(leadMetric || '') ? leadMetric : null));
-    }
-    const info = object(data.page_info);
-    const pages = Number(info.total_page) || 0;
-    if (pages <= page || !list(data.list).length) break;
-    if (page >= MAX_CAMPAIGN_PAGES) { incomplete = true; break; }
-    page++;
+    if (succeeded) break;
   }
-  return { metricsById, incomplete, leadMetric: selected.includes(leadMetric || '') ? leadMetric : null };
+  if (!succeeded) throw lastError instanceof Error ? lastError : new Error('TikTok performance report unavailable');
+  reportSelectionCache.set(account.id, { lead: chosenLead, interactionFields, expires: Date.now() + 30 * 60_000 });
+  return { metricsById, incomplete, leadMetric: chosenLead, interactionFields };
 }
 
-const EMPTY_METRICS: TikTokAdsMetrics = { spend: null, impressions: null, clicks: null, ctr: null, conversions: null, leads: null, costPerLead: null };
+const EMPTY_METRICS: TikTokAdsMetrics = { spend: null, impressions: null, clicks: null, ctr: null, conversions: null, leads: null, costPerLead: null, interactions: null };
 async function accountReport(token: string, account: TikTokAdsAccount, since: string, until: string, fresh: boolean) {
   const key = `${account.id}:${since}:${until}`;
   const cached = reportCache.get(key);
@@ -422,7 +448,8 @@ async function accountReport(token: string, account: TikTokAdsAccount, since: st
   const warnings: string[] = [];
   const metrics = metricAttempt.value;
   if (metricAttempt.failed) warnings.push('تعذر قراءة الأداء للفترة المحددة. عدد الحملات وحالتها والميزانية ما زالت صحيحة؛ أرقام الصرف والليدات غير متاحة.');
-  if (metrics && !metrics.leadMetric) warnings.push('TikTok لم يوفر مقياس ليدات مباشرًا لهذا التقرير؛ لا نعتبر جميع التحويلات ليدات.');
+  if (metrics && !metrics.leadMetric) warnings.push('TikTok لم يوفر مقياس ليدات مباشرًا لهذا الحساب/الفترة. راجع هدف Lead Generation وصلاحيات التقرير؛ التحويلات العامة ليست ليدات.');
+  if (metrics && !metrics.interactionFields.length) warnings.push('مقياس تفاعلات إعلانات TikTok غير متاح من واجهة التقارير الحالية؛ لا نخلط النقرات أو المشاهدات بالتفاعلات.');
   if (source.incomplete || metrics?.incomplete) warnings.push('عدد كبير من النتائج: تم وضع حد للصفحات حفاظًا على سرعة التحميل.');
   const campaigns: TikTokAdsCampaign[] = source.campaigns.map(campaign => {
     const id = campaignId(campaign.campaign_id);
@@ -433,7 +460,7 @@ async function accountReport(token: string, account: TikTokAdsAccount, since: st
       budget: amount(campaign.budget), budgetMode: clean(campaign.budget_mode),
       createdAt: clean(campaign.create_time), metrics: metrics?.metricsById.get(id) || (metrics ? {
         // The report returned successfully, so missing campaigns have zero measured delivery.
-        spend: 0, impressions: 0, clicks: 0, ctr: 0, conversions: null, leads: metrics.leadMetric ? 0 : null, costPerLead: null,
+        spend: 0, impressions: 0, clicks: 0, ctr: 0, conversions: null, leads: metrics.leadMetric ? 0 : null, costPerLead: null, interactions: metrics.interactionFields.length ? 0 : null,
       } : { ...EMPTY_METRICS }),
     };
   }).filter(campaign => campaign.id);

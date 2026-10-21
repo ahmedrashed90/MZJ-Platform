@@ -109,7 +109,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
-      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", meta_ads: "marketing.engagement.view", google_ads: "marketing.engagement.view", tiktok_ads: "marketing.engagement.view", tiktok_ads_builder: "marketing.campaign.create", monitoring: "marketing.monitoring.view",
+      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", meta_ads: "marketing.engagement.view", campaign_report: "marketing.engagement.view", google_ads: "marketing.engagement.view", tiktok_ads: "marketing.engagement.view", tiktok_ads_builder: "marketing.campaign.create", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view", subscriptions: "marketing.subscriptions.view", subscription_settings: "marketing.subscriptions.manage", subscription_history: "marketing.subscriptions.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
       work_schema_status: "system.marketing.access",

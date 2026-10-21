@@ -27,6 +27,8 @@ import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { PaidAdsPanel } from "../components/PaidAdsPanel";
+import { CampaignReportPage } from "../components/CampaignReportPage";
+import "../reporting/report.css";
 import { ConnectedAccountsOverview } from "../components/ConnectedAccountsOverview";
 import {
   marketingResultCount,
@@ -111,7 +113,7 @@ type Payload = {
 type RecordStatus = "active" | "archived" | "all";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
-type PageView = "engagement" | "accounts" | "agendas" | "meta_ads";
+type PageView = "engagement" | "accounts" | "agendas" | "meta_ads" | "report";
 type PostOrigin = "all" | "system" | "meta";
 
 const EMPTY_SUMMARY: EngagementSummary = {
@@ -202,7 +204,7 @@ function processingLabel(status: string) {
   return "قيد المعالجة";
 }
 function pageView(value: string | null): PageView {
-  return value === "campaigns" ? "meta_ads" : value === "agendas" || value === "accounts" || value === "meta_ads" ? value : "engagement";
+  return value === "campaigns" ? "meta_ads" : value === "agendas" || value === "accounts" || value === "meta_ads" || value === "report" ? value : "engagement";
 }
 function bestPlatform(result: EngagementResultGroup) {
   return [...result.platforms].sort((a, b) => b.engagements - a.engagements || b.posts - a.posts)[0];
@@ -314,7 +316,7 @@ export function EngagementPage() {
 
   useEffect(() => {
     // Paid campaigns are independent and must not trigger organic report reads.
-    if (view === "meta_ads") { setLoading(false); return; }
+    if (view === "meta_ads" || view === "report") { setLoading(false); return; }
     void load();
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(true);
@@ -616,10 +618,11 @@ export function EngagementPage() {
         <button type="button" className={view === "engagement" ? "active" : ""} onClick={() => changeView("engagement")}>تفاعل النشر</button>
         <button type="button" className={view === "accounts" ? "active" : ""} onClick={() => changeView("accounts")}>الحسابات والمتابعون</button>
         <button type="button" className={view === "meta_ads" ? "active" : ""} onClick={() => changeView("meta_ads")}>الحملات الممولة</button>
+        <button type="button" className={view === "report" ? "active" : ""} onClick={() => changeView("report")}>تقرير الحملات</button>
         <button type="button" className={view === "agendas" ? "active" : ""} onClick={() => changeView("agendas")}>نتائج الأجندات</button>
       </div>
 
-      {view === "meta_ads" ? <PaidAdsPanel /> : view === "engagement" ? <>
+      {view === "meta_ads" ? <PaidAdsPanel /> : view === "report" ? <CampaignReportPage /> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{data ? count(summary.posts) : "—"}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{data ? count(summary.likes) : "—"}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>

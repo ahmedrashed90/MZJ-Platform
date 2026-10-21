@@ -1,3 +1,4 @@
+import { consolidatedCampaignReport } from '../_marketing-campaign-report.js';
 import { handleMarketingWorkflow, assertWorkflowFileAccess, workflowScheduleFiles, assertLegacyMarketingTarget, runDueWorkflowPublications } from './workflow.js';
 import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
 import { isTerminalApproval } from '../../shared/marketing-workflow.js';
@@ -4469,7 +4470,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   // Server timing is emitted only for slow, safe GET reads. No user IDs,
   // tokens, payloads or query parameters are logged.
   const monitoredResource = String(request.query.resource || "");
-  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads", "tiktok_ads", "tiktok_ads_builder"].includes(monitoredResource)) {
+  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads", "tiktok_ads", "tiktok_ads_builder", "campaign_report"].includes(monitoredResource)) {
     const started = Date.now();
     response.once("finish", () => {
       const elapsed = Date.now() - started;
@@ -4536,6 +4537,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
+      if(resource==='campaign_report'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتقرير الحملات'});return response.status(200).json(await consolidatedCampaignReport(sql,request.query.dateFrom,request.query.dateTo));}
       if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='social_accounts_overview'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض الحسابات'});return response.status(200).json(await marketingSocialAccountsOverview(sql));}

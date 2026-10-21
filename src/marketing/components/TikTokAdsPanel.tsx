@@ -5,7 +5,7 @@ import { hasPermission } from '../../systemAccess';
 import { marketingFetch, marketingLocalDateKey, marketingQuery } from '../api';
 
 type AdsAccount = { id: string; name: string; currency: string; timeZone: string };
-type Metrics = { spend: number | null; impressions: number | null; clicks: number | null; ctr: number | null; conversions: number | null; leads: number | null; costPerLead: number | null };
+type Metrics = { spend: number | null; impressions: number | null; clicks: number | null; ctr: number | null; conversions: number | null; leads: number | null; costPerLead: number | null; interactions: number | null };
 type Campaign = { id: string; accountId: string; name: string; status: string; deliveryStatus: string; objective: string; type: string; budget: number | null; budgetMode: string; createdAt: string; metrics: Metrics };
 type AccountReport = { account: AdsAccount; campaigns: Campaign[]; warnings: string[]; incomplete: boolean; metricsAvailable: boolean };
 type AdsResponse = { ok: true; status: 'ready' | 'needs_connection' | 'needs_account' | 'failed'; accounts: AdsAccount[]; reports: AccountReport[]; errors: { accountId: string; message: string }[]; dateRange: { since: string; until: string }; syncedAt: string; note: string };
@@ -149,7 +149,7 @@ export function TikTokAdsPanel() {
   const totalCampaigns = reports.reduce((sum, report) => sum + report.campaigns.length, 0);
   const commonCurrency = reports.length && reports.every(report => report.account.currency && report.account.currency === reports[0].account.currency) ? reports[0].account.currency : '';
   const completeMetrics = reports.length > 0 && reports.every(report => report.metricsAvailable);
-  const sum = (key: 'spend' | 'clicks' | 'impressions' | 'leads') => reports.reduce((total, report) => total + report.campaigns.reduce((subtotal, campaign) => subtotal + (campaign.metrics[key] || 0), 0), 0);
+  const sum = (key: 'spend' | 'clicks' | 'impressions' | 'leads' | 'interactions') => reports.reduce((total, report) => total + report.campaigns.reduce((subtotal, campaign) => subtotal + (campaign.metrics[key] || 0), 0), 0);
   const leadsKnown = completeMetrics && reports.every(report => report.campaigns.every(campaign => campaign.metrics.leads !== null));
   const spend = sum('spend');
   const leads = sum('leads');
@@ -356,11 +356,12 @@ export function TikTokAdsPanel() {
         <article><Wallet size={23}/><span>الإنفاق الفعلي</span><strong>{completeMetrics ? (commonCurrency ? money(spend, commonCurrency) : 'حسب الحساب') : '—'}</strong><small>للفترة المختارة فقط</small></article>
         <article><UsersThree size={23}/><span>الليدات</span><strong>{leadsKnown ? count(leads) : '—'}</strong><small>ليدات منصة TikTok عند توفر مقياس مباشر</small></article>
         <article><ChartLineUp size={23}/><span>تكلفة الليد</span><strong>{leadsKnown && commonCurrency && leads > 0 ? money(spend / leads, commonCurrency) : '—'}</strong><small>الصرف ÷ الليدات الحقيقية المقاسة</small></article>
+        <article><ChartLineUp size={23}/><span>تفاعلات الإعلانات</span><strong>{completeMetrics && reports.every(report => report.campaigns.every(c => c.metrics.interactions !== null)) ? count(sum('interactions')) : '—'}</strong><small>إعجاب + تعليق + مشاركة عند دعم المقياس</small></article>
         <article><CurrencyDollar size={23}/><span>النقرات</span><strong>{completeMetrics ? count(sum('clicks')) : '—'}</strong><small>{completeMetrics ? count(sum('impressions')) : '—'} ظهور</small></article>
       </section>
       <section className="panel marketing-tiktok-table-panel">
         <header><div><h4>تفاصيل الحملات</h4><p>{count(rows.length)} حملة مطابقة · {data.dateRange.since} إلى {data.dateRange.until}</p></div><small>{loading ? 'جارٍ التحديث…' : `آخر قراءة: ${new Date(data.syncedAt).toLocaleString('ar-SA-u-nu-latn')}`}</small></header>
-        <div className="marketing-tiktok-table-scroll"><table className="marketing-tiktok-table"><thead><tr><th>الحملة / الحساب</th><th>الهدف</th><th>الحالة</th><th>الميزانية</th><th>الصرف</th><th>الظهور</th><th>النقرات</th><th>CTR</th><th>التحويلات</th><th>الليدات</th><th>تكلفة الليد</th><th>إجراءات</th></tr></thead><tbody>
+        <div className="marketing-tiktok-table-scroll"><table className="marketing-tiktok-table"><thead><tr><th>الحملة / الحساب</th><th>الهدف</th><th>الحالة</th><th>الميزانية</th><th>الصرف</th><th>الظهور</th><th>النقرات</th><th>CTR</th><th>التحويلات</th><th>الليدات</th><th>تكلفة الليد</th><th>التفاعلات</th><th>إجراءات</th></tr></thead><tbody>
           {visibleRows.map(({ account, campaign }) => <tr key={`${account.id}:${campaign.id}`}>
             <td><strong dir="auto">{campaign.name}</strong><small dir="auto">{account.name} · {campaign.type === 'UPGRADED_SMART_PLUS' ? 'Smart+' : 'عادية'} · ID: {campaign.id}</small></td>
             <td>{objectiveLabel(campaign.objective)}</td>
@@ -373,6 +374,7 @@ export function TikTokAdsPanel() {
             <td className="numeric">{count(campaign.metrics.conversions)}</td>
             <td className="numeric">{count(campaign.metrics.leads)}</td>
             <td className="numeric">{money(campaign.metrics.costPerLead, account.currency)}</td>
+            <td className="numeric">{count(campaign.metrics.interactions)}</td>
             <td><div className="marketing-tiktok-row-actions">
               {canManage && ['ENABLE', 'DISABLE'].includes(campaign.status) && <button className="secondary-button small" type="button" disabled={Boolean(busy)} onClick={() => void changeStatus(account, campaign)} title={campaign.status === 'ENABLE' ? 'إيقاف الحملة' : 'تشغيل الحملة وقد يبدأ الإنفاق'}>{campaign.status === 'ENABLE' ? <PauseCircle size={18}/> : <PlayCircle size={18}/>}<span>{campaign.status === 'ENABLE' ? 'إيقاف' : 'تشغيل'}</span></button>}
               <a className="secondary-button small" href="https://ads.tiktok.com/i18n/perf" target="_blank" rel="noreferrer" title="فتح TikTok Ads Manager"><LinkSimple size={17}/></a>
