@@ -93,7 +93,7 @@ global.fetch = async (url, options) => {
     assert.equal(cached.tiktok.accounts[0].stale,false);
     const clock = Date.now;
     try {
-      Date.now = () => clock() + 11 * 60_000;
+      Date.now = () => clock() + 13 * 60 * 60_000;
       const outage = await moduleUnderTest.marketingSocialAccountsOverview(sql,{...range,refresh:'1'});
       assert.equal(outage.tiktok.accounts[0].followers,13642,'A temporary provider outage does not erase the last real follower count');
       assert.equal(outage.tiktok.accounts[0].stale,true,'Stale readings are explicitly identified');

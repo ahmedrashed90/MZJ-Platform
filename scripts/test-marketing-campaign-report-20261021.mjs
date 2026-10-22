@@ -15,7 +15,7 @@ function loadTS(file, mocks = {}) {
   const sandbox = { module: mod, exports: mod.exports, require: dep => {
     if (Object.hasOwn(mocks, dep)) return mocks[dep];
     throw new Error(`Unexpected imported module: ${dep}`);
-  }, TextEncoder, Uint8Array, Uint32Array, DataView, Blob, Date, String, Number, Math, Promise, Map, Set, JSON, Intl, console };
+  }, TextEncoder, Uint8Array, Uint32Array, DataView, Blob, Date, String, Number, Math, Promise, Map, Set, JSON, Intl, console, window:globalThis.window };
   vm.runInNewContext(output.outputText, sandbox, { filename: file });
   return mod.exports;
 }
@@ -27,6 +27,10 @@ const args = { platform: 'meta', platformName: 'Meta Ads', accountId: '22', acco
   metrics: { spend: '180', leads: '6', interactions: '15' }, interactionField: 'interactions', interactionsDefinition: 'post_engagement' };
 const row = shared.normalizeCampaignReportRow(args);
 check(row.spend === 180 && row.leads === 6 && row.costPerLead === 30 && row.interactions === 15, 'Lead and CPL from attributable provider metrics');
+const usdRow = shared.normalizeCampaignReportRow({...args,currency:'usd',metrics:{spend:20,leads:5,interactions:1}});
+check(usdRow.sourceCurrency === 'USD' && usdRow.currency === 'SAR' && usdRow.spend === 75 && usdRow.costPerLead === 15,'USD spend and CPL use exactly 3.75 SAR per USD');
+const unknownRow = shared.normalizeCampaignReportRow({...args,currency:'EUR',metrics:{spend:20,leads:5,interactions:1}});
+check(unknownRow.spend === null && unknownRow.costPerLead === null && unknownRow.currency === 'SAR' && unknownRow.sourceCurrency === 'EUR','Unsupported currency never mislabeled or converted using USD rate');
 const absent = shared.normalizeCampaignReportRow({ ...args, metrics: { spend: 100, leads: null } });
 check(absent.leads === null && absent.costPerLead === null && absent.interactions === null, 'Unknown lead and interactions stay unknown, never zero');
 const zero = shared.normalizeCampaignReportRow({ ...args, metrics: { spend: 0, leads: 0, interactions: 0 } });
@@ -55,11 +59,18 @@ check(report.providers.find(p => p.platform === 'tiktok').status === 'failed', '
 check(report.rows.find(r => r.platform === 'google').interactions === 80, 'Google engagements map to interactions without converting to likes');
 check(report.rows.find(r => r.platform === 'meta').leads === 10, 'Meta lead attribution preserved');
 check(report.rows.find(r => r.platform === 'snapchat').clicks === 60 && report.rows.find(r => r.platform === 'snapchat').interactions === null, 'Snapchat clicks are distinct from engagements');
-check(report.rows.find(r => r.platform === 'google').currency === 'USD' && report.rows.find(r => r.platform === 'meta').currency === 'SAR', 'Account currencies stay separate');
+check(report.rows.every(r => r.currency === 'SAR') && report.rows.find(r => r.platform === 'google').sourceCurrency === 'USD' && report.rows.find(r => r.platform === 'google').spend === 168.75 && report.rows.find(r => r.platform === 'google').costPerLead === 84.375 && report.rows.find(r => r.platform === 'meta').spend === 500, 'Account spend/CPL normalized to SAR at USD x 3.75, SAR unchanged');
 check(calls.length === 2 && calls.every(call => call.from === '2026-10-01' && call.to === '2026-10-21'), 'One identical date filter sent to each reporting source');
+let printHtml='';
+globalThis.window={open:()=>({document:{open(){},write(value){printHtml=value},close(){}}})};
 const exporters = loadTS('src/marketing/reporting/exportCampaignReport.ts');
 const binary = await exporters.campaignReportXlsx(report.rows,report.providers,report.from,report.to).arrayBuffer();
 check(new Uint8Array(binary)[0] === 0x50 && new Uint8Array(binary)[1] === 0x4b && binary.byteLength > 1000, 'Export generates a native Excel ZIP container');
+const xlsxText = Buffer.from(binary).toString('utf8');
+check(xlsxText.includes('168.75') && xlsxText.includes('84.375') && xlsxText.includes('SAR'), 'Excel exports actually converted USD spend/CPL and labeled currency SAR');
+try { exporters.printCampaignReportPdf(report.rows,report.providers,report.from,report.to); }
+finally { delete globalThis.window; }
+check(printHtml.includes('168.75') && printHtml.includes('SAR') && printHtml.includes('3.75'), 'PDF print markup actually shows SAR amounts and fixed USD conversion');
 for (const file of ['src/marketing/components/CampaignReportPage.tsx','src/marketing/pages/EngagementPage.tsx','src/marketing/components/TikTokAdsPanel.tsx','server/_marketing-tiktok-ads.ts']) {
   const source = fs.readFileSync(file,'utf8');
   const output = ts.transpileModule(source,{fileName:file,reportDiagnostics:true,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}});

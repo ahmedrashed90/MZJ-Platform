@@ -63,7 +63,7 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
   const row = (n: number, cells: string[], height = 22) => `<row r="${n}" ht="${height}" customHeight="1">${cells.join('')}</row>`;
   values.push(row(1, [cell('A', 1, 'محمد ذعار العجمي للسيارات | تقرير الحملات الإعلانية', 2)], 34));
   values.push(row(2, [cell('A', 2, `الفترة: ${from} إلى ${to} | تاريخ الإصدار: ${new Date().toLocaleString('ar-SA-u-nu-latn')}`, 3)], 29));
-  values.push(row(4, [cell('A', 4, `عدد الحملات: ${rows.length}`, 7), cell('D', 4, `المنصات: ${[...new Set(rows.map(x => x.platformName))].join('، ') || '—'}`, 7)], 28));
+  values.push(row(4, [cell('A', 4, `عدد الحملات: ${rows.length} | العملة: SAR`, 7), cell('D', 4, `المنصات: ${[...new Set(rows.map(x => x.platformName))].join('، ') || '—'}`, 7)], 28));
   values.push(row(6, columns.map((col, idx) => cell(col, 6, heading[idx], 1)), 30));
   rows.forEach((item, index) => {
     const n = index + 7;
@@ -71,7 +71,7 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
       cell('A', n, item.platformName, index % 2 ? 8 : 0),
       cell('B', n, item.accountName, index % 2 ? 8 : 0),
       cell('C', n, item.campaignName, index % 2 ? 8 : 0),
-      cell('D', n, item.currency || 'غير محددة', index % 2 ? 8 : 0),
+      cell('D', n, 'SAR', index % 2 ? 8 : 0),
       cell('E', n, item.spend, item.spend === null ? 6 : 5, item.spend !== null),
       cell('F', n, item.leads, item.leads === null ? 6 : 4, item.leads !== null),
       cell('G', n, item.costPerLead, item.costPerLead === null ? 6 : 5, item.costPerLead !== null),
@@ -82,7 +82,7 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
   const notesStart = rows.length + 9;
   values.push(row(notesStart, [cell('A', notesStart, 'ملاحظات عن البيانات', 7)], 27));
   values.push(row(notesStart + 1, [cell('A', notesStart + 1, '— تعني أن المنصة لم توفر البيانات أو أن القسمة غير ممكنة. لا تعني صفرًا.', 9)], 27));
-  values.push(row(notesStart + 2, [cell('A', notesStart + 2, 'تكلفة الليد = الإنفاق ÷ الليدات المؤكدة للحملة. لا يتم جمع العملات المختلفة.', 9)], 27));
+  values.push(row(notesStart + 2, [cell('A', notesStart + 2, 'جميع المبالغ بالريال السعودي (SAR). الدولار الأمريكي يحوّل × 3.75؛ العملة غير المحددة لا تُحوّل بالتخمين. تكلفة الليد = الإنفاق ÷ الليدات.', 9)], 27));
   values.push(row(notesStart + 3, [cell('A', notesStart + 3, 'التفاعلات هي مقاييس المنصات الإعلانية المتاحة، وقد تختلف طريقة احتسابها بين المنصات.', 9)], 27));
   providers.forEach((provider, index) => values.push(row(notesStart + 5 + index, [cell('A', notesStart + 5 + index,
     `${provider.name}: ${provider.status === 'ready' ? 'متصل' : 'غير متاح'} | ${provider.note || ''} ${provider.incomplete ? '| بعض النتائج غير مكتملة' : ''}`, 9)], 27)));
@@ -122,19 +122,17 @@ export function printCampaignReportPdf(rows: CampaignReportRow[], providers: Cam
   const printWindow = window.open('', '_blank', 'width=1200,height=900');
   if (!printWindow) throw new Error('اسمح بفتح نافذة الطباعة لتصدير PDF، ثم اختر «حفظ كملف PDF».');
   const stat = (label: string, value: string) => `<div class="stat"><small>${html(label)}</small><b>${html(value)}</b></div>`;
-  const currencyGroups = [...new Set(rows.map(row => row.currency || `غير محددة (${row.accountName})`))];
-  const sums = currencyGroups.map(currency => {
-    const part = rows.filter(row => (row.currency || `غير محددة (${row.accountName})`) === currency);
-    const allLeadKnown = part.every(row => row.leads !== null);
-    const spendKnown = part.every(row => row.spend !== null);
-    const spend = part.reduce((sum, row) => sum + (row.spend || 0), 0);
-    const leads = part.reduce((sum, row) => sum + (row.leads || 0), 0);
-    return stat(`الإنفاق (${currency})`, spendKnown ? fmt(spend) : 'غير مكتمل') + stat(`الليدات (${currency})`, allLeadKnown ? fmt(leads) : 'غير مكتمل') + stat(`CPL (${currency})`, allLeadKnown && spendKnown && leads > 0 ? fmt(spend / leads) : '—');
-  }).join('');
+  const spendKnown = rows.length > 0 && rows.every(row => row.spend !== null);
+  const leadsKnown = rows.length > 0 && rows.every(row => row.leads !== null);
+  const spend = rows.reduce((sum, row) => sum + (row.spend || 0), 0);
+  const leads = rows.reduce((sum, row) => sum + (row.leads || 0), 0);
+  const sums = stat('الإنفاق (SAR)', spendKnown ? fmt(spend) : 'غير مكتمل') +
+    stat('الليدات', leadsKnown ? fmt(leads) : 'غير مكتمل') +
+    stat('CPL (SAR)', spendKnown && leadsKnown && leads > 0 ? fmt(spend / leads) : '—');
   const charts = ([['interactions', 'تفاعلات الإعلانات'], ['leads','عدد الليدات'], ['costPerLead','تكلفة الليد']] as const).map(([key, label]) => {
     const sorted = [...rows].filter(row => row[key] !== null).sort((a,b) => (b[key] || 0) - (a[key] || 0)).slice(0, 9);
     const max = Math.max(1, ...sorted.map(row => row[key] || 0));
-    return `<section class="chart"><h2>${html(label)}</h2>${sorted.length ? sorted.map(row => `<div class="barrow"><span>${html(row.campaignName)}</span><i><u style="width:${Math.max(0,((row[key]||0)/max)*100)}%"></u></i><strong>${html(fmt(row[key]))}${key === 'costPerLead' ? ' '+html(row.currency) : ''}</strong></div>`).join('') : '<p>لا توجد بيانات متاحة لهذا المقياس.</p>'}</section>`;
+    return `<section class="chart"><h2>${html(label)}</h2>${sorted.length ? sorted.map(row => `<div class="barrow"><span>${html(row.campaignName)}</span><i><u style="width:${Math.max(0,((row[key]||0)/max)*100)}%"></u></i><strong>${html(fmt(row[key]))}${key === 'costPerLead' ? ' ر.س' : ''}</strong></div>`).join('') : '<p>لا توجد بيانات متاحة لهذا المقياس.</p>'}</section>`;
   }).join('');
   const page = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><title>تقرير حملات MZJ ${from} - ${to}</title><style>
     @page { size:A4 landscape; margin:11mm; } * { box-sizing:border-box; } body { margin:0; padding:26px; font-family:Tahoma,Arial,sans-serif; font-size:10px; color:#24364b; direction:rtl; background:#fff; }
@@ -147,8 +145,8 @@ export function printCampaignReportPdf(rows: CampaignReportRow[], providers: Cam
     .notice {color:#5c6f82;line-height:1.8;background:#f7fafb;border-radius:9px;padding:10px;margin:16px 0;}.footer {margin-top:24px;border-top:1px solid #d9e4eb;padding-top:12px;color:#718296;}thead{display:table-header-group}tr{break-inside:avoid;}@media print{body{padding:0;}}
     </style></head><body><header class="cover"><h1>تقرير الحملات الإعلانية</h1><p>محمد ذعار العجمي للسيارات • من ${html(from)} إلى ${html(to)} • أُعد ${html(new Date().toLocaleString('ar-SA-u-nu-latn'))}</p></header>
     <div class="facts">${stat('عدد الحملات', String(rows.length))}${sums}</div>
-    <h2>الحملات ومؤشرات الأداء</h2><table><thead><tr>${['المنصة','الحساب','الحملات','العملة','المبلغ المصروف','إجمالي الليدات','تكلفة الليد','تفاعلات الإعلانات','النقرات'].map(label=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr><td>${html(row.platformName)}</td><td>${html(row.accountName)}</td><td>${html(row.campaignName)}</td><td class="n">${html(row.currency || 'غير محددة')}</td><td class="n">${html(fmt(row.spend))}</td><td class="n">${html(fmt(row.leads))}</td><td class="n">${html(fmt(row.costPerLead))}</td><td class="n">${html(fmt(row.interactions))}</td><td class="n">${html(fmt(row.clicks))}</td></tr>`).join('') || '<tr><td colspan="9">لا توجد حملات في النطاق المحدد.</td></tr>'}</tbody></table>
-    <div class="charts">${charts}</div><aside class="notice">— تعني أن منصة الإعلانات لم توفر المقياس أو لا يمكن حسابه؛ لا تعني صفرًا. تكلفة الليد = الإنفاق ÷ عدد الليدات. العملات المختلفة معروضة بصورة منفصلة. مقاييس التفاعلات تختلف بين المنصات. ${providers.filter(p=>p.status!=='ready'||p.incomplete).map(p=>`${html(p.name)}: ${html(p.note||'البيانات غير مكتملة')}`).join(' • ')}</aside>
+    <h2>الحملات ومؤشرات الأداء</h2><table><thead><tr>${['المنصة','الحساب','الحملات','العملة','المبلغ المصروف','إجمالي الليدات','تكلفة الليد','تفاعلات الإعلانات','النقرات'].map(label=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr><td>${html(row.platformName)}</td><td>${html(row.accountName)}</td><td>${html(row.campaignName)}</td><td class="n">SAR</td><td class="n">${html(fmt(row.spend))}</td><td class="n">${html(fmt(row.leads))}</td><td class="n">${html(fmt(row.costPerLead))}</td><td class="n">${html(fmt(row.interactions))}</td><td class="n">${html(fmt(row.clicks))}</td></tr>`).join('') || '<tr><td colspan="9">لا توجد حملات في النطاق المحدد.</td></tr>'}</tbody></table>
+    <div class="charts">${charts}</div><aside class="notice">— تعني أن منصة الإعلانات لم توفر المقياس أو لا يمكن حسابه؛ لا تعني صفرًا. تكلفة الليد = الإنفاق ÷ عدد الليدات. جميع المبالغ بالريال السعودي؛ الدولار الأمريكي يُحوّل × 3.75. العملات غير المعروفة لا تُحوّل بالتخمين. مقاييس التفاعلات تختلف بين المنصات. ${providers.filter(p=>p.status!=='ready'||p.incomplete).map(p=>`${html(p.name)}: ${html(p.note||'البيانات غير مكتملة')}`).join(' • ')}</aside>
     <footer class="footer">تقرير MZJ • مصدر البيانات: واجهات المنصات الإعلانية المرتبطة بالنظام، وليس سجلات CRM.</footer>
     <script>window.addEventListener('load',()=>{setTimeout(()=>{window.focus();window.print()},250)});<\/script></body></html>`;
   printWindow.document.open(); printWindow.document.write(page); printWindow.document.close();

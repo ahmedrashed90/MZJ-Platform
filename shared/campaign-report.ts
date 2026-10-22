@@ -1,11 +1,12 @@
 /** Unified, source-preserving paid-ad report contract.
  * Adding a platform requires only another registered server adapter returning this shape.
- * Unknown values remain null; spend and CPL are never combined across currencies.
+ * Reporting values are normalized to SAR. Unsupported/unknown source currencies
+ * never contribute an invented conversion to paid spend or CPL.
  */
 export type CampaignReportMetric = number | null;
 export type CampaignReportRow = {
   key: string; platform: string; platformName: string; accountId: string;
-  accountName: string; currency: string; campaignId: string; campaignName: string;
+  accountName: string; currency: string; sourceCurrency: string; exchangeRate: number | null; campaignId: string; campaignName: string;
   status: string; spend: CampaignReportMetric; clicks: CampaignReportMetric; leads: CampaignReportMetric;
   costPerLead: CampaignReportMetric; interactions: CampaignReportMetric;
   interactionsDefinition: string;
@@ -19,6 +20,14 @@ export type CampaignReportPayload = {
   rows: CampaignReportRow[]; providers: CampaignReportProvider[];
 };
 
+/** Accounting conversion requested by MZJ: fixed USD/SAR peg for reports. */
+export const REPORT_CURRENCY = 'SAR' as const;
+export const USD_TO_SAR = 3.75;
+export function sarExchangeRate(sourceCurrency: unknown): number | null {
+  const code = String(sourceCurrency ?? '').trim().toUpperCase();
+  return code === 'SAR' ? 1 : code === 'USD' ? USD_TO_SAR : null;
+}
+
 const finiteMetric = (input: unknown): CampaignReportMetric => {
   if (input === null || input === undefined || input === '') return null;
   const result = Number(input);
@@ -30,7 +39,10 @@ export function normalizeCampaignReportRow(input: {
   metrics: Record<string, unknown>; interactionField: string; interactionsDefinition: string;
 }): CampaignReportRow {
   const metrics = input.metrics || {};
-  const spend = finiteMetric(metrics.spend);
+  const sourceCurrency = String(input.currency ?? '').trim().toUpperCase();
+  const exchangeRate = sarExchangeRate(sourceCurrency);
+  const nativeSpend = finiteMetric(metrics.spend);
+  const spend = nativeSpend === null || exchangeRate === null ? null : Number((nativeSpend * exchangeRate).toFixed(6));
   const leads = finiteMetric(metrics.leads);
   const interactions = finiteMetric(metrics[input.interactionField]);
   const platform = String(input.platform || 'unknown');
@@ -38,7 +50,7 @@ export function normalizeCampaignReportRow(input: {
   const campaignId = String(input.campaignId || '');
   return {
     key: `${platform}:${accountId}:${campaignId}`, platform, platformName: input.platformName,
-    accountId, accountName: String(input.accountName || accountId), currency: String(input.currency || ''),
+    accountId, accountName: String(input.accountName || accountId), currency: REPORT_CURRENCY, sourceCurrency, exchangeRate,
     campaignId, campaignName: String(input.campaignName || campaignId), status: String(input.status || ''),
     spend, clicks: finiteMetric(metrics.clicks), leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null,
     interactions, interactionsDefinition: input.interactionsDefinition,

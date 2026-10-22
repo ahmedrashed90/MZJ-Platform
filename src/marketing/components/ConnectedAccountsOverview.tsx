@@ -4,7 +4,7 @@ import { marketingFetch, marketingQuery } from '../api';
 import { CompactFollowerChart, TopEngagedSocialPost, type DailyFollower, type EngagedSocialPost } from './CompactFollowerChart';
 
 type OrganicAccount = {
-  id: number; name: string; connected: boolean; reconnect: boolean; stale: boolean; note: string;
+  id: number; name: string; connected: boolean; reconnect: boolean; connectionVerified: boolean; stale: boolean; note: string;
   followers: number | null; monthlyChange: number | null; dailyChange: number | null;
   videoCount: number | null; likesCount: number | null; impressions: number | null;
   profileViews: number | null; views: number | null; reach: number | null;
@@ -44,7 +44,7 @@ export function ConnectedAccountsOverview({ dateFrom, dateTo, refreshSignal = 0 
         {accounts.map(account => <article key={`${code}-${account.id}`} className="panel marketing-meta-account-card marketing-social-account-card">
           <header className="marketing-meta-account-heading">
             <span className={`marketing-platform-chip ${code}`}>{logo}{name}</span>
-            <span className={`marketing-sync-status ${account.connected ? 'synced' : 'pending'}`}>{account.reconnect ? 'إعادة ربط' : account.stale && account.note.includes('قائمة حسابات') ? 'تعذر التحقق' : account.connected ? 'متصل' : 'غير متصل'}</span>
+            <span className={`marketing-sync-status ${account.connected ? 'synced' : 'pending'}`}>{!account.connectionVerified ? 'تعذر التحقق' : account.reconnect ? 'إعادة ربط' : account.connected ? (account.stale ? 'آخر حالة: متصل' : 'متصل') : 'غير متصل'}</span>
           </header>
           <h4>{account.name}</h4>
           <div className="marketing-meta-follower-number"><strong>{number(account.followers)}</strong><small>متابع</small></div>
@@ -68,10 +68,10 @@ export function ConnectedAccountsOverview({ dateFrom, dateTo, refreshSignal = 0 
           <footer className="marketing-meta-account-footer"><span>آخر قراءة للمتابعين: {account.lastDate || '—'}</span></footer>
         </article>)}
         {!accounts.length && <article className="panel marketing-meta-account-card marketing-social-account-card">
-          <header className="marketing-meta-account-heading"><span className={`marketing-platform-chip ${code}`}>{logo}{name}</span><span className="marketing-sync-status pending">غير متاح</span></header>
+          <header className="marketing-meta-account-heading"><span className={`marketing-platform-chip ${code}`}>{logo}{name}</span><span className="marketing-sync-status pending">تعذر التحقق</span></header>
           <h4>حساب {name}</h4>
           <div className="marketing-meta-follower-number"><strong>—</strong><small>متابع</small></div>
-          <p className="marketing-social-account-note">{result?.note || (loading ? 'جاري قراءة الحساب من BulkPublish…' : error || 'لا يوجد حساب متصل بهذه المنصة داخل BulkPublish.')}</p>
+          <p className="marketing-social-account-note">{result?.note || (loading ? 'جاري قراءة الحساب من BulkPublish…' : error || 'تعذر تحديد حالة القناة حاليًا. راجع اتصال BulkPublish لاحقًا.')}</p>
           <button type="button" className="secondary-button small" disabled={loading} onClick={() => setRequest(n => n + 1)}>تحديث</button>
         </article>}
       </div>;

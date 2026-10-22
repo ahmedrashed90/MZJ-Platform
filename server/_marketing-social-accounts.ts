@@ -4,13 +4,14 @@
  * successfully observed metrics. Unknown fields stay null, never invented.
  */
 import { getSql } from './_db.js';
+import { cachedBulkPublishRead } from './_marketing-bulkpublish-read-cache.js';
 
 type Sql = ReturnType<typeof getSql>;
 export type OrganicPlatform = 'tiktok' | 'snapchat';
-type Channel = { id: number; name: string; platform: OrganicPlatform; connected: boolean; reconnect: boolean };
+type Channel = { id: number; name: string; platform: OrganicPlatform; connected: boolean; reconnect: boolean; verified: boolean };
 type Snapshot = { date: string; followers: number };
 export type OrganicAccount = {
-  id: number; name: string; connected: boolean; reconnect: boolean; stale: boolean; note: string;
+  id: number; name: string; connected: boolean; reconnect: boolean; connectionVerified: boolean; stale: boolean; note: string;
   followers: number | null; monthlyChange: number | null; dailyChange: number | null;
   videoCount: number | null; likesCount: number | null; impressions: number | null;
   profileViews: number | null; views: number | null; reach: number | null;
@@ -51,31 +52,12 @@ export function socialAnalyticsRange(query: Record<string, unknown>) {
   return { dateFrom, dateTo };
 }
 
-type Entry<T> = { expires: number; value: T };
-let cacheIdentity = '';
-let channelsCache: Entry<Channel[]> | null = null;
-const providerCache = new Map<string, Entry<Record<string, any>>>();
 const latestAccounts = new Map<string, OrganicAccount>();
-const cacheTTL = 10 * 60_000; // BulkPublish Free: 30 API calls/day, avoid refresh storms.
+let organicKeyIdentity = '';
 function credential() {
   const key = clean(process.env.BULKPUBLISH_API_KEY);
-  // Rotating the key must not accidentally reuse results authenticated by the previous one.
-  if (key !== cacheIdentity) { cacheIdentity = key; channelsCache = null; providerCache.clear(); latestAccounts.clear(); }
+  if (key !== organicKeyIdentity) { organicKeyIdentity = key; latestAccounts.clear(); }
   return key;
-}
-async function get(path: string, apiKey: string, force = false): Promise<Record<string, any>> {
-  const old = providerCache.get(path);
-  if (old && old.expires > Date.now()) return old.value; // Manual refresh honors the cache to protect API quota.
-  const response = await fetch(`https://app.bulkpublish.com${path}`, {
-    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-    redirect: 'manual', signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) throw new Error(`BulkPublish HTTP ${response.status}`);
-  const payload = obj(await response.json());
-  if (payload.error || payload.success === false) throw new Error('BulkPublish لم يرجع إحصائيات صالحة');
-  providerCache.set(path, { expires: Date.now() + cacheTTL, value: payload });
-  if (providerCache.size > 64) providerCache.delete(providerCache.keys().next().value!);
-  return payload;
 }
 function platformOf(value: unknown): OrganicPlatform | null {
   const platform = clean(value).toLowerCase();
@@ -93,29 +75,26 @@ async function storedChannels(sql: Sql): Promise<Channel[]> {
     return rows.flatMap(row => {
       const platform = platformOf(row.platform), id = Number(row.channel_id);
       return platform && Number.isSafeInteger(id) && id > 0 ? [{ platform, id,
-        name: clean(row.account_name) || `${platform} ${id}`, connected: false, reconnect: false }] : [];
+        name: clean(row.account_name) || `${platform} ${id}`, connected: false, reconnect: false, verified: false }] : [];
     });
   } catch { return []; }
 }
-async function listChannels(key: string, force: boolean): Promise<{ channels: Channel[]; warning: string }> {
+async function listChannels(sql: Sql, key: string): Promise<{ channels: Channel[]; warning: string }> {
   try {
-    if (channelsCache && channelsCache.expires > Date.now()) return { channels: channelsCache.value, warning: '' };
-    const payload = await get('/api/channels', key, force);
+    const read = await cachedBulkPublishRead(sql,key,'/api/channels');
+    const payload = read.payload;
     const items = arr(payload.channels || payload.data);
     if (!Array.isArray(payload.channels) && !Array.isArray(payload.data)) throw new Error('BulkPublish لم يرجع قائمة الحسابات');
     const channels: Channel[] = items.flatMap(raw => {
-      const c = obj(raw); const platform = platformOf(c.platform); const id = Number(c.id);
+      const c = obj(raw), platform = platformOf(c.platform), id = Number(c.id);
       if (!platform || !Number.isSafeInteger(id) || id <= 0) return [];
       const reconnect = c.needsReconnect === true;
-      return [{ id, platform, name: clean(c.accountName || c.name || `${platform} ${id}`),
-        connected: c.isActive === true && !reconnect, reconnect }];
+      return [{id,platform,name:clean(c.accountName || c.name || `${platform} ${id}`),
+        connected:c.isActive === true && !reconnect,reconnect,verified:true}];
     });
-    channelsCache = { value: channels, expires: Date.now() + cacheTTL };
-    return { channels, warning: '' };
+    return { channels, warning: read.warning };
   } catch (error) {
-    const warning = `تعذر تحديث قائمة حسابات BulkPublish (${error instanceof Error ? error.message : 'فشل الاتصال'}).`;
-    if (channelsCache) return { channels: channelsCache.value, warning };
-    return { channels: [], warning };
+    return { channels: [], warning: `تعذر التحقق من قائمة حسابات BulkPublish (${error instanceof Error ? error.message : 'فشل الاتصال'}).` };
   }
 }
 function metricsRows(payload: Record<string, any>) { return arr(payload.metrics || obj(payload.data).metrics); }
@@ -185,22 +164,38 @@ async function store(sql: Sql, channel: Channel, snapshots: Snapshot[]) {
     // Missing migration or old CHECK constraint must not disconnect an account.
   }
 }
-async function oneAccount(sql: Sql, channel: Channel, from: string, to: string, force: boolean): Promise<OrganicAccount> {
+async function oneAccount(sql: Sql, channel: Channel, from: string, to: string): Promise<OrganicAccount> {
   const cacheKey = `${channel.platform}:${channel.id}`;
   const previous = latestAccounts.get(cacheKey);
-  const localFrom = from < daysBefore(to, 29) ? daysBefore(to, 29) : from;
-  const query = new URLSearchParams({ channelIds: String(channel.id), platforms: channel.platform, from: localFrom, to });
+  // Fixed rolling window regardless of the user's historical filter. Changing
+  // filter dates must not create a different upstream request on every click.
+  // Historical follower values come from the Marketing database.
+  const today = riyadhToday();
+  const query = new URLSearchParams({ channelIds: String(channel.id), platforms: channel.platform, from: daysBefore(today,29), to:today });
   let payload: Record<string, any> | null = null;
   let warning = '';
+  let providerStale = false;
   if (channel.connected) {
     try {
       // Some BulkPublish subscriptions accept channelIds but not date filters.
-      try { payload = await get(`/api/analytics/account?${query}`, cacheIdentity, force); }
-      catch { payload = await get(`/api/analytics/account?channelIds=${channel.id}&platforms=${channel.platform}`, cacheIdentity, force); }
+      try {
+        const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/account?${query}`);
+        payload = response.payload; providerStale ||= response.stale;
+        if (response.warning) warning = response.warning;
+      } catch (error) {
+        // Fallback only for unsupported date-filter variants, NEVER for 429 or
+        // provider downtime; otherwise the fallback doubles rate-limit usage.
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/BulkPublish HTTP (400|404|422)\b|حقول التاريخ غير مدعومة/i.test(message)) throw error;
+        const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/account?channelIds=${channel.id}&platforms=${channel.platform}`);
+        payload = response.payload; providerStale ||= response.stale;
+        if (response.warning) warning = response.warning;
+      }
     } catch (error) {
       warning = `تعذر تحديث إحصائيات الحساب (${error instanceof Error ? error.message : 'فشل الاتصال'}).`;
+      providerStale = true;
     }
-  } else warning = channel.reconnect ? 'الحساب يحتاج إعادة ربط داخل BulkPublish.' : 'حالة القناة غير نشطة داخل BulkPublish.';
+  } else warning = !channel.verified ? 'تعذر التحقق من حالة القناة حاليًا؛ لا يُعتبر الحساب مفصولًا.' : channel.reconnect ? 'الحساب يحتاج إعادة ربط داخل BulkPublish.' : 'أكد BulkPublish أن القناة غير نشطة في آخر تحديث ناجح.';
 
   const remote = payload ? snapshotsFrom(payload, channel) : [];
   if (remote.length) { try { await store(sql, channel, remote); } catch { warning += ' تعذر حفظ التاريخ.'; } }
@@ -227,13 +222,17 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string, 
   }
   let post = previous?.topPost || null;
   if (channel.connected) {
-    try { post = topPost(await get(`/api/analytics/engagement?${query}`, cacheIdentity, force), channel); }
-    catch { /* Optional endpoint must never hide the account itself. */ }
+    try {
+      const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/engagement?${query}`);
+      post = topPost(response.payload,channel) || post;
+      providerStale ||= response.stale;
+      if (response.warning) warning = [warning,response.warning].filter(Boolean).join(' ');
+    } catch { /* Optional endpoint must never hide the account itself. */ }
   }
   const fallbackAllowed = !!previous && previous.lastDate !== null && previous.lastDate >= from && previous.lastDate <= to;
   const account: OrganicAccount = {
     id: channel.id, name: clean(arr(payload?.channels).find(c => Number(c?.id) === channel.id)?.accountName) || channel.name,
-    connected: channel.connected, reconnect: channel.reconnect, stale: payload === null || (!remote.length && fallbackAllowed), note: warning,
+    connected: channel.connected, reconnect: channel.reconnect, connectionVerified: channel.verified, stale: providerStale || payload === null || (!remote.length && fallbackAllowed), note: warning,
     followers: mostRecent?.followers ?? (fallbackAllowed ? previous!.followers : null),
     monthlyChange: monthly.length > 1 ? monthly.at(-1)!.followers - monthly[0].followers : (fallbackAllowed ? previous!.monthlyChange : null),
     dailyChange: dayChange(snapshots),
@@ -259,19 +258,18 @@ export async function marketingSocialAccountsOverview(sql: Sql, query: Record<st
   const { dateFrom, dateTo } = socialAnalyticsRange(query);
   const empty = { connected: false, accounts: [] as OrganicAccount[], note: '' };
   if (!key) return { ok: true as const, tiktok: { ...empty, note: 'اضبط BULKPUBLISH_API_KEY على السيرفر.' }, snapchat: { ...empty, note: 'اضبط BULKPUBLISH_API_KEY على السيرفر.' } };
-  const refreshed = query.refresh === '1';
-  const fetched = await listChannels(key, refreshed);
+  const fetched = await listChannels(sql,key);
   const channels = fetched.warning && !fetched.channels.length ? await storedChannels(sql) : fetched.channels;
   const warning = fetched.warning;
   const forPlatform = async (platform: OrganicPlatform) => {
     const selected = channels.filter(c => c.platform === platform).slice(0, 8);
     const accounts = await Promise.all(selected.map(async channel => {
-      try { return await oneAccount(sql, channel, dateFrom, dateTo, refreshed); }
+      try { return await oneAccount(sql, channel, dateFrom, dateTo); }
       catch (error) {
         const cached = latestAccounts.get(`${channel.platform}:${channel.id}`);
-        if (cached) return { ...cached, connected: channel.connected, reconnect: channel.reconnect, stale: true,
+        if (cached) return { ...cached, connected: channel.connected, reconnect: channel.reconnect, connectionVerified: channel.verified, stale: true,
           note: 'تعذر التحديث؛ يتم عرض آخر بيانات ناجحة للحساب.' };
-        return { id: channel.id, name: channel.name, connected: channel.connected, reconnect: channel.reconnect, stale: true,
+        return { id: channel.id, name: channel.name, connected: channel.connected, reconnect: channel.reconnect, connectionVerified: channel.verified, stale: true,
           note: error instanceof Error ? error.message.slice(0, 150) : 'تعذر قراءة إحصائيات الحساب',
           followers: null, monthlyChange: null, dailyChange: null, videoCount: null, likesCount: null,
           impressions: null, profileViews: null, views: null, reach: null, lastDate: null, snapshots: [], topPost: null } as OrganicAccount;
@@ -282,8 +280,10 @@ export async function marketingSocialAccountsOverview(sql: Sql, query: Record<st
       account.note = [account.note, warning].filter(Boolean).join(' ');
     }
     return { connected: accounts.some(a => a.connected), accounts,
-      note: warning || (!accounts.length ? `لم يتم العثور على حساب ${platform === 'tiktok' ? 'TikTok' : 'Snapchat'} مرتبط داخل BulkPublish.` : '') };
+      note: warning || (!accounts.length ? `لم يُعثر على حساب ${platform === 'tiktok' ? 'TikTok' : 'Snapchat'} داخل آخر قائمة قنوات متاحة.` : '') };
   };
-  const [tiktok, snapchat] = await Promise.all([forPlatform('tiktok'), forPlatform('snapchat')]);
+  // Sequential platform reads avoid parallel quota bursts when one request returns 429.
+  const tiktok = await forPlatform('tiktok');
+  const snapchat = await forPlatform('snapchat');
   return { ok: true as const, tiktok, snapchat };
 }

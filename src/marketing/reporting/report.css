@@ -22,3 +22,6 @@
 .mcr-filter-heading .mcr-head-actions button{display:inline-flex;align-items:center;gap:6px}
 @media(max-width:1260px){.mcr-charts{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:820px){.mcr-charts{grid-template-columns:1fr}}
+
+/* Single report accounting currency; no per-account currency filter. */
+.mcr-currency-fixed{align-self:end;min-height:39px;display:inline-flex;align-items:center;padding:8px 12px;border:1px solid #d9e5e8;background:var(--surface,#f2f7f8);border-radius:10px;font-size:12px;font-weight:700;color:var(--ink,#315364)}

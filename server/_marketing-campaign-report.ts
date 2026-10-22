@@ -52,20 +52,26 @@ export async function consolidatedCampaignReport(sql: Sql, fromInput: unknown, t
       for (const campaign of campaigns) {
         if (!campaign.id) continue;
         campaignCount++;
-        rows.push(normalizeCampaignReportRow({
+        const reportRow = normalizeCampaignReportRow({
           platform: adapter.code, platformName: adapter.name,
           accountId: account.id, accountName: account.name, currency: account.currency,
           campaignId: campaign.id, campaignName: campaign.name, status: campaign.status || campaign.deliveryStatus,
           metrics: campaign.metrics || {}, interactionField: adapter.interactionField,
           interactionsDefinition: adapter.interactionDefinition,
-        }));
+        });
+        if (reportRow.exchangeRate === null && reportRow.spend === null) {
+          const source = reportRow.sourceCurrency || 'غير محددة';
+          const message = `عملة ${source} غير مدعومة للتحويل إلى الريال السعودي في حساب ${reportRow.accountName}؛ لم يُحتسب الصرف أو تكلفة الليد حتى لا يظهر رقم مضلل.`;
+          if (!warnings.includes(message)) warnings.push(message);
+        }
+        rows.push(reportRow);
       }
     }
     const connected = data.status === 'ready';
     providers.push({ platform: adapter.code, name: adapter.name,
       status: connected ? 'ready' : data.status === 'failed' ? 'failed' : 'unavailable',
       note: String(data.note || ''),
-      incomplete: reports.some(report => Boolean(report.incomplete)) || Boolean(data.truncatedAccounts) || errors.length > 0,
+      incomplete: reports.some(report => Boolean(report.incomplete)) || Boolean(data.truncatedAccounts) || errors.length > 0 || warnings.some(x => x.startsWith('عملة ')),
       warnings, campaignCount });
   }
   // Neither empty API responses nor missing lead metrics can be treated as zero.
