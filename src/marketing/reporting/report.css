@@ -25,3 +25,19 @@
 
 /* Single report accounting currency; no per-account currency filter. */
 .mcr-currency-fixed{align-self:end;min-height:39px;display:inline-flex;align-items:center;padding:8px 12px;border:1px solid #d9e5e8;background:var(--surface,#f2f7f8);border-radius:10px;font-size:12px;font-weight:700;color:var(--ink,#315364)}
+
+/* Campaign graph selection and local manager annotation. */
+.mcr-table-scroll table { min-width:1200px; }
+.mcr-table-scroll tbody.mcr-selected-campaign > tr:first-child { background:#fff3ed; outline:1px solid #e1bdaa; outline-offset:-1px; }
+.mcr-table-scroll tbody tr[role=button] { cursor:pointer; }
+.mcr-table-scroll tbody tr[role=button]:focus-visible { outline:2px solid #b4765c; outline-offset:-2px; }
+.mcr-selected-details td { white-space:normal!important; background:#fffaf6; padding:17px 20px!important; }
+.mcr-campaign-details { display:grid; gap:12px; }
+.mcr-campaign-details > div:first-child {display:grid;gap:5px} .mcr-campaign-details > div:first-child strong{font-size:15px;color:#63382c} .mcr-campaign-details small{color:#806b62}
+.mcr-campaign-details-numbers{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.mcr-campaign-details-numbers span{display:grid;gap:4px;padding:9px 14px;background:#fff;border:1px solid #efdcd2;border-radius:9px;min-width:105px;font-size:11px;color:#786156}
+.mcr-campaign-details-numbers b{font-size:13px;color:#552c22}
+.mcr-campaign-manager{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
+.mcr-campaign-manager label{display:grid;gap:6px;width:min(360px,100%);font-size:12px;font-weight:700}
+.mcr-campaign-manager input{height:40px;min-width:0;border:1px solid #e2c9bc;border-radius:9px;padding:8px 12px;font:inherit;box-sizing:border-box;width:100%}
+.mcr-campaign-manager button{min-height:40px}.mcr-manager-saved{font-size:12px;color:#23734d!important}

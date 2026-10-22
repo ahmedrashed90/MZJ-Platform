@@ -9,7 +9,7 @@ export type CampaignReportRow = {
   accountName: string; currency: string; sourceCurrency: string; exchangeRate: number | null; campaignId: string; campaignName: string;
   status: string; spend: CampaignReportMetric; clicks: CampaignReportMetric; leads: CampaignReportMetric;
   costPerLead: CampaignReportMetric; interactions: CampaignReportMetric;
-  interactionsDefinition: string;
+  interactionsDefinition: string; managerName: string;
 };
 export type CampaignReportProvider = {
   platform: string; name: string; status: 'ready' | 'unavailable' | 'failed';
@@ -17,7 +17,7 @@ export type CampaignReportProvider = {
 };
 export type CampaignReportPayload = {
   ok: true; from: string; to: string; generatedAt: string;
-  rows: CampaignReportRow[]; providers: CampaignReportProvider[];
+  rows: CampaignReportRow[]; providers: CampaignReportProvider[]; canEditManager?: boolean;
 };
 
 /** Accounting conversion requested by MZJ: fixed USD/SAR peg for reports. */
@@ -35,7 +35,7 @@ const finiteMetric = (input: unknown): CampaignReportMetric => {
 };
 export function normalizeCampaignReportRow(input: {
   platform: string; platformName: string; accountId: unknown; accountName: unknown;
-  currency: unknown; campaignId: unknown; campaignName: unknown; status: unknown;
+  currency: unknown; campaignId: unknown; campaignName: unknown; managerName?: unknown; status: unknown;
   metrics: Record<string, unknown>; interactionField: string; interactionsDefinition: string;
 }): CampaignReportRow {
   const metrics = input.metrics || {};
@@ -53,7 +53,7 @@ export function normalizeCampaignReportRow(input: {
     accountId, accountName: String(input.accountName || accountId), currency: REPORT_CURRENCY, sourceCurrency, exchangeRate,
     campaignId, campaignName: String(input.campaignName || campaignId), status: String(input.status || ''),
     spend, clicks: finiteMetric(metrics.clicks), leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null,
-    interactions, interactionsDefinition: input.interactionsDefinition,
+    interactions, interactionsDefinition: input.interactionsDefinition, managerName: String(input.managerName || '').trim(),
   };
 }
 export function validateCampaignReportRange(from: unknown, to: unknown) {

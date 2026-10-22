@@ -44,7 +44,9 @@ export function ConnectedAccountsOverview({ dateFrom, dateTo, refreshSignal = 0 
         {accounts.map(account => <article key={`${code}-${account.id}`} className="panel marketing-meta-account-card marketing-social-account-card">
           <header className="marketing-meta-account-heading">
             <span className={`marketing-platform-chip ${code}`}>{logo}{name}</span>
-            <span className={`marketing-sync-status ${account.connected ? 'synced' : 'pending'}`}>{!account.connectionVerified ? 'تعذر التحقق' : account.reconnect ? 'إعادة ربط' : account.connected ? (account.stale ? 'آخر حالة: متصل' : 'متصل') : 'غير متصل'}</span>
+            <span className={`marketing-sync-status ${account.connected ? 'synced' : 'pending'}`}>{!account.connectionVerified
+              ? (account.lastDate || account.followers !== null ? 'آخر بيانات محفوظة' : 'بانتظار التحديث')
+              : account.reconnect ? 'إعادة ربط' : account.connected ? (account.stale ? 'آخر حالة: متصل' : 'متصل') : 'غير متصل'}</span>
           </header>
           <h4>{account.name}</h4>
           <div className="marketing-meta-follower-number"><strong>{number(account.followers)}</strong><small>متابع</small></div>
@@ -68,7 +70,7 @@ export function ConnectedAccountsOverview({ dateFrom, dateTo, refreshSignal = 0 
           <footer className="marketing-meta-account-footer"><span>آخر قراءة للمتابعين: {account.lastDate || '—'}</span></footer>
         </article>)}
         {!accounts.length && <article className="panel marketing-meta-account-card marketing-social-account-card">
-          <header className="marketing-meta-account-heading"><span className={`marketing-platform-chip ${code}`}>{logo}{name}</span><span className="marketing-sync-status pending">تعذر التحقق</span></header>
+          <header className="marketing-meta-account-heading"><span className={`marketing-platform-chip ${code}`}>{logo}{name}</span><span className="marketing-sync-status pending">{loading ? 'جاري التحديث' : 'بانتظار التحديث'}</span></header>
           <h4>حساب {name}</h4>
           <div className="marketing-meta-follower-number"><strong>—</strong><small>متابع</small></div>
           <p className="marketing-social-account-note">{result?.note || (loading ? 'جاري قراءة الحساب من BulkPublish…' : error || 'تعذر تحديد حالة القناة حاليًا. راجع اتصال BulkPublish لاحقًا.')}</p>

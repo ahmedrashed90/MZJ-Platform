@@ -9,7 +9,7 @@ type Rating = {
   item_id: string; assignee_id: string; assignee_name: string; percentage: number;
   scores: { criterionId: string; criterionName: string; score: number }[];
   created_at: string; updated_at: string; idea_name: string; task_name: string;
-  task_no: string; reviewer_name: string;
+  task_no: string; reviewer_name: string; outcome?: 'approved' | 'rejected';
 };
 type RatingPayload = { ok: true; rows: Rating[]; canViewAll: boolean };
 const dateKey = (date: Date) => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
@@ -79,7 +79,7 @@ export function MarketingRatingsPage() {
     <section className="panel mkw-ratings-ranking"><h3>ترتيب المنفذين</h3>
       <div className="mkw-ratings-table-scroll"><table><thead><tr><th>الترتيب</th><th>المنفذ</th><th>عدد المطلوبات المقيّمة</th><th>نسبة الجودة</th><th>التقدير</th><th>النجوم</th><th>التفاصيل</th></tr></thead><tbody>
         {ranking.map((row,index) => <Fragment key={row.id}><tr><td>{index+1}</td><td>{row.name}</td><td>{row.count}</td><td><strong>{asPercent(row.percentage)}</strong></td><td><span className={`mkw-rating-level is-${workRatingLevel(row.percentage).css}`}>{workRatingLevel(row.percentage).label}</span></td><td><RatingStars percentage={row.percentage}/></td><td><button type="button" className="secondary-button small" onClick={() => setExpanded(expanded === row.id ? '' : row.id)}>{expanded === row.id ? 'إغلاق' : 'عرض المطلوبات'}</button></td></tr>
-          {expanded === row.id && <tr key={`${row.id}-detail`} className="mkw-rating-detail-row"><td colSpan={7}><div>{row.ratings.map(item=><article key={item.item_id}><div><strong>{item.task_no} · {item.idea_name}</strong><span>{item.reviewer_name} · {new Date(item.created_at).toLocaleDateString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'Asia/Riyadh'})}</span></div><b>{asPercent(Number(item.percentage))}</b><div>{item.scores.map(score=><small key={score.criterionId}>{score.criterionName}: {score.score} / 3</small>)}</div></article>)}</div></td></tr>}
+          {expanded === row.id && <tr key={`${row.id}-detail`} className="mkw-rating-detail-row"><td colSpan={7}><div>{row.ratings.map(item=><article key={item.item_id}><div><strong>{item.task_no} · {item.idea_name}{item.outcome === 'rejected' ? ' · مطلوب مرفوض' : ''}</strong><span>{item.reviewer_name} · {new Date(item.created_at).toLocaleDateString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'Asia/Riyadh'})}</span></div><b>{asPercent(Number(item.percentage))}</b><div>{item.scores.map(score=><small key={score.criterionId}>{score.criterionName}: {score.score} / 3</small>)}</div></article>)}</div></td></tr>}
         </Fragment>)}
         {!ranking.length && <tr><td colSpan={7}>لا توجد تقييمات للفترة المحددة</td></tr>}
       </tbody></table></div>

@@ -114,7 +114,10 @@ async function listChannels(sql: Sql, key: string, platform: OrganicPlatform, ch
     });
     return { channels, warning: read.warning };
   } catch (error) {
-    return { channels: [], warning: `تعذر التحقق من قائمة ${platform === 'snapchat' ? 'Snapchat' : 'TikTok'} في BulkPublish (${error instanceof Error ? error.message : 'فشل الاتصال'}).` };
+    const reason = error instanceof Error ? error.message : 'فشل الاتصال';
+    return { channels: [], warning: /\b429\b/.test(reason)
+      ? 'وصل BulkPublish لحد الطلبات مؤقتًا (429)؛ تُعرض آخر بيانات محفوظة إن وُجدت.'
+      : `تعذر قراءة قائمة حسابات ${platform === 'snapchat' ? 'Snapchat' : 'TikTok'} (${reason}).` };
   }
 }
 function metricsRows(payload: Record<string, any>) { return arr(payload.metrics || obj(payload.data).metrics); }
@@ -215,7 +218,7 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string, 
       warning = `تعذر تحديث إحصائيات الحساب (${error instanceof Error ? error.message : 'فشل الاتصال'}).`;
       providerStale = true;
     }
-  } else warning = !channel.verified ? 'تعذر التحقق من حالة القناة حاليًا؛ لا يُعتبر الحساب مفصولًا.' : channel.reconnect ? 'الحساب يحتاج إعادة ربط داخل BulkPublish.' : 'أكد BulkPublish أن القناة غير نشطة في آخر تحديث ناجح.';
+  } else warning = !channel.verified ? 'حالة الاتصال قيد التحديث؛ تُعرض آخر البيانات المحفوظة ولا يُعتبر الحساب مفصولًا.' : channel.reconnect ? 'الحساب يحتاج إعادة ربط داخل BulkPublish.' : 'أكد BulkPublish أن القناة غير نشطة في آخر تحديث ناجح.';
 
   const remote = payload ? snapshotsFrom(payload, channel) : [];
   if (remote.length) { try { await store(sql, channel, remote); } catch { warning += ' تعذر حفظ التاريخ.'; } }

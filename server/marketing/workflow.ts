@@ -13,7 +13,7 @@ import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishi
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
 import { finalCoverage, matchingWorkflowPublishFiles, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
-import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem } from './evaluations.js';
+import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
@@ -72,7 +72,7 @@ async function notify(user: SessionUser, action: string, taskId: string, title: 
 async function taskVisible(db: any, user: SessionUser, taskId: string) {
   const scopes = departmentScope(user);
   const [row] = await db`select t.* from marketing.work_tasks t where t.id=${taskId}::uuid and t.is_deleted=false and (
-    ${isManager(user)} or t.created_by=${user.id}::uuid or exists(
+    ${(isManager(user) || canGradeWorkItem(user))} or t.created_by=${user.id}::uuid or exists(
       select 1 from marketing.work_items i left join core.departments d on d.id=i.department_id
       where i.task_id=t.id and (i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     ))`;
@@ -84,7 +84,7 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
   const [row] = await db`select i.*,t.name as task_name,t.task_no,t.created_by,t.status as task_status
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id where i.id=${itemId}::uuid and t.is_deleted=false and (
-      ${isManager(user)} or i.assigned_to=${user.id}::uuid or
+      ${(isManager(user) || canGradeWorkItem(user))} or i.assigned_to=${user.id}::uuid or
       (${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))} and t.created_by=${user.id}::uuid) or d.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.notFound);
   if (forEdit && !['in_progress', 'revision', 'submitted'].includes(row.status)) throw new Error(W.immutable);
@@ -141,11 +141,31 @@ async function recalculateTask(db: any, taskId: string) {
 async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const task = await taskVisible(db, user, taskId);
   const all = await loadItems(db, taskId);
-  const canSeeAll = isManager(user) || (task.created_by === user.id && (hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review')));
+  const canSeeAll = isManager(user) || canGradeWorkItem(user) || (task.created_by === user.id && (hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review')));
   const scopes = departmentScope(user);
   const permittedDepartments = scopes.length ? await db`select id::text from core.departments where code=any(${scopes}::text[]) and system_code='marketing'` : [];
   const departmentIds = new Set(permittedDepartments.map((d: any) => d.id));
   const items = canSeeAll ? all : all.filter(i => i.assigned_to === user.id || departmentIds.has(i.department_id));
+  // Rejected output is intentionally excluded from the active requirements and
+  // readiness. Retain a separate rating-only archive for administrators.
+  let rejectedItems: any[] = [];
+  try { rejectedItems = await db`select r.item_id::text as id,r.assigned_to::text,
+    coalesce(u.full_name,'') as assignee_name,r.idea_name,r.media_kind,
+    'rejected'::text as status,r.rejected_at,r.rejection_note,
+    case when r.percentage is not null then jsonb_build_object(
+      'percentage',r.percentage::float8,'scores',r.scores,
+      'created_at',r.rated_at,'updated_at',r.rated_at,
+      'reviewer_name',coalesce(rv.full_name,'')) else null end as rating
+    from marketing.work_rejected_items r
+    left join core.users u on u.id=r.assigned_to
+    left join core.users rv on rv.id=r.rated_by
+    where r.task_id=${taskId}::uuid and (${canSeeAll} or r.assigned_to=${user.id}::uuid)
+    order by r.rejected_at desc,r.item_id`;
+  } catch (error) {
+    // Keep existing task details usable if the new grading archive migration
+    // has not yet been applied. New rejection/rating requires that migration.
+    if (String((error as {code?:string})?.code || '') !== '42P01') throw error;
+  }
   const readiness = workReadiness(items);
   const dates = items.map(i => workDate(i.due_on)).sort();
   const [type] = await db`select name from marketing.campaign_types where id=${task.type_id}::uuid`;
@@ -153,7 +173,8 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const events = await db`select id,action,note,actor_name,created_at,item_id,data from marketing.work_history
     where task_id=${taskId}::uuid and (${canSeeAll} or item_id=any(${itemIds}::uuid[])) order by created_at desc,id desc limit 150`;
   return { ok: true, task: { ...task, type_name: type?.name || '', items, product_count: readiness.total,
-    approved_count: readiness.approved, readiness: readiness.percent, due_from: dates[0] || null, due_to: dates.at(-1) || null }, events, capabilities: workflowCapabilities(user), canRate: canGradeWorkItem(user) };
+    approved_count: readiness.approved, readiness: readiness.percent, due_from: dates[0] || null, due_to: dates.at(-1) || null }, rejectedItems,
+    events, capabilities: workflowCapabilities(user), canRate: canGradeWorkItem(user) };
 }
 async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   const scopes = departmentScope(user);
@@ -378,7 +399,13 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
       decision === 'approve' ? 'approved' : decision === 'revise' ? 'revision' : 'rejected', note,
       { formatIds: targets.map(row => row.format_id), categoryId });
     if (decision === 'reject') {
-      // The existing requirement-rejection policy is preserved.
+      // Keep rejection out of work_items/readiness/products, but retain a safe
+      // grading-only archive to allow the reviewer to rate a rejected output.
+      await tx`insert into marketing.work_rejected_items
+        (item_id,task_id,assigned_to,idea_name,media_kind,rejected_by,rejection_note)
+        values(${itemId}::uuid,${locked.task_id}::uuid,${locked.assigned_to}::uuid,
+          ${locked.idea_name},${locked.media_kind},${user.id}::uuid,${note})
+        on conflict(item_id) do nothing`;
       await tx`delete from marketing.work_items where id=${itemId}::uuid`;
     } else {
       for (const format of targets) {
@@ -905,9 +932,13 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   const from = text(request.query.from, 10), to = text(request.query.to, 10);
   if (!isWorkDate(from) || !isWorkDate(to) || from > to) throw new Error(W.dateInvalid);
   if ((new Date(to).getTime() - new Date(from).getTime()) / 86400000 > 62) throw new Error(W.dateInvalid);
-  const rows = await sql<any[]>`select i.id,i.task_id,i.due_on::text,i.media_kind,i.idea_name,i.status,t.name as task_name,t.task_no
+  const seeAll = isManager(user) || canGradeWorkItem(user);
+  const rows = await sql<any[]>`select i.id,i.task_id,i.due_on::text,i.media_kind,i.idea_name,i.status,t.name as task_name,t.task_no,
+    coalesce(u.full_name,'') as assignee_name
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
-    where t.is_deleted=false and i.assigned_to=${user.id}::uuid and i.due_on between ${from}::date and ${to}::date
+    left join core.users u on u.id=i.assigned_to
+    where t.is_deleted=false and (${seeAll} or i.assigned_to=${user.id}::uuid)
+      and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
   return { ok: true, rows };
 }
@@ -1379,6 +1410,16 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       const item = await visibleItem(sql, user, id(body.itemId));
       if (!canGradeWorkItem(user)) throw new Error(W.denied);
       result = await saveItemRating(sql, user, body, item);
+    }
+    else if (action === 'work_save_rejected_rating') {
+      if (!canGradeWorkItem(user)) throw new Error(W.denied);
+      const rejectedId = id(body.itemId);
+      const [rejected] = await sql<any[]>`select r.item_id,r.task_id,r.assigned_to
+        from marketing.work_rejected_items r join marketing.work_tasks t on t.id=r.task_id
+        where r.item_id=${rejectedId}::uuid and t.is_deleted=false`;
+      if (!rejected) throw new Error(W.notFound);
+      await taskVisible(sql,user,String(rejected.task_id));
+      result = await saveRejectedItemRating(sql,user,body,rejected);
     }
     else if (action === 'work_manage_note') {
       const item = await visibleItem(sql, user, id(body.itemId));

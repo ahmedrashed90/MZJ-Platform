@@ -620,3 +620,26 @@
 .mkw-note-management .mkw-review-controls{display:grid;gap:10px}
 @media(max-width:760px){.mkw-rating-criteria-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mkw-rating-final-result{grid-template-columns:1fr 1fr}}
 @media(max-width:450px){.mkw-rating-criteria-grid{grid-template-columns:1fr}.mkw-rating-final-result{grid-template-columns:1fr}.mkw-requirement-rating-result{gap:7px}}
+
+/* Stronger task identity, clearly distinguished requirement cards (marketing only). */
+.mkw-detail-overview { background:linear-gradient(130deg,#fff5ef 0%,#fffaf6 62%,#ffffff 100%); border-color:#dbab96; box-shadow:0 10px 30px rgba(100,50,30,.09); }
+.mkw-detail-overview .mkw-detail-title h2 { color:#562b22; }
+.mkw-detail-overview .mkw-summary { background:rgba(255,255,255,.87); border:1px solid #ead3c6; border-radius:12px; }
+.mkw-requirement-review-entry { border-width:1px; border-inline-start-width:5px; box-shadow:0 4px 13px rgba(85,52,43,.045); }
+.mkw-requirement-review-entry:nth-child(4n+1) { --mkw-item-accent:#b66e4f; --mkw-item-tint:#fff5ef; border-color:#e2c2ae; border-inline-start-color:var(--mkw-item-accent); }
+.mkw-requirement-review-entry:nth-child(4n+2) { --mkw-item-accent:#86734d; --mkw-item-tint:#fbf8ee; border-color:#e7dbc1; border-inline-start-color:var(--mkw-item-accent); }
+.mkw-requirement-review-entry:nth-child(4n+3) { --mkw-item-accent:#856373; --mkw-item-tint:#fbf4f8; border-color:#e3ccd7; border-inline-start-color:var(--mkw-item-accent); }
+.mkw-requirement-review-entry:nth-child(4n+4) { --mkw-item-accent:#537c76; --mkw-item-tint:#f0f8f5; border-color:#cadeD8; border-inline-start-color:var(--mkw-item-accent); }
+.mkw-requirement-review-entry > .mkw-requirement-review-toggle,
+.mkw-requirement-review-entry.is-open > .mkw-requirement-review-toggle { background:var(--mkw-item-tint); }
+.mkw-requirement-review-entry .mkw-item-number { background:var(--mkw-item-tint); color:var(--mkw-item-accent); border-color:var(--mkw-item-accent); }
+.mkw-requirement-review-entry .mkw-requirement-review-identify > strong { color:#532f26; }
+.mkw-requirement-review-entry > .mkw-execution-item { background:rgba(255,255,255,.98); }
+.mkw-requirement-review-entry.is-rejected { --mkw-item-accent:#b2473a; --mkw-item-tint:#fff0ec; border-color:#e9c0b9; border-inline-start-color:#b2473a; }
+.mkw-rejected-section { display:grid; gap:10px; margin-top:16px; }
+.mkw-rejected-section > h3 { color:#984437; font-size:15px; }
+.mkw-rejected-summary { padding:14px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.mkw-rejected-summary > div { display:grid; gap:5px; min-width:0; }
+.mkw-rejected-summary small { color:#826b63; }
+.mkw-rating-gate { color:#81675d; font-size:12px; }
+.mkw-rating-binary { background:#fff9f5!important; border-color:#b98065!important; }

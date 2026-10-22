@@ -102,6 +102,31 @@ commit;`;
 // Do not re-run the initial full workflow DDL just because a new column/table
 // was introduced: ALTER/CREATE within the entire bootstrap may deadlock with
 // concurrent reads and leave every serverless request running for 120 seconds.
+export const MARKETING_WORKFLOW_REJECTED_RATINGS_SQL = `-- Preserve a rejected executor's rating capability WITHOUT leaving the rejected
+-- requirement in the active task, readiness, product or publication pipeline.
+begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_rejected_items (
+  item_id uuid primary key,
+  task_id uuid not null references marketing.work_tasks(id) on delete cascade,
+  assigned_to uuid not null references core.users(id),
+  idea_name text not null,
+  media_kind text not null check(media_kind in ('image','video')),
+  rejected_by uuid references core.users(id),
+  rejected_at timestamptz not null default now(),
+  rejection_note text not null default '',
+  scores jsonb check(scores is null or jsonb_typeof(scores)='array'),
+  percentage numeric(5,2) check(percentage is null or percentage between 0 and 100),
+  rated_by uuid references core.users(id),
+  rated_at timestamptz
+);
+create index if not exists work_rejected_items_task on marketing.work_rejected_items(task_id,rejected_at desc);
+create index if not exists work_rejected_items_ratings on marketing.work_rejected_items(rated_at,assigned_to) where rated_at is not null;
+insert into marketing.workflow_migrations(code) values('schema-7') on conflict do nothing;
+commit;
+`;
+
 export const MARKETING_WORKFLOW_TASK_DELETE_SQL = `begin;
 set local lock_timeout = '3s';
 set local statement_timeout = '12s';
@@ -313,11 +338,11 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7') };
     };
-    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
+    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await flags()).hasRejected && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -328,6 +353,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
       if (!(await flags()).hasKpi) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
       if (!(await flags()).hasNotes) await runSqlScript(MARKETING_WORKFLOW_NOTES_SQL);
+      if (!(await flags()).hasRejected) await runSqlScript(MARKETING_WORKFLOW_REJECTED_RATINGS_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

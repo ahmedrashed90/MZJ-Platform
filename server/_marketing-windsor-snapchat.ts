@@ -128,9 +128,9 @@ export async function windsorSnapchatAdsData(from: string, to: string): Promise<
   if (fallback === 'all') warnings.push('تم جلب البيانات عبر /all بدل مسار Snapchat المباشر.');
   if (Array.isArray(rows) && rows.length >= 50000) warnings.push('نتيجة Windsor وصلت للحد الأعلى من الصفوف؛ قد تكون الفترة غير مكتملة. اختر فترة أقصر.');
   const payload: WindsorPayload = { status: 'ready',
-    note: 'Snapchat Ads عبر Windsor.ai؛ كل حملة صف واحد بإجمالي الفترة المختارة. native_leads تتطلب مطابقة مع Snapchat Ads Manager.',
-    reports: aggregated.reports.map(report => ({ ...report, warnings })), errors: [] };
-  if (!aggregated.reports.length && warnings.length) payload.note += ' ' + warnings.join(' ');
+    // Informational connector implementation notes are internal only. The
+    // report shows real provider failures, not technical explanations.
+    note: '', reports: aggregated.reports.map(report => ({ ...report, warnings })), errors: [] };
   resultCache.set(cacheKey, { time: Date.now() + 5 * 60_000, payload });
   if (resultCache.size > 16) resultCache.delete(resultCache.keys().next().value!);
   return payload;

@@ -53,14 +53,22 @@ const server = loadTS('server/_marketing-campaign-report.ts', {
   '../shared/campaign-report.js': shared,
   './_db.js': { getSql: () => {} },
 });
-const report = await server.consolidatedCampaignReport({}, '2026-10-01', '2026-10-21');
+const sql = async (parts, ...values) => {
+  const query = parts.join('?');
+  if (query.includes('from marketing.campaign_report_managers')) return [{ platform:'meta',account_id:'meta-1',campaign_id:'A',manager_name:'MZJ manager' }];
+  if (query.includes('insert into marketing.campaign_report_managers')) return [];
+  throw Error(`Unexpected SQL: ${query}`);
+};
+const report = await server.consolidatedCampaignReport(sql, '2026-10-01', '2026-10-21');
 check(report.rows.length === 3 && report.providers.length === 4, 'All registered providers appear even when one fails');
 check(report.providers.find(p => p.platform === 'tiktok').status === 'failed', 'Provider errors isolate rather than erase successful data');
 check(report.rows.find(r => r.platform === 'google').interactions === 80, 'Google engagements map to interactions without converting to likes');
 check(report.rows.find(r => r.platform === 'meta').leads === 10, 'Meta lead attribution preserved');
+check(report.rows.find(r => r.platform === 'meta').managerName === 'MZJ manager', 'Saved local campaign manager is joined on its account/campaign');
 check(report.rows.find(r => r.platform === 'snapchat').clicks === 60 && report.rows.find(r => r.platform === 'snapchat').interactions === null, 'Snapchat clicks are distinct from engagements');
 check(report.rows.every(r => r.currency === 'SAR') && report.rows.find(r => r.platform === 'google').sourceCurrency === 'USD' && report.rows.find(r => r.platform === 'google').spend === 168.75 && report.rows.find(r => r.platform === 'google').costPerLead === 84.375 && report.rows.find(r => r.platform === 'meta').spend === 500, 'Account spend/CPL normalized to SAR at USD x 3.75, SAR unchanged');
 check(calls.length === 2 && calls.every(call => call.from === '2026-10-01' && call.to === '2026-10-21'), 'One identical date filter sent to each reporting source');
+check((await server.saveCampaignReportManager(sql,{platform:'meta',accountId:'meta-1',campaignId:'A',managerName:'MZJ manager',updatedBy:'00000000-0000-4000-8000-000000000001'})).ok, 'Saving manager is independent of ad provider writes');
 let printHtml='';
 globalThis.window={open:()=>({document:{open(){},write(value){printHtml=value},close(){}}})};
 const exporters = loadTS('src/marketing/reporting/exportCampaignReport.ts');
@@ -79,6 +87,5 @@ for (const file of ['src/marketing/components/CampaignReportPage.tsx','src/marke
 const page=fs.readFileSync('src/marketing/pages/EngagementPage.tsx','utf8');
 const endpoints=fs.readFileSync('server/marketing/index.ts','utf8');
 check(page.includes('view === "report" ? <CampaignReportPage />') && endpoints.includes("if(resource==='campaign_report')"),'Campaign report has standalone tab and permission-protected API');
-check(!fs.readFileSync('server/_marketing-campaign-report.ts','utf8').includes('insert into marketing') &&
-  !fs.readFileSync('server/_marketing-campaign-report.ts','utf8').includes('update marketing'),'Report endpoints are read-only');
+check(!fs.readFileSync('server/_marketing-campaign-report.ts','utf8').slice(0,fs.readFileSync('server/_marketing-campaign-report.ts','utf8').indexOf('export async function saveCampaignReportManager')).includes('insert into marketing'),'Campaign reading does not mutate data; local manager annotation has its own permissioned route');
 console.log(`\n${passed}/${passed} unified campaign reporting contract checks passed`);

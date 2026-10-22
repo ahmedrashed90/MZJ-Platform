@@ -3,7 +3,7 @@ import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSim
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
-import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel } from '../../../shared/marketing-workflow';
+import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, type WorkItemRating } from '../../../shared/marketing-workflow';
 import { W, Empty, Field, FileLink, FilesPreview, Formats, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
 
@@ -13,8 +13,14 @@ function submittedDayInRiyadh(value: string | null | undefined) {
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh' }) : '—';
 }
 
+type RejectedRatingItem = {
+  id: string; assignee_name: string; idea_name: string; media_kind: 'image' | 'video';
+  status: 'rejected'; rejected_at: string; rejection_note: string; rating: WorkItemRating | null;
+};
+
 type Detail = {
   task: WorkTask & { items: WorkItem[] };
+  rejectedItems: RejectedRatingItem[];
   events: { id: string; action: string; note: string; actor_name: string; created_at: string; item_id: string | null }[];
   capabilities: WorkCapabilities;
   canRate: boolean;
@@ -31,24 +37,28 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const task = query.data?.task;
   const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter)) || [];
   async function refresh() { await query.reload(); onChanged?.(); }
-  const selectedRatingItem = task?.items.find(item => item.id === ratingItemId);
+  const selectedRatingItem = task?.items.find(item => item.id === ratingItemId)
+    || query.data?.rejectedItems?.find(item => item.id === ratingItemId);
   const canRate = Boolean(query.data?.canRate);
-  const ratingRows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id, name: c.name }))
-    : (selectedRatingItem?.rating?.scores || []).map(c => ({ id: c.criterionId, name: c.criterionName }));
-  const scored = ratingRows.length > 0 && ratingRows.every(c => Number.isInteger(ratingScores[c.id]) && ratingScores[c.id] !== '' && Number(ratingScores[c.id]) >= 0 && Number(ratingScores[c.id]) <= 3);
+  const ratingRows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id, name: c.name, binary: isBinaryProductDecisionCriterion(c.name) }))
+    : (selectedRatingItem?.rating?.scores || []).map(c => ({ id: c.criterionId, name: c.criterionName, binary: isBinaryProductDecisionCriterion(c.criterionName) }));
+  const ratingAllowed = Boolean(canRate && selectedRatingItem &&
+    (selectedRatingItem.status === 'rejected' || (selectedRatingItem.status === 'approved' && workItemReadiness(selectedRatingItem) === 100)));
+  const scored = ratingRows.length > 0 && ratingRows.every(c => Number.isInteger(ratingScores[c.id]) && ratingScores[c.id] !== ''
+    && Number(ratingScores[c.id]) >= 0 && Number(ratingScores[c.id]) <= 3 && (!c.binary || [0,3].includes(Number(ratingScores[c.id]))));
   const ratingTotal = ratingRows.reduce((sum,c) => sum + Number(ratingScores[c.id] || 0),0);
   const ratingPercentage = scored ? Math.round(ratingTotal/(ratingRows.length*3)*10000)/100 : null;
-  function openItemRating(item: WorkItem) {
+  function openItemRating(item: WorkItem | RejectedRatingItem) {
     const rows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id })) : (item.rating?.scores || []).map(c => ({ id: c.criterionId }));
     setRatingScores(Object.fromEntries(rows.map(c => [c.id,
       item.rating?.scores.find(s => s.criterionId === c.id)?.score ?? ''])));
     setRatingError(''); setRatingItemId(item.id);
   }
   async function saveItemRating() {
-    if (!selectedRatingItem || !canRate || !scored) { setRatingError('حدد درجة كل بند من 0 إلى 3'); return; }
+    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد الاعتماد 100% أو الرفض، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
     setRatingBusy(true); setRatingError('');
     try {
-      await workPost('save_rating', { itemId: selectedRatingItem.id,
+      await workPost(selectedRatingItem.status === 'rejected' ? 'save_rejected_rating' : 'save_rating', { itemId: selectedRatingItem.id,
         scores: ratingRows.map(row => ({ criterionId: row.id, score: ratingScores[row.id] })) });
       await refresh(); setRatingItemId('');
     } catch (e) { setRatingError(e instanceof Error ? e.message : W.invalid); }
@@ -70,6 +80,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               const reviews = item.format_reviews || [];
               const pending = reviews.filter(r => r.status === 'submitted').length;
               const approved = reviews.filter(r => r.status === 'approved').length;
+              const gradeReady = item.status === 'approved' && workItemReadiness(item) === 100;
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
@@ -85,15 +96,31 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                     <span className={`mkw-rating-level is-${workRatingLevel(Number(item.rating.percentage)).css}`}>{workRatingLevel(Number(item.rating.percentage)).label}</span>
                     <RatingStars percentage={Number(item.rating.percentage)}/></div>
                     : <span className="mkw-rating-unrated">لم يتم التقييم</span>}
-                  {(canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
+                  {gradeReady && (canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
                     {canRate ? (item.rating ? 'تعديل التقييم' : 'تقييم المنفذ') : 'عرض التقييم'}
                   </button>}
+                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100%</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
                   canRate={query.data!.canRate} settings={settings.data} refresh={refresh} />}
               </section>;
             })}
+          </div>}
+          {!onlyItems && !deliveryFilter && !!query.data?.rejectedItems?.length && <div className="mkw-rejected-section">
+            <h3>المطلوبات المرفوضة — محفوظة للتقييم فقط ولا تدخل في الجاهزية</h3>
+            {query.data.rejectedItems.map(item => <section key={item.id} className="mkw-requirement-review-entry is-rejected">
+              <div className="mkw-rejected-summary">
+                <div><strong>{item.idea_name}</strong><small>المنفذ: {item.assignee_name} · مرفوض · {showDate(item.rejected_at,true)}</small>
+                  {item.rejection_note && <small>{item.rejection_note}</small>}</div>
+                <div className="mkw-actions">
+                  {item.rating && <strong dir="ltr">{Number(item.rating.percentage).toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>}
+                  {(canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
+                    {canRate ? item.rating ? 'تعديل التقييم' : 'تقييم المنفذ' : 'عرض التقييم'}
+                  </button>}
+                </div>
+              </div>
+            </section>)}
           </div>}
         </section>
         <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
@@ -105,11 +132,17 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
           <div className="mkw-rating-criteria-grid">
             {ratingRows.map(row => <label key={row.id} className="mkw-rating-criterion">
               <span>{row.name}</span>
-              {canRate ? <input type="number" min="0" max="3" step="1" value={ratingScores[row.id] ?? ''}
-                disabled={ratingBusy} placeholder="0 - 3"
-                onChange={event => { const value = event.target.value;
-                  if (value === '') setRatingScores(current => ({...current,[row.id]:''}));
-                  else if (/^[0-3]$/.test(value)) setRatingScores(current => ({...current,[row.id]:Number(value)})); }} />
+              {ratingAllowed ? (row.binary
+                ? <select className="mkw-rating-binary" value={ratingScores[row.id] ?? ''} disabled={ratingBusy}
+                    aria-label={`${row.name} — 0 أو 3 فقط`}
+                    onChange={event => setRatingScores(current => ({...current,[row.id]:event.target.value === '' ? '' : Number(event.target.value)}))}>
+                    <option value="">اختر 0 أو 3</option><option value="0">0 — رفض</option><option value="3">3 — قبول</option>
+                  </select>
+                : <input type="number" min="0" max="3" step="1" value={ratingScores[row.id] ?? ''}
+                    disabled={ratingBusy} placeholder="0 - 3"
+                    onChange={event => { const value = event.target.value;
+                      if (value === '') setRatingScores(current => ({...current,[row.id]:''}));
+                      else if (/^[0-3]$/.test(value)) setRatingScores(current => ({...current,[row.id]:Number(value)})); }} />)
                 : <strong>{ratingScores[row.id] ?? '—'} / 3</strong>}
             </label>)}
           </div>
@@ -118,7 +151,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
             <div><small>نسبة الجودة</small><strong dir="ltr">{ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong></div>
             <div><small>التقدير النهائي</small><strong className={`mkw-rating-level is-${workRatingLevel(ratingPercentage).css}`}>{workRatingLevel(ratingPercentage).label}</strong><RatingStars percentage={ratingPercentage}/></div>
           </div>}
-          {canRate && <div className="mkw-actions"><button type="button" className="primary" disabled={ratingBusy || !scored}
+          {ratingAllowed && <div className="mkw-actions"><button type="button" className="primary" disabled={ratingBusy || !scored}
             onClick={() => void saveItemRating()}>حفظ التقييم</button></div>}
         </div>
       </Modal>
@@ -143,6 +176,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
+  const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
@@ -180,11 +214,16 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
       finally { setProgress(null); controller.current = null; }
     });
   }
+  function beginRevision(formatId?: string) {
+    setRevisionFormat(formatId || 'all');
+    setEditingNoteId(null); setNoteType(''); setNote(''); setShowNoteEditor(false); setError('');
+  }
   async function review(decision: 'approve' | 'revise' | 'reject', formatId?: string) {
     if (decision === 'revise' && (!note.trim() || !noteType)) { setError('اختر نوع الملاحظة واكتب التفاصيل'); return; }
     if (decision === 'reject' && !window.confirm(W.rejectedConfirm)) return;
-    await run(() => workPost('review', { itemId: item.id, version: version.current, decision,
+    const saved = await run(() => workPost('review', { itemId: item.id, version: version.current, decision,
       ...(formatId ? { formatId } : {}), note: decision === 'revise' ? note : '', categoryId: decision === 'revise' ? noteType : undefined }));
+    if (saved) { setRevisionFormat(null); setShowNoteEditor(false); setNote(''); setNoteType(''); }
   }
   async function manageNote(remove = false, noteId: string | null = editingNoteId) {
     if (remove && !noteId) return;
@@ -205,8 +244,8 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
       <section className="mkw-note-management">
         <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
-          {canRate && <button type="button" className="secondary" disabled={busy} onClick={() => {
-            setEditingNoteId(null); setNote(''); setNoteType(''); setShowNoteEditor(!showNoteEditor);
+          {canRate && revisionFormat !== null && hasSubmitted && <button type="button" className="secondary" disabled={busy} onClick={() => {
+            setEditingNoteId(null); setNote(''); setNoteType(''); setShowNoteEditor(true);
           }}>إضافة ملاحظة</button>}
         </div>
         {activeNotes.length > 0 && <div className="mkw-review-notes-list">{activeNotes.map(reviewNote =>
@@ -228,11 +267,13 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
             </div>}
           </article>)}</div>
         </details>}
-        {showNoteEditor && canRate && <div className="mkw-review-controls"><div className="mkw-note-fields">
+        {showNoteEditor && canRate && (editingNoteId !== null || revisionFormat !== null) && <div className="mkw-review-controls"><div className="mkw-note-fields">
           <Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
           <Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} maxLength={10000} onChange={event => setNote(event.target.value)}/></Field>
-        </div><div className="mkw-actions"><button type="button" className="primary" disabled={busy || !noteType || !note.trim()} onClick={() => void manageNote(false)}>
-          {editingNoteId ? 'حفظ التعديل' : 'إضافة ملاحظة'}</button></div></div>}
+        </div><div className="mkw-actions"><button type="button" className="primary" disabled={busy || !noteType || !note.trim()}
+          onClick={() => editingNoteId ? void manageNote(false) : void review('revise', revisionFormat === 'all' ? undefined : revisionFormat || undefined)}>
+          {editingNoteId ? 'حفظ التعديل' : 'إضافة ملاحظة وتأكيد التعديل'}</button>
+          <button type="button" className="secondary" disabled={busy} onClick={() => { setShowNoteEditor(false); setRevisionFormat(null); setEditingNoteId(null); }}>إلغاء</button></div></div>}
       </section>
       {rating && <div className="mkw-rating-reviewer">{rating.reviewer_name} · {showDate(rating.updated_at,true)}</div>}
       <div className="mkw-item-detail-grid">
@@ -257,7 +298,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
               <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><span className="mkw-format-state">{state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div>
               {formatFiles.map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !locked && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
               {canUpload && !locked && <label className="mkw-upload-action"><UploadSimple size={17}/><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
-              {capabilities.review && state === 'submitted' && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => void review('revise', format.id)}>إرجاع المقاس</button></div>}
+              {capabilities.review && state === 'submitted' && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}>تعديل</button></div>}
             </div>;
           })}</div>
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
@@ -266,7 +307,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
         </section>
       </div>
       {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
-      {capabilities.review && hasSubmitted && <section className="mkw-review-controls"><div className="mkw-note-fields"><Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field><Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} onChange={event => setNote(event.target.value)} maxLength={10000} /></Field></div><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => void review('revise')}>{W.revise} الملفات المرفوعة</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
+      {capabilities.review && hasSubmitted && <section className="mkw-review-controls"><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
     </div>
 
   </article>;

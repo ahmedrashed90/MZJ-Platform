@@ -2,6 +2,13 @@ import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFo
 
 export type WorkMediaKind = 'image' | 'video';
 export type WorkItemStatus = 'in_progress' | 'submitted' | 'revision' | 'approved';
+/** Only the product acceptance/rejection criterion is binary; all others keep 0,1,2,3. */
+export function isBinaryProductDecisionCriterion(name: unknown): boolean {
+  const normalized = String(name ?? '').toLowerCase()
+    .replace(/[\u064b-\u065f\u0670]/g,'').replace(/[\u0622\u0623\u0625]/g,'ا').replace(/\s+/g,' ').trim();
+  return /قبول\s*(?:او|\/)\s*رفض\s*المنتج/.test(normalized);
+}
+
 export type WorkPlanKind = 'agenda' | 'campaign';
 export type WorkFormat = { id: string; platform_id: string; platform_name: string; platform_code: string; name: string; width?: number | null; height?: number | null };
 export type WorkFile = { id: string; name: string; mime_type: string; file_size: number; category: 'idea' | 'final'; format_id: string; status: string; order_index?: number };
