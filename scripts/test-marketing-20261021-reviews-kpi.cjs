@@ -81,6 +81,22 @@ async function main(){
     const result=await ratings.saveRejectedItemRating(db,admin,{scores:[{criterionId:id(201),score:0},{criterionId:id(202),score:3}]},{item_id:item.id});
     assert.equal(result.percentage,50);db.assertDone();
   });
+  await check('Approved and rejected ratings both appear in the executor ratings report',async()=>{
+    const timestamp='2026-10-22T16:24:47.000Z';
+    const approved={item_id:id(100),assignee_id:executor.id,assignee_name:'Executor',percentage:100,scores:[],created_at:timestamp,updated_at:timestamp,idea_name:'Approved',task_name:'Task',task_no:'TSK-001',reviewer_name:'Admin',outcome:'approved'};
+    const rejected={...approved,item_id:id(101),percentage:83.33,idea_name:'Rejected',outcome:'rejected'};
+    const db=scriptedSql([step('with all_ratings as (',[approved,rejected],(_,sql)=>{
+      assert(sql.includes('union all'));
+      assert(sql.includes('from marketing.work_rejected_items r'));
+      assert(sql.includes('where r.percentage is not null'));
+      assert(sql.includes('coalesce(r.rated_at,r.rejected_at) as created_at'));
+      assert(sql.includes('left join core.users u on u.id=r.assignee_id'));
+    })]);
+    const result=await ratings.ratingsReport(db,admin,{dateFrom:'2026-10-01',dateTo:'2026-10-22'});
+    assert.equal(result.rows.length,2);
+    assert.deepEqual(result.rows.map(row=>row.outcome),['approved','rejected']);
+    assert.equal(result.rows[1].percentage,83.33);db.assertDone();
+  });
   await check('Only managers may change review notes, and categories validate against settings',async()=>{
     await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),executor,{remove:true},item));
     const db=scriptedSql([step('select id',[{id:item.id}]),step('select id from marketing.work_review_categories',[{id:id(301)}]),step('insert into marketing.work_item_review_notes'),step('update marketing.work_items')]);
@@ -108,13 +124,24 @@ async function main(){
     assert(sql.includes('on conflict do nothing'));
     assert(!/drop\s+(?:table|schema)|truncate\s+table/i.test(sql));
   });
-  await check('Rating controls are three per row and stars appear only with overall result',()=>{
+  await check('Rating controls remain three per row while computed results are hidden until saved',()=>{
     const task=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
     const css=fs.readFileSync(path.join(root,'src/marketing/workflow/workflow.css'),'utf8');
-    assert(task.includes('mkw-rating-final-result') && task.includes('mkw-requirement-rating-strip'));
+    assert(!task.includes('mkw-rating-final-result') && task.includes('mkw-requirement-rating-strip'));
+    assert(task.includes('mkw-requirement-rating-result') && task.includes('RatingStars percentage={Number(item.rating.percentage)}'));
+    assert(!task.includes('const ratingTotal =') && !task.includes('const ratingPercentage =')); 
     assert(task.includes('type="number" min="0" max="3" step="1"'));
     assert(css.includes('mkw-rating-criteria-grid{display:grid;grid-template-columns:repeat(3'));
     assert(!task.includes('اختر الدرجة'));
+  });
+  await check('Monthly top evaluation includes the grade name and its numeric result',()=>{
+    const ui=fs.readFileSync(path.join(root,'src/marketing/pages/MarketingRatingsPage.tsx'),'utf8');
+    assert(ui.includes('أعلى تقييم خلال كل شهر'));
+    assert(ui.includes('>التقدير</span>'));
+    assert(ui.includes('>نتيجة التقدير</span>'));
+    assert(ui.includes('workRatingLevel(winner.percentage).label'));
+    assert(ui.includes('asPercent(winner.percentage)'));
+    assert(ui.includes("window.addEventListener('mzj-marketing-work-changed', refreshRatings)"));
   });
   await check('Schema includes independent format approvals and review ratings',()=>{
     const schema=fs.readFileSync(path.join(root,'database/migrations/20261021_marketing_reviews_kpi.sql'),'utf8');

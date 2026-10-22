@@ -602,11 +602,6 @@
 .mkw-rating-criterion>span{font-size:13px;font-weight:800;color:var(--ink,#55302a);overflow-wrap:anywhere}
 .mkw-rating-criterion input{display:block;width:100%;max-width:150px;min-height:44px;text-align:center;border:1px solid var(--line,#e9ded8);border-radius:9px;font:inherit;font-weight:800;color:var(--ink);background:#fff}
 .mkw-rating-criterion>strong{font-size:16px}
-.mkw-rating-final-result{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:16px;border-radius:14px;background:var(--surface,#faf6f4);border:1px solid var(--line,#e9deda)}
-.mkw-rating-final-result>div{display:grid;justify-items:center;align-content:center;gap:7px;text-align:center}
-.mkw-rating-final-result small{font-size:12px;color:var(--muted,#776a67)}
-.mkw-rating-final-result strong{font-size:22px;color:var(--ink,#68362c)}
-.mkw-rating-final-result .mkw-rating-level{font-size:15px}
 .mkw-rating-reviewer{font-size:11px;color:var(--muted,#877c78)}
 .mkw-note-management{display:grid;gap:12px;margin:14px 0;padding:14px;border:1px solid var(--line,#e8e1dc);border-radius:13px}
 .mkw-note-management>.mkw-section-title{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
@@ -618,8 +613,8 @@
 .mkw-reviewed-notes-history>summary{cursor:pointer;font-size:12px;font-weight:700;color:var(--muted,#857c77)}
 .mkw-reviewed-notes-history>.mkw-review-notes-list{margin-top:10px}
 .mkw-note-management .mkw-review-controls{display:grid;gap:10px}
-@media(max-width:760px){.mkw-rating-criteria-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mkw-rating-final-result{grid-template-columns:1fr 1fr}}
-@media(max-width:450px){.mkw-rating-criteria-grid{grid-template-columns:1fr}.mkw-rating-final-result{grid-template-columns:1fr}.mkw-requirement-rating-result{gap:7px}}
+@media(max-width:760px){.mkw-rating-criteria-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:450px){.mkw-rating-criteria-grid{grid-template-columns:1fr}.mkw-requirement-rating-result{gap:7px}}
 
 /* Stronger task identity, clearly distinguished requirement cards (marketing only). */
 .mkw-detail-overview { background:linear-gradient(130deg,#fff5ef 0%,#fffaf6 62%,#ffffff 100%); border-color:#dbab96; box-shadow:0 10px 30px rgba(100,50,30,.09); }

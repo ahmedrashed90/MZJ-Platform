@@ -46,8 +46,6 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
     (selectedRatingItem.status === 'rejected' || (selectedRatingItem.status === 'approved' && workItemReadiness(selectedRatingItem) === 100)));
   const scored = ratingRows.length > 0 && ratingRows.every(c => Number.isInteger(ratingScores[c.id]) && ratingScores[c.id] !== ''
     && Number(ratingScores[c.id]) >= 0 && Number(ratingScores[c.id]) <= 3 && (!c.binary || [0,3].includes(Number(ratingScores[c.id]))));
-  const ratingTotal = ratingRows.reduce((sum,c) => sum + Number(ratingScores[c.id] || 0),0);
-  const ratingPercentage = scored ? Math.round(ratingTotal/(ratingRows.length*3)*10000)/100 : null;
   function openItemRating(item: WorkItem | RejectedRatingItem) {
     const rows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id })) : (item.rating?.scores || []).map(c => ({ id: c.criterionId }));
     setRatingScores(Object.fromEntries(rows.map(c => [c.id,
@@ -114,7 +112,11 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                 <div><strong>{item.idea_name}</strong><small>المنفذ: {item.assignee_name} · مرفوض · {showDate(item.rejected_at,true)}</small>
                   {item.rejection_note && <small>{item.rejection_note}</small>}</div>
                 <div className="mkw-actions">
-                  {item.rating && <strong dir="ltr">{Number(item.rating.percentage).toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>}
+                  {item.rating && <div className="mkw-requirement-rating-result"><strong>تقييم المنفذ</strong>
+                    <strong dir="ltr">{Number(item.rating.percentage).toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>
+                    <span className={`mkw-rating-level is-${workRatingLevel(Number(item.rating.percentage)).css}`}>{workRatingLevel(Number(item.rating.percentage)).label}</span>
+                    <RatingStars percentage={Number(item.rating.percentage)}/>
+                  </div>}
                   {(canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
                     {canRate ? item.rating ? 'تعديل التقييم' : 'تقييم المنفذ' : 'عرض التقييم'}
                   </button>}
@@ -146,11 +148,6 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                 : <strong>{ratingScores[row.id] ?? '—'} / 3</strong>}
             </label>)}
           </div>
-          {ratingPercentage !== null && <div className="mkw-rating-final-result">
-            <div><small>إجمالي الدرجات</small><strong dir="ltr">{ratingTotal} / {ratingRows.length*3}</strong></div>
-            <div><small>نسبة الجودة</small><strong dir="ltr">{ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong></div>
-            <div><small>التقدير النهائي</small><strong className={`mkw-rating-level is-${workRatingLevel(ratingPercentage).css}`}>{workRatingLevel(ratingPercentage).label}</strong><RatingStars percentage={ratingPercentage}/></div>
-          </div>}
           {ratingAllowed && <div className="mkw-actions"><button type="button" className="primary" disabled={ratingBusy || !scored}
             onClick={() => void saveItemRating()}>حفظ التقييم</button></div>}
         </div>

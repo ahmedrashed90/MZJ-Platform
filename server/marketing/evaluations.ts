@@ -177,17 +177,19 @@ export async function ratingsReport(sql: Sql, user: SessionUser, query: Row) {
       join marketing.work_items i on i.id=r.item_id
       join marketing.work_tasks t on t.id=i.task_id and t.is_deleted=false
       union all
-      select r.item_id,r.assigned_to as assignee_id,r.percentage,r.scores,r.rated_at as created_at,
-        r.rated_at as updated_at,r.idea_name,t.name as task_name,t.task_no,r.rated_by,'rejected'::text as outcome
+      select r.item_id,r.assigned_to as assignee_id,r.percentage,coalesce(r.scores,'[]'::jsonb) as scores,
+        coalesce(r.rated_at,r.rejected_at) as created_at,
+        coalesce(r.rated_at,r.rejected_at) as updated_at,r.idea_name,
+        t.name as task_name,t.task_no,r.rated_by,'rejected'::text as outcome
       from marketing.work_rejected_items r
       join marketing.work_tasks t on t.id=r.task_id and t.is_deleted=false
-      where r.rated_at is not null
+      where r.percentage is not null
     )
-    select r.item_id::text,r.assignee_id::text,u.full_name as assignee_name,
+    select r.item_id::text,r.assignee_id::text,coalesce(u.full_name,'منفذ سابق') as assignee_name,
       r.percentage::float8,r.scores,r.created_at,r.updated_at,
       r.idea_name,r.task_name,r.task_no,r.outcome,rv.full_name as reviewer_name
     from all_ratings r
-    join core.users u on u.id=r.assignee_id
+    left join core.users u on u.id=r.assignee_id
     left join core.users rv on rv.id=r.rated_by
     where (r.created_at at time zone 'Asia/Riyadh')::date >= ${from}::date
       and (r.created_at at time zone 'Asia/Riyadh')::date <= ${to}::date

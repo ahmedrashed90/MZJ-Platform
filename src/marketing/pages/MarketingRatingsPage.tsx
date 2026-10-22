@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Medal, TrendUp, UsersThree, CalendarBlank } from '@phosphor-icons/react';
 import { workRatingLevel } from '../../../shared/marketing-workflow';
 import { RatingStars } from '../workflow/TaskDetail';
@@ -37,6 +37,12 @@ export function MarketingRatingsPage() {
   const [expanded, setExpanded] = useState('');
   const valid = Boolean(/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to);
   const query = useWorkQuery<RatingPayload>('ratings', { dateFrom: applied.from, dateTo: applied.to });
+  // Keep the ranking up-to-date when a requirement is graded in another panel.
+  useEffect(() => {
+    const refreshRatings = () => { if (document.visibilityState === 'visible') void query.reload(); };
+    window.addEventListener('mzj-marketing-work-changed', refreshRatings);
+    return () => window.removeEventListener('mzj-marketing-work-changed', refreshRatings);
+  }, [query.reload]);
   const all = query.data?.rows || [];
   const people = useMemo(() => [...new Map(all.map(row => [row.assignee_id, row.assignee_name])).entries()].sort((a,b) => a[1].localeCompare(b[1], 'ar')), [all]);
   const years = useMemo(() => [...new Set(all.map(row => ratingDate(row.created_at).slice(0,4)))].sort().reverse(), [all]);
@@ -73,7 +79,10 @@ export function MarketingRatingsPage() {
       <article className="panel"><UsersThree size={28}/><span>المنفذون المقيّمون</span><strong>{ranking.length.toLocaleString('ar-SA-u-nu-latn')}</strong></article>
     </div>
     <section className="panel mkw-ratings-monthly"><header><CalendarBlank size={23}/><h3>أعلى تقييم خلال كل شهر</h3></header>
-      <div className="mkw-ratings-months">{months.map(({key,winner}) => winner && <article key={key}><small>{monthFormat.format(new Date(`${key}-01T12:00:00Z`))}</small><strong>{winner.name}</strong><b>{asPercent(winner.percentage)}</b><RatingStars percentage={winner.percentage}/><span>{winner.count} مطلوب مقيّم</span></article>)}</div>
+      <div className="mkw-ratings-months">{months.map(({key,winner}) => winner && <article key={key}><small>{monthFormat.format(new Date(`${key}-01T12:00:00Z`))}</small><strong>{winner.name}</strong>
+        <div className="mkw-ratings-monthly-grade"><span>التقدير</span><strong className={`mkw-rating-level is-${workRatingLevel(winner.percentage).css}`}>{workRatingLevel(winner.percentage).label}</strong></div>
+        <div className="mkw-ratings-monthly-grade"><span>نتيجة التقدير</span><b>{asPercent(winner.percentage)}</b></div>
+        <RatingStars percentage={winner.percentage}/><span>{winner.count} مطلوب مقيّم</span></article>)}</div>
       {!months.length && <div className="mkw-ratings-empty">لا توجد تقييمات للفترة المحددة</div>}
     </section>
     <section className="panel mkw-ratings-ranking"><h3>ترتيب المنفذين</h3>

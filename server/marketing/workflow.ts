@@ -940,7 +940,30 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     where t.is_deleted=false and (${seeAll} or i.assigned_to=${user.id}::uuid)
       and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
-  return { ok: true, rows };
+  // A task may have deliverables due on different dates. Its readiness must
+  // include all visible current deliverables, not just the selected day.
+  // Fetch those deliverables in one batch and use the SAME shared readiness
+  // calculation as task details (including partial uploads and approvals).
+  const taskIds = [...new Set(rows.map(row => String(row.task_id)))];
+  if (!taskIds.length) return { ok: true, rows };
+  const readinessItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+    coalesce((select jsonb_agg(jsonb_build_object(
+      'category',j.category,'format_id',j.format_id,'status',f.status,
+      'name',f.original_name,'mime_type',f.mime_type))
+      from marketing.work_item_files j join marketing.files f on f.id=j.file_id
+      where j.item_id=i.id and f.status='ready'),'[]'::jsonb) as files,
+    coalesce((select jsonb_agg(jsonb_build_object('format_id',fr.format_id,'status',fr.status))
+      from marketing.work_format_reviews fr where fr.item_id=i.id),'[]'::jsonb) as format_reviews
+    from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
+    where t.is_deleted=false and i.task_id=any(${taskIds}::uuid[])
+      and (${seeAll} or i.assigned_to=${user.id}::uuid)`;
+  const grouped = new Map<string, WorkItem[]>();
+  for (const item of readinessItems) {
+    const key = String(item.task_id);
+    grouped.set(key, [...(grouped.get(key) || []), item as WorkItem]);
+  }
+  const readinessByTask = new Map([...grouped.entries()].map(([key, items]) => [key, workReadiness(items).percent]));
+  return { ok: true, rows: rows.map(row => ({ ...row, task_readiness: readinessByTask.get(String(row.task_id)) ?? 0 })) };
 }
 
 async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, services: WorkflowServices) {
