@@ -1,0 +1,12 @@
+إعادة بناء فلو Meta لاستخدام Facebook Login for Business Configuration
+
+MODIFIED
+- .env.example
+- server/_platform-connections.ts
+- scripts/check-marketing-platform-connections-rebuild-v1212.mjs
+- docs/MARKETING-PLATFORM-CONNECTIONS-CLEAN-REBUILD-V1212-AR.md
+
+ADDED
+- docs/META-FACEBOOK-LOGIN-FOR-BUSINESS-CLEAN-FLOW-AR.md
+- docs/META-FACEBOOK-LOGIN-FOR-BUSINESS-CHANGED-FILES.txt
+- test-results/META-FACEBOOK-LOGIN-FOR-BUSINESS-TEST-RESULTS.txt
