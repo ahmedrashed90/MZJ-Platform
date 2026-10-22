@@ -25,9 +25,10 @@ import {
 } from "@phosphor-icons/react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
+import { LeadDrawer } from "../components/LeadDrawer";
 import { crmFetch, departmentLabel, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
-import type { CrmMeta, CrmUserOption } from "../types";
+import type { CrmLead, CrmMeta, CrmUserOption } from "../types";
 
 type ContactRow = {
   id: string;
@@ -215,6 +216,8 @@ export function CrmContactsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [profile, setProfile] = useState<ContactProfile | null>(null);
+  const [conversationLead, setConversationLead] = useState<CrmLead | null>(null);
+  const [conversationMeta, setConversationMeta] = useState<CrmMeta | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [purgeOpen, setPurgeOpen] = useState(false);
@@ -239,7 +242,7 @@ export function CrmContactsPage() {
   const openedFromList = useRef(false);
   const listScroll = useRef(0);
 
-  useEscapeToClose(Boolean(contactId && !purgeOpen && !editingOrder && !creatingOrder && !deletingOrder), () => closeProfile());
+  useEscapeToClose(Boolean(contactId && !conversationLead && !purgeOpen && !editingOrder && !creatingOrder && !deletingOrder), () => closeProfile());
   useEscapeToClose(purgeOpen, () => setPurgeOpen(false));
   useEscapeToClose(Boolean(editingOrder), () => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); });
   useEscapeToClose(creatingOrder, () => { setCreatingOrder(false); setCreateOrderDraft(null); setCreateOrderError(""); });
@@ -277,6 +280,7 @@ export function CrmContactsPage() {
 
   useEffect(() => { void loadList(); }, [appliedQ, page]);
   useEffect(() => {
+    setConversationLead(null);
     if (contactId) void loadProfile(contactId);
     else {
       setProfile(null);
@@ -556,6 +560,16 @@ export function CrmContactsPage() {
     }
   }
 
+  function openContactConversation(lead: CrmLead) {
+    // Open the existing conversation drawer directly: sold leads are not in the dashboard list.
+    setConversationLead(lead);
+    if (!conversationMeta) {
+      void crmFetch<CrmMeta>("/api/crm/meta").then(setConversationMeta).catch((failure) => {
+        console.warn("تعذر تحميل إعدادات محادثة العميل", failure);
+      });
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const lead = latestLead(profile);
   const contactName = profile ? text(profile.contact.display_name || lead?.customer_name) : "";
@@ -607,7 +621,7 @@ export function CrmContactsPage() {
     {contactId ? <div className="crm-contact-profile-backdrop">
       <article className="crm-contact-profile-v2">
         <header className="crm-contact-profile-hero">
-          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeError(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
+          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile && lead && !lead.is_deleted ? <button type="button" className="crm-secondary-button compact crm-contact-open-conversation-button" onClick={() => openContactConversation({ ...lead, phone: lead.phone || profile.contact.primary_phone || "", phone_normalized: lead.phone_normalized || profile.contact.primary_phone_normalized || "" } as CrmLead)}><ChatCircleDots size={18} />فتح محادثة العميل</button> : null}{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeError(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
           {profileLoading && !profile ? <div className="crm-contact-profile-loading">جاري تحميل ملف العميل...</div> : null}
           {profile ? <div className="crm-contact-profile-identity">
             <span className="crm-contact-avatar"><IdentificationCard size={34} weight="duotone" /></span>
@@ -689,6 +703,13 @@ export function CrmContactsPage() {
         </div> : null}
       </article>
     </div> : null}
+
+    {conversationLead ? <LeadDrawer
+      lead={conversationLead}
+      meta={conversationMeta}
+      onClose={() => setConversationLead(null)}
+      onSaved={(updated) => { setConversationLead(updated); if (contactId) void loadProfile(contactId); }}
+    /> : null}
 
     {purgeOpen && profile ? <div className="crm-modal-backdrop crm-contact-purge-backdrop" onMouseDown={() => { setPurgeOpen(false); setPurgeError(""); }}><div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا.</p></div><button className="crm-icon-button" type="button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}><X size={18} /></button></header><div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div>{purgeError ? <div className="crm-alert error">{purgeError}</div> : null}<label className="crm-form-label"><span>التأكيد</span><input value={confirmPhone} onChange={(event) => { setConfirmPhone(event.target.value); if (purgeError) setPurgeError(""); }} /></label><div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف بالكامل"}</button></div></div></div> : null}
 
