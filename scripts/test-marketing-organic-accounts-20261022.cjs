@@ -24,21 +24,25 @@ const sql = async (strings, ...values) => {
 sql.json = data => data;
 const load = createLoader(root, {'./_db.js': {getSql: () => sql}});
 const moduleUnderTest = load('server/_marketing-social-accounts.ts');
-const oldFetch = global.fetch, oldKey = process.env.BULKPUBLISH_API_KEY;
+const oldFetch = global.fetch, oldKey = process.env.BULKPUBLISH_API_KEY, oldSnapKey = process.env.BULKPUBLISH_SNAPCHAT_API_KEY, oldSnapId = process.env.BULKPUBLISH_SNAPCHAT_CHANNEL_ID;
 process.env.BULKPUBLISH_API_KEY = 'fake-test-only-token';
+process.env.BULKPUBLISH_SNAPCHAT_API_KEY = 'fake-snapchat-test-only-token';
+delete process.env.BULKPUBLISH_SNAPCHAT_CHANNEL_ID;
 let providerCalls = [];
 let failTikTok = false;
 global.fetch = async (url, options) => {
   const parsed = new URL(url);
   providerCalls.push({path:parsed.pathname, params:Object.fromEntries(parsed.searchParams)});
   assert.equal(parsed.origin, 'https://app.bulkpublish.com');
-  assert.equal(options.headers.Authorization, 'Bearer fake-test-only-token');
+  const token = options.headers.Authorization;
+  assert(['Bearer fake-test-only-token', 'Bearer fake-snapchat-test-only-token'].includes(token));
+  if (parsed.searchParams.get('platforms') === 'snapchat') assert.equal(token, 'Bearer fake-snapchat-test-only-token');
+  if (parsed.searchParams.get('platforms') === 'tiktok') assert.equal(token, 'Bearer fake-test-only-token');
   const ok = json => ({ok:true, status:200, json:async()=>json});
-  if (parsed.pathname === '/api/channels') return ok({channels:[
+  if (parsed.pathname === '/api/channels') return ok({channels:token === 'Bearer fake-test-only-token' ? [
     {id:2042, platform:'tiktok', isActive:true, needsReconnect:false, accountName:'@mzjcars'},
-    {id:3010, platform:'instagram', isActive:true, accountName:'another'},
-    {id:3011, platform:'snapchat', isActive:true, needsReconnect:false, accountName:'mzj_snap'}
-  ]});
+    {id:3010, platform:'instagram', isActive:true, accountName:'another'}
+  ] : [{id:3011, platform:'snapchat', isActive:true, needsReconnect:false, accountName:'mzj_snap'}]});
   if (parsed.pathname === '/api/analytics/account' && parsed.searchParams.get('platforms') === 'snapchat') return ok({metrics:[
     {date:'2026-10-20',channelId:3011,platform:'snapchat',impressions:200,views:190},
     {date:'2026-10-21',channelId:3011,platform:'snapchat',impressions:210,views:197,reach:171}
@@ -127,5 +131,9 @@ global.fetch = async (url, options) => {
     global.fetch=oldFetch;
     if(oldKey===undefined)delete process.env.BULKPUBLISH_API_KEY;
     else process.env.BULKPUBLISH_API_KEY=oldKey;
+    if(oldSnapKey===undefined)delete process.env.BULKPUBLISH_SNAPCHAT_API_KEY;
+    else process.env.BULKPUBLISH_SNAPCHAT_API_KEY=oldSnapKey;
+    if(oldSnapId===undefined)delete process.env.BULKPUBLISH_SNAPCHAT_CHANNEL_ID;
+    else process.env.BULKPUBLISH_SNAPCHAT_CHANNEL_ID=oldSnapId;
   }
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,7 +1,8 @@
 /** Read-only, per-account organic analytics from BulkPublish.
- * Snapchat and TikTok share the same provider but never share ad campaign data.
- * A transient provider/DB failure must not disconnect accounts or erase last
- * successfully observed metrics. Unknown fields stay null, never invented.
+ * TikTok uses the existing BULKPUBLISH_API_KEY and publishing channel.
+ * Snapchat uses ONLY BULKPUBLISH_SNAPCHAT_API_KEY (optional channel selector).
+ * Each credential owns its channel discovery, analytics and 429 quota state.
+ * Failed reads must not disconnect accounts or erase their last verified metrics.
  */
 import { getSql } from './_db.js';
 import { cachedBulkPublishRead } from './_marketing-bulkpublish-read-cache.js';
@@ -53,48 +54,67 @@ export function socialAnalyticsRange(query: Record<string, unknown>) {
 }
 
 const latestAccounts = new Map<string, OrganicAccount>();
-let organicKeyIdentity = '';
-function credential() {
-  const key = clean(process.env.BULKPUBLISH_API_KEY);
-  if (key !== organicKeyIdentity) { organicKeyIdentity = key; latestAccounts.clear(); }
+const organicKeyIdentity: Record<OrganicPlatform, string> = { tiktok: '', snapchat: '' };
+/** Never fall back from Snapchat to TikTok's API key. */
+function credential(platform: OrganicPlatform): string {
+  const key = clean(platform === 'tiktok' ? process.env.BULKPUBLISH_API_KEY : process.env.BULKPUBLISH_SNAPCHAT_API_KEY);
+  if (key !== organicKeyIdentity[platform]) {
+    organicKeyIdentity[platform] = key;
+    for (const cacheKey of latestAccounts.keys()) {
+      if (cacheKey.startsWith(`${platform}:`)) latestAccounts.delete(cacheKey);
+    }
+  }
   return key;
+}
+function configuredChannelId(platform: OrganicPlatform): number | null {
+  if (platform !== 'snapchat') return null; // Keep TikTok read behavior unchanged.
+  const raw = clean(process.env.BULKPUBLISH_SNAPCHAT_CHANNEL_ID);
+  if (!raw) return null; // Automatically discover Snapchat channels under its own key.
+  const id = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(id) || id < 1) {
+    throw new Error('BULKPUBLISH_SNAPCHAT_CHANNEL_ID غير صالح؛ استخدم معرّف قناة Snapchat الرقمي فقط.');
+  }
+  return id;
 }
 function platformOf(value: unknown): OrganicPlatform | null {
   const platform = clean(value).toLowerCase();
   return platform === 'tiktok' || platform === 'snapchat' ? platform : null;
 }
-async function storedChannels(sql: Sql): Promise<Channel[]> {
+async function storedChannels(sql: Sql, platform: OrganicPlatform, channelId: number | null): Promise<Channel[]> {
   try {
-    // Serverless cold starts have no in-memory cache. Keep saved accounts visible
-    // if BulkPublish's channel-list endpoint is temporarily unavailable.
+    // Cold Vercel instances can still show previously recorded followers when
+    // this platform's own API key is temporarily throttled (not the other key).
     const rows = await sql<any[]>`
       select distinct on (platform,channel_id) platform,channel_id,account_name
       from marketing.social_follower_snapshots
-      where platform in ('tiktok','snapchat')
+      where platform=${platform}
       order by platform,channel_id,snapshot_date desc`;
     return rows.flatMap(row => {
-      const platform = platformOf(row.platform), id = Number(row.channel_id);
-      return platform && Number.isSafeInteger(id) && id > 0 ? [{ platform, id,
-        name: clean(row.account_name) || `${platform} ${id}`, connected: false, reconnect: false, verified: false }] : [];
+      const found = platformOf(row.platform), id = Number(row.channel_id);
+      return found === platform && Number.isSafeInteger(id) && id > 0 && (channelId === null || id === channelId)
+        ? [{ platform, id, name: clean(row.account_name) || `${platform} ${id}`,
+          connected: false, reconnect: false, verified: false }] : [];
     });
   } catch { return []; }
 }
-async function listChannels(sql: Sql, key: string): Promise<{ channels: Channel[]; warning: string }> {
+async function listChannels(sql: Sql, key: string, platform: OrganicPlatform, channelId: number | null): Promise<{ channels: Channel[]; warning: string }> {
   try {
-    const read = await cachedBulkPublishRead(sql,key,'/api/channels');
+    const read = await cachedBulkPublishRead(sql, key, '/api/channels');
     const payload = read.payload;
     const items = arr(payload.channels || payload.data);
     if (!Array.isArray(payload.channels) && !Array.isArray(payload.data)) throw new Error('BulkPublish لم يرجع قائمة الحسابات');
+    // An API key can belong to a different BulkPublish organisation. Never
+    // infer a Snapchat connection from the TikTok key's channels (or vice versa).
     const channels: Channel[] = items.flatMap(raw => {
-      const c = obj(raw), platform = platformOf(c.platform), id = Number(c.id);
-      if (!platform || !Number.isSafeInteger(id) || id <= 0) return [];
+      const c = obj(raw), actualPlatform = platformOf(c.platform), id = Number(c.id);
+      if (actualPlatform !== platform || !Number.isSafeInteger(id) || id <= 0 || (channelId !== null && channelId !== id)) return [];
       const reconnect = c.needsReconnect === true;
-      return [{id,platform,name:clean(c.accountName || c.name || `${platform} ${id}`),
-        connected:c.isActive === true && !reconnect,reconnect,verified:true}];
+      return [{ id, platform, name: clean(c.accountName || c.name || `${platform} ${id}`),
+        connected: c.isActive === true && !reconnect, reconnect, verified: true }];
     });
     return { channels, warning: read.warning };
   } catch (error) {
-    return { channels: [], warning: `تعذر التحقق من قائمة حسابات BulkPublish (${error instanceof Error ? error.message : 'فشل الاتصال'}).` };
+    return { channels: [], warning: `تعذر التحقق من قائمة ${platform === 'snapchat' ? 'Snapchat' : 'TikTok'} في BulkPublish (${error instanceof Error ? error.message : 'فشل الاتصال'}).` };
   }
 }
 function metricsRows(payload: Record<string, any>) { return arr(payload.metrics || obj(payload.data).metrics); }
@@ -164,7 +184,7 @@ async function store(sql: Sql, channel: Channel, snapshots: Snapshot[]) {
     // Missing migration or old CHECK constraint must not disconnect an account.
   }
 }
-async function oneAccount(sql: Sql, channel: Channel, from: string, to: string): Promise<OrganicAccount> {
+async function oneAccount(sql: Sql, channel: Channel, from: string, to: string, apiKey: string): Promise<OrganicAccount> {
   const cacheKey = `${channel.platform}:${channel.id}`;
   const previous = latestAccounts.get(cacheKey);
   // Fixed rolling window regardless of the user's historical filter. Changing
@@ -179,7 +199,7 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string):
     try {
       // Some BulkPublish subscriptions accept channelIds but not date filters.
       try {
-        const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/account?${query}`);
+        const response = await cachedBulkPublishRead(sql,apiKey,`/api/analytics/account?${query}`);
         payload = response.payload; providerStale ||= response.stale;
         if (response.warning) warning = response.warning;
       } catch (error) {
@@ -187,7 +207,7 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string):
         // provider downtime; otherwise the fallback doubles rate-limit usage.
         const message = error instanceof Error ? error.message : String(error);
         if (!/BulkPublish HTTP (400|404|422)\b|حقول التاريخ غير مدعومة/i.test(message)) throw error;
-        const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/account?channelIds=${channel.id}&platforms=${channel.platform}`);
+        const response = await cachedBulkPublishRead(sql,apiKey,`/api/analytics/account?channelIds=${channel.id}&platforms=${channel.platform}`);
         payload = response.payload; providerStale ||= response.stale;
         if (response.warning) warning = response.warning;
       }
@@ -223,7 +243,7 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string):
   let post = previous?.topPost || null;
   if (channel.connected) {
     try {
-      const response = await cachedBulkPublishRead(sql,credential(),`/api/analytics/engagement?${query}`);
+      const response = await cachedBulkPublishRead(sql,apiKey,`/api/analytics/engagement?${query}`);
       post = topPost(response.payload,channel) || post;
       providerStale ||= response.stale;
       if (response.warning) warning = [warning,response.warning].filter(Boolean).join(' ');
@@ -254,17 +274,25 @@ async function oneAccount(sql: Sql, channel: Channel, from: string, to: string):
   return account;
 }
 export async function marketingSocialAccountsOverview(sql: Sql, query: Record<string, unknown> = {}) {
-  const key = credential();
   const { dateFrom, dateTo } = socialAnalyticsRange(query);
   const empty = { connected: false, accounts: [] as OrganicAccount[], note: '' };
-  if (!key) return { ok: true as const, tiktok: { ...empty, note: 'اضبط BULKPUBLISH_API_KEY على السيرفر.' }, snapchat: { ...empty, note: 'اضبط BULKPUBLISH_API_KEY على السيرفر.' } };
-  const fetched = await listChannels(sql,key);
-  const channels = fetched.warning && !fetched.channels.length ? await storedChannels(sql) : fetched.channels;
-  const warning = fetched.warning;
   const forPlatform = async (platform: OrganicPlatform) => {
-    const selected = channels.filter(c => c.platform === platform).slice(0, 8);
+    const apiKey = credential(platform);
+    const variable = platform === 'tiktok' ? 'BULKPUBLISH_API_KEY' : 'BULKPUBLISH_SNAPCHAT_API_KEY';
+    if (!apiKey) return { ...empty, note: `أضف ${variable} في متغيرات Vercel لربط ${platform === 'tiktok' ? 'TikTok' : 'Snapchat'}.` };
+    if (platform === 'snapchat' && apiKey === credential('tiktok')) {
+      return { ...empty, note: 'مفتاح Snapchat يطابق مفتاح TikTok؛ أدخل مفتاح BulkPublish المستقل الخاص بسناب شات في BULKPUBLISH_SNAPCHAT_API_KEY.' };
+    }
+
+    let channelId: number | null;
+    try { channelId = configuredChannelId(platform); }
+    catch (error) { return { ...empty, note: error instanceof Error ? error.message : 'معرّف القناة غير صالح.' }; }
+
+    const fetched = await listChannels(sql, apiKey, platform, channelId);
+    const selected = (fetched.warning && !fetched.channels.length
+      ? await storedChannels(sql, platform, channelId) : fetched.channels).slice(0, 8);
     const accounts = await Promise.all(selected.map(async channel => {
-      try { return await oneAccount(sql, channel, dateFrom, dateTo); }
+      try { return await oneAccount(sql, channel, dateFrom, dateTo, apiKey); }
       catch (error) {
         const cached = latestAccounts.get(`${channel.platform}:${channel.id}`);
         if (cached) return { ...cached, connected: channel.connected, reconnect: channel.reconnect, connectionVerified: channel.verified, stale: true,
@@ -275,14 +303,17 @@ export async function marketingSocialAccountsOverview(sql: Sql, query: Record<st
           impressions: null, profileViews: null, views: null, reach: null, lastDate: null, snapshots: [], topPost: null } as OrganicAccount;
       }
     }));
-    if (warning) for (const account of accounts) {
+    if (fetched.warning) for (const account of accounts) {
       account.stale = true;
-      account.note = [account.note, warning].filter(Boolean).join(' ');
+      account.note = [account.note, fetched.warning].filter(Boolean).join(' ');
     }
-    return { connected: accounts.some(a => a.connected), accounts,
-      note: warning || (!accounts.length ? `لم يُعثر على حساب ${platform === 'tiktok' ? 'TikTok' : 'Snapchat'} داخل آخر قائمة قنوات متاحة.` : '') };
+    const emptyNote = !accounts.length ? channelId !== null
+      ? `معرّف قناة ${platform === 'snapchat' ? 'Snapchat' : 'TikTok'} (${channelId}) غير موجود ضمن القنوات المتاحة بهذا المفتاح. راجع معرّف القناة.`
+      : `لم يُعثر على حساب ${platform === 'tiktok' ? 'TikTok' : 'Snapchat'} في قائمة قنوات هذا المفتاح.` : '';
+    return { connected: accounts.some(a => a.connected), accounts, note: fetched.warning || emptyNote };
   };
-  // Sequential platform reads avoid parallel quota bursts when one request returns 429.
+  // Each platform resolves its own API key, channel list and quota cache.
+  // TikTok's scheduling code continues using its original environment vars.
   const tiktok = await forPlatform('tiktok');
   const snapchat = await forPlatform('snapchat');
   return { ok: true as const, tiktok, snapchat };

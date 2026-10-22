@@ -39,7 +39,7 @@ unlinked. The same failure was also shown on the Snapchat organic followers card
    `database/migrations/20261022_marketing_snapchat_organic.sql` so Snapchat
    and TikTok follower snapshots can both be stored.
 4. Deploy the entire ZIP to the existing MZJ project; keep your current
-   environment variables `BULKPUBLISH_API_KEY`, `WINDSOR_SNAPCHAT_API_KEY`.
+   environment variables `BULKPUBLISH_API_KEY` (TikTok only), `BULKPUBLISH_SNAPCHAT_API_KEY` (Snapchat organic, separate) and `WINDSOR_SNAPCHAT_API_KEY` (Snapchat paid campaigns).
    Rotate any previously shared Windsor key.
 5. Redeploy on Vercel. The cache is populated on the first successful API
    response. If BulkPublish is **already** returning 429, it cannot supply fresh
