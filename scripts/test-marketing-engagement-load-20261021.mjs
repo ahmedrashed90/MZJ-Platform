@@ -40,8 +40,8 @@ for(const job of ['backfillPublishedPosts','cleanupLegacyTestEngagementRows','re
   check(!getSection.includes(`await ${job}(sql)`),`Read-only engagement endpoint avoids expensive ${job} write task`);
 }
 check(engagement.includes('export async function refreshEngagementMetrics') && engagement.split('export async function refreshEngagementMetrics')[1].includes('await backfillPublishedPosts(sql)'), 'Manual refresh retains legacy backfill path');
-check(page.includes('if (view === "meta_ads") { setLoading(false); return; }') && page.includes('<PaidAdsPanel />'), 'Paid reports skip organic engagement fetch');
-check(page.includes('visiblePosts.map') && page.includes('visibleEvents.map') && page.includes('visibleResults.map'), 'All long engagement lists render bounded pages');
+check(page.includes('view === "report" ? <CampaignReportPage />') && !page.includes('<PaidAdsPanel />'), 'Campaign reports have a dedicated view outside organic engagement');
+check(page.includes('visiblePosts.map') && page.includes('visibleEvents.map') && page.includes('rows.slice((postPage - 1) * POST_PAGE_SIZE') && page.includes('engagements.slice((eventPage - 1) * ENGAGEMENT_PAGE_SIZE'), 'Long post and comment lists remain paginated');
 check(platforms.includes("['meta', 'tiktok', 'youtube', 'google_ads']"),'Previous OAuth platforms remain visible during network failures');
 check(platforms.includes('setLoading("");\n      if (result.canManage)'), 'Connections render immediately, independently of Zoho status request');
 check(ads.includes('marketing-google-ads-hero') && ads.includes('marketing-google-ads-setup-banner'), 'Google Ads has professional header and connected-state empty screen');

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, Medal, PencilSimple, Trash } from '@phosphor-icons/react';
+import { useEffect, useRef, useState } from 'react';
+import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, PencilSimple, Trash } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
@@ -23,10 +23,37 @@ type Detail = {
 export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
+  const [ratingItemId, setRatingItemId] = useState('');
+  const [ratingScores, setRatingScores] = useState<Record<string, number | ''>>({});
+  const [ratingBusy, setRatingBusy] = useState(false);
+  const [ratingError, setRatingError] = useState('');
   const [openedRequirementId, setOpenedRequirementId] = useState('');
   const task = query.data?.task;
   const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter)) || [];
   async function refresh() { await query.reload(); onChanged?.(); }
+  const selectedRatingItem = task?.items.find(item => item.id === ratingItemId);
+  const canRate = Boolean(query.data?.canRate);
+  const ratingRows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id, name: c.name }))
+    : (selectedRatingItem?.rating?.scores || []).map(c => ({ id: c.criterionId, name: c.criterionName }));
+  const scored = ratingRows.length > 0 && ratingRows.every(c => Number.isInteger(ratingScores[c.id]) && ratingScores[c.id] !== '' && Number(ratingScores[c.id]) >= 0 && Number(ratingScores[c.id]) <= 3);
+  const ratingTotal = ratingRows.reduce((sum,c) => sum + Number(ratingScores[c.id] || 0),0);
+  const ratingPercentage = scored ? Math.round(ratingTotal/(ratingRows.length*3)*10000)/100 : null;
+  function openItemRating(item: WorkItem) {
+    const rows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id })) : (item.rating?.scores || []).map(c => ({ id: c.criterionId }));
+    setRatingScores(Object.fromEntries(rows.map(c => [c.id,
+      item.rating?.scores.find(s => s.criterionId === c.id)?.score ?? ''])));
+    setRatingError(''); setRatingItemId(item.id);
+  }
+  async function saveItemRating() {
+    if (!selectedRatingItem || !canRate || !scored) { setRatingError('حدد درجة كل بند من 0 إلى 3'); return; }
+    setRatingBusy(true); setRatingError('');
+    try {
+      await workPost('save_rating', { itemId: selectedRatingItem.id,
+        scores: ratingRows.map(row => ({ criterionId: row.id, score: ratingScores[row.id] })) });
+      await refresh(); setRatingItemId('');
+    } catch (e) { setRatingError(e instanceof Error ? e.message : W.invalid); }
+    finally { setRatingBusy(false); }
+  }
   return <Modal open title={task ? `${task.task_no} - ${task.name}` : W.task} onClose={onClose} className="mkw-fullscreen">
     <div className="mkw mkw-detail-view">
       <WorkAlert>{query.error}</WorkAlert>
@@ -52,6 +79,16 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                   {pending > 0 && <span className="mkw-requirement-waiting">{pending} قيد المراجعة</span>}
                   <span className="mkw-requirement-review-label">{opened ? 'إغلاق' : 'فتح المطلوب'}<CaretDown size={16}/></span>
                 </button>
+                <div className="mkw-requirement-rating-strip">
+                  {item.rating ? <div className="mkw-requirement-rating-result"><strong>تقييم المنفذ</strong>
+                    <strong dir="ltr">{Number(item.rating.percentage).toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>
+                    <span className={`mkw-rating-level is-${workRatingLevel(Number(item.rating.percentage)).css}`}>{workRatingLevel(Number(item.rating.percentage)).label}</span>
+                    <RatingStars percentage={Number(item.rating.percentage)}/></div>
+                    : <span className="mkw-rating-unrated">لم يتم التقييم</span>}
+                  {(canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
+                    {canRate ? (item.rating ? 'تعديل التقييم' : 'تقييم المنفذ') : 'عرض التقييم'}
+                  </button>}
+                </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
                   canRate={query.data!.canRate} settings={settings.data} refresh={refresh} />}
@@ -61,6 +98,30 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
         </section>
         <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
       </>}
+      <Modal open={Boolean(ratingItemId && selectedRatingItem)} title={`تقييم المنفذ — ${selectedRatingItem?.assignee_name || ''}`}
+        onClose={() => setRatingItemId('')} className="mkw-rating-modal">
+        <div className="mkw mkw-rating-form">
+          <WorkAlert>{ratingError}</WorkAlert>
+          <div className="mkw-rating-criteria-grid">
+            {ratingRows.map(row => <label key={row.id} className="mkw-rating-criterion">
+              <span>{row.name}</span>
+              {canRate ? <input type="number" min="0" max="3" step="1" value={ratingScores[row.id] ?? ''}
+                disabled={ratingBusy} placeholder="0 - 3"
+                onChange={event => { const value = event.target.value;
+                  if (value === '') setRatingScores(current => ({...current,[row.id]:''}));
+                  else if (/^[0-3]$/.test(value)) setRatingScores(current => ({...current,[row.id]:Number(value)})); }} />
+                : <strong>{ratingScores[row.id] ?? '—'} / 3</strong>}
+            </label>)}
+          </div>
+          {ratingPercentage !== null && <div className="mkw-rating-final-result">
+            <div><small>إجمالي الدرجات</small><strong dir="ltr">{ratingTotal} / {ratingRows.length*3}</strong></div>
+            <div><small>نسبة الجودة</small><strong dir="ltr">{ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong></div>
+            <div><small>التقدير النهائي</small><strong className={`mkw-rating-level is-${workRatingLevel(ratingPercentage).css}`}>{workRatingLevel(ratingPercentage).label}</strong><RatingStars percentage={ratingPercentage}/></div>
+          </div>}
+          {canRate && <div className="mkw-actions"><button type="button" className="primary" disabled={ratingBusy || !scored}
+            onClick={() => void saveItemRating()}>حفظ التقييم</button></div>}
+        </div>
+      </Modal>
     </div>
   </Modal>;
 }
@@ -82,8 +143,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
-  const [ratingOpen, setRatingOpen] = useState(false);
-  const [ratingScores, setRatingScores] = useState<Record<string, number | ''>>({});
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
   const controller = useRef<AbortController | null>(null), version = useRef(item.version);
@@ -94,10 +154,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const readyToSubmit = item.formats.some(format => !states.has(format.id) && finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
   const hasSubmitted = (item.format_reviews || []).some(row => row.status === 'submitted');
   const categories = settings?.categories || [];
-  const criteria = settings?.criteria || [];
   const rating = item.rating;
-  const level = rating ? workRatingLevel(Number(rating.percentage)) : null;
-  const orderedScores = useMemo(() => rating?.scores || [], [rating]);
 
   async function persist() {
     if (!editable) return version.current;
@@ -129,31 +186,55 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
     await run(() => workPost('review', { itemId: item.id, version: version.current, decision,
       ...(formatId ? { formatId } : {}), note: decision === 'revise' ? note : '', categoryId: decision === 'revise' ? noteType : undefined }));
   }
-  function openRating() {
-    setRatingScores(Object.fromEntries(criteria.map(row => [row.id,
-      rating?.scores.find(score => score.criterionId === row.id)?.score ?? ''])));
-    setRatingOpen(true);
+  async function manageNote(remove = false, noteId: string | null = editingNoteId) {
+    if (remove && !noteId) return;
+    if (remove && !window.confirm('حذف الملاحظة؟')) return;
+    if (!remove && (!noteType || !note.trim())) { setError('اختر نوع الملاحظة واكتب التفاصيل'); return; }
+    const saved = await run(() => workPost('manage_note', { itemId: item.id,
+      ...(noteId ? { noteId } : {}), remove,
+      categoryId: remove ? null : noteType, note: remove ? '' : note.trim() }));
+    if (saved) { setNote(''); setNoteType(''); setEditingNoteId(null); setShowNoteEditor(false); }
   }
-  async function saveRating() {
-    if (!criteria.length || criteria.some(row => ratingScores[row.id] === '')) { setError('حدد درجة كل بند'); return; }
-    const saved = await run(() => workPost('save_rating', { itemId: item.id,
-      scores: criteria.map(row => ({ criterionId: row.id, score: ratingScores[row.id] })) }));
-    if (saved) setRatingOpen(false);
+  function editNote(id: string, categoryId: string | null, text: string) {
+    setEditingNoteId(id); setNoteType(categoryId || ''); setNote(text); setShowNoteEditor(true);
   }
-  async function manageNote(remove: boolean) {
-    const saved = await run(() => workPost('manage_note', { itemId: item.id, remove,
-      categoryId: remove ? null : noteType, note: remove ? '' : note }));
-    if (saved) setShowNoteEditor(false);
-  }
+  const activeNotes = (item.review_notes || []).filter(row => !row.responded_at);
+  const completedNotes = (item.review_notes || []).filter(row => Boolean(row.responded_at));
   return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
-      {item.review_note && <section className="mkw-current-review"><div><strong>{W.reviewNote}{item.review_note_type_name ? ` · ${item.review_note_type_name}` : ''}</strong><p className="mkw-idea-text">{item.review_note}</p></div>{canRate && <div className="mkw-actions"><button type="button" className="secondary" onClick={() => { setNote(item.review_note); setNoteType(item.review_note_type_id || ''); setShowNoteEditor(!showNoteEditor); }}><PencilSimple size={15} />تعديل</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void manageNote(true)}><Trash size={15} />حذف</button></div>}</section>}
-      {showNoteEditor && canRate && <section className="mkw-review-controls"><div className="mkw-note-fields"><Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field><Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} maxLength={10000} onChange={event => setNote(event.target.value)} /></Field></div><button type="button" className="primary" disabled={busy} onClick={() => void manageNote(false)}>حفظ الملاحظة</button></section>}
-      <div className="mkw-rating-section"><div className="mkw-section-title"><h4>تقييم المنفذ</h4>{rating && level && <span className={`mkw-rating-level is-${level.css}`}>{level.label}</span>}</div>
-        {rating && <div className="mkw-rating-summary"><Medal size={24} /><strong dir="ltr">{Number(rating.percentage).toLocaleString('ar-SA-u-nu-latn', {maximumFractionDigits:2})}%</strong><RatingStars percentage={Number(rating.percentage)}/><span>{rating.reviewer_name}</span></div>}
-        {(canRate || rating) && <button type="button" className="secondary" onClick={openRating}>{canRate ? rating ? 'تعديل التقييم' : 'تقييم المنفذ' : 'عرض التقييم'}</button>}
-      </div>
+      <section className="mkw-note-management">
+        <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
+          {canRate && <button type="button" className="secondary" disabled={busy} onClick={() => {
+            setEditingNoteId(null); setNote(''); setNoteType(''); setShowNoteEditor(!showNoteEditor);
+          }}>إضافة ملاحظة</button>}
+        </div>
+        {activeNotes.length > 0 && <div className="mkw-review-notes-list">{activeNotes.map(reviewNote =>
+          <article key={reviewNote.id} className="mkw-current-review">
+            <div><strong>{reviewNote.category_name || W.reviewNote}</strong><p>{reviewNote.note}</p>
+              <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
+            {canRate && <div className="mkw-actions">
+              <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
+              <button type="button" className="secondary danger" disabled={busy} onClick={() => void manageNote(true,reviewNote.id)}><Trash size={15}/> حذف</button>
+            </div>}
+          </article>)}</div>}
+        {completedNotes.length > 0 && <details className="mkw-reviewed-notes-history"><summary>سجل الملاحظات السابقة ({completedNotes.length})</summary>
+          <div className="mkw-review-notes-list">{completedNotes.map(reviewNote => <article key={reviewNote.id} className="mkw-current-review is-resolved">
+            <div><strong>{reviewNote.category_name || W.reviewNote}</strong><p>{reviewNote.note}</p>
+              <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
+            {canRate && <div className="mkw-actions">
+              <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
+              <button type="button" className="secondary danger" disabled={busy} onClick={() => void manageNote(true,reviewNote.id)}><Trash size={15}/> حذف</button>
+            </div>}
+          </article>)}</div>
+        </details>}
+        {showNoteEditor && canRate && <div className="mkw-review-controls"><div className="mkw-note-fields">
+          <Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
+          <Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} maxLength={10000} onChange={event => setNote(event.target.value)}/></Field>
+        </div><div className="mkw-actions"><button type="button" className="primary" disabled={busy || !noteType || !note.trim()} onClick={() => void manageNote(false)}>
+          {editingNoteId ? 'حفظ التعديل' : 'إضافة ملاحظة'}</button></div></div>}
+      </section>
+      {rating && <div className="mkw-rating-reviewer">{rating.reviewer_name} · {showDate(rating.updated_at,true)}</div>}
       <div className="mkw-item-detail-grid">
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
           <div className="mkw-execution-quick-row">
@@ -187,16 +268,6 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
       {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
       {capabilities.review && hasSubmitted && <section className="mkw-review-controls"><div className="mkw-note-fields"><Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field><Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} onChange={event => setNote(event.target.value)} maxLength={10000} /></Field></div><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => void review('revise')}>{W.revise} الملفات المرفوعة</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
     </div>
-    <Modal open={ratingOpen} title={`تقييم المنفذ — ${item.assignee_name}`} onClose={() => setRatingOpen(false)} className="mkw-rating-modal"><div className="mkw mkw-rating-form">
-      <WorkAlert>{error}</WorkAlert>
-      {(canRate ? criteria : orderedScores).map(row => {
-        const id = 'id' in row ? row.id : row.criterionId;
-        const name = 'name' in row ? row.name : row.criterionName;
-        const score = canRate ? ratingScores[id] : orderedScores.find(s => s.criterionId === id)?.score;
-        return <label key={id}><span>{name}</span>{canRate ? <select disabled={busy} value={score ?? ''} onChange={event => setRatingScores(current => ({ ...current, [id]: event.target.value === '' ? '' : Number(event.target.value) }))}><option value="">اختر الدرجة</option>{[0,1,2,3].map(value => <option key={value} value={value}>{value}</option>)}</select> : <strong>{score} / 3</strong>}</label>;
-      })}
-      {rating && <div className="mkw-rating-summary"><strong>{Number(rating.percentage).toLocaleString('ar-SA-u-nu-latn', {maximumFractionDigits:2})}%</strong><RatingStars percentage={Number(rating.percentage)} /></div>}
-      {canRate && <div className="mkw-actions"><button type="button" className="primary" disabled={busy || !criteria.length} onClick={() => void saveRating()}>حفظ التقييم</button></div>}
-    </div></Modal>
+
   </article>;
 }

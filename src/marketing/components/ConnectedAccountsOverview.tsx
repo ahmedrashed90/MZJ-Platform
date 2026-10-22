@@ -1,52 +1,56 @@
 import { useEffect, useState } from 'react';
-import { ArrowClockwise, GoogleLogo, TiktokLogo, Megaphone, UsersThree } from '@phosphor-icons/react';
+import { TiktokLogo } from '@phosphor-icons/react';
 import { marketingFetch, marketingQuery } from '../api';
+import { CompactFollowerChart, TopEngagedSocialPost, type DailyFollower, type EngagedSocialPost } from './CompactFollowerChart';
 
-type AdsAccount = { id: string; name: string; currency?: string; timeZone?: string };
-type OrganicAccount = { id: number; name: string };
-type Response = {
-  ok: true;
-  googleAds: { connected: boolean; accounts: AdsAccount[]; note: string };
-  tiktokAds: { connected: boolean; accounts: AdsAccount[]; note: string };
-  tiktok: { connected: boolean; accounts: OrganicAccount[]; note: string };
-  tiktokProfile: { connected: boolean; accountName: string; followers: number | null; statsAvailable: boolean };
+type OrganicAccount = {
+  id: number; name: string;
+  followers: number | null; monthlyChange: number | null; dailyChange: number | null;
+  videoCount: number | null; likesCount: number | null; impressions: number | null; profileViews: number | null;
+  lastDate: string | null; snapshots: DailyFollower[]; topPost: EngagedSocialPost | null;
 };
+type Response = { ok: true; tiktok: { connected: boolean; accounts: OrganicAccount[] } };
+const optionalCount = (value: number | null) => value === null ? '—' : value.toLocaleString('ar-SA-u-nu-latn');
+const growth = (value: number | null) => value === null ? '—' : `${value > 0 ? '+' : ''}${value.toLocaleString('ar-SA-u-nu-latn')}`;
 
-/** Displays only provider-confirmed account identity. Ads channels have no follower counts. */
-export function ConnectedAccountsOverview() {
+export function ConnectedAccountsOverview({ dateFrom, dateTo, refreshSignal = 0 }: { dateFrom: string; dateTo: string; refreshSignal?: number }) {
   const [value, setValue] = useState<Response | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
   const [request, setRequest] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setError('');
-    void marketingFetch<Response>(`/api/marketing${marketingQuery({ resource: 'social_accounts_overview' })}`, { signal: controller.signal })
+    setLoading(true);
+    void marketingFetch<Response>(`/api/marketing${marketingQuery({ resource: 'social_accounts_overview', dateFrom, dateTo, ...(request || refreshSignal ? { refresh: '1' } : {}) })}`, { signal: controller.signal })
       .then(payload => { if (!controller.signal.aborted) setValue(payload); })
-      .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'تعذر تحميل الحسابات'); })
+      .catch(() => { if (!controller.signal.aborted) setValue(null); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [request]);
-
-  const google = value?.googleAds.accounts || [];
-  const tiktokAds = value?.tiktokAds.accounts || [];
-  const organic = value?.tiktok.accounts || [];
-  const tiktokConnected = Boolean(value?.tiktok.connected || value?.tiktokProfile?.connected);
-  return <section className="marketing-connected-accounts">
-    <header className="marketing-connected-accounts-header"><div><h3>حسابات TikTok وGoogle Ads</h3></div><button type="button" className="secondary-button small" disabled={loading} onClick={() => setRequest(n => n + 1)}><ArrowClockwise size={16} className={loading ? 'spin' : ''}/> تحديث الحسابات</button></header>
-    {error && <p role="alert" className="marketing-tiktok-warning">{error}</p>}
-    {loading && !value && <div className="panel marketing-meta-account-empty" role="status">جارٍ قراءة حسابات TikTok وGoogle Ads المرتبطة…</div>}
-    {value && <div className="marketing-connected-accounts-grid">
-      <article className="panel marketing-connected-account-group"><header><span className="marketing-connected-brand tiktok"><TiktokLogo size={21} weight="fill"/> TikTok</span><span className={`marketing-sync-status ${tiktokConnected ? 'synced' : 'pending'}`}>{tiktokConnected ? 'متصل' : 'بحاجة إلى ربط'}</span></header>
-        {value.tiktokProfile?.connected && <div className="marketing-connected-account-entry"><strong dir="auto">{value.tiktokProfile.accountName || "TikTok"}</strong><small><UsersThree size={15}/> المتابعون: <b>{value.tiktokProfile.followers === null ? "—" : value.tiktokProfile.followers.toLocaleString("ar-SA-u-nu-latn")}</b></small></div>}
-        {organic.length ? organic.map(item => <div className="marketing-connected-account-entry" key={item.id}><strong dir="auto">{item.name}</strong><small>حساب النشر العضوي</small></div>) : <small>{value.tiktok.note}</small>}
-      </article>
-      <article className="panel marketing-connected-account-group"><header><span className="marketing-connected-brand tiktok"><TiktokLogo size={21} weight="fill"/> TikTok Ads</span><span className={`marketing-sync-status ${value.tiktokAds.connected ? 'synced' : 'pending'}`}>{value.tiktokAds.connected ? 'متصل' : 'بحاجة إلى ربط'}</span></header>
-        {tiktokAds.length ? tiktokAds.map(item => <div className="marketing-connected-account-entry" key={item.id}><strong dir="auto">{item.name}</strong><small><Megaphone size={15}/> حساب إعلاني · <bdi dir="ltr">{item.id}</bdi>{item.currency ? ` · ${item.currency}` : ''}</small></div>) : <small>{value.tiktokAds.note}</small>}
-      </article>
-      <article className="panel marketing-connected-account-group"><header><span className="marketing-connected-brand google"><GoogleLogo size={21}/> Google Ads</span><span className={`marketing-sync-status ${value.googleAds.connected ? 'synced' : 'pending'}`}>{value.googleAds.connected ? 'متصل' : 'بحاجة إلى ربط'}</span></header>
-        {google.length ? google.map(item => <div className="marketing-connected-account-entry" key={item.id}><strong dir="auto">{item.name}</strong><small><Megaphone size={15}/> حساب إعلاني · <bdi dir="ltr">{item.id}</bdi>{item.currency ? ` · ${item.currency}` : ''}</small></div>) : <small>{value.googleAds.note}</small>}
-      </article>
-    </div>}
-  </section>;
+  }, [dateFrom, dateTo, request, refreshSignal]);
+  const accounts = value?.tiktok.accounts || [];
+  return <>
+    {accounts.map(account => <article key={account.id} className="panel marketing-meta-account-card marketing-social-account-card">
+      <header className="marketing-meta-account-heading">
+        <span className="marketing-platform-chip tiktok"><TiktokLogo size={20} weight="fill"/>TikTok</span>
+        <span className="marketing-sync-status synced">متصل</span>
+      </header>
+      <h4>{account.name}</h4>
+      <div className="marketing-meta-follower-number"><strong>{optionalCount(account.followers)}</strong><small>متابع</small></div>
+      <div className="marketing-meta-account-metrics">
+        <div><span>نمو الشهر المسجل</span><strong>{growth(account.monthlyChange)}</strong></div>
+        <div><span>عدد الفيديوهات</span><strong>{optionalCount(account.videoCount)}</strong></div>
+        <div><span>إعجابات الحساب</span><strong>{optionalCount(account.likesCount)}</strong></div>
+        <div><span>مرات الظهور</span><strong>{optionalCount(account.impressions)}</strong></div>
+        <div><span>زيارات الملف الشخصي</span><strong>{optionalCount(account.profileViews)}</strong></div>
+      </div>
+      <CompactFollowerChart snapshots={account.snapshots}/>
+      <TopEngagedSocialPost post={account.topPost}/>
+      <footer className="marketing-meta-account-footer"><span>{account.lastDate || '—'}</span></footer>
+    </article>)}
+    {loading && !value && <article className="panel marketing-meta-account-empty">جاري تحميل TikTok…</article>}
+    {!loading && !accounts.length && <article className="panel marketing-meta-account-card marketing-social-account-card">
+      <header className="marketing-meta-account-heading"><span className="marketing-platform-chip tiktok"><TiktokLogo size={20}/>TikTok</span><span className="marketing-sync-status pending">غير متاح</span></header>
+      <h4>حساب TikTok</h4><div className="marketing-meta-follower-number"><strong>—</strong><small>متابع</small></div>
+      <button type="button" className="secondary-button small" onClick={() => setRequest(n => n + 1)}>تحديث</button>
+    </article>}
+  </>;
 }

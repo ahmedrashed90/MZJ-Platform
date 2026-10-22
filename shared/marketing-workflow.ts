@@ -9,11 +9,17 @@ export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
   media_kind: WorkMediaKind; idea_name: string; idea: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
   files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
+  review_notes?: WorkItemReviewNote[];
   format_reviews?: Array<{ format_id: string; status: 'submitted' | 'approved' | 'revision'; submitted_at?: string | null; approved_at?: string | null }>;
   rating?: WorkItemRating | null; version: number; approved_at?: string | null; submitted_at?: string | null;
   delivery_status?: 'on_time' | 'late' | null;
   pending_uploads?: { id: string; name: string; category: string }[];
   sort_order: number; task_name?: string; task_no?: string; actions?: { id: string; name: string; completed: boolean; admin_only: boolean; is_final_approval: boolean }[];
+};
+export type WorkItemReviewNote = {
+  id: string; category_id: string | null; category_name: string;
+  note: string; created_at: string; updated_at: string;
+  author_name: string; responded_at: string | null;
 };
 export type WorkItemRating = {
   percentage: number; scores: Array<{ criterionId: string; criterionName: string; score: number }>;

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import {
   Archive,
   ArrowClockwise,
@@ -14,7 +13,6 @@ import {
   LinkSimple,
   MagnifyingGlass,
   ShareNetwork,
-  ChartLineUp,
   TiktokLogo,
   Trash,
   UsersThree,
@@ -29,6 +27,7 @@ import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { CampaignReportPage } from "../components/CampaignReportPage";
 import "../reporting/report.css";
 import { ConnectedAccountsOverview } from "../components/ConnectedAccountsOverview";
+import { CompactFollowerChart, TopEngagedSocialPost } from "../components/CompactFollowerChart";
 import {
   marketingResultPlatformLabel,
   marketingResultSourceLabel,
@@ -132,6 +131,14 @@ const EMPTY_SUMMARY: EngagementSummary = {
 function count(value: unknown) { return Number(value || 0).toLocaleString("ar-SA-u-nu-latn"); }
 function optionalCount(value: unknown) { return value === null || value === undefined ? "—" : count(value); }
 function followerChange(value: number | null) { return value === null ? "لا توجد مقارنة بعد" : `${value > 0 ? "+" : ""}${count(value)}`; }
+function accountDates() {
+  const fields = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const field = (name: string) => fields.find(x => x.type === name)?.value || '01';
+  const dateTo = `${field('year')}-${field('month')}-${field('day')}`;
+  const previous = new Date(`${dateTo}T12:00:00Z`);
+  previous.setUTCDate(previous.getUTCDate() - 13);
+  return { dateFrom: previous.toISOString().slice(0,10), dateTo };
+}
 function platformLabel(platform: string) { return marketingResultPlatformLabel(platform); }
 function sourceLabel(platform: string) {
   if (platform === "facebook") return "بوست فيس بوك";
@@ -223,6 +230,8 @@ export function EngagementPage() {
   const [webhookOpen, setWebhookOpen] = useState(false);
   const [selectedResult, setSelectedResult] = useState<EngagementResultGroup | null>(null);
   const [view, setView] = useState<PageView>(() => pageView(searchParams.get("view")));
+  const [accountRange, setAccountRange] = useState(accountDates);
+  const [organicRefresh, setOrganicRefresh] = useState(0);
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
@@ -518,6 +527,7 @@ export function EngagementPage() {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذرت مزامنة حسابات Meta");
     } finally {
+      setOrganicRefresh(value => value + 1);
       setLoading(false);
     }
   }
@@ -695,13 +705,17 @@ export function EngagementPage() {
         </section>
       </> : view === "accounts" ? <>
         <section className="marketing-meta-account-intro">
-          <div><h3>الحسابات والمتابعون</h3><p>ملخص الحسابات المرتبطة وأرقام المتابعة الحقيقية؛ تفاصيل Meta محفوظة دون تغيير.</p></div>
-          {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={17} /> تحديث الحسابات والمنشورات</button> : null}
+          <h3>الحسابات والمتابعون</h3>
+          <div className="marketing-social-account-toolbar">
+            <label>من تاريخ <input type="date" max={accountRange.dateTo} value={accountRange.dateFrom}
+              onChange={event => setAccountRange(current => ({ ...current, dateFrom: event.target.value }))}/></label>
+            <label>إلى تاريخ <input type="date" min={accountRange.dateFrom} value={accountRange.dateTo}
+              onChange={event => setAccountRange(current => ({ ...current, dateTo: event.target.value }))}/></label>
+            {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={17}/> تحديث الحسابات والمنشورات</button> : null}
+          </div>
         </section>
-        <ConnectedAccountsOverview />
-        <h3 className="marketing-meta-section-heading">Facebook وInstagram</h3>
-        <div className="marketing-meta-accounts-grid">
-          {(data?.accounts || []).map((account) => <article key={`${account.platform}-${account.accountId}`} className="panel marketing-meta-account-card">
+        <div className="marketing-meta-accounts-grid marketing-social-accounts-grid">
+          {(data?.accounts || []).map((account) => <article key={`${account.platform}-${account.accountId}`} className="panel marketing-meta-account-card marketing-social-account-card">
             <header className="marketing-meta-account-heading">
               <span className={`marketing-platform-chip ${account.platform}`}>{platformIcon(account.platform, 20)}{platformLabel(account.platform)}</span>
               <span className={`marketing-sync-status ${account.connected ? "synced" : "pending"}`}>{account.connected ? "متصل" : "غير متصل"}</span>
@@ -714,34 +728,14 @@ export function EngagementPage() {
               <div><span>{account.platform === "facebook" ? "تفاعلات المنشورات (Reactions)" : "إعجابات المنشورات"}</span><strong>{optionalCount(account.likesTotal)}</strong><small>من {count(account.likesMeasuredCount)} منشور تمت قراءة إعجاباته</small></div>
               {account.platform === "facebook" && <div><span>إعجابات صفحة Facebook</span><strong>{optionalCount(account.fans)}</strong></div>}
             </div>
-            <details className="marketing-meta-account-extra"><summary>أعلى المنشورات وتطور المتابعين</summary>
-            <section className="marketing-meta-top-post" aria-label={`أعلى منشور تفاعلًا في ${platformLabel(account.platform)}`}>
-              <div className="marketing-meta-top-post-title"><Heart size={17}/><strong>أعلى بوست تفاعلًا</strong><span>{account.topPost ? `${count(account.topPost.engagementTotal)} تفاعل` : "—"}</span></div>
-              {account.topPost ? <>
-                <p>{account.topPost.caption || "منشور بدون نص"}</p>
-                <div className="marketing-meta-top-post-metrics"><span>إعجابات / تفاعلات: {optionalCount(account.topPost.likes)}</span><span>تعليقات: {optionalCount(account.topPost.comments)}</span><span>مشاركات: {optionalCount(account.topPost.shares)}</span></div>
-                <footer><span>{marketingDate(account.topPost.publishedAt)}</span>{/^https:\/\//i.test(account.topPost.permalink) && <a href={account.topPost.permalink} target="_blank" rel="noopener noreferrer">فتح المنشور <LinkSimple size={15}/></a>}</footer>
-              </> : <p>لا تتوفر بعد أرقام تفاعل للمنشورات المزامنة في هذا الحساب.</p>}
-            </section>
-            {account.snapshots.length > 1 ? <div className="marketing-meta-followers-chart" dir="ltr">
-              <ResponsiveContainer width="100%" height={160}>
-                <LineChart data={account.snapshots} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 4" vertical={false} stroke="#ebe5e0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={18} />
-                  <Tooltip formatter={(value) => [count(value), "المتابعون"]} labelFormatter={(value) => `التاريخ: ${value}`} />
-                  <Line type="monotone" dataKey="followers" name="المتابعون" stroke="var(--brand)" strokeWidth={2.5} dot={account.snapshots.length < 12} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div> : <div className="marketing-meta-chart-empty"><ChartLineUp size={18} /> يبدأ الرسم البياني بعد حفظ بيانات يومين مختلفين.</div>}
-            </details>
+            <CompactFollowerChart snapshots={account.snapshots.filter(snapshot => snapshot.date >= accountRange.dateFrom && snapshot.date <= accountRange.dateTo)}/>
+            <TopEngagedSocialPost post={account.topPost}/>
             <footer className="marketing-meta-account-footer">
-              <span>تمت قراءة {count(account.discoveredCount)} منشور · آخر تحديث: {account.state?.last_success_at ? marketingDate(account.state.last_success_at, true) : "لم تبدأ المزامنة"}</span>
-              <span>{account.state?.backfill_complete ? "اكتمل الأرشيف المتاح" : "استيراد الأرشيف جارٍ على دفعات"}</span>
+              <span>تمت قراءة {count(account.discoveredCount)} منشور · آخر تحديث: {account.state?.last_success_at ? marketingDate(account.state.last_success_at, true) : "—"}</span>
+              <span>{account.state?.backfill_complete ? "اكتمل الأرشيف المتاح" : "الأرشيف قيد المزامنة"}</span>
             </footer>
-            {account.state?.last_error ? <details className="marketing-error-compact"><summary>تنبيه المزامنة</summary><p>{account.state.last_error}</p></details> : null}
           </article>)}
-          {!data ? <div className="panel marketing-meta-account-empty" role="status">{loading ? "جاري تحميل حسابات Meta..." : "لم يتم تحميل حالة الحسابات. تحقق من رسالة الخطأ وأعد المحاولة."}</div>
-            : !data.accounts.length ? <div className="panel marketing-meta-account-empty">لا توجد حسابات Meta مرتبطة حاليًا. اربط Facebook وInstagram من إعدادات منصات التسويق.</div> : null}
+          <ConnectedAccountsOverview dateFrom={accountRange.dateFrom} dateTo={accountRange.dateTo} refreshSignal={organicRefresh}/>
         </div>
       </> : null}
     </div>

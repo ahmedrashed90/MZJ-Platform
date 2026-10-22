@@ -182,6 +182,45 @@ insert into marketing.workflow_migrations(code) values ('schema-5') on conflict 
 commit;
 `;
 
+export const MARKETING_WORKFLOW_NOTES_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_item_review_notes (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references marketing.work_items(id) on delete cascade,
+  category_id uuid references marketing.work_review_categories(id) on delete set null,
+  note text not null check(length(trim(note))>0),
+  created_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  responded_at timestamptz,
+  deleted_at timestamptz,
+  legacy_import boolean not null default false
+);
+create unique index if not exists work_item_review_notes_legacy_unique
+  on marketing.work_item_review_notes(item_id) where legacy_import;
+create index if not exists work_item_review_notes_active
+  on marketing.work_item_review_notes(item_id, created_at desc) where responded_at is null and deleted_at is null;
+-- Import the original single review note exactly once without discarding it.
+insert into marketing.work_item_review_notes(item_id,category_id,note,created_at,legacy_import)
+select i.id,i.review_note_type_id,i.review_note,coalesce(i.review_note_created_at,i.updated_at),true
+from marketing.work_items i where length(trim(i.review_note))>0
+on conflict do nothing;
+create table if not exists marketing.social_follower_snapshots (
+  platform text not null check(platform in ('tiktok')),
+  channel_id bigint not null,
+  account_name text not null default '',
+  snapshot_date date not null,
+  followers bigint not null check(followers >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key(platform,channel_id,snapshot_date)
+);
+create index if not exists social_follower_snapshots_date
+  on marketing.social_follower_snapshots(snapshot_date desc,channel_id);
+insert into marketing.workflow_migrations(code) values ('schema-6') on conflict do nothing;
+commit;`;
+
 export const MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL = `begin;
 set local lock_timeout = '3s';
 set local statement_timeout = '12s';
@@ -274,11 +313,11 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6') };
     };
-    if ((await flags()).current && (await flags()).hasKpi && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
+    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -288,6 +327,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasDrafts) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
       if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
       if (!(await flags()).hasKpi) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
+      if (!(await flags()).hasNotes) await runSqlScript(MARKETING_WORKFLOW_NOTES_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
@@ -308,7 +348,7 @@ let workflowStructureReady: Promise<void> | null = null;
 export function assertMarketingWorkflowReady(sql = getSql()) {
   if (!workflowStructureReady) {
     workflowStructureReady = (async () => {
-      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean }[]>`
+      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean; notes: boolean; social: boolean }[]>`
         select
           to_regclass('marketing.work_tasks') is not null as tasks,
           to_regclass('marketing.work_items') is not null as items,
@@ -317,9 +357,11 @@ export function assertMarketingWorkflowReady(sql = getSql()) {
           to_regclass('marketing.work_item_files') is not null as files,
           to_regclass('marketing.work_item_ratings') is not null as ratings,
           to_regclass('marketing.work_format_reviews') is not null as formats,
-          to_regclass('marketing.work_review_categories') is not null as categories
+          to_regclass('marketing.work_review_categories') is not null as categories,
+          to_regclass('marketing.work_item_review_notes') is not null as notes,
+          to_regclass('marketing.social_follower_snapshots') is not null as social
       `;
-      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories) {
+      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories || !state.notes || !state.social) {
         const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
         (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
         throw error;

@@ -6615,3 +6615,27 @@
 .mkw-ratings-months article small,.mkw-ratings-months article span{color:var(--muted,#748998)}.mkw-ratings-months article b{font-size:26px}.mkw-ratings-empty{padding:18px;color:var(--muted,#718494)}
 .mkw-ratings-table-scroll{overflow-x:auto}.mkw-ratings-ranking table{border-collapse:collapse;width:100%;min-width:950px}.mkw-ratings-ranking th,.mkw-ratings-ranking td{padding:13px;border-bottom:1px solid var(--line,#e4eaf0);text-align:right;font-size:13px}.mkw-ratings-ranking th{background:var(--surface,#f4f8f9)}.mkw-rating-detail-row>td>div{display:grid;gap:10px}.mkw-rating-detail-row article{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:11px;background:var(--surface,#f5f8f9);border-radius:9px}.mkw-rating-detail-row article>div{display:grid;gap:6px}.mkw-rating-detail-row article>div:last-child{display:flex;gap:9px;flex-wrap:wrap}.mkw-rating-detail-row article span,.mkw-rating-detail-row article small{font-size:11px;color:var(--muted,#708390)}
 @media(max-width:780px){.mkw-ratings-stats{grid-template-columns:1fr}.mkw-ratings-filters label{flex:1}}
+
+/* Organic social accounts: equal cards, compact daily follower history in each card. */
+.marketing-social-accounts-grid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:14px}
+.marketing-social-account-card{display:flex;flex-direction:column;min-width:0;padding:18px;box-shadow:0 10px 30px rgba(50,32,26,.045)}
+.marketing-social-account-card h4{margin:13px 0 7px;overflow-wrap:anywhere}
+.marketing-social-account-card .marketing-meta-follower-number strong{font-size:clamp(26px,2.35vw,36px)}
+.marketing-social-account-card .marketing-meta-account-metrics,.marketing-social-account-card .marketing-meta-account-metrics.has-page-likes{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:13px 0}
+.marketing-social-account-card .marketing-meta-account-metrics>div{padding:10px;border-radius:10px;gap:5px}
+.marketing-social-account-card .marketing-meta-account-metrics strong{font-size:15px}
+.marketing-social-account-card .marketing-meta-account-footer{margin-top:auto;padding-top:10px}
+.marketing-social-account-toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:9px}
+.marketing-social-account-toolbar label{display:grid;gap:5px;font-size:11px;font-weight:700;color:var(--muted)}
+.marketing-social-account-toolbar input{min-height:38px;border:1px solid var(--line);border-radius:10px;padding:7px;background:white;color:var(--ink);font:inherit}
+.marketing-social-follower-trend{border:1px solid var(--line);border-radius:12px;padding:11px 11px 5px;min-width:0}
+.marketing-social-follower-trend header{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--ink)}
+.marketing-social-follower-trend header span{font-weight:800;font-size:12px}
+.marketing-social-follower-trend header .is-up{color:#188558}.marketing-social-follower-trend header .is-down{color:#c93d43}.marketing-social-follower-trend header .is-flat{color:var(--muted)}
+.marketing-social-mini-chart{height:108px;min-width:0;margin-top:3px}.marketing-social-mini-empty{height:45px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px}
+.marketing-social-account-card .marketing-social-top-post{margin:10px 0 13px;background:var(--surface,#fffaf8);padding:10px 12px}
+.marketing-social-account-card .marketing-social-top-post p{margin:6px 0;font-size:11px;-webkit-line-clamp:2}
+.marketing-social-account-card .marketing-social-top-post footer{margin-top:6px}
+@media(max-width:1350px){.marketing-social-accounts-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.marketing-social-accounts-grid{grid-template-columns:1fr}.marketing-meta-account-intro{align-items:start}}
+@media(max-width:420px){.marketing-social-account-card .marketing-meta-account-metrics,.marketing-social-account-card .marketing-meta-account-metrics.has-page-likes{grid-template-columns:repeat(2,minmax(0,1fr))}}

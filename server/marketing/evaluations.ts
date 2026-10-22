@@ -91,11 +91,13 @@ export async function saveItemRating(sql: Sql, user: SessionUser, body: Row, ite
 
 export async function manageItemReviewNote(sql: Sql, user: SessionUser, body: Row, item: Row) {
   requireAccess(canGrade(user));
+  const noteId = body.noteId ? validId(body.noteId) : null;
   const remove = body.remove === true;
-  const name = String(body.note ?? '').trim().slice(0, 10000);
+  const note = String(body.note ?? '').trim().slice(0, 10000);
   const categoryId = !remove && body.categoryId ? validId(body.categoryId) : null;
-  if (!remove && (!categoryId || !name)) throw new Error('اختر نوع الملاحظة واكتب التفاصيل');
-  await sql.begin(async tx => {
+  if (remove && !noteId) throw new Error('حدد الملاحظة المطلوب حذفها');
+  if (!remove && (!categoryId || !note)) throw new Error('اختر نوع الملاحظة واكتب التفاصيل');
+  return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
     const [current] = await tx<any[]>`select id from marketing.work_items where id=${item.id}::uuid for update`;
@@ -104,11 +106,25 @@ export async function manageItemReviewNote(sql: Sql, user: SessionUser, body: Ro
       const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`;
       if (!category) throw new Error('نوع الملاحظة غير متاح');
     }
-    await tx`update marketing.work_items set review_note=${remove ? '' : name},review_note_type_id=${categoryId}::uuid,
-      review_note_created_at=case when ${remove} then null else now() end,updated_at=now(),version=version+1
-      where id=${item.id}::uuid`;
+    if (noteId) {
+      const [existing] = await tx<any[]>`select id from marketing.work_item_review_notes
+        where id=${noteId}::uuid and item_id=${item.id}::uuid and deleted_at is null for update`;
+      if (!existing) throw new Error('الملاحظة غير موجودة');
+      if (remove) {
+        await tx`update marketing.work_item_review_notes set deleted_at=now(),updated_at=now()
+          where id=${noteId}::uuid and item_id=${item.id}::uuid`;
+      } else {
+        await tx`update marketing.work_item_review_notes
+          set category_id=${categoryId}::uuid,note=${note},updated_at=now()
+          where id=${noteId}::uuid and item_id=${item.id}::uuid`;
+      }
+    } else {
+      await tx`insert into marketing.work_item_review_notes(item_id,category_id,note,created_by)
+        values(${item.id}::uuid,${categoryId}::uuid,${note},${user.id}::uuid)`;
+    }
+    await tx`update marketing.work_items set updated_at=now(),version=version+1 where id=${item.id}::uuid`;
+    return { ok: true };
   });
-  return { ok: true };
 }
 
 export async function ratingsReport(sql: Sql, user: SessionUser, query: Row) {

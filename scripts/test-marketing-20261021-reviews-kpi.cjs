@@ -56,8 +56,38 @@ async function main(){
   });
   await check('Only managers may change review notes, and categories validate against settings',async()=>{
     await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),executor,{remove:true},item));
-    const db=scriptedSql([step('select id',[{id:item.id}]),step('select id from marketing.work_review_categories',[{id:id(301)}]),step('update marketing.work_items')]);
+    const db=scriptedSql([step('select id',[{id:item.id}]),step('select id from marketing.work_review_categories',[{id:id(301)}]),step('insert into marketing.work_item_review_notes'),step('update marketing.work_items')]);
     await ratings.manageItemReviewNote(db,admin,{categoryId:id(301),note:'Please fix text'},item);db.assertDone();
+  });
+  await check('Review notes support independent creation, editing, and deletion',async()=>{
+    const db=scriptedSql([
+      step('select id',[{id:item.id}]),
+      step('select id from marketing.work_review_categories',[{id:id(301)}]),
+      step('select id from marketing.work_item_review_notes',[{id:id(400)}]),
+      step('update marketing.work_item_review_notes'),step('update marketing.work_items'),
+    ]);
+    await ratings.manageItemReviewNote(db,admin,{noteId:id(400),categoryId:id(301),note:'Updated comment'},item);
+    db.assertDone();
+    const deleting=scriptedSql([step('select id',[{id:item.id}]),
+      step('select id from marketing.work_item_review_notes',[{id:id(400)}]),
+      step('update marketing.work_item_review_notes'),step('update marketing.work_items')]);
+    await ratings.manageItemReviewNote(deleting,admin,{noteId:id(400),remove:true},item);
+    deleting.assertDone();
+    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),admin,{remove:true},item));
+  });
+  await check('New schema keeps existing reviews and tracks daily organic followers',()=>{
+    const sql=fs.readFileSync(path.join(root,'database/migrations/20261022_marketing_review_notes.sql'),'utf8');
+    for(const key of ['work_item_review_notes','work_item_review_notes_legacy_unique','social_follower_snapshots','schema-6']) assert(sql.includes(key));
+    assert(sql.includes('on conflict do nothing'));
+    assert(!/drop\s+(?:table|schema)|truncate\s+table/i.test(sql));
+  });
+  await check('Rating controls are three per row and stars appear only with overall result',()=>{
+    const task=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+    const css=fs.readFileSync(path.join(root,'src/marketing/workflow/workflow.css'),'utf8');
+    assert(task.includes('mkw-rating-final-result') && task.includes('mkw-requirement-rating-strip'));
+    assert(task.includes('type="number" min="0" max="3" step="1"'));
+    assert(css.includes('mkw-rating-criteria-grid{display:grid;grid-template-columns:repeat(3'));
+    assert(!task.includes('اختر الدرجة'));
   });
   await check('Schema includes independent format approvals and review ratings',()=>{
     const schema=fs.readFileSync(path.join(root,'database/migrations/20261021_marketing_reviews_kpi.sql'),'utf8');
@@ -70,7 +100,7 @@ async function main(){
     const workflow=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
     assert(task.includes('عرض التقييم')&&task.includes('mkw-note-fields'));
     assert(screen.includes('أعلى تقييم خلال كل شهر'));
-    assert(workflow.includes("and fr.status='revision'"));
+    assert(workflow.includes("and status='revision'") || workflow.includes("and fr.status='revision'"));
     assert(workflow.includes("status in ('approved','submitted')"));
   });
   await check('Campaign charts use every filtered campaign without a fixed top-N limit',()=>{
@@ -86,8 +116,9 @@ async function main(){
     assert(!ui.includes('نتائج الأجندات')&&!ui.includes('الحملات الممولة'));
     const provider=fs.readFileSync(path.join(root,'server/_platform-connections.ts'),'utf8');
     assert(provider.includes('user.info.stats')&&provider.includes('follower_count'));
+    assert(fs.readFileSync(path.join(root,'server/_marketing-social-accounts.ts'),'utf8').includes('/api/analytics/account')); 
     assert(fs.readFileSync(path.join(root,'server/_marketing-tiktok-ads.ts'),'utf8').includes("['onsite_form']"));
   });
-  console.log(`\n${checks}/10 combined 2026-10-21 marketing checks passed (offline).`);
+  console.log(`\n${checks}/${checks} combined 2026-10-21 marketing checks passed (offline).`);
 }
 main().catch(e=>{console.error(e);process.exitCode=1});

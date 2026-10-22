@@ -109,7 +109,16 @@ async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkIt
       'created_at',r.created_at,'updated_at',r.updated_at,'reviewer_name',coalesce(ru.full_name,''))
       from marketing.work_item_ratings r left join core.users ru on ru.id=r.rated_by
       where r.item_id=i.id) as rating,
-    (select rc.name from marketing.work_review_categories rc where rc.id=i.review_note_type_id) as review_note_type_name,
+    coalesce((select jsonb_agg(jsonb_build_object(
+      'id',n.id::text,'category_id',n.category_id::text,'category_name',coalesce(c.name,''),
+      'note',n.note,'created_at',n.created_at,'updated_at',n.updated_at,
+      'author_name',coalesce(nu.full_name,''),'responded_at',n.responded_at
+    ) order by n.created_at desc,n.id desc)
+      from marketing.work_item_review_notes n
+      left join marketing.work_review_categories c on c.id=n.category_id
+      left join core.users nu on nu.id=n.created_by
+      where n.item_id=i.id and n.deleted_at is null),'[]'::jsonb) as review_notes,
+
     coalesce((select jsonb_agg(jsonb_build_object('id',a.id::text,'name',a.name,'completed',coalesce(ap.completed,false),
       'admin_only',a.admin_only,'is_final_approval',a.is_final_approval) order by a.sort_order,a.created_at)
       from marketing.assignment_actions a left join marketing.work_action_progress ap on ap.action_id=a.id and ap.item_id=i.id
@@ -383,10 +392,11 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
       const completelyApproved = item.formats.every(format => statuses.get(format.id) === 'approved');
       const pendingReview = all.some(row => row.status === 'submitted');
       const nextStatus = completelyApproved ? 'approved' : pendingReview ? 'submitted' : decision === 'revise' ? 'revision' : 'in_progress';
+      if (decision === 'revise') {
+        await tx`insert into marketing.work_item_review_notes(item_id,category_id,note,created_by)
+          values(${itemId}::uuid,${categoryId}::uuid,${note},${user.id}::uuid)`;
+      }
       await tx`update marketing.work_items set status=${nextStatus},
-        review_note=case when ${decision === 'revise'} then ${note} else review_note end,
-        review_note_type_id=case when ${decision === 'revise'} then ${categoryId}::uuid else review_note_type_id end,
-        review_note_created_at=case when ${decision === 'revise'} then now() else review_note_created_at end,
         approved_at=case when ${completelyApproved} then now() else null end,
         approved_by=case when ${completelyApproved} then ${user.id}::uuid else null end,
         version=version+1,updated_at=now() where id=${itemId}::uuid`;
@@ -535,10 +545,10 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
       if (upload.category === 'final') {
         await tx`delete from marketing.work_format_reviews where item_id=${upload.item_id}::uuid
           and format_id=any(${formatIds}::text[]) and status='revision'`;
-        await tx`update marketing.work_items set review_note='',review_note_type_id=null,review_note_created_at=null
-          where id=${upload.item_id}::uuid and review_note_created_at is not null and
-          review_note_created_at <= (select created_at from marketing.work_uploads where file_id=${fileId}::uuid)
-          and not exists (select 1 from marketing.work_format_reviews fr where fr.item_id=${upload.item_id}::uuid and fr.status='revision')`;
+        // Keep all review history, but clear pending notes only after a NEW final upload.
+        await tx`update marketing.work_item_review_notes set responded_at=now(),updated_at=now()
+          where item_id=${upload.item_id}::uuid and responded_at is null and deleted_at is null
+            and created_at < (select committed_at from marketing.work_uploads where file_id=${fileId}::uuid)`;
       }
       await tx`update marketing.work_items set version=version+1,updated_at=now() where id=${upload.item_id}::uuid`;
     }
