@@ -6,6 +6,7 @@ import { getSql } from './_db.js';
 import { metaAdsData } from './_marketing-meta-ads.js';
 import { googleAdsData } from './_marketing-google-ads.js';
 import { tiktokAdsData } from './_marketing-tiktok-ads.js';
+import { windsorSnapchatAdsData } from './_marketing-windsor-snapchat.js';
 import { normalizeCampaignReportRow, validateCampaignReportRange,
   type CampaignReportPayload, type CampaignReportProvider, type CampaignReportRow } from '../shared/campaign-report.js';
 
@@ -22,6 +23,8 @@ const ADAPTERS: readonly Adapter[] = [
     read: (sql, from, to) => googleAdsData(sql, 'last_30d', '', from, to) },
   { code: 'tiktok', name: 'TikTok Ads', interactionField: 'interactions', interactionDefinition: 'تفاعلات TikTok الإعلانية عند إتاحتها (إعجابات + تعليقات + مشاركات)، دون المشاهدات',
     read: (sql, from, to) => tiktokAdsData(sql, 'last_30d', '', from, to, false) },
+  { code: 'snapchat', name: 'Snapchat Ads', interactionField: 'interactions', interactionDefinition: 'تفاعلات إعلانات Snapchat عند توفر engagements من Windsor.ai؛ لا تُحسب النقرات تفاعلات',
+    read: (_sql, from, to) => windsorSnapchatAdsData(from, to) },
 ];
 
 export async function consolidatedCampaignReport(sql: Sql, fromInput: unknown, toInput: unknown): Promise<CampaignReportPayload> {

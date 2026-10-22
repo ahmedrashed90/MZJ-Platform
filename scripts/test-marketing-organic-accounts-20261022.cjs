@@ -10,13 +10,13 @@ const sql = async (strings, ...values) => {
   const query = strings.join('?').replace(/\s+/g, ' ').trim();
   queries.push({query, values});
   if (query.includes('insert into marketing.social_follower_snapshots')) {
-    const [channelId, name, batch] = values;
-    for (const row of batch) snapshotStore.set(`${channelId}:${row.date}`, {...row, channelId, name});
+    const [platform, channelId, name, batch] = values;
+    for (const row of batch) snapshotStore.set(`${platform}:${channelId}:${row.date}`, {...row, channelId, platform, name});
     return [];
   }
   if (query.includes('from marketing.social_follower_snapshots')) {
-    const [channelId, from, to] = values;
-    return [...snapshotStore.values()].filter(row => row.channelId === channelId && row.date >= from && row.date <= to)
+    const [platform, channelId, from, to] = values;
+    return [...snapshotStore.values()].filter(row => row.platform === platform && row.channelId === channelId && row.date >= from && row.date <= to)
       .sort((a,b) => a.date.localeCompare(b.date));
   }
   throw new Error('Unexpected SQL: ' + query);
@@ -27,6 +27,7 @@ const moduleUnderTest = load('server/_marketing-social-accounts.ts');
 const oldFetch = global.fetch, oldKey = process.env.BULKPUBLISH_API_KEY;
 process.env.BULKPUBLISH_API_KEY = 'fake-test-only-token';
 let providerCalls = [];
+let failTikTok = false;
 global.fetch = async (url, options) => {
   const parsed = new URL(url);
   providerCalls.push({path:parsed.pathname, params:Object.fromEntries(parsed.searchParams)});
@@ -35,14 +36,22 @@ global.fetch = async (url, options) => {
   const ok = json => ({ok:true, status:200, json:async()=>json});
   if (parsed.pathname === '/api/channels') return ok({channels:[
     {id:2042, platform:'tiktok', isActive:true, needsReconnect:false, accountName:'@mzjcars'},
-    {id:3010, platform:'instagram', isActive:true, accountName:'another'}
+    {id:3010, platform:'instagram', isActive:true, accountName:'another'},
+    {id:3011, platform:'snapchat', isActive:true, needsReconnect:false, accountName:'mzj_snap'}
   ]});
-  if (parsed.pathname === '/api/analytics/account') return ok({metrics:[
+  if (parsed.pathname === '/api/analytics/account' && parsed.searchParams.get('platforms') === 'snapchat') return ok({metrics:[
+    {date:'2026-10-20',channelId:3011,platform:'snapchat',impressions:200,views:190},
+    {date:'2026-10-21',channelId:3011,platform:'snapchat',impressions:210,views:197,reach:171}
+  ],channels:[{id:3011,platform:'snapchat',accountName:'mzj_snap'}]});
+  if (parsed.pathname === '/api/analytics/account') {
+    if (failTikTok) return {ok:false,status:503,json:async()=>({error:'temporary outage'})};
+    return ok({metrics:[
     {date:'2026-10-20',channelId:2042,platform:'tiktok',followers:13620},
     {date:'2026-10-21',channelId:2042,platform:'tiktok',followers:13642,following:0,
       impressions:10012,reach:0,profileViews:23,engagementRate:null,
       platformSpecific:{likesCount:32268,videoCount:480}}
   ],channels:[{id:2042,platform:'tiktok',accountName:'@mzjcars'}]});
+  }
   if (parsed.pathname === '/api/analytics/engagement') return ok({posts:[
     {id:'post1',content:'first',likes:51,comments:7,shares:2,publishedAt:'2026-10-20',url:'https://example.com/1'},
     {id:'post2',content:'second',likes:71,comments:11,shares:6,publishedAt:'2026-10-21',url:'https://example.com/2'}
@@ -58,6 +67,10 @@ global.fetch = async (url, options) => {
     assert.equal(result.ok,true);
     assert.equal(result.tiktok.connected,true);
     assert.equal(result.tiktok.accounts.length,1,'Only active organic TikTok channels appear');
+    assert.equal(result.snapchat.accounts.length,1, 'Snapchat channel appears separately');
+    assert.equal(result.snapchat.accounts[0].connected,true);
+    assert.equal(result.snapchat.accounts[0].followers,null,'Unprovided Snapchat followers stay unknown');
+    assert.equal(result.snapchat.accounts[0].views,197);
     const account=result.tiktok.accounts[0];
     assert.equal(account.id,2042);
     assert.equal(account.name,'@mzjcars');
@@ -72,6 +85,20 @@ global.fetch = async (url, options) => {
     assert.equal(account.topPost.engagementTotal,88);
     assert.equal(account.topPost.permalink,'https://example.com/2');
     assert.equal(snapshotStore.size,2,'Daily follower values persist idempotently');
+    failTikTok = true;
+    // BulkPublish Free permits 30 calls/day, so the first refresh inside TTL
+    // must reuse its cached value instead of hammering the API.
+    const cached = await moduleUnderTest.marketingSocialAccountsOverview(sql,{...range,refresh:'1'});
+    assert.equal(cached.tiktok.accounts[0].followers,13642);
+    assert.equal(cached.tiktok.accounts[0].stale,false);
+    const clock = Date.now;
+    try {
+      Date.now = () => clock() + 11 * 60_000;
+      const outage = await moduleUnderTest.marketingSocialAccountsOverview(sql,{...range,refresh:'1'});
+      assert.equal(outage.tiktok.accounts[0].followers,13642,'A temporary provider outage does not erase the last real follower count');
+      assert.equal(outage.tiktok.accounts[0].stale,true,'Stale readings are explicitly identified');
+    } finally { Date.now = clock; }
+    failTikTok = false;
     assert(providerCalls.some(c=>c.path==='/api/analytics/account' && c.params.channelIds==='2042'));
     assert(providerCalls.some(c=>c.path==='/api/analytics/engagement' && c.params.platforms==='tiktok'));
     assert(!providerCalls.some(c=>c.path.includes('ads')),'Never use paid ads to represent organic followers');

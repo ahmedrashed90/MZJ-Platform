@@ -45,14 +45,16 @@ const server = loadTS('server/_marketing-campaign-report.ts', {
   './_marketing-meta-ads.js': { metaAdsData: adapter('meta', [{id:'A',name:'Meta A',status:'ACTIVE',metrics:{spend:500,leads:10,interactions:40}}]) },
   './_marketing-google-ads.js': { googleAdsData: adapter('google',[{id:'B',name:'Google B',status:'ENABLED',metrics:{spend:45,leads:2,engagements:80}}]) },
   './_marketing-tiktok-ads.js': { tiktokAdsData: async () => { throw Error('Timeout'); } },
+  './_marketing-windsor-snapchat.js': { windsorSnapchatAdsData: async (from,to) => ({status:'ready',note:'',reports:[{account:{id:'snap-1',name:'Snapchat',currency:'SAR'},campaigns:[{id:'S',name:'Snap A',metrics:{spend:200,leads:5,clicks:60,interactions:null}}]}],errors:[]}) },
   '../shared/campaign-report.js': shared,
   './_db.js': { getSql: () => {} },
 });
 const report = await server.consolidatedCampaignReport({}, '2026-10-01', '2026-10-21');
-check(report.rows.length === 2 && report.providers.length === 3, 'All registered providers appear even when one fails');
+check(report.rows.length === 3 && report.providers.length === 4, 'All registered providers appear even when one fails');
 check(report.providers.find(p => p.platform === 'tiktok').status === 'failed', 'Provider errors isolate rather than erase successful data');
 check(report.rows.find(r => r.platform === 'google').interactions === 80, 'Google engagements map to interactions without converting to likes');
 check(report.rows.find(r => r.platform === 'meta').leads === 10, 'Meta lead attribution preserved');
+check(report.rows.find(r => r.platform === 'snapchat').clicks === 60 && report.rows.find(r => r.platform === 'snapchat').interactions === null, 'Snapchat clicks are distinct from engagements');
 check(report.rows.find(r => r.platform === 'google').currency === 'USD' && report.rows.find(r => r.platform === 'meta').currency === 'SAR', 'Account currencies stay separate');
 check(calls.length === 2 && calls.every(call => call.from === '2026-10-01' && call.to === '2026-10-21'), 'One identical date filter sent to each reporting source');
 const exporters = loadTS('src/marketing/reporting/exportCampaignReport.ts');

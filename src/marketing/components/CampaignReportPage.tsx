@@ -6,7 +6,7 @@ import { marketingFetch, marketingLocalDateKey, marketingQuery } from '../api';
 import { downloadCampaignReportXlsx, printCampaignReportPdf } from '../reporting/exportCampaignReport';
 
 const number = (value: number | null, decimals = 0) => value === null ? '—' : value.toLocaleString('ar-SA-u-nu-latn', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
-const currencyValue = (value: number | null, currency: string) => value === null ? '—' : `${number(value, 2)} ${currency}`;
+const currencyValue = (value: number | null, currency: string) => value === null ? '—' : `${number(value, 2)} ${currency || 'عملة غير محددة'}`;
 const RECENT = 29 * 86_400_000;
 type ChartMetric = 'interactions' | 'leads' | 'costPerLead';
 const CHART_COLORS: Record<ChartMetric, string> = { interactions: '#167d91', leads: '#2e8b68', costPerLead: '#ca8741' };
@@ -77,19 +77,30 @@ export function CampaignReportPage() {
     }
   }, [applied]);
   useEffect(() => { void load(); return () => { controller.current?.abort(); ++seq.current; }; }, [load]);
-  const currencies = useMemo(() => [...new Set((data?.rows || []).map(row => row.currency).filter(Boolean))], [data]);
+  const currencies = useMemo(() => [...new Set((data?.rows || []).map(row => row.currency))], [data]);
   const rows = useMemo(() => (data?.rows || []).filter(row => (platform === 'all' || row.platform === platform) &&
     (currency === 'all' || row.currency === currency) &&
     (!search.trim() || `${row.campaignName} ${row.accountName} ${row.platformName}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))), [data, platform, currency, search]);
-  const grouped = useMemo(() => currencies.filter(c => currency === 'all' || currency === c).map(name => {
-    const matches = rows.filter(row => row.currency === name);
-    const knownSpend = matches.every(row => row.spend !== null);
-    const knownLeads = matches.every(row => row.leads !== null);
-    const spend = matches.reduce((sum, row) => sum + (row.spend || 0), 0);
-    const leads = matches.reduce((sum, row) => sum + (row.leads || 0), 0);
-    return {name, matches: matches.length, spend: knownSpend ? spend : null, leads: knownLeads ? leads : null,
-      cpl: knownSpend && knownLeads && leads > 0 ? spend / leads : null};
-  }).filter(item => item.matches > 0), [currencies, currency, rows]);
+  const grouped = useMemo(() => {
+    // The Windsor fallback may lack currency: never combine unknown-currency
+    // spend from different accounts as though their money were interchangeable.
+    const buckets = new Map<string, CampaignReportRow[]>();
+    for (const row of rows) {
+      const name = row.currency || `غير محددة (${row.accountName})`;
+      const key = row.currency || `${row.platform}:${row.accountId}:unknown`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key)!.push(row);
+    }
+    return [...buckets].map(([_key, matches]) => {
+      const name = matches[0].currency || `غير محددة (${matches[0].accountName})`;
+      const knownSpend = matches.every(row => row.spend !== null);
+      const knownLeads = matches.every(row => row.leads !== null);
+      const spend = matches.reduce((sum, row) => sum + (row.spend || 0), 0);
+      const leads = matches.reduce((sum, row) => sum + (row.leads || 0), 0);
+      return {name, matches: matches.length, spend: knownSpend ? spend : null, leads: knownLeads ? leads : null,
+        cpl: knownSpend && knownLeads && leads > 0 ? spend / leads : null};
+    }).filter(item => item.matches > 0);
+  }, [rows]);
   const allLeadsKnown = rows.length > 0 && rows.every(row => row.leads !== null);
   const allInteractionsKnown = rows.length > 0 && rows.every(row => row.interactions !== null);
   const totalLeads = rows.reduce((sum, row) => sum + (row.leads || 0), 0);
@@ -115,7 +126,7 @@ export function CampaignReportPage() {
         <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} className={loading ? 'marketing-spin' : ''}/> تحديث</button></div>
       {!valid && <small className="mcr-error">حدد تاريخ بداية ونهاية صحيحين، بفترة لا تزيد عن سنة.</small>}
       <div className="mcr-filter-row mcr-secondary-filters"><label><span>المنصة</span><select value={platform} onChange={event => setPlatform(event.target.value)}><option value="all">كل المنصات</option>{(data?.providers || []).map(item => <option key={item.platform} value={item.platform}>{item.name}</option>)}</select></label>
-        <label><span>عملة الحساب</span><select value={currency} onChange={event => setCurrency(event.target.value)}><option value="all">كل العملات</option>{currencies.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label><span>عملة الحساب</span><select value={currency} onChange={event => setCurrency(event.target.value)}><option value="all">كل العملات</option>{currencies.map(item => <option key={item} value={item}>{item || 'عملة غير محددة'}</option>)}</select></label>
         <label className="mcr-search"><span>بحث بالحملة أو الحساب</span><input type="search" placeholder="ابحث باسم الحملة..." value={search} onChange={event => setSearch(event.target.value)}/></label></div>
     </section>
     {error && <div className="mcr-warning" role="alert">{error}</div>}
@@ -133,9 +144,9 @@ export function CampaignReportPage() {
       </section>
       {grouped.length > 1 && <div className="mcr-currencies">{grouped.map(group => <span key={group.name}>{group.name}: إنفاق <strong>{currencyValue(group.spend,group.name)}</strong> • ليدات <strong>{number(group.leads)}</strong> • CPL <strong>{currencyValue(group.cpl,group.name)}</strong></span>)}</div>}
       <section className="panel mcr-table-panel"><header><div><h4>الحملات</h4><p>{number(rows.length)} حملة • {data.from} إلى {data.to}</p></div><small>آخر تحديث: {new Date(data.generatedAt).toLocaleString('ar-SA-u-nu-latn')}</small></header>
-        <div className="mcr-table-scroll"><table><thead><tr><th>المنصة</th><th>الحساب</th><th>الحملات</th><th>العملة</th><th>المبلغ المصروف</th><th>إجمالي الليدات</th><th>تكلفة الليد</th><th>تفاعلات الإعلانات</th></tr></thead><tbody>
-          {rows.map(row => <tr key={row.key}><td><span className={`mcr-platform-label ${row.platform}`}>{row.platformName}</span></td><td dir="auto">{row.accountName}</td><td><bdi dir="auto">{row.campaignName}</bdi></td><td>{row.currency || '—'}</td><td dir="ltr">{currencyValue(row.spend,row.currency)}</td><td>{number(row.leads)}</td><td dir="ltr">{currencyValue(row.costPerLead,row.currency)}</td><td title={row.interactionsDefinition}>{number(row.interactions)}</td></tr>)}
-          {!rows.length && <tr><td colSpan={8} className="mcr-empty">لا توجد حملات في الفترة أو الفلاتر المختارة، أو أن جميع حسابات الإعلانات غير متاحة.</td></tr>}
+        <div className="mcr-table-scroll"><table><thead><tr><th>المنصة</th><th>الحساب</th><th>الحملات</th><th>العملة</th><th>المبلغ المصروف</th><th>إجمالي الليدات</th><th>تكلفة الليد</th><th>تفاعلات الإعلانات</th><th>النقرات</th></tr></thead><tbody>
+          {rows.map(row => <tr key={row.key}><td><span className={`mcr-platform-label ${row.platform}`}>{row.platformName}</span></td><td dir="auto">{row.accountName}</td><td><bdi dir="auto">{row.campaignName}</bdi></td><td>{row.currency || 'غير محددة'}</td><td dir="ltr">{currencyValue(row.spend,row.currency)}</td><td>{number(row.leads)}</td><td dir="ltr">{currencyValue(row.costPerLead,row.currency)}</td><td title={row.interactionsDefinition}>{number(row.interactions)}</td><td>{number(row.clicks)}</td></tr>)}
+          {!rows.length && <tr><td colSpan={9} className="mcr-empty">لا توجد حملات في الفترة أو الفلاتر المختارة، أو أن جميع حسابات الإعلانات غير متاحة.</td></tr>}
         </tbody></table></div>
       </section>
     </>}

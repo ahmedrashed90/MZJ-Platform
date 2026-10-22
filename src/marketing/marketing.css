@@ -6639,3 +6639,6 @@
 @media(max-width:1350px){.marketing-social-accounts-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:800px){.marketing-social-accounts-grid{grid-template-columns:1fr}.marketing-meta-account-intro{align-items:start}}
 @media(max-width:420px){.marketing-social-account-card .marketing-meta-account-metrics,.marketing-social-account-card .marketing-meta-account-metrics.has-page-likes{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Organic account diagnostics remain inside the existing card layout. */
+.marketing-social-account-note { margin: 9px 0; color: var(--muted, #776455); font-size: 12px; line-height: 1.7; }

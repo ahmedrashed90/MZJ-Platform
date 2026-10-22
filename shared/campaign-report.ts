@@ -6,7 +6,7 @@ export type CampaignReportMetric = number | null;
 export type CampaignReportRow = {
   key: string; platform: string; platformName: string; accountId: string;
   accountName: string; currency: string; campaignId: string; campaignName: string;
-  status: string; spend: CampaignReportMetric; leads: CampaignReportMetric;
+  status: string; spend: CampaignReportMetric; clicks: CampaignReportMetric; leads: CampaignReportMetric;
   costPerLead: CampaignReportMetric; interactions: CampaignReportMetric;
   interactionsDefinition: string;
 };
@@ -40,7 +40,7 @@ export function normalizeCampaignReportRow(input: {
     key: `${platform}:${accountId}:${campaignId}`, platform, platformName: input.platformName,
     accountId, accountName: String(input.accountName || accountId), currency: String(input.currency || ''),
     campaignId, campaignName: String(input.campaignName || campaignId), status: String(input.status || ''),
-    spend, leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null,
+    spend, clicks: finiteMetric(metrics.clicks), leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null,
     interactions, interactionsDefinition: input.interactionsDefinition,
   };
 }

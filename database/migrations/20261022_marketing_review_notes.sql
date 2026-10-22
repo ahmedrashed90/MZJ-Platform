@@ -23,7 +23,7 @@ select i.id,i.review_note_type_id,i.review_note,coalesce(i.review_note_created_a
 from marketing.work_items i where length(trim(i.review_note))>0
 on conflict do nothing;
 create table if not exists marketing.social_follower_snapshots (
-  platform text not null check(platform in ('tiktok')),
+  platform text not null check(platform in ('tiktok','snapchat')),
   channel_id bigint not null,
   account_name text not null default '',
   snapshot_date date not null,
