@@ -62,3 +62,16 @@ transfer history may have changed legitimately since the original ERP order.
 - Existing `check-erpnext-advance-paid-sales-followup-20260805.mjs` has three
   failures in the ORIGINAL uploaded ZIP; the same three exist before/after
   these requested changes. They are unrelated to source attribution/readiness.
+
+## Follow-up: operator approved historical correction
+
+A strictly one-time, **guarded** replacement for the former unguarded APPLY
+file now exists at `database/reconciliation/20261023_crm_erp_sale_source_APPLY_AFTER_APPROVAL.sql`.
+It targets the one conclusively verified original manual source (`friend` for
+lead `f4436112-8b3d-40ff-b71f-dafb087de3d4`) and the 115 legacy technical
+ERP transaction sources whose current linked CRM source differs. It enforces
+1/115/109 counts and the 86/16/6/6/1 source distribution. It creates durable
+BEFORE snapshots in schema `crm_reconciliation`, verifies no sale facts changed,
+and aborts atomically on discrepancy. A read-only VERIFY and optional guarded
+ROLLBACK are included. **No production Neon writes have been executed here**;
+an independent Neon recovery backup is required before running APPLY.
