@@ -620,6 +620,14 @@
 .mkw-detail-overview { background:linear-gradient(130deg,#fff5ef 0%,#fffaf6 62%,#ffffff 100%); border-color:#dbab96; box-shadow:0 10px 30px rgba(100,50,30,.09); }
 .mkw-detail-overview .mkw-detail-title h2 { color:#562b22; }
 .mkw-detail-overview .mkw-summary { background:rgba(255,255,255,.87); border:1px solid #ead3c6; border-radius:12px; }
+
+/* Only the task's overall readiness in the execution detail header is green.
+   Requirement readiness bars retain the existing brand color unchanged. */
+.mkw-detail-overview > .mkw-readiness > span { color:#15803d; }
+.mkw-detail-overview > .mkw-readiness strong { color:#15803d; }
+.mkw-detail-overview > .mkw-readiness progress { accent-color:#16a34a; }
+.mkw-detail-overview > .mkw-readiness progress::-webkit-progress-value { background:#16a34a; }
+.mkw-detail-overview > .mkw-readiness progress::-moz-progress-bar { background:#16a34a; }
 .mkw-requirement-review-entry { border-width:1px; border-inline-start-width:5px; box-shadow:0 4px 13px rgba(85,52,43,.045); }
 .mkw-requirement-review-entry:nth-child(4n+1) { --mkw-item-accent:#b66e4f; --mkw-item-tint:#fff5ef; border-color:#e2c2ae; border-inline-start-color:var(--mkw-item-accent); }
 .mkw-requirement-review-entry:nth-child(4n+2) { --mkw-item-accent:#86734d; --mkw-item-tint:#fbf8ee; border-color:#e7dbc1; border-inline-start-color:var(--mkw-item-accent); }

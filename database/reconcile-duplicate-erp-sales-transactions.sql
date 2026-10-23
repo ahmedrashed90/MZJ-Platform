@@ -167,8 +167,21 @@ SET
   assigned_name=coalesce(nullif(r.platform_user_name,''),st.assigned_name),
   department_code=coalesce(nullif(r.platform_department_code,''),st.department_code),
   branch_code=coalesce(nullif(r.platform_branch_code,''),st.branch_code),
-  source_code='next_erp',
-  source_name='NEXT ERP',
+  -- The sales-order integration origin must not replace the customer's source.
+  source_code=case
+    when lower(coalesce(st.source_code,'')) not in ('','next_erp','website') then st.source_code
+    else coalesce((
+      select nullif(l.source_code,'') from crm.leads l
+      where l.id=coalesce(r.resolved_lead_id,st.lead_id)
+    ),'next_erp')
+  end,
+  source_name=case
+    when lower(coalesce(st.source_code,'')) not in ('','next_erp','website') then st.source_name
+    else coalesce((
+      select nullif(l.source_name,'') from crm.leads l
+      where l.id=coalesce(r.resolved_lead_id,st.lead_id)
+    ),'NEXT ERP')
+  end,
   metadata=coalesce(st.metadata,'{}'::jsonb) || jsonb_build_object(
     'canonicalSalesTransaction', true,
     'salesOrderNo', r.sales_order_no,

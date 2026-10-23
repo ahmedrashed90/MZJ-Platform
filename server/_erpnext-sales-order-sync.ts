@@ -80,6 +80,8 @@ async function upsertErpNextSalesTransaction(
     mapping: PlatformUserMapping;
     departmentCode: string;
     branchCode: string | null;
+    leadSourceCode: string;
+    leadSourceName: string;
     firstPayload: ErpNextVehiclePayload;
   },
 ) {
@@ -88,6 +90,10 @@ async function upsertErpNextSalesTransaction(
   const totalAmount = numberValue(normalized.grandTotal);
   const crmSourceCode = clean(normalized.crmSourceCode) || "next_erp";
   const crmSourceName = clean(normalized.crmSourceName) || "NEXT ERP";
+  // The Sales Order's origin is NOT the customer's acquisition source.
+  // Keep the original CRM lead attribution in the canonical sales snapshot.
+  const leadSourceCode = clean(input.leadSourceCode) || crmSourceCode;
+  const leadSourceName = clean(input.leadSourceName) || (leadSourceCode === crmSourceCode ? crmSourceName : leadSourceCode);
   const metadata = {
     origin: "erpnext-sales-order",
     integrationOrderId: input.orderId,
@@ -98,11 +104,13 @@ async function upsertErpNextSalesTransaction(
     erpSalesPerson: normalized.erpSalesPerson,
     crmSourceCode,
     crmSourceName,
+    leadAcquisitionSourceCode: leadSourceCode,
+    leadAcquisitionSourceName: leadSourceName,
     canonicalSalesTransaction: true,
   };
 
   const existingRows = await tx<any[]>`
-    select id::text,source_type,coalesce(is_cancelled,false) as is_cancelled
+    select id::text,source_type,coalesce(is_cancelled,false) as is_cancelled,source_code,source_name
     from crm.sales_transactions
     where source_reference=${normalized.orderNo}
     order by
@@ -117,6 +125,14 @@ async function upsertErpNextSalesTransaction(
     for update
   `;
   const existing = existingRows[0] || null;
+  // A previously attributed sale keeps its non-technical acquisition snapshot,
+  // even if the CRM customer source is edited later and ERP resends the order.
+  const priorSaleSourceCode = clean(existing?.source_code);
+  const hasAcquisitionSnapshot = Boolean(priorSaleSourceCode && !["next_erp", "website"].includes(priorSaleSourceCode.toLowerCase()));
+  const saleSourceCode = hasAcquisitionSnapshot ? priorSaleSourceCode : leadSourceCode;
+  const saleSourceName = hasAcquisitionSnapshot ? (clean(existing?.source_name) || leadSourceName) : leadSourceName;
+  metadata.leadAcquisitionSourceCode = saleSourceCode;
+  metadata.leadAcquisitionSourceName = saleSourceName;
 
   if (existing) {
     if (existingRows.length > 1) {
@@ -144,8 +160,8 @@ async function upsertErpNextSalesTransaction(
         assigned_name=${mapping.full_name},
         department_code=${input.departmentCode},
         branch_code=${input.branchCode},
-        source_code=${crmSourceCode},
-        source_name=${crmSourceName},
+        source_code=${saleSourceCode},
+        source_name=${saleSourceName},
         car_name=${clean(firstPayload.item?.type)||null},
         car_category=${clean(firstPayload.item?.category)||null},
         updated_by=${mapping.id}::uuid,
@@ -164,7 +180,7 @@ async function upsertErpNextSalesTransaction(
       car_name,car_category,created_by,updated_by,metadata,is_cancelled
     ) values(
       ${input.leadId}::uuid,'erpnext_sales_order',${normalized.orderNo},${saleAt}::timestamptz,${quantity},${totalAmount},
-      ${mapping.id}::uuid,${mapping.full_name},${input.departmentCode},${input.branchCode},${crmSourceCode},${crmSourceName},
+      ${mapping.id}::uuid,${mapping.full_name},${input.departmentCode},${input.branchCode},${leadSourceCode},${leadSourceName},
       ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.category)||null},
       ${mapping.id}::uuid,${mapping.id}::uuid,${tx.json(metadata)},false
     )
@@ -176,7 +192,17 @@ async function upsertErpNextSalesTransaction(
       end,
       quantity=excluded.quantity,total_amount=excluded.total_amount,
       assigned_to=excluded.assigned_to,assigned_name=excluded.assigned_name,department_code=excluded.department_code,
-      branch_code=excluded.branch_code,source_code=excluded.source_code,source_name=excluded.source_name,
+      branch_code=excluded.branch_code,
+      source_code=case
+        when lower(coalesce(crm.sales_transactions.source_code,'')) not in ('','next_erp','website')
+          then crm.sales_transactions.source_code
+        else excluded.source_code
+      end,
+      source_name=case
+        when lower(coalesce(crm.sales_transactions.source_code,'')) not in ('','next_erp','website')
+          then crm.sales_transactions.source_name
+        else excluded.source_name
+      end,
       car_name=excluded.car_name,car_category=excluded.car_category,updated_by=excluded.updated_by,
       metadata=coalesce(crm.sales_transactions.metadata,'{}'::jsonb)||excluded.metadata,
       is_cancelled=false,cancelled_at=null,cancelled_by=null,updated_at=now()
@@ -407,9 +433,11 @@ async function ensureCrmContact(
   if (!inserted) {
     [contact] = await tx`
       update crm.contacts set
-        display_name=coalesce(nullif(${name},''),display_name),
-        primary_phone=coalesce(nullif(${phone},''),primary_phone),
-        primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
+        -- When the contact existed before this ERP order, keep its CRM identity.
+        -- ERP may fill missing values, but must not overwrite known CRM details.
+        display_name=coalesce(nullif(display_name,''),nullif(${name},'')),
+        primary_phone=coalesce(nullif(primary_phone,''),nullif(${phone},'')),
+        primary_phone_normalized=coalesce(nullif(primary_phone_normalized,''),nullif(${phoneNormalized},'')),
         metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(metadata)}::jsonb,
         updated_at=now()
       where id=${contact.id}::uuid
@@ -716,37 +744,12 @@ async function linkCrmCustomer(input: {
 
       [lead] = await tx`
         update crm.leads set
-          contact_id=${contact.id}::uuid,
-          customer_name=coalesce(nullif(customer_name,''),${customerName}),
-          phone=coalesce(nullif(${normalized.actualCustomerPhone},''),phone),
-          phone_normalized=coalesce(nullif(${normalized.actualCustomerPhoneNormalized},''),phone_normalized),
-          source_code=case
-            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
-            else source_code
-          end,
-          source_name=case
-            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceName}
-            else source_name
-          end,
-          source_history=case
-            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp'
-              then coalesce(source_history,'[]'::jsonb)||${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])}::jsonb
-            else source_history
-          end,
-          -- Sale ownership is authoritative at sale time. Website checkout orders move
-          -- CRM ownership to the virtual Website user; manual NEXT ERP orders move it
-          -- to the mapped salesperson who made that Sales Order. Cancellation restores
-          -- the previous CRM state captured above.
-          service_key=${serviceKey},
-          department_code=${departmentCode},
-          branch_code=${branchCode},
-          assigned_to=${mapping.id}::uuid,
-          responsible_name_snapshot=${mapping.full_name},
-          status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},sold_at=${saleAt}::timestamptz,
-          car_name=coalesce(nullif(car_name,''),${clean(firstPayload.item?.type)||null}),
-          car_category=coalesce(nullif(car_category,''),${clean(firstPayload.item?.category)||null}),
-          car_model=coalesce(nullif(car_model,''),${clean(firstPayload.item?.model)||null}),
-          color=coalesce(nullif(color,''),${clean(firstPayload.item?.exteriorColor)||null}),
+          -- An existing CRM customer already has an acquisition source, responsible
+          -- salesperson, department, branch and customer details. Never overwrite
+          -- those from ERP (including Website checkout orders). ERP sale ownership
+          -- is still recorded independently in crm.sales_transactions.
+          contact_id=coalesce(contact_id,${contact.id}::uuid),
+          status_code=null,status_label='تم البيع',sold_at=${saleAt}::timestamptz,
           extra_data=coalesce(extra_data,'{}'::jsonb)||${tx.json({ ...sourceMetadata, salesOrders: orders })}::jsonb,
           updated_by=${mapping.id}::uuid,updated_at=${saleAt}::timestamptz
         where id=${existing.id}::uuid
@@ -756,12 +759,9 @@ async function linkCrmCustomer(input: {
       if (existing.current_request_id) {
         await tx`
           update crm.service_requests set
-            service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},assigned_to=${mapping.id}::uuid,status_label='تم البيع',
-            source_code=case
-              when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
-              else source_code
-            end,
-            request_state='closed',closed_at=${saleAt}::timestamptz,
+            -- Close the existing request without reclassifying its original source,
+            -- salesperson, service, department or branch.
+            status_label='تم البيع',request_state='closed',closed_at=${saleAt}::timestamptz,
             closed_by=${mapping.id}::uuid,closure_reason='تم البيع',metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(sourceMetadata)}::jsonb,updated_at=now()
           where id=${existing.current_request_id}::uuid
         `;
@@ -779,10 +779,9 @@ async function linkCrmCustomer(input: {
             lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
             actor_id,actor_name,actor_role,note,details,created_at
           ) values(
-            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${departmentCode||null},${oldBranch||null},${branchCode||null},
-            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',${crmSourceCode === "website"
-              ? `تم تسجيل البيع ${normalized.orderNo} من طلب الشراء أونلاين وتحديث المسؤول إلى Website`
-              : `تم تسجيل البيع ${normalized.orderNo} وتحديث المسؤول إلى مندوب NEXT ERP ${mapping.full_name}`},
+            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${oldDepartment||null},${oldBranch||null},${oldBranch||null},
+            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',
+            ${`تم تسجيل البيع ${normalized.orderNo} للمندوب ${mapping.full_name} دون تغيير مصدر العميل أو مسؤوله أو قسمه أو فرعه`},
             ${tx.json(sourceMetadata)},${saleAt}::timestamptz
           )
         `;
@@ -797,6 +796,8 @@ async function linkCrmCustomer(input: {
       mapping,
       departmentCode,
       branchCode,
+      leadSourceCode: clean(lead.source_code) || crmSourceCode,
+      leadSourceName: clean(lead.source_name) || crmSourceName,
       firstPayload,
     });
 

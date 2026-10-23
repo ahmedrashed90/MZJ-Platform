@@ -79,8 +79,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
       else l.source_code
     end
   `;
+  // Historical ERP transaction rows sometimes stored the order's origin
+  // (next_erp/website) instead of the customer's acquisition source. Read the
+  // existing CRM source for those legacy snapshots without touching sale dates,
+  // quantities or representative/department snapshots. New ERP transactions
+  // capture this acquisition source directly at creation time.
   const transactionReportSourceCodeSql = sql`
     case
+      when lower(coalesce(st.source_type,'')) in ('erpnext_sales_order','erp_reconciliation')
+        and lower(coalesce(st.source_code,'')) in ('next_erp','website')
+        and nullif(l.source_code,'') is not null
+        and lower(l.source_code) not in ('next_erp','website')
+      then case when lower(l.source_code) in ('manual','manual_entry','manual-entry') then 'branch' else l.source_code end
       when lower(coalesce(st.source_code,l.source_code,'')) in ('manual','manual_entry','manual-entry') then 'branch'
       else coalesce(st.source_code,l.source_code)
     end
@@ -865,7 +875,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       greatest(coalesce(st.quantity,1),1)::int as quantity,
       coalesce(st.total_amount,0)::float as total_amount,
       (${transactionReportSourceCodeSql}) as source_code,
-      coalesce(src.name,st.source_name,l.source_name) as source_name,
+      coalesce(src.name,
+        case when (${transactionReportSourceCodeSql})=l.source_code then l.source_name else st.source_name end,
+        st.source_name,l.source_name) as source_name,
       case when src.report_group in ('digital','direct') then src.report_group else 'other' end as source_report_group,
       (${transactionDepartmentCodeSql}) as department_code,
       (${transactionBranchCodeSql}) as branch_code,
