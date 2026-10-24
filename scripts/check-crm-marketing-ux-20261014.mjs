@@ -20,9 +20,16 @@ const workflow=read('server/marketing/workflow.ts');
 assert.match(detail,/openedRequirementId/);
 assert.match(detail,/mkw-requirement-review-toggle/);
 assert.match(detail,/workPost\('review', \{ itemId: item\.id, version: version\.current, decision,\s*\.\.\.\(formatId \? \{ formatId \} : \{\}\), note:/);
-assert.match(detail,/const hasSubmitted = \(item\.format_reviews \|\| \[\]\)\.some\(row => row\.status === 'submitted'\)/);
-assert.match(workflow,/const pending = \(item\?\.format_reviews \|\| \[\]\)\.filter\(row => row\.status === 'submitted'\)/);
-assert.match(workflow,/const targets = requestedFormat \? pending\.filter\(row => row\.format_id === requestedFormat\) : pending/);
+// Reviewers may reject a requirement without files; approval/revision depend on
+// ready FINAL files, not whether the executor clicked Submit for review.
+assert.match(detail,/const reviewableFormats = workReviewableFormats\(item, 'revise'\)/);
+assert.match(detail,/const approvableFormats = workReviewableFormats\(item, 'approve'\)/);
+assert.match(detail,/\{capabilities\.review && item\.status !== 'approved' && <section/);
+assert.match(detail,/<button type="button" className="secondary danger" disabled=\{busy\} onClick=\{\(\) => void review\('reject'\)\}/);
+assert.doesNotMatch(detail,/const hasSubmitted =/);
+assert.match(workflow,/const reviewable = decision === 'reject' \? \[\] : workReviewableFormats\(item, decision === 'approve' \? 'approve' : 'revise'\)/);
+assert.match(workflow,/const targets = requestedFormat \? reviewable\.filter\(format => format\.id === requestedFormat\) : reviewable/);
+assert.match(workflow,/if \(decision !== 'reject' && !targets\.length\)/);
 assert.match(workflow,/const completelyApproved = item\.formats\.every\(format => statuses\.get\(format\.id\) === 'approved'\)/);
 assert.match(workflow,/where id=\$\{itemId\}::uuid/);
 assert.match(workflow,/const readiness = await recalculateTask\(tx, locked\.task_id\)/);
