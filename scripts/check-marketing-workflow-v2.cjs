@@ -18,7 +18,7 @@ const stubs = {
 };
 const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
-const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), {W}=load('shared/marketing-workflow-labels.ts');
+const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), evaluations=load('server/marketing/evaluations.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
 const file={id:uid(80),name:'tucson.jpg',mime_type:'image/jpeg',file_size:4,category:'final',format_id:format.id,status:'ready'};
 const item={id:uid(51),task_id:uid(50),task_name:'Tucson',task_no:'TSK-000001',created_by:admin.id,assigned_to:worker.id,department_id:uid(30),status:'submitted',media_kind:'image',formats:[format],files:[file],version:1,due_on:'2026-10-15'};
@@ -42,6 +42,29 @@ test('Revision with still-ready final files remains at 50 percent',()=>assert.eq
 test('Individual requirement reaches 100 percent after approval',()=>assert.equal(domain.workItemReadiness({...item,status:'approved'}),100));
 test('Approval without final coverage cannot show 100 percent',()=>assert.equal(domain.workItemReadiness({...item,status:'approved',files:[]}),0));
 test('Partial format upload contributes its proportional share before other formats arrive',()=>assert.equal(domain.workItemReadiness({...item,formats:[format,{...format,id:uid(11)}]}),25));
+test('Review buttons require ready FINAL files but do not require Submit',()=>{
+  const noFiles={...item,status:'in_progress',format_reviews:[],files:[]};
+  assert.equal(domain.workReviewableFormats(noFiles,'approve').length,0);
+  assert.equal(domain.workReviewableFormats(noFiles,'revise').length,0);
+  const onlyIdea={...noFiles,files:[{...file,category:'idea'}]};
+  assert.equal(domain.workReviewableFormats(onlyIdea,'approve').length,0);
+  assert.equal(domain.workReviewableFormats(onlyIdea,'revise').length,0);
+  const ready={...noFiles,files:[file]};
+  assert.deepEqual(domain.workReviewableFormats(ready,'approve').map(f=>f.id),[format.id]);
+  assert.deepEqual(domain.workReviewableFormats(ready,'revise').map(f=>f.id),[format.id]);
+});
+test('Revision locks its format until a new final file is uploaded',()=>{
+  const revision={...item,status:'revision',format_reviews:[{format_id:format.id,status:'revision'}]};
+  assert.equal(domain.workReviewableFormats(revision,'approve').length,0);
+  assert.equal(domain.workReviewableFormats(revision,'revise').length,0);
+  assert.equal(domain.workReviewableFormats({...revision,format_reviews:[]},'approve').length,1);
+  assert.equal(domain.workReviewableFormats({...revision,format_reviews:[{format_id:format.id,status:'approved'}]},'revise').length,0);
+});
+test('Incomplete carousel can be revised but cannot be approved as 100%',()=>{
+  const partial={...item,formats:[{...format,name:'carousel'}],format_reviews:[]};
+  assert.equal(domain.workReviewableFormats(partial,'revise').length,1);
+  assert.equal(domain.workReviewableFormats(partial,'approve').length,0);
+});
 test('Parent task progress mirrors the detailed requirement milestone',()=>assert.equal(domain.workReadiness([item]).percent,domain.workItemReadiness(item)));
 test('Each requirement displays its idea and readiness without opening detail',()=>{const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');assert(front.includes('({item.idea?.trim() ||'));assert(front.includes('<Readiness value={workItemReadiness(item)} />'));assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'));});
 test('Approval without a ready file never counts',()=>assert.equal(domain.workReadiness([{...item,status:'approved',files:[]}]).percent,0));
@@ -208,7 +231,7 @@ test('Approval completes a fully delivered single-output task',async()=>{
   const db=scriptedSql([
     itemRead([pending]),taskLock(),itemLock([pending]),itemLoad([pending]),
     step('insert into marketing.work_history'),
-    step('update marketing.work_format_reviews',[],v=>assert.equal(v[0],'approved')),
+    step('insert into marketing.work_format_reviews',[],v=>{assert.equal(v[2],'approved'); assert.equal(v[3],true);}),
     step('select format_id,status',[{format_id:format.id,status:'approved'}]),
     step('update marketing.work_items',[],v=>assert.equal(v[0],'approved')),
     step('insert into marketing.work_action_progress'),
@@ -216,6 +239,85 @@ test('Approval completes a fully delivered single-output task',async()=>{
   ]);
   const result=await api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin);
   assert.equal(result.readiness.percent,100);db.assertDone();
+});
+test('Admin can reject an unsubmitted requirement with NO final files',async()=>{
+  const empty={...item,status:'in_progress',format_reviews:[],files:[]};
+  const db=scriptedSql([
+    itemRead([empty]),taskLock(),itemLock([empty]),itemLoad([empty]),
+    step('insert into marketing.work_history',[],v=>assert.deepEqual(v[6].formatIds,[])),
+    step('insert into marketing.work_rejected_items',[],v=>assert.equal(v[0],empty.id)),
+    step('delete from marketing.work_items',[],v=>assert.deepEqual(v,[empty.id])),
+    ...recalc([],'empty'),
+  ]);
+  const result=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);
+  assert.equal(result.readiness.total,0);db.assertDone();
+});
+test('Admin can approve uploaded files directly without executor Submit',async()=>{
+  const ready={...item,status:'in_progress',format_reviews:[],submitted_at:null};
+  const db=scriptedSql([
+    itemRead([ready]),taskLock(),itemLock([ready]),itemLoad([ready]),
+    step('insert into marketing.work_history',[],v=>assert.deepEqual(v[6].formatIds,[format.id])),
+    step('insert into marketing.work_format_reviews',[],v=>{assert.equal(v[2],'approved');assert.equal(v[3],true);}),
+    step('select format_id,status',[{format_id:format.id,status:'approved'}]),
+    step('update marketing.work_items',[],(v,q)=>{assert.equal(v[0],'approved');assert(q.includes('submitted_at=case when'));}),
+    step('insert into marketing.work_action_progress'),
+    ...recalc([{...ready,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]}],'completed'),
+  ]);
+  const result=await api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin);
+  assert.equal(result.readiness.percent,100);db.assertDone();
+});
+test('Admin can request revision immediately after final upload, before Submit',async()=>{
+  const ready={...item,status:'in_progress',format_reviews:[]};
+  const categoryId=uid(72);
+  const db=scriptedSql([
+    itemRead([ready]),taskLock(),itemLock([ready]),itemLoad([ready]),
+    step('select id from marketing.work_review_categories',[{id:categoryId}]),
+    step('insert into marketing.work_history',[],v=>assert.deepEqual(v[6].formatIds,[format.id])),
+    step('insert into marketing.work_format_reviews',[],v=>assert.equal(v[2],'revision')),
+    step('select format_id,status',[{format_id:format.id,status:'revision'}]),
+    step('insert into marketing.work_item_review_notes'),
+    step('update marketing.work_items',[],v=>assert.equal(v[0],'revision')),
+    ...recalc([{...ready,status:'revision',format_reviews:[{format_id:format.id,status:'revision'}]}],'active'),
+  ]);
+  const result=await api.reviewItem(db,{itemId:item.id,decision:'revise',note:'تعديل مطلوب',categoryId,version:1},admin);
+  assert.equal(result.readiness.percent,50);db.assertDone();
+});
+test('Admin cannot revise a requirement with only an idea attachment',async()=>{
+  const empty={...item,status:'in_progress',format_reviews:[],files:[{...file,category:'idea'}]};
+  const db=scriptedSql([itemRead([empty]),taskLock(),itemLock([empty]),itemLoad([empty])]);
+  await assert.rejects(()=>api.reviewItem(db,{itemId:item.id,decision:'revise',categoryId:uid(72),note:'تعديل',version:1},admin));
+  db.assertDone();
+});
+test('Executor can be rated after reviewer requested changes, without 100% approval',async()=>{
+  const revised={...item,status:'revision'};
+  const criterionId=uid(95);
+  const db=scriptedSql([
+    step('select id,assigned_to,status,formats',[revised]),
+    step('select 1 from marketing.work_format_reviews',[{ready:1}]),
+    step('select id::text,name from marketing.work_kpi_criteria',[{id:criterionId,name:'جودة التنفيذ'}]),
+    step('insert into marketing.work_item_ratings',[],v=>assert.equal(v[4],100)),
+  ]);
+  const result=await evaluations.saveItemRating(db,admin,{scores:[{criterionId,score:3}]},revised);
+  assert.equal(result.percentage,100);db.assertDone();
+});
+test('Cannot rate an unreviewed executor who merely uploaded files',async()=>{
+  const draft={...item,status:'in_progress'};
+  const db=scriptedSql([
+    step('select id,assigned_to,status,formats',[draft]),
+    step('select 1 from marketing.work_format_reviews',[]),
+  ]);
+  await assert.rejects(()=>evaluations.saveItemRating(db,admin,{scores:[]},draft),/تقييم المنفذ متاح/);
+  db.assertDone();
+});
+test('Rating a rejected requirement does not require any submitted files',async()=>{
+  const criterionId=uid(95), rejected={item_id:item.id,assigned_to:worker.id};
+  const db=scriptedSql([
+    step('select item_id,assigned_to from marketing.work_rejected_items',[rejected]),
+    step('select id::text,name from marketing.work_kpi_criteria',[{id:criterionId,name:'جودة التنفيذ'}]),
+    step('update marketing.work_rejected_items',[],v=>{assert.equal(v[1],100);assert.equal(v[3],item.id);}),
+  ]);
+  const result=await evaluations.saveRejectedItemRating(db,admin,{scores:[{criterionId,score:3}]},rejected);
+  assert.equal(result.percentage,100);db.assertDone();
 });
 test('Reject archives selected output for grading before deletion and recalculates remaining readiness',async()=>{
   const remaining={...item,id:uid(52),status:'approved'};

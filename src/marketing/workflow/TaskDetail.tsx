@@ -3,7 +3,7 @@ import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSim
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
-import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, type WorkItemRating } from '../../../shared/marketing-workflow';
+import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, workReviewableFormats, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, type WorkItemRating } from '../../../shared/marketing-workflow';
 import { W, Empty, Field, FileLink, FilesPreview, Formats, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
 
@@ -26,6 +26,12 @@ type Detail = {
   canRate: boolean;
 };
 
+function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
+  if (item.status === 'rejected') return true;
+  if (item.status === 'approved') return workItemReadiness(item) === 100;
+  return item.status === 'revision' || (item.format_reviews || []).some(row => row.status === 'revision');
+}
+
 export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
@@ -42,8 +48,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const canRate = Boolean(query.data?.canRate);
   const ratingRows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id, name: c.name, binary: isBinaryProductDecisionCriterion(c.name) }))
     : (selectedRatingItem?.rating?.scores || []).map(c => ({ id: c.criterionId, name: c.criterionName, binary: isBinaryProductDecisionCriterion(c.criterionName) }));
-  const ratingAllowed = Boolean(canRate && selectedRatingItem &&
-    (selectedRatingItem.status === 'rejected' || (selectedRatingItem.status === 'approved' && workItemReadiness(selectedRatingItem) === 100)));
+  const ratingAllowed = Boolean(canRate && selectedRatingItem && canEvaluateItem(selectedRatingItem));
   const scored = ratingRows.length > 0 && ratingRows.every(c => Number.isInteger(ratingScores[c.id]) && ratingScores[c.id] !== ''
     && Number(ratingScores[c.id]) >= 0 && Number(ratingScores[c.id]) <= 3 && (!c.binary || [0,3].includes(Number(ratingScores[c.id]))));
   function openItemRating(item: WorkItem | RejectedRatingItem) {
@@ -53,7 +58,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
     setRatingError(''); setRatingItemId(item.id);
   }
   async function saveItemRating() {
-    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد الاعتماد 100% أو الرفض، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
+    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد الاعتماد 100% أو طلب التعديل أو الرفض، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
     setRatingBusy(true); setRatingError('');
     try {
       await workPost(selectedRatingItem.status === 'rejected' ? 'save_rejected_rating' : 'save_rating', { itemId: selectedRatingItem.id,
@@ -78,7 +83,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               const reviews = item.format_reviews || [];
               const pending = reviews.filter(r => r.status === 'submitted').length;
               const approved = reviews.filter(r => r.status === 'approved').length;
-              const gradeReady = item.status === 'approved' && workItemReadiness(item) === 100;
+              const gradeReady = canEvaluateItem(item);
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
@@ -97,7 +102,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                   {gradeReady && (canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
                     {canRate ? (item.rating ? 'تعديل التقييم' : 'تقييم المنفذ') : 'عرض التقييم'}
                   </button>}
-                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100%</span>}
+                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100% أو طلب التعديل</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
@@ -183,7 +188,10 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const finals = item.files.filter(file => file.category === 'final');
   const states = new Map((item.format_reviews || []).map(r => [r.format_id, r.status]));
   const readyToSubmit = item.formats.some(format => !states.has(format.id) && finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
-  const hasSubmitted = (item.format_reviews || []).some(row => row.status === 'submitted');
+  const reviewableFormats = workReviewableFormats(item, 'revise');
+  const approvableFormats = workReviewableFormats(item, 'approve');
+  const reviewableFormatIds = new Set(reviewableFormats.map(format => format.id));
+  const approvableFormatIds = new Set(approvableFormats.map(format => format.id));
   const categories = settings?.categories || [];
   const rating = item.rating;
 
@@ -241,7 +249,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
       <section className="mkw-note-management">
         <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
-          {canRate && revisionFormat !== null && hasSubmitted && <button type="button" className="secondary" disabled={busy} onClick={() => {
+          {canRate && revisionFormat !== null && reviewableFormats.length > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => {
             setEditingNoteId(null); setNote(''); setNoteType(''); setShowNoteEditor(true);
           }}>إضافة ملاحظة</button>}
         </div>
@@ -295,7 +303,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
               <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><span className="mkw-format-state">{state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div>
               {formatFiles.map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !locked && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
               {canUpload && !locked && <label className="mkw-upload-action"><UploadSimple size={17}/><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
-              {capabilities.review && state === 'submitted' && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}>تعديل</button></div>}
+              {capabilities.review && reviewableFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy || !approvableFormatIds.has(format.id)} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}>تعديل</button></div>}
             </div>;
           })}</div>
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
@@ -304,7 +312,7 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
         </section>
       </div>
       {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
-      {capabilities.review && hasSubmitted && <section className="mkw-review-controls"><div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button><button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
+      {capabilities.review && item.status !== 'approved' && <section className="mkw-review-controls"><div className="mkw-actions">{reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button></>}<button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
     </div>
 
   </article>;

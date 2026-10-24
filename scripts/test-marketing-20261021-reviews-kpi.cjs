@@ -38,6 +38,7 @@ async function main(){
   await check('Admin saves a complete 0-3 per-criterion grade at the correct percentage',async()=>{
     const db=scriptedSql([
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),
+      step('select 1 from marketing.work_format_reviews',[]),
       step('select count(*)::int as approved_count',[{approved_count:2}]),
       step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'قبول أو رفض المنتج'},{id:id(202),name:'الجودة'}]),
       step('insert into marketing.work_item_ratings',[],(values)=>{
@@ -52,17 +53,19 @@ async function main(){
   await check('Out-of-range values and executor grading are rejected',async()=>{
     const input={scores:[{criterionId:id(201),score:4}]};
     await assert.rejects(()=>ratings.saveItemRating(scriptedSql([]),executor,input,item));
-    const db=scriptedSql([step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),step('select count(*)::int as approved_count',[{approved_count:2}]),step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'Design'}])]);
+    const db=scriptedSql([step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),step('select 1 from marketing.work_format_reviews',[]),
+      step('select count(*)::int as approved_count',[{approved_count:2}]),step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'Design'}])]);
     await assert.rejects(()=>ratings.saveItemRating(db,admin,input,item));db.assertDone();
   });
   await check('Unapproved requirements cannot be rated by an administrator', async()=>{
-    const db=scriptedSql([step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'submitted',formats:item.formats}])]);
+    const db=scriptedSql([step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'submitted',formats:item.formats}]), step('select 1 from marketing.work_format_reviews',[])]);
     await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:3}]},item), /100%/);
     db.assertDone();
   });
   await check('Binary acceptance criterion rejects 1 or 2 on the server',async()=>{
     const db=scriptedSql([
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),
+      step('select 1 from marketing.work_format_reviews',[]),
       step('select count(*)::int as approved_count',[{approved_count:2}]),
       step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'قبول أو رفض المنتج'}]),
     ]);

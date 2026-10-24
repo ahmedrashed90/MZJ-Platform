@@ -11,7 +11,7 @@ import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketin
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
 import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishing.js';
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
-import { finalCoverage, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
+import { finalCoverage, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, workReviewableFormats, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
@@ -75,7 +75,7 @@ async function taskVisible(db: any, user: SessionUser, taskId: string) {
     ${(isManager(user) || canGradeWorkItem(user))} or t.created_by=${user.id}::uuid or exists(
       select 1 from marketing.work_items i left join core.departments d on d.id=i.department_id
       where i.task_id=t.id and (i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
-    ))`;
+    ) or exists(select 1 from marketing.work_rejected_items r where r.task_id=t.id and r.assigned_to=${user.id}::uuid))`;
   if (!row) throw new Error(W.notFound);
   return row;
 }
@@ -201,7 +201,8 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
       ${isManager(user)} or (t.created_by=${user.id}::uuid and ${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))})
       or exists(select 1 from marketing.work_items own
         left join core.departments d on d.id=own.department_id where own.task_id=t.id and
-          (own.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))))
+          (own.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[])))
+      or exists(select 1 from marketing.work_rejected_items r where r.task_id=t.id and r.assigned_to=${user.id}::uuid))
     group by t.id,ct.name order by t.created_at desc,t.task_number desc`;
   const visibleItemIds = rows.flatMap(row => Array.isArray(row.visible_item_ids) ? row.visible_item_ids : []);
   const itemsByTask = new Map<string, WorkItem[]>();
@@ -386,18 +387,20 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
     if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
     if (locked.status === 'approved') throw new Error(W.immutable);
     const item = (await loadItems(tx, locked.task_id)).find(row => row.id === itemId);
-    const pending = (item?.format_reviews || []).filter(row => row.status === 'submitted');
-    if (!item || (decision !== 'reject' && !pending.length)) throw new Error(W.immutable);
+    if (!item) throw new Error(W.notFound);
     if (requestedFormat && !item.formats.some(format => format.id === requestedFormat)) throw new Error(W.selectFormats);
-    const targets = requestedFormat ? pending.filter(row => row.format_id === requestedFormat) : pending;
-    if (decision !== 'reject' && !targets.length) throw new Error(W.immutable);
+    // Reviewer actions are based on ready FINAL files, not the executor's
+    // optional Submit click. Rejection has no file or submission prerequisite.
+    const reviewable = decision === 'reject' ? [] : workReviewableFormats(item, decision === 'approve' ? 'approve' : 'revise');
+    const targets = requestedFormat ? reviewable.filter(format => format.id === requestedFormat) : reviewable;
+    if (decision !== 'reject' && !targets.length) throw new Error(decision === 'approve' ? W.incompleteFiles : W.immutable);
     if (categoryId) {
       const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`;
       if (!category) throw new Error('نوع الملاحظة غير موجود في الإعدادات');
     }
     await history(tx, user, locked.task_id, itemId,
       decision === 'approve' ? 'approved' : decision === 'revise' ? 'revision' : 'rejected', note,
-      { formatIds: targets.map(row => row.format_id), categoryId });
+      { formatIds: targets.map(row => row.id), categoryId });
     if (decision === 'reject') {
       // Keep rejection out of work_items/readiness/products, but retain a safe
       // grading-only archive to allow the reviewer to rate a rejected output.
@@ -409,10 +412,13 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
       await tx`delete from marketing.work_items where id=${itemId}::uuid`;
     } else {
       for (const format of targets) {
-        await tx`update marketing.work_format_reviews set status=${decision === 'approve' ? 'approved' : 'revision'},
-          approved_at=case when ${decision === 'approve'} then now() else null end,
-          approved_by=case when ${decision === 'approve'} then ${user.id}::uuid else null end,
-          updated_at=now() where item_id=${itemId}::uuid and format_id=${format.format_id}`;
+        const approved = decision === 'approve';
+        await tx`insert into marketing.work_format_reviews
+          (item_id,format_id,status,submitted_at,approved_at,approved_by,updated_at)
+          values(${itemId}::uuid,${format.id},${approved ? 'approved' : 'revision'},now(),
+            case when ${approved} then now() else null end,${approved ? user.id : null}::uuid,now())
+          on conflict(item_id,format_id) do update set status=excluded.status,
+            approved_at=excluded.approved_at,approved_by=excluded.approved_by,updated_at=now()`;
       }
       const all = await tx<any[]>`select format_id,status from marketing.work_format_reviews where item_id=${itemId}::uuid`;
       const statuses = new Map<string,string>(all.map(row => [row.format_id, row.status]));
@@ -426,6 +432,12 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
       await tx`update marketing.work_items set status=${nextStatus},
         approved_at=case when ${completelyApproved} then now() else null end,
         approved_by=case when ${completelyApproved} then ${user.id}::uuid else null end,
+        -- A directly approved item has no Submit timestamp; record its actual
+        -- latest final upload date so delivery-on-time reporting still works.
+        submitted_at=case when ${completelyApproved} then coalesce(submitted_at,
+          (select max(coalesce(up.committed_at,j.created_at)) from marketing.work_item_files j
+            left join marketing.work_uploads up on up.file_id=j.file_id and up.item_id=j.item_id
+            where j.item_id=${itemId}::uuid and j.category='final')) else submitted_at end,
         version=version+1,updated_at=now() where id=${itemId}::uuid`;
       if (completelyApproved) await tx`insert into marketing.work_action_progress(item_id,action_id,completed,completed_by)
         select ${itemId}::uuid,id,true,${user.id}::uuid from marketing.assignment_actions

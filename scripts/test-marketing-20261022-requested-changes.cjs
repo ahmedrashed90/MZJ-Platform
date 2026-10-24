@@ -24,7 +24,8 @@ test('Representative card has bounded height with an internal scroll, including 
   assert(css.includes('height:360px;min-height:360px;max-height:360px'));
 });
 test('Rating action is gated on full approval, except archived rejections', () => {
-  assert(detail.includes("item.status === 'approved' && workItemReadiness(item) === 100"));
+  assert(detail.includes("if (item.status === 'approved') return workItemReadiness(item) === 100"));
+  assert(detail.includes("item.status === 'revision'"));
   assert(detail.includes("selectedRatingItem.status === 'rejected'"));
   assert(detail.includes("'save_rejected_rating' : 'save_rating'"));
   assert(workflow.includes('work_save_rejected_rating'));
@@ -51,7 +52,7 @@ test('Only binary acceptance/rejection uses grade 0 or 3', () => {
 });
 test('Notes action appears only after review revision was selected', () => {
   assert(detail.includes("function beginRevision(formatId?: string)"));
-  assert(detail.includes("canRate && revisionFormat !== null && hasSubmitted"));
+  assert(detail.includes("canRate && revisionFormat !== null && reviewableFormats.length > 0"));
   assert(detail.includes('>إضافة ملاحظة</button>'));
   assert(detail.includes("decision === 'revise' ? note : ''"));
 });

@@ -117,6 +117,23 @@ export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'f
   }, 0);
   return Math.round(total * 10 / item.formats.length) / 10;
 }
+/** A reviewer may act on uploaded final files without waiting for the executor
+ * to press Submit. Approved formats stay locked; a format sent for revision
+ * becomes reviewable again only after the executor uploads a NEW final file. */
+export function workReviewableFormats(
+  item: Pick<WorkItem, 'formats' | 'files' | 'media_kind'> & Partial<Pick<WorkItem, 'format_reviews'>>,
+  decision: 'approve' | 'revise',
+): WorkFormat[] {
+  const states = new Map((item.format_reviews || []).map(row => [row.format_id, row.status]));
+  return item.formats.filter(format => {
+    const state = states.get(format.id);
+    if (state === 'approved' || state === 'revision') return false;
+    const uploaded = item.files.some(file => file.category === 'final' && file.status === 'ready' && file.format_id === format.id);
+    if (!uploaded) return false;
+    return decision === 'revise' || finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind });
+  });
+}
+
 export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>>) {
   const total = items.length;
   let approved = 0;
