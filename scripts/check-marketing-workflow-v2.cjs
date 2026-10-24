@@ -16,7 +16,7 @@ const stubs = {
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
 };
-const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
+const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
 const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), evaluations=load('server/marketing/evaluations.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
@@ -222,6 +222,96 @@ test('Calendar gives regular user readiness from only their visible requirement'
   const result=await api.calendar(db,worker,{query:{from:'2026-10-01',to:'2026-10-31'}});
   assert.equal(result.rows[0].item_readiness,50);db.assertDone();
 });
+test('Reviewer can append additional configured photo sizes without touching existing files and approvals',async()=>{
+  const next={...format,id:uid(11),name:'Photo Square',platform_id:uid(21),platform_name:'Facebook'};
+  const db=scriptedSql([
+    itemRead([item]),taskLock(),itemLock([item]),
+    step('from marketing.platform_post_types pt join marketing.platforms p',[next],v=>assert.deepEqual(v,[[next.id]])),
+    step('update marketing.work_items',[{version:2}],(v,query)=>{
+      assert.deepEqual(v[0].map(f=>f.id),[format.id,next.id]);
+      assert.deepEqual(v.slice(1,4),[false,false,false]);
+      assert(!query.includes('delete from marketing.work_item_files'));
+    }),
+    step('insert into marketing.work_history',[],v=>{assert.equal(v[2],'formats_added');assert.deepEqual(v[6].formatIds,[next.id]);}),
+    ...recalc([{...item,status:'submitted',formats:[format,next],format_reviews:[{format_id:format.id,status:'approved'}]}],'active'),
+  ]);
+  const n=events.length;
+  const output=await api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[next.id]},admin);
+  assert.equal(output.added,1);
+  assert.equal(output.version,2);
+  assert.equal(events.length,n+1);
+  assert.deepEqual(events.at(-1).audienceUserIds,[worker.id]);
+  db.assertDone();
+});
+test('Appending sizes to an approved requirement reopens ONLY its final approval',async()=>{
+  const next={...format,id:uid(12),name:'Photo Square',platform_id:uid(21)};
+  const approved={...item,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
+  const reopened={...approved,status:'in_progress',formats:[format,next]};
+  assert.equal(domain.workItemReadiness(reopened),50);
+  const db=scriptedSql([
+    itemRead([approved]),taskLock(),itemLock([approved]),
+    step('from marketing.platform_post_types pt join marketing.platforms p',[next]),
+    step('update marketing.work_items',[{version:2}],v=>{
+      assert.deepEqual(v[0].map(f=>f.id),[format.id,next.id]);
+      assert.deepEqual(v.slice(1,4),[true,true,true]);
+    }),
+    step('update marketing.work_action_progress',[],(_,query)=>{
+      assert.match(query,/a\.is_final_approval=true/);
+      assert.match(query,/completed=false/);
+    }),
+    step('insert into marketing.work_history'),
+    ...recalc([reopened],'active'),
+  ]);
+  await api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[next.id]},admin);
+  db.assertDone();
+});
+test('Reviewer can append configured video sizes to a VIDEO requirement',async()=>{
+  const initial={...format,name:'Video'};
+  const added={...format,id:uid(13),name:'Video Reels',platform_id:uid(21)};
+  const video={...item,status:'in_progress',media_kind:'video',formats:[initial],files:[]};
+  const db=scriptedSql([
+    itemRead([video]),taskLock(),itemLock([video]),
+    step('from marketing.platform_post_types pt join marketing.platforms p',[added]),
+    step('update marketing.work_items',[{version:2}],v=>assert.deepEqual(v[0].map(f=>f.name),['Video','Video Reels'])),
+    step('insert into marketing.work_history'),
+    ...recalc([{...video,formats:[initial,added]}],'active'),
+  ]);
+  const result=await api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[added.id]},admin);
+  assert.equal(result.added,1);db.assertDone();
+});
+test('Executor cannot add final sizes',async()=>{
+  await assert.rejects(()=>api.addItemFormats(identitySql,{itemId:item.id,version:1,formatIds:[uid(11)]},worker));
+});
+test('Adding an existing format cannot duplicate it',async()=>{
+  const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item])]);
+  await assert.rejects(()=>api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[format.id]},admin));
+  db.assertDone();
+});
+test('Invalid or repeated format IDs cannot be added',async()=>{
+  await assert.rejects(()=>api.addItemFormats(identitySql,{itemId:item.id,version:1,formatIds:[]},admin));
+  await assert.rejects(()=>api.addItemFormats(identitySql,{itemId:item.id,version:1,formatIds:[uid(11),uid(11)]},admin));
+});
+test('Stale version cannot append formats to a concurrently edited item',async()=>{
+  const db=scriptedSql([itemRead([item]),taskLock(),itemLock([{...item,version:2}])]);
+  await assert.rejects(()=>api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[uid(11)]},admin));
+  db.assertDone();
+});
+test('Video-only dimensions cannot be appended to an image requirement',async()=>{
+  const newFormat={...format,id:uid(11),name:'Video Reels'};
+  const db=scriptedSql([itemRead([item]),taskLock(),itemLock([item]),step('from marketing.platform_post_types pt join marketing.platforms p',[newFormat])]);
+  await assert.rejects(()=>api.addItemFormats(db,{itemId:item.id,version:1,formatIds:[newFormat.id]},admin));
+  db.assertDone();
+});
+test('Client only shows unselected sizes compatible with the requirement media kind',()=>{
+  const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+  const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
+  assert(front.includes("workPost('add_item_formats'"));
+  assert(front.includes('capabilities.review && <button type="button" className="secondary"'));
+  assert(front.includes('!configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name)'));
+  assert(front.includes('<FormatSelector formats={availableFormats} selected={newFormatIds}'));
+  assert(api.includes("requirePermission(user, 'marketing.task.review')"));
+  assert(api.includes("else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user)"));
+});
 test('Executor cannot invoke reviewer API',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'approve',version:1},worker)));
 test('Revision needs a note',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'revise',version:1,note:''},admin)));
 test('Stale review cannot overwrite concurrent changes',async()=>{const db=scriptedSql([itemRead([item]),taskLock(),itemLock([{...item,version:2}])]);await assert.rejects(()=>api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin));db.assertDone();});
@@ -383,6 +473,7 @@ test('Task preview allows platform admin to see rejected grading archive',async(
     itemLoad([item]),
     step('from marketing.work_rejected_items',[rejected],v=>assert.deepEqual(v,[item.task_id,true,admin.id])),
     step('select name from marketing.campaign_types',[{name:'Cash'}]),
+    step('from marketing.platform_post_types pt join marketing.platforms p',[format]),
     step('select id,action,note'),
   ]);
   const r=await api.taskSummary(db,admin,item.task_id);

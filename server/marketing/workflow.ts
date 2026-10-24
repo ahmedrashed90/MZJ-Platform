@@ -169,12 +169,18 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const readiness = workReadiness(items);
   const dates = items.map(i => workDate(i.due_on)).sort();
   const [type] = await db`select name from marketing.campaign_types where id=${task.type_id}::uuid`;
+  const formatOptions: WorkFormat[] = hasPermission(user, 'marketing.task.review')
+    ? await db`select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,
+      p.name as platform_name,p.code as platform_code
+      from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
+      where pt.is_active=true order by p.name,pt.name,pt.id`
+    : [];
   const itemIds = items.map(i => i.id);
   const events = await db`select id,action,note,actor_name,created_at,item_id,data from marketing.work_history
     where task_id=${taskId}::uuid and (${canSeeAll} or item_id=any(${itemIds}::uuid[])) order by created_at desc,id desc limit 150`;
   return { ok: true, task: { ...task, type_name: type?.name || '', items, product_count: readiness.total,
     approved_count: readiness.approved, readiness: readiness.percent, due_from: dates[0] || null, due_to: dates.at(-1) || null }, rejectedItems,
-    events, capabilities: workflowCapabilities(user), canRate: canGradeWorkItem(user) };
+    events, formatOptions, capabilities: workflowCapabilities(user), canRate: canGradeWorkItem(user) };
 }
 async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   const scopes = departmentScope(user);
@@ -326,6 +332,52 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
     await recalculateTask(tx, current.task_id);
     return { ok: true, version: row.version, message: W.saved };
   });
+}
+/** Append configured media sizes to one existing assignment, preserving all
+ * earlier files and per-format approvals. An approved assignment becomes
+ * active again until its new sizes have been delivered and approved. */
+async function addItemFormats(sql: Sql, body: Row, user: SessionUser) {
+  requirePermission(user, 'marketing.task.review');
+  const itemId = id(body.itemId);
+  const requestedIds = list(body.formatIds).map(value => id(value));
+  if (!requestedIds.length || requestedIds.length > 150 || new Set(requestedIds).size !== requestedIds.length) throw new Error(W.selectFormats);
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const visible = await visibleItem(tx, user, itemId);
+    await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
+    const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
+    const original: WorkFormat[] = Array.isArray(locked.formats) ? locked.formats : [];
+    const existing = new Set(original.map(format => format.id));
+    if (requestedIds.some(value => existing.has(value)) || original.length + requestedIds.length > 150) throw new Error(W.selectFormats);
+    // Same active catalog and image/video checks as task creation. An invalid
+    // video size on an image requirement (or vice versa) never gets persisted.
+    const added = await validateFormats(tx, locked.media_kind, requestedIds);
+    const wasApproved = locked.status === 'approved';
+    const [updated] = await tx<any[]>`update marketing.work_items
+      set formats=${tx.json(json([...original, ...added]))},
+        status=case when ${wasApproved} then 'in_progress' else status end,
+        approved_at=case when ${wasApproved} then null else approved_at end,
+        approved_by=case when ${wasApproved} then null else approved_by end,
+        version=version+1,updated_at=now()
+      where id=${itemId}::uuid returning version`;
+    if (wasApproved) {
+      await tx`update marketing.work_action_progress ap
+        set completed=false,completed_by=null,updated_at=now()
+        from marketing.assignment_actions a
+        where ap.item_id=${itemId}::uuid and ap.action_id=a.id and a.is_final_approval=true`;
+    }
+    const names = added.map(format => `${format.platform_name} - ${format.name}`);
+    await history(tx, user, visible.task_id, itemId, 'formats_added', names.join(', '), {
+      formatIds: added.map(format => format.id), formats: names,
+    });
+    await recalculateTask(tx, visible.task_id);
+    return { ok: true, taskId: String(visible.task_id), assigneeId: String(locked.assigned_to),
+      version: updated.version, added: added.length, message: W.saved };
+  });
+  await notify(user, 'formats_added', result.taskId, W.addFormats, [result.assigneeId], W.finalFiles);
+  return result;
 }
 async function submitItem(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.final_file.upload');
@@ -1432,6 +1484,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     if (action === 'work_reserve') result = await reserveTask(sql, body, user);
     else if (action === 'work_create_task') result = await createTask(sql, body, user);
     else if (action === 'work_save_item') result = await saveItem(sql, body, user);
+    else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
     else if (action === 'work_review') result = await reviewItem(sql, body, user);
     else if (action === 'work_save_evaluation_setting') result = await manageEvaluationSetting(sql, user, body);

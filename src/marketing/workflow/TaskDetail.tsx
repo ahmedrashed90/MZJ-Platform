@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, PencilSimple, Trash } from '@phosphor-icons/react';
+import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, PencilSimple, Trash, Plus } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
 import { hasPermission } from '../../systemAccess';
-import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, workReviewableFormats, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, type WorkItemRating } from '../../../shared/marketing-workflow';
-import { W, Empty, Field, FileLink, FilesPreview, Formats, MediaLabel, Readiness, Status, WorkAlert } from './components';
+import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, workReviewableFormats, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, supportsWorkMedia, type WorkFormat, type WorkItemRating } from '../../../shared/marketing-workflow';
+import { W, Empty, Field, FileLink, FilesPreview, Formats, FormatSelector, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
 
 function submittedDayInRiyadh(value: string | null | undefined) {
@@ -22,6 +22,7 @@ type Detail = {
   task: WorkTask & { items: WorkItem[] };
   rejectedItems: RejectedRatingItem[];
   events: { id: string; action: string; note: string; actor_name: string; created_at: string; item_id: string | null }[];
+  formatOptions: WorkFormat[];
   capabilities: WorkCapabilities;
   canRate: boolean;
 };
@@ -106,7 +107,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
-                  canRate={query.data!.canRate} settings={settings.data} refresh={refresh} />}
+                  formatOptions={query.data!.formatOptions || []} canRate={query.data!.canRate} settings={settings.data} refresh={refresh} />}
               </section>;
             })}
           </div>}
@@ -167,8 +168,8 @@ export function RatingStars({ percentage }: { percentage: number }) {
     <Star key={n} size={17} weight={n < level.stars ? 'fill' : 'regular'} />)}</span>;
 }
 
-function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: {
-  item: WorkItem; number: number; capabilities: WorkCapabilities; canRate: boolean;
+function ItemEditor({ item, number, capabilities, formatOptions, canRate, settings, refresh }: {
+  item: WorkItem; number: number; capabilities: WorkCapabilities; formatOptions: WorkFormat[]; canRate: boolean;
   settings: WorkEvaluationSettings | null; refresh: () => Promise<void>;
 }) {
   const { user } = useAuth();
@@ -179,6 +180,8 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
+  const [showFormatPicker, setShowFormatPicker] = useState(false);
+  const [newFormatIds, setNewFormatIds] = useState<string[]>([]);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
@@ -192,6 +195,8 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
   const approvableFormats = workReviewableFormats(item, 'approve');
   const reviewableFormatIds = new Set(reviewableFormats.map(format => format.id));
   const approvableFormatIds = new Set(approvableFormats.map(format => format.id));
+  const configuredIds = new Set(item.formats.map(format => format.id));
+  const availableFormats = formatOptions.filter(format => !configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name));
   const categories = settings?.categories || [];
   const rating = item.rating;
 
@@ -229,6 +234,11 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
     const saved = await run(() => workPost('review', { itemId: item.id, version: version.current, decision,
       ...(formatId ? { formatId } : {}), note: decision === 'revise' ? note : '', categoryId: decision === 'revise' ? noteType : undefined }));
     if (saved) { setRevisionFormat(null); setShowNoteEditor(false); setNote(''); setNoteType(''); }
+  }
+  async function addFormats() {
+    if (!newFormatIds.length) { setError(W.selectFormats); return; }
+    const saved = await run(() => workPost('add_item_formats', { itemId: item.id, version: version.current, formatIds: newFormatIds }));
+    if (saved) { setNewFormatIds([]); setShowFormatPicker(false); }
   }
   async function manageNote(remove = false, noteId: string | null = editingNoteId) {
     if (remove && !noteId) return;
@@ -294,7 +304,14 @@ function ItemEditor({ item, number, capabilities, canRate, settings, refresh }: 
             {!ideaFiles.length && !editable && <span className="mkw-muted">—</span>}
           </section>
         </section>
-        <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span></div>
+        <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><div className="mkw-actions"><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span>
+          {capabilities.review && <button type="button" className="secondary" disabled={busy} onClick={() => { setShowFormatPicker(open => !open); setNewFormatIds([]); setError(''); }}><Plus size={17}/>{W.addFormats}</button>}</div></div>
+          {showFormatPicker && capabilities.review && <div className="mkw-upload-format">
+            <strong>{W.addFormats} — {item.media_kind === 'image' ? W.image : W.video}</strong>
+            <FormatSelector formats={availableFormats} selected={newFormatIds} disabled={busy} onChange={setNewFormatIds}/>
+            <div className="mkw-actions"><button type="button" className="primary" disabled={busy || newFormatIds.length === 0} onClick={() => void addFormats()}>{W.save} {W.sizes}</button>
+            <button type="button" className="secondary" disabled={busy} onClick={() => { setShowFormatPicker(false); setNewFormatIds([]); }}>{W.cancel}</button></div>
+          </div>}
           <div className="mkw-final-grid">{item.formats.map(format => {
             const state = states.get(format.id);
             const locked = state === 'submitted' || state === 'approved';
