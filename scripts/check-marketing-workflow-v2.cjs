@@ -174,26 +174,30 @@ test('Calendar limits regular executor to own deliverables',async()=>{
   const db=scriptedSql([step('and (? or i.assigned_to=?::uuid) and i.due_on between',[],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31']))]);
   await api.calendar(db,worker,{query:{from:'2026-10-01',to:'2026-10-31'}});db.assertDone();
 });
-test('Calendar shows task readiness for every due card, including items due on other dates',async()=>{
-  const calendarCard = {id:item.id,task_id:item.task_id,due_on:'2026-10-15',task_name:'Tucson',task_no:'TSK-000001',status:'submitted'};
-  const earlier = {...item,task_id:item.task_id,formats:[format],files:[file],status:'submitted',format_reviews:[]};
-  const later = {...item,id:uid(52),task_id:item.task_id,formats:[format],files:[file],status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
+test('Calendar shows each requirement readiness even when the same task has another due date',async()=>{
+  const earlier = {...item,formats:[format],files:[file],status:'submitted',format_reviews:[]};
+  const later = {...item,id:uid(52),due_on:'2026-10-25',formats:[format],files:[file],status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
+  const cards = [earlier,later].map(({id,task_id,due_on,status})=>({id,task_id,due_on,status,task_name:'Tucson',task_no:'TSK-000001'}));
   const db = scriptedSql([
-    step('select i.id,i.task_id,i.due_on::text',[calendarCard], v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31'])),
-    step('select i.task_id::text as task_id',[earlier,later],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
+    step('select i.id,i.task_id,i.due_on::text',cards, v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31'])),
+    step('select i.id::text as id,i.task_id::text as task_id',[earlier,later],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
   ]);
   const result=await api.calendar(db,admin,{query:{from:'2026-10-01',to:'2026-10-31'}});
-  assert.equal(result.rows.length,1);assert.equal(result.rows[0].task_readiness,75);db.assertDone();
+  assert.equal(result.rows.length,2);
+  assert.equal(result.rows[0].item_readiness,50);
+  assert.equal(result.rows[1].item_readiness,100);
+  assert.equal(result.rows[0].task_readiness,undefined);
+  db.assertDone();
 });
-test('Calendar gives regular user readiness from only their visible deliverables',async()=>{
+test('Calendar gives regular user readiness from only their visible requirement',async()=>{
   const calendarCard={id:item.id,task_id:item.task_id,due_on:'2026-10-15'};
   const scopedItem={...item,formats:[format],files:[file],format_reviews:[]};
   const db=scriptedSql([
     step('select i.id,i.task_id,i.due_on::text',[calendarCard],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31'])),
-    step('select i.task_id::text as task_id',[scopedItem],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),
+    step('select i.id::text as id,i.task_id::text as task_id',[scopedItem],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),
   ]);
   const result=await api.calendar(db,worker,{query:{from:'2026-10-01',to:'2026-10-31'}});
-  assert.equal(result.rows[0].task_readiness,50);db.assertDone();
+  assert.equal(result.rows[0].item_readiness,50);db.assertDone();
 });
 test('Executor cannot invoke reviewer API',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'approve',version:1},worker)));
 test('Revision needs a note',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'revise',version:1,note:''},admin)));

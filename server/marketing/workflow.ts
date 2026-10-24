@@ -11,7 +11,7 @@ import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketin
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
 import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishing.js';
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
-import { finalCoverage, matchingWorkflowPublishFiles, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
+import { finalCoverage, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
@@ -940,13 +940,12 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     where t.is_deleted=false and (${seeAll} or i.assigned_to=${user.id}::uuid)
       and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
-  // A task may have deliverables due on different dates. Its readiness must
-  // include all visible current deliverables, not just the selected day.
-  // Fetch those deliverables in one batch and use the SAME shared readiness
-  // calculation as task details (including partial uploads and approvals).
+  // Each calendar card represents one requirement, not the whole task.
+  // Use the SAME individual readiness calculation as task details (including
+  // partial uploads and approvals); leave the task readiness unchanged.
   const taskIds = [...new Set(rows.map(row => String(row.task_id)))];
   if (!taskIds.length) return { ok: true, rows };
-  const readinessItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+  const readinessItems = await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,i.status,i.media_kind,i.formats,
     coalesce((select jsonb_agg(jsonb_build_object(
       'category',j.category,'format_id',j.format_id,'status',f.status,
       'name',f.original_name,'mime_type',f.mime_type))
@@ -957,13 +956,8 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
     where t.is_deleted=false and i.task_id=any(${taskIds}::uuid[])
       and (${seeAll} or i.assigned_to=${user.id}::uuid)`;
-  const grouped = new Map<string, WorkItem[]>();
-  for (const item of readinessItems) {
-    const key = String(item.task_id);
-    grouped.set(key, [...(grouped.get(key) || []), item as WorkItem]);
-  }
-  const readinessByTask = new Map([...grouped.entries()].map(([key, items]) => [key, workReadiness(items).percent]));
-  return { ok: true, rows: rows.map(row => ({ ...row, task_readiness: readinessByTask.get(String(row.task_id)) ?? 0 })) };
+  const readinessByItem = new Map(readinessItems.map(item => [String(item.id), workItemReadiness(item as WorkItem)]));
+  return { ok: true, rows: rows.map(row => ({ ...row, item_readiness: readinessByItem.get(String(row.id)) ?? 0 })) };
 }
 
 async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, services: WorkflowServices) {
