@@ -126,3 +126,19 @@
 .mlf-link-content :is(input,select){min-height:43px;width:100%;padding:9px 12px;background:#fff;border:1px solid var(--line);border-radius:11px;font:inherit}
 .mlf-link-box{background:#f7f0e9;color:#4a211c;border-radius:10px;word-break:break-all;line-height:1.8;padding:13px}
 .mlf-link-content button.primary{min-height:44px;display:flex;align-items:center;justify-content:center;gap:9px}
+/* Existing marketing theme, sheet header-mapping editor only. */
+.mlf-sheet-read{grid-column:1/-1;display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+.mlf-sheet-read span{font-size:12px;color:var(--muted);line-height:1.7;flex:1}
+.mlf-sheet-headline{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin:18px 0 12px}
+.mlf-sheet-headline h3{margin:0 0 5px;font-size:16px;color:var(--ink)}
+.mlf-sheet-headline p{margin:0;color:var(--muted);font-size:12px}
+.mlf-sheet-headline>span{color:var(--brand);background:#f5e9e2;padding:8px 10px;border-radius:10px;font-size:11px;font-weight:900}
+.mlf-sheet-mapping{display:grid;gap:9px}
+.mlf-sheet-mapping-row{display:flex;align-items:end;gap:15px;background:#fbf7f4;border:1px solid #ebded6;border-radius:12px;padding:12px;flex-wrap:wrap}
+.mlf-sheet-header{flex:1 1 180px;display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-width:0}
+.mlf-sheet-header strong{color:var(--ink);font-size:13px;overflow-wrap:anywhere}
+.mlf-sheet-header small{color:var(--muted);font-size:11px;flex-basis:100%;padding-inline-start:34px}
+.mlf-sheet-letter{width:26px;height:26px;border-radius:8px;display:inline-grid;place-items:center;background:#f0e2d9;color:var(--brand);font-weight:900;font-size:12px}
+.mlf-sheet-mapping-row>label{display:flex;flex-direction:column;gap:6px;flex:1 1 220px;color:var(--ink);font-weight:800;font-size:12px}
+.mlf-sheet-actions{margin-top:16px}
+@media(max-width:760px){.mlf-sheet-mapping-row{align-items:stretch;flex-direction:column}.mlf-sheet-mapping-row>label{width:100%;flex:1 1 auto}.mlf-sheet-header{flex-basis:auto}.mlf-sheet-read{grid-column:auto;align-items:stretch;flex-direction:column}.mlf-sheet-read button{width:100%}}

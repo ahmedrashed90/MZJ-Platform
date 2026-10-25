@@ -5,7 +5,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { requireUser, requestIp } from '../_auth.js';
 import { requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
-import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField } from '../../shared/lead-forms.js';
+import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
 const sourceName = (v: unknown) => clean(v, 100).replace(/[\r\n\t]/g, ' ') || 'direct';
@@ -100,6 +100,66 @@ async function googleToken() {
   tokenCache={token:json.access_token,until:Date.now()+(json.expires_in || 3600)*1000};
   return json.access_token;
 }
+/** The sheet's first row is authoritative; reading never changes any existing cells. */
+function parseSheetId(input: unknown): string {
+  let sheetId=clean(input,2100);
+  if (sheetId.startsWith('https://')) {
+    try {
+      const url=new URL(sheetId);
+      if (url.hostname!=='docs.google.com') throw new FormInputError('استخدم رابط Google Sheets الصحيح');
+      const match=url.pathname.match(/^\/spreadsheets\/d\/([\w-]+)(?:\/|$)/);
+      sheetId=match?.[1] || '';
+    } catch { throw new FormInputError('رابط Google Sheets غير صحيح'); }
+  }
+  if (!/^[\w-]{15,180}$/.test(sheetId)) throw new FormInputError('معرف Google Sheets غير صالح');
+  return sheetId;
+}
+function safeTab(input: unknown) {
+  const title=clean(input,100);
+  if (!title || /[\[\]*?:/\\]/.test(title)) throw new FormInputError('اسم ورقة العمل غير صالح');
+  return title;
+}
+function tabRange(title: string, cells: string) { return `'${title.replace(/'/g,"''")}'!${cells}`; }
+async function readSheets<T>(sheetId: string, path: string): Promise<T> {
+  const token=await googleToken();
+  const response=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}${path}`,{
+    headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(12000),cache:'no-store',
+  });
+  if (!response.ok) {
+    if (response.status===403) throw new FormInputError('حساب الخدمة لا يملك صلاحية الوصول للشيت. شارك الملف مع بريد حساب الخدمة بصلاحية محرر.');
+    if (response.status===404) throw new FormInputError('تعذر العثور على الشيت أو ورقة العمل؛ تحقق من الرابط والاسم والصلاحيات.');
+    if (response.status===400) throw new FormInputError('تعذر قراءة الورقة؛ تحقق من الاسم الصحيح الموجود أسفل الشيت.');
+    throw new Error(`تعذر قراءة Google Sheets (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+async function listSheetTabs(sheetId: string) {
+  const response=await readSheets<{sheets?: {properties?: {title?: string;hidden?: boolean}}[]}>(sheetId,'?fields=sheets(properties(title,hidden))');
+  return (response.sheets||[]).map(s=>({title:s.properties?.title||'',hidden:!!s.properties?.hidden})).filter(x=>x.title);
+}
+async function readSheetHeaders(sheetId: string, tab: string): Promise<string[]> {
+  const range=tabRange(safeTab(tab),'1:1');
+  const response=await readSheets<{values?: unknown[][]}>(sheetId,`/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`);
+  const row=Array.isArray(response.values?.[0])?response.values![0]:[];
+  if (!row.length || !row.some(v=>String(v??'').trim())) throw new FormInputError('الصف الأول في هذه الورقة فارغ. أضف عناوين الأعمدة أولًا.');
+  if (row.length>120) throw new FormInputError('الورقة تحتوي على أكثر من 120 عمودًا؛ لا يمكن ربطها بهذا الفورم.');
+  return row.map(v=>clean(v,200));
+}
+function riyadhSheetTimestamp(value: unknown) {
+  const date=new Date(value as string);
+  const parts=new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(date);
+  const part=(type:string)=>parts.find(p=>p.type===type)?.value||'';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+}
+function mappedLeadValue(key: string, lead: any, allowed: Set<string>, extra: Set<string>, matchLocalSheetFormat=false) {
+  if ((!allowed.has(key) && !extra.has(key)) || !key) return '';
+  if (key==='form') return String(lead.form_title || '');
+  if (key==='lead_id') return String(lead.id || '');
+  if (key==='submitted_at') return matchLocalSheetFormat?riyadhSheetTimestamp(lead.created_at):new Date(lead.created_at).toISOString();
+  if (key.startsWith('answers.')) return String(lead.answers?.[key.slice(8)] || '');
+  if (['vehicle','purchase','timeline'].includes(key)) return String(lead.answers?.[key] || '');
+  return String(lead[key] || '');
+}
 async function syncLead(leadId: string) {
   const sql = getSql();
   const [row] = await sql<any[]>`
@@ -112,11 +172,21 @@ async function syncLead(leadId: string) {
     const token = await googleToken();
     const allowed = new Set(['name','phone','source','campaign','medium','ad_id','form','vehicle','purchase','timeline','submitted_at','lead_id']);
     const extra = new Set((row.config?.fields || []).map((f:any)=>`answers.${f.id}`));
-    const columns: string[] = Array.isArray(row.sheet_columns) ? row.sheet_columns.filter((v:unknown)=>allowed.has(String(v))||extra.has(String(v))) : DEFAULT_SHEET_COLUMNS;
-    const answers = row.answers || {};
-    const values = columns.map((key:string) => String(key === 'form' ? row.form_title : key === 'lead_id' ? row.id : key === 'submitted_at' ? new Date(row.created_at).toISOString() :
-      key.startsWith('answers.') ? answers[key.slice(8)] || '' : ['vehicle','purchase','timeline'].includes(key) ? answers[key] || '' : row[key] || ''));
-    const range = `'${String(row.sheet_tab || 'Sheet1').replace(/'/g,"''")}'!A:AZ`;
+    const columns: unknown[] = Array.isArray(row.sheet_columns) ? row.sheet_columns : DEFAULT_SHEET_COLUMNS;
+    const mapped=columns.length>0 && columns.every(v=>v && typeof v==='object' && !Array.isArray(v));
+    let values: string[];
+    if (mapped) {
+      const mapping=columns as SheetColumnMapping[];
+      // Do not append in the wrong positions if somebody edits/reorders the linked sheet later.
+      const currentHeaders=await readSheetHeaders(row.sheet_id,String(row.sheet_tab||'Sheet1'));
+      if (mapping.length!==currentHeaders.length || mapping.some((m,i)=>m.header!==currentHeaders[i]))
+        throw new Error('عناوين الأعمدة تغيرت في Google Sheets؛ راجع الربط قبل إرسال الليد.');
+      values=mapping.map(col=>col.source==='fixed' ? String(col.value||'') : mappedLeadValue(col.source,row,allowed,extra,true));
+    } else {
+      const legacy=columns.filter(v=>typeof v==='string' && (allowed.has(v)||extra.has(v))) as string[];
+      values=(legacy.length?legacy:DEFAULT_SHEET_COLUMNS).map(key=>mappedLeadValue(key,row,allowed,extra));
+    }
+    const range=tabRange(String(row.sheet_tab || 'Sheet1'),'A:DP');
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(row.sheet_id)}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
     const res = await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({values:[values]}),signal:AbortSignal.timeout(10000)});
     if (!res.ok) throw new Error(`Google Sheets ${res.status}: ${clean(await res.text(),120)}`);
@@ -206,6 +276,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       list:'marketing.lead_forms.view', get:'marketing.lead_forms.view', stats:'marketing.lead_forms.reports.view', leads:'marketing.lead_forms.leads.view',
       create:'marketing.lead_forms.create', save:'marketing.lead_forms.edit', duplicate:'marketing.lead_forms.create', publish:'marketing.lead_forms.publish', pause:'marketing.lead_forms.publish', archive:'marketing.lead_forms.publish',
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
+      sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
     } as Record<string,string>)[action];
     if (!permission) return fail(res,404,'عملية غير معروفة');
     if (!await requirePermissionForUser(req,res,user,permission,{systemCode:'marketing',pageCode:'lead_forms',action})) return;
@@ -215,6 +286,16 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     res.setHeader('Cache-Control','no-store');
     if (action==='sheet_status' && req.method==='GET') {
       const account=sheetServiceAccount(); return res.json({ok:true,configured:!!account,serviceEmail:account?.client_email || ''});
+    }
+    if (action==='sheet_tabs' && req.method==='GET') {
+      if (!sheetServiceAccount()) return fail(res,400,'خدمة Google Sheets غير مُهيأة على السيرفر');
+      const sheetId=parseSheetId(params.sheetId);
+      return res.json({ok:true,tabs:await listSheetTabs(sheetId)});
+    }
+    if (action==='sheet_headers' && req.method==='GET') {
+      if (!sheetServiceAccount()) return fail(res,400,'خدمة Google Sheets غير مُهيأة على السيرفر');
+      const sheetId=parseSheetId(params.sheetId),sheetTab=safeTab(params.sheetTab);
+      return res.json({ok:true,headers:await readSheetHeaders(sheetId,sheetTab)});
     }
     if (action==='list' && req.method==='GET') {
       const rows=await sql<any[]>`
@@ -299,14 +380,26 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       return res.json({ok:true});
     }
     if (action==='sheets') {
-      let sheetId=clean(params.sheetId,180),tab=clean(params.sheetTab,80)||'Sheet1';
-      if (sheetId.startsWith('https://')) {
-        const match=sheetId.match(/\/spreadsheets\/d\/([\w-]+)/); if (match) sheetId=match[1];
+      // Setting an existing sheet never renames, moves or modifies old rows/headers.
+      const sheetId=params.sheetId ? parseSheetId(params.sheetId) : '';
+      const tab=safeTab(params.sheetTab || 'Sheet1');
+      if (!sheetId) {
+        await sql`update marketing.lead_forms set sheet_id='',sheet_tab=${tab},sheet_columns=${sql.json(DEFAULT_SHEET_COLUMNS)},updated_at=now() where id=${id}::uuid`;
+        return res.json({ok:true});
       }
-      if (sheetId && !/^[\w-]{15,180}$/.test(sheetId)) return fail(res,400,'معرف Google Sheets غير صالح');
-      const validColumns=new Set([...AVAILABLE_SHEET_COLUMNS.map(c=>c.code),...(existing.config?.fields || []).map((f:any)=>`answers.${f.id}`)]);
-      const columns=Array.isArray(params.columns) ? params.columns.map((v:unknown)=>clean(v,60)).filter((v:string)=>validColumns.has(v)).slice(0,20) : DEFAULT_SHEET_COLUMNS;
-      if (!columns.length || !columns.includes('phone')) return fail(res,400,'حدد أعمدة الشيت بما فيها رقم الجوال');
+      if (!sheetServiceAccount()) return fail(res,400,'خدمة Google Sheets غير مُهيأة على السيرفر');
+      const actualHeaders=await readSheetHeaders(sheetId,tab);
+      const raw=Array.isArray(params.columns)?params.columns:[];
+      if (raw.length!==actualHeaders.length) return fail(res,400,'أعد قراءة أعمدة الورقة قبل حفظ الربط');
+      const validSources=new Set([...AVAILABLE_SHEET_COLUMNS.map(c=>c.code),...(existing.config?.fields||[]).map((f:any)=>`answers.${f.id}`),'','fixed']);
+      const columns:SheetColumnMapping[]=[];
+      for (const [i,entry] of raw.entries()) {
+        if (!entry || typeof entry!=='object' || Array.isArray(entry)) return fail(res,400,'اربط الأعمدة حسب ترتيبها الفعلي');
+        const header=clean(entry.header,200),source=clean(entry.source,75);
+        if (header!==actualHeaders[i] || !validSources.has(source)) return fail(res,400,'عناوين الأعمدة تغيرت أو تحتوي على حقل غير صالح. أعد قراءة الورقة.');
+        columns.push({header,source,...(source==='fixed'?{value:clean(entry.value,160)}:{})});
+      }
+      if (!columns.some(c=>c.source==='phone')) return fail(res,400,'اربط عمود رقم الجوال قبل الحفظ حتى تستقبل الليدات بشكل صحيح');
       await sql`update marketing.lead_forms set sheet_id=${sheetId},sheet_tab=${tab},sheet_columns=${sql.json(columns)},updated_at=now() where id=${id}::uuid`;
       return res.json({ok:true});
     }
