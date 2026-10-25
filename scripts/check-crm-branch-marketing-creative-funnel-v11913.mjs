@@ -38,7 +38,7 @@ check("wholesale sales keep one canonical branch identity", reports.includes("co
 check("representative branch comes from central CRM assignments", reports.includes("from core.user_system_branches usb") && reports.includes("usb.system_code='crm'"));
 check("sales display uses the effective transaction branch", salesFacts.includes("(${transactionBranchCodeSql}) as branch_code"));
 check("sales data scope enforces the CURRENT representative branch", salesFacts.includes("(${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])") && reports.includes('const transactionCurrentBranchCodeSql = assignedRepBranch("base")'));
-check("explicit branch filters use current branch for CRM dashboards and historical branch for sales reports", (reports.match(/then \=\$\{transactionCurrentBranchCodeSql\}/g) || []).length >= 0 && (reports.match(/then \$\{transactionCurrentBranchCodeSql\} else \(\$\{transactionBranchCodeSql\}\) end/g) || []).length >= 2);
+check("explicit sales filters use transaction branch in dashboard and reports, while access uses current branch", (reports.match(/\(\$\{transactionBranchCodeSql\}\)=\$\{branch \|\| null\}/g) || []).length >= 4 && !reports.includes("then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end") && salesFacts.includes("(${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])"));
 check("agent sold drill-down joins the same representative branch", reports.includes("agent_sale_rows as") && reports.includes(") assigned_primary_branch on true"));
 check("ERP orders are not added as a second sold metric", !salesFacts.includes("integrations.erpnext_sales_orders"));
 check("lead sold quantity is not added as a second sold metric", !salesFacts.includes("l.sold_quantity"));

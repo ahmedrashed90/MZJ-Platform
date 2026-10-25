@@ -535,11 +535,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       const soldDetailRows = await sql<any[]>`
         with effective_leads as (${effectiveLeads}),
-        in_period_sales as (
+        matched_sales as (
           select
+            st.id::text as transaction_id,
             st.lead_id,
-            coalesce(sum(greatest(coalesce(st.quantity,1),1)),0)::int as sold_quantity,
-            max(st.sale_at) as last_sale_at
+            greatest(coalesce(st.quantity,1),1)::int as quantity,
+            st.sale_at,
+            st.source_reference,
+            st.car_name,
+            st.assigned_to::text as assigned_to,
+            coalesce(st.assigned_name,l.report_assigned_name,'غير موزع') as assigned_name,
+            (${transactionDepartmentCodeSql}) as department_code,
+            (${transactionBranchCodeSql}) as branch_code,
+            coalesce(transaction_branch.name,(${transactionBranchCodeSql}),'بدون فرع') as branch_name,
+            (${transactionReportSourceCodeSql}) as source_code,
+            coalesce(transaction_source.name,
+              case when (${transactionReportSourceCodeSql})=l.source_code then l.source_name else st.source_name end,
+              st.source_name,l.source_name) as source_name
           from crm.sales_transactions st
           join effective_leads l on l.id=st.lead_id and l.is_deleted=false
           left join lateral (
@@ -550,6 +562,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
             order by usb.is_primary desc,b.sort_order,b.name
             limit 1
           ) assigned_primary_branch on true
+          left join core.branches transaction_branch on transaction_branch.code=(${transactionBranchCodeSql})
+          left join core.sources transaction_source on transaction_source.code=(${transactionReportSourceCodeSql})
           where coalesce(st.is_cancelled,false)=false
             and (${from || null}::date is null or ${manualSaleDateSql}>=${from || null}::date)
             and (${to || null}::date is null or ${manualSaleDateSql}<=${to || null}::date)
@@ -559,25 +573,45 @@ export default async function handler(request: VercelRequest, response: VercelRe
               or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
+            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
             and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,l.report_assigned_name,assigned_primary_branch.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
             and ${soldDetailMatchSql}
-          group by st.lead_id
+        ),
+        in_period_sales as (
+          select
+            lead_id,
+            coalesce(sum(quantity),0)::int as sold_quantity,
+            max(sale_at) as last_sale_at,
+            string_agg(distinct source_reference, ', ' order by source_reference)
+              filter(where nullif(source_reference,'') is not null) as sales_order_numbers
+          from matched_sales
+          group by lead_id
+        ),
+        latest_sale as (
+          select distinct on (lead_id) *
+          from matched_sales
+          order by lead_id,sale_at desc,transaction_id desc
         )
         select
-          l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
-          l.report_department_code as department_code,l.report_branch_code as branch_code,
-          'تم البيع'::text as status_label,l.car_name,l.notes,l.status_note,s.sold_quantity,s.last_sale_at as sold_at,l.registered_at,l.created_at,l.updated_at,
-          l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
-          l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
-          l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group,
+          l.id::text,l.customer_name,l.phone,l.phone_normalized,
+          t.source_code,t.source_name,
+          t.department_code,t.branch_code,
+          'تم البيع'::text as status_label,coalesce(nullif(t.car_name,''),l.car_name) as car_name,l.notes,
+          concat_ws(' · ',nullif(l.status_note,''),
+            case when s.sales_order_numbers is not null then 'طلبات البيع: '||s.sales_order_numbers end) as status_note,
+          s.sold_quantity,s.last_sale_at as sold_at,l.registered_at,l.created_at,l.updated_at,
+          t.assigned_to,l.call_center_assigned_to::text,
+          t.assigned_name,l.report_call_center_name as call_center_name,
+          t.branch_name,t.source_name as catalog_source_name,l.source_report_group,
+          s.sales_order_numbers,
           (count(*) over())::int as total_count
         from in_period_sales s
+        join latest_sale t on t.lead_id=s.lead_id
         join effective_leads l on l.id=s.lead_id
-        where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.notes,l.status_note,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${detailQ ? `%${detailQ}%` : null})
+        where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,t.car_name,t.source_name,l.notes,l.status_note,t.assigned_name,t.branch_name,s.sales_order_numbers) ilike ${detailQ ? `%${detailQ}%` : null})
         order by s.last_sale_at desc,l.updated_at desc,coalesce(l.registered_at,l.created_at) desc
         limit ${detailPageSize} offset ${detailOffset}
       `;
@@ -633,7 +667,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
               or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
+            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -722,7 +756,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
               or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
-            and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
+            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -915,7 +949,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
       )
       and ${transactionDepartmentFilterSql}
-      and (${branch || null}::text is null or (case when ${dashboardPeriod}::boolean then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end)=${branch || null})
+      and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
       and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
@@ -1280,7 +1314,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         reportHistoricalIdentity: historical,
       };
     })
-    .filter((row) => Number(row.total || 0) >= 1)
+    .filter((row) => Number(row.total || 0) >= 1 || Number(row.sold || 0) > 0)
     .map(({ reportIdentityDepartmentCode: _departmentCode, reportIdentityBranchCode: _branchCode, reportHistoricalIdentity: _historical, ...row }) => row)
     .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));
 
