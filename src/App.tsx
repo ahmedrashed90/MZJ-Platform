@@ -33,6 +33,8 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const MarketingLeadFormsPage = lazy(() => import("./marketing/lead-forms/LeadFormsPage").then(m => ({default:m.LeadFormsPage})));
+const PublicLeadFormPage = lazy(() => import("./marketing/lead-forms/PublicLeadFormPage").then(m => ({default:m.PublicLeadFormPage})));
 const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
 const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
 const MarketingRatingsPage = lazy(() => import("./marketing/pages/MarketingRatingsPage").then(module => ({ default: module.MarketingRatingsPage })));
@@ -132,6 +134,7 @@ function PlatformRoutes() {
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
             <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
             <Route path="subscriptions" element={<PermissionGuard permission="marketing.subscriptions.view"><SubscriptionsPage /></PermissionGuard>} />
+            <Route path="lead-forms" element={<PermissionGuard permission="marketing.lead_forms.view"><MarketingLeadFormsPage /></PermissionGuard>} />
             <Route path="task-folder" element={<TaskFolderPage />} />
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
             <Route path="attendance" element={<Navigate to="/attendance" replace />} />
@@ -180,6 +183,7 @@ export default function App() {
   const isPublicOwners = ["/club", "/club/", "/owners", "/owners/"].includes(location.pathname) || location.pathname.startsWith("/club/invite/") || location.pathname.startsWith("/owners/invite/");
   const isPublicCashQr = location.pathname === "/cash-register" || location.pathname === "/cash-register/";
   const isPublicLegal = ["/privacy", "/privacy/", "/terms", "/terms/"].includes(location.pathname);
+  const isPublicLeadForm = /^\/forms\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(location.pathname);
 
   if (isPublicLegal) {
     return (
@@ -188,6 +192,11 @@ export default function App() {
         <Route path="/terms" element={<TermsOfServicePage />} />
       </Routes>
     );
+  }
+  if (isPublicLeadForm) {
+    return <Suspense fallback={<div className="crm-loading-panel">جاري تحميل النموذج...</div>}>
+      <Routes><Route path="/forms/:slug" element={<PublicLeadFormPage />} /></Routes>
+    </Suspense>;
   }
   if (loading) return <PlatformLoadingPage />;
   if (isPublicTracking) {

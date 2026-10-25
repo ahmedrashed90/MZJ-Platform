@@ -57,6 +57,7 @@ import googleDriveIntegrationHandler from "../server/integrations/google-drive.j
 import operationsHandler from "../server/operations/index.js";
 import legacyOperationsHistoryHandler from "../server/operations/legacy-history.js";
 import marketingHandler from "../server/marketing/index.js";
+import marketingLeadFormsHandler from "../server/marketing/lead-forms.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import instagramMediaHandler from "../server/marketing/instagram-media.js";
 import googleDriveMediaHandler from "../server/marketing/google-drive-media.js";
@@ -139,6 +140,7 @@ const routes = new Map<string, ApiHandler>([
   ["operations", operationsHandler],
   ["operations/legacy-history", legacyOperationsHistoryHandler],
   ["marketing", marketingHandler],
+  ["marketing/lead-forms", marketingLeadFormsHandler],
   ["marketing/instagram-media", instagramMediaHandler],
   ["marketing/google-drive-media", googleDriveMediaHandler],
   ["google-drive/connect", googleDriveRoute("connect")],

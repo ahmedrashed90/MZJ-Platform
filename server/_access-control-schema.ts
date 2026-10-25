@@ -204,6 +204,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('marketing','receipt_calendar','تقويم الاستلام','/marketing/receipt-calendar',100,true),
 ('marketing','stock','الاستوك','/marketing/stock',110,true),
 ('marketing','subscriptions','الاشتراكات','/marketing/subscriptions',120,true),
+('marketing','lead_forms','فورم المنصات','/marketing/lead-forms',125,true),
 ('operations','inventory','مخزون السيارات','/operations',10,true),
 ('operations','manage','إدارة السيارات','/operations/manage',20,true),
 ('operations','movement','الحركة','/operations/movement',30,true),
@@ -385,6 +386,14 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
 ('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
 ('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
+('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
+('marketing.lead_forms.create','إنشاء فورم','marketing','lead_forms','create','إنشاء فورم','إنشاء فورم جديد','action',true,1571,true),
+('marketing.lead_forms.edit','تعديل فورم','marketing','lead_forms','edit','تعديل فورم','تعديل محتوى وتصميم الفورم','action',true,1572,true),
+('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
+('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
+('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
+('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
 ('marketing.campaign.create','إنشاء حملة','marketing','create_campaign','create','إنشاء حملة','إنشاء حملة جديدة','action',true,1570,true),
 ('marketing.campaign.edit','تعديل حملة','marketing','database','edit','تعديل حملة','تعديل بيانات حملة','action',true,1580,true),
 ('marketing.campaign.delete','حذف حملة','marketing','database','delete','حذف حملة','حذف حملة','action',true,1590,true),
@@ -605,6 +614,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
 ('marketing','subscriptions','الاشتراكات','/marketing/subscriptions',120,true),
+('marketing','lead_forms','فورم المنصات','/marketing/lead-forms',125,true),
 ('core','owners_community','MZJ Club Community','/owners-community',60,true),
 ('website','stock','الاستوك في الموقع','/website',10,true)
 on conflict(system_code,code) do update set
@@ -620,6 +630,14 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
 ('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
 ('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
+('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
+('marketing.lead_forms.create','إنشاء فورم','marketing','lead_forms','create','إنشاء فورم','إنشاء فورم جديد','action',true,1571,true),
+('marketing.lead_forms.edit','تعديل فورم','marketing','lead_forms','edit','تعديل فورم','تعديل محتوى وتصميم الفورم','action',true,1572,true),
+('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
+('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
+('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
+('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
 ('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
 ('owners.community.manage','إدارة MZJ Club Community','core','owners_community','manage','إدارة MZJ Club Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
 ('settings.owners.view','مشاهدة إعدادات MZJ Club Community','core','settings','owners_view','مشاهدة إعدادات MZJ Club Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
@@ -662,6 +680,11 @@ select r.id,p.id
 from core.roles r
 join core.permissions p on p.code in ('marketing.subscriptions.view','marketing.subscriptions.renew','marketing.subscriptions.manage')
 where r.code in ('admin','system_admin')
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r join core.permissions p on p.code like 'marketing.lead_forms.%'
+where r.code in ('admin','system_admin','marketing_admin')
 on conflict do nothing;
 
 insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
@@ -805,6 +828,8 @@ async function requiredPagePermissionCatalogReady() {
             where rp.role_id=r.id and p.code=required_permission.code
           )
       )
+      and exists(select 1 from core.system_pages where system_code='marketing' and code='lead_forms' and is_active=true)
+      and (select count(*)::int from core.permissions where code like 'marketing.lead_forms.%' and is_active=true) >= 8
       and exists(
         select 1 from core.system_pages
         where system_code='core' and code='owners_community' and is_active=true

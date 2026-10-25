@@ -15,6 +15,7 @@ import {
   Package,
   PaperPlaneTilt,
   PlusCircle,
+  ClipboardText,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
@@ -31,6 +32,7 @@ const links = [
   { to: "/marketing/ratings", label: "تقييمات المنفذين", icon: Star, permission: "marketing.dashboard.view" },
   { to: "/marketing/stock", label: "\u0627\u0644\u0627\u0633\u062a\u0648\u0643", icon: Car, permission: "marketing.stock.view" },
   { to: "/marketing/subscriptions", label: "\u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643\u0627\u062a", icon: CreditCard, permission: "marketing.subscriptions.view" },
+  { to: "/marketing/lead-forms", label: "فورم المنصات", icon: ClipboardText, permission: "marketing.lead_forms.view" },
 ];
 
 export function MarketingLayout() {
