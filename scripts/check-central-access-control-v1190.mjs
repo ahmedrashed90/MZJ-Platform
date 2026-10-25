@@ -40,9 +40,13 @@ expect("Central migration preserves and increments permission versions", contain
 expect("Central migration deactivates duplicated settings pages", contains("database/migrations/20260724_central_access_control_v1190.sql", "code='settings'", "system_code in ('crm','marketing','operations','tracking')"));
 expect("Rollback migration exists", fs.existsSync("database/migrations/20260724_central_access_control_v1190_rollback.sql"));
 expect("Runtime schema contains every catalog permission", permissionCodes.every((code) => (read("server/_access-control-schema.ts") + read("server/_marketing-workflow-access.ts")).includes(`'${code}'`)));
-expect("Original permissions remain in historical migration and newer ones have runtime schemas", permissionCodes.every((code) => {
+expect("Original permissions remain in historical migrations and newer feature permissions have runtime schemas", permissionCodes.every((code) => {
   const historical = read("database/migrations/20260724_central_access_control_v1190.sql") + read("database/marketing-workflow-access.sql");
-  return historical.includes(`'${code}'`) || (code === "operations.inventory.tajyeer.update" && read("server/_access-control-schema.ts").includes(`'${code}'`));
+  if (historical.includes(`'${code}'`)) return true;
+  // Historical migrations are immutable. New permissions live in the idempotent
+  // runtime access-control migration, so they must not be required in July's SQL.
+  const isRuntimeAddition = code === "operations.inventory.tajyeer.update" || code.startsWith("marketing.lead_forms.");
+  return isRuntimeAddition && read("server/_access-control-schema.ts").includes(`'${code}'`);
 }));
 
 expect("Session loads effective central access", contains("server/_auth.ts", "getEffectiveAccess", "...access"));
