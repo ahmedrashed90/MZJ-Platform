@@ -29,8 +29,9 @@ type Detail = {
 
 function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
   if (item.status === 'rejected') return true;
-  if (item.status === 'approved') return workItemReadiness(item) === 100;
-  return item.status === 'revision' || (item.format_reviews || []).some(row => row.status === 'revision');
+  // Rating follows a reviewer approval of the uploaded files, even when other
+  // formats or requirements in the task are still awaiting completion.
+  return item.status === 'approved' || (item.format_reviews || []).some(row => row.status === 'approved');
 }
 
 export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
@@ -43,6 +44,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const [openedRequirementId, setOpenedRequirementId] = useState('');
   const task = query.data?.task;
   const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter)) || [];
+  const rejectedItems = !deliveryFilter ? (query.data?.rejectedItems || []).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
   async function refresh() { await query.reload(); onChanged?.(); }
   const selectedRatingItem = task?.items.find(item => item.id === ratingItemId)
     || query.data?.rejectedItems?.find(item => item.id === ratingItemId);
@@ -59,7 +61,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
     setRatingError(''); setRatingItemId(item.id);
   }
   async function saveItemRating() {
-    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد الاعتماد 100% أو طلب التعديل أو الرفض، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
+    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد اعتماد الملفات المرفوعة أو رفض المطلوب، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
     setRatingBusy(true); setRatingError('');
     try {
       await workPost(selectedRatingItem.status === 'rejected' ? 'save_rejected_rating' : 'save_rating', { itemId: selectedRatingItem.id,
@@ -103,7 +105,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                   {gradeReady && (canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
                     {canRate ? (item.rating ? 'تعديل التقييم' : 'تقييم المنفذ') : 'عرض التقييم'}
                   </button>}
-                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100% أو طلب التعديل</span>}
+                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد الملفات المرفوعة أو رفض المطلوب</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
@@ -111,9 +113,9 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               </section>;
             })}
           </div>}
-          {!onlyItems && !deliveryFilter && !!query.data?.rejectedItems?.length && <div className="mkw-rejected-section">
+          {!!rejectedItems.length && <div className="mkw-rejected-section">
             <h3>المطلوبات المرفوضة — محفوظة للتقييم فقط ولا تدخل في الجاهزية</h3>
-            {query.data.rejectedItems.map(item => <section key={item.id} className="mkw-requirement-review-entry is-rejected">
+            {rejectedItems.map(item => <section key={item.id} className="mkw-requirement-review-entry is-rejected">
               <div className="mkw-rejected-summary">
                 <div><strong>{item.idea_name}</strong><small>المنفذ: {item.assignee_name} · مرفوض · {showDate(item.rejected_at,true)}</small>
                   {item.rejection_note && <small>{item.rejection_note}</small>}</div>

@@ -23,15 +23,16 @@ test('Representative card has bounded height with an internal scroll, including 
   assert(css.includes('overflow-y:auto; overscroll-behavior:contain'));
   assert(css.includes('height:360px;min-height:360px;max-height:360px'));
 });
-test('Rating action is gated on full approval, except archived rejections', () => {
-  assert(detail.includes("if (item.status === 'approved') return workItemReadiness(item) === 100"));
-  assert(detail.includes("item.status === 'revision'"));
+test('Rating is gated on approved uploads or archived rejection, not revision alone', () => {
+  assert(detail.includes("item.status === 'approved' || (item.format_reviews || []).some(row => row.status === 'approved')"));
+  assert(!detail.includes("item.status === 'revision' || (item.format_reviews || []).some(row => row.status === 'revision')"));
   assert(detail.includes("selectedRatingItem.status === 'rejected'"));
   assert(detail.includes("'save_rejected_rating' : 'save_rating'"));
   assert(workflow.includes('work_save_rejected_rating'));
   assert(workflow.includes('rejectedItems,\n    events'));
   assert(detail.includes('query.data?.rejectedItems?.find'));
-  assert(detail.includes('!onlyItems && !deliveryFilter'));
+  assert(detail.includes('const rejectedItems = !deliveryFilter ?'));
+  assert(detail.includes('!onlyItems || onlyItems.includes(item.id)'));
   assert(read('database/migrations/20261022_marketing_rejected_item_ratings.sql').includes('work_rejected_items'));
 });
 test('Only binary acceptance/rejection uses grade 0 or 3', () => {

@@ -749,8 +749,8 @@ export async function assertWorkflowFileAccess(sql: Sql, file: any, user: Sessio
     join marketing.work_tasks t on t.id=i.task_id left join core.departments d on d.id=i.department_id
     where j.file_id=${file.id}::uuid and (
       ${isManager(user)} or i.assigned_to=${user.id}::uuid or
-      (t.created_by=${user.id}::uuid and (${hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review')} or (j.category='final' and i.status='approved' and t.status='completed'))) or d.code=any(${scopes}::text[]) or
-      (i.status='approved' and t.status='completed' and j.category='final' and ${productManager(user)})
+      (t.created_by=${user.id}::uuid and (${hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review')} or (j.category='final' and i.status='approved' and t.is_deleted=false))) or d.code=any(${scopes}::text[]) or
+      (i.status='approved' and t.is_deleted=false and j.category='final' and ${productManager(user)})
     )) or exists(select 1 from marketing.work_uploads up join marketing.work_reservations r on r.id=up.reservation_id
       where up.file_id=${file.id}::uuid and up.created_by=${user.id}::uuid and up.cancelled_at is null and r.used_at is null)`;
   if (!allowed) throw new Error(W.denied);
@@ -758,7 +758,7 @@ export async function assertWorkflowFileAccess(sql: Sql, file: any, user: Sessio
 async function products(sql: Sql, user: SessionUser) {
   if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
   const scopes = departmentScope(user);
-  const rows = await sql<any[]>`select i.*,i.due_on::text,t.task_no,t.name as task_name,t.completed_at as released_at,
+  const rows = await sql<any[]>`select i.*,i.due_on::text,t.task_no,t.name as task_name,i.approved_at as released_at,
     coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,'file_size',f.file_size,
       'category',j.category,'format_id',j.format_id,'status',f.status,'order_index',j.order_index) order by j.order_index,j.id)
@@ -767,9 +767,9 @@ async function products(sql: Sql, user: SessionUser) {
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=i.department_id
     left join core.users u on u.id=i.assigned_to
-    where t.is_deleted=false and t.status='completed' and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
+    where t.is_deleted=false and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
       i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))
-    order by t.completed_at desc,i.approved_at desc,i.created_at desc,i.id desc`;
+    order by i.approved_at desc,i.created_at desc,i.id desc`;
   return rows.filter(row => finalCoverage(row as WorkItem)).map(row => ({ ...row,
     statement: `${row.task_name} - ${row.media_kind === 'video' ? W.video : W.image}` }));
 }
@@ -779,7 +779,7 @@ async function productVisible(db: any, user: SessionUser, itemId: string) {
     u.full_name as assignee_name,d.name as department_name from marketing.work_items i
     join marketing.work_tasks t on t.id=i.task_id left join core.users u on u.id=i.assigned_to
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=d.id
-    where i.id=${itemId}::uuid and i.status='approved' and t.status='completed' and t.is_deleted=false and (
+    where i.id=${itemId}::uuid and i.status='approved' and t.is_deleted=false and (
       ${productManager(user)} or ${isManager(user)} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.productUnavailable);
   const item = (await loadItems(db, row.task_id)).find(r => r.id === itemId);
@@ -1119,7 +1119,7 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     if (!line || Number(body.version) !== Number(line.version)) throw new Error(W.conflict);
     // Recheck approval in the same transaction. A prepared file is never a draft upload.
     const [released] = await tx<any[]>`select i.id from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
-      where i.id=${line.product_id}::uuid and i.status='approved' and t.status='completed' for share of i,t`;
+      where i.id=${line.product_id}::uuid and i.status='approved' and t.is_deleted=false for share of i,t`;
     if (!released) throw new Error(W.productUnavailable);
     const existing = await tx<any[]>`select target.*,s.status,s.caption,s.hashtags,s.publish_options from marketing.work_publish_targets target
       join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=${lineId}::uuid for update of s`;
@@ -1191,7 +1191,7 @@ export async function workflowScheduleFiles(sql: Sql, schedule: Row): Promise<an
     join marketing.files f on f.id=link.file_id join marketing.work_publish_targets target on target.schedule_id=link.schedule_id
     join marketing.work_plan_items l on l.id=target.line_id join marketing.work_items i on i.id=l.product_id
     join marketing.work_tasks t on t.id=i.task_id
-    where link.schedule_id=${schedule.id}::uuid and f.status='ready' and i.status='approved' and t.status='completed' and t.is_deleted=false
+    where link.schedule_id=${schedule.id}::uuid and f.status='ready' and i.status='approved' and t.is_deleted=false
       and exists(select 1 from marketing.work_item_files jf
         left join marketing.platform_post_types source_format on source_format.id::text=jf.format_id
         join marketing.platform_post_types destination_format on destination_format.id=target.post_type_id

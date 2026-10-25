@@ -499,12 +499,52 @@ test('Rejecting last output archives it for grading but leaves task empty, not a
 });
 test('Submitting someone else output is denied',async()=>{const db=scriptedSql([itemRead([{...item,assigned_to:uid(3),status:'in_progress'}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
 test('Pending uploads block submission',async()=>{const current={...item,status:'in_progress'};const db=scriptedSql([itemRead([current]),taskLock(),itemLock([current]),itemLoad([current]),step('select count(*)::int as count',[{count:1}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
+test('Resubmitting new final files after requested revision changes state to under review',async()=>{
+  // Commit of a replacement file clears the obsolete per-format revision row.
+  const corrected={...item,status:'revision',format_reviews:[],version:2};
+  const pending={...corrected,status:'submitted',format_reviews:[{format_id:format.id,status:'submitted'}]};
+  const db=scriptedSql([
+    itemRead([corrected]),taskLock(),itemLock([corrected]),itemLoad([corrected]),
+    step('select count(*)::int as count',[{count:0}]),
+    step('insert into marketing.work_format_reviews',[],(v,q)=>{assert.deepEqual(v,[item.id,format.id]);assert(q.includes("'submitted'"));}),
+    step('update marketing.work_items',[],(v)=>assert.deepEqual(v,[item.id])),
+    step('insert into marketing.work_history',[],v=>assert.equal(v[2],'submitted')),
+    ...recalc([pending],'active'),
+    step('select u.id::text',[]),
+  ]);
+  const result=await api.submitItem(db,{itemId:item.id,version:2},worker);
+  assert.equal(result.ok,true);db.assertDone();
+});
 test('Upload item/reservation identity is mutually exclusive',async()=>assert.rejects(()=>api.prepareUpload(identitySql,{itemId:item.id,reservationId:uid(90),category:'idea',fileName:'a.docx',fileSize:4},admin)));
 test('Upload to someone else output is denied',async()=>{const db=scriptedSql([itemRead([{...item,status:'in_progress'}]),taskLock(),step('select id from marketing.work_items'),itemRead([{...item,status:'in_progress'}])]);await assert.rejects(()=>api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'a.jpg',fileSize:4,mimeType:'image/jpeg',formatIds:[format.id]},admin));db.assertDone();});
 test('Staging final upload holds task and item locks atomically',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([itemRead([row]),taskLock(),step('select id from marketing.work_items'),itemRead([row]),step('select format_id from marketing.work_format_reviews',[]),step('insert into marketing.files',[{id:file.id}]),step('insert into marketing.work_uploads')]);const r=await api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'a.jpg',fileSize:4,mimeType:'image/jpeg',formatIds:[format.id]},worker);assert.equal(r.storageProvider,'google-drive');db.assertDone();});
 test('Removing an unrelated file is denied',async()=>{const row={...item,status:'in_progress'};const db=scriptedSql([step('select * from marketing.work_uploads',[{file_id:file.id,item_id:uid(99),created_by:uid(3)}]),itemRead([row]),taskLock(),step('select status,assigned_to',[row]),itemRead([row]),step('select 1 from marketing.work_item_files')]);await assert.rejects(()=>api.removeUpload(db,{itemId:item.id,fileId:file.id},worker));db.assertDone();});
-test('Products require whole-task completion and newest-first order',async()=>{const db=scriptedSql([step("where t.is_deleted=false and t.status='completed' and i.status='approved'",[],(v,q)=>{assert(q.includes('order by t.completed_at desc,i.approved_at desc'));})]);assert.deepEqual(await api.products(db,admin),[]);db.assertDone();});
-test('Unreleased products cannot be selected by ID',async()=>{const db=scriptedSql([step("and t.status='completed'",[])]);await assert.rejects(()=>api.productVisible(db,admin,item.id));db.assertDone();});
+test('Approved products are released independently of parent task and newest approval first',async()=>{const db=scriptedSql([step("where t.is_deleted=false and i.status='approved'",[],(v,q)=>{assert(q.includes('i.approved_at as released_at'));assert(q.includes('order by i.approved_at desc'));assert(!q.includes("t.status='completed'"));})]);assert.deepEqual(await api.products(db,admin),[]);db.assertDone();});
+test('Product details depend on item approval rather than task completion',async()=>{const db=scriptedSql([step("i.status='approved' and t.is_deleted=false",[],(_,q)=>{assert(!q.includes("t.status='completed'"));})]);await assert.rejects(()=>api.productVisible(db,admin,item.id));db.assertDone();});
+test('Fully approved deliverable appears in Products while its parent task is still active',async()=>{
+  const released={...item,status:'approved',formats:[format],files:[file],task_status:'active',task_no:'TSK-0001',task_name:'Tucson',approved_at:'2026-10-25T12:00:00Z'};
+  const db=scriptedSql([step("where t.is_deleted=false and i.status='approved'",[released])]);
+  const visible=await api.products(db,admin);
+  assert.equal(visible.length,1);assert.equal(visible[0].id,item.id);
+  assert.equal(visible[0].statement,'Tucson - صورة');db.assertDone();
+});
+test('Approved product detail opens before parent task reaches 100%',async()=>{
+  const released={...item,status:'approved',formats:[format],files:[file],task_status:'active',task_no:'TSK-0001',task_name:'Tucson'};
+  const db=scriptedSql([
+    step("i.status='approved' and t.is_deleted=false",[released]),
+    itemLoad([released]),
+  ]);
+  const product=await api.productVisible(db,admin,item.id);
+  assert.equal(product.id,item.id);assert.equal(product.files.length,1);db.assertDone();
+});
+test('Ready approved product files may publish independently of parent task completion',async()=>{
+  const db=scriptedSql([step('from marketing.work_publish_files link',[{id:file.id}],(_,query)=>{
+    assert(query.includes("i.status='approved' and t.is_deleted=false"));
+    assert(!query.includes("t.status='completed'"));
+  })]);
+  const files=await api.workflowScheduleFiles(db,{id:uid(71),publish_options:{workflowProductId:item.id}});
+  assert.equal(files.length,1);db.assertDone();
+});
 function publishingDb(status,kind='agenda',extra=[]){return scriptedSql([step('select target.line_id,p.kind',[{line_id:uid(61),kind}]),step('from marketing.work_plan_items l',[{id:uid(61)}]),...(kind==='campaign'?[]:[step('for update of s',[{id:uid(71),status,platform_code:'instagram',caption:'Tucson',hashtags:'#MZJ',publish_result:{id:'remote-1'}}]), ...(['waiting','failed'].includes(status)?[step('join marketing.work_plans plan',[{ok:1}])]:[])]),...extra]);}
 const services={validatePublishItem:async()=>{},publishItem:async()=>({})};
 test('Funding plan never triggers organic publication or spend',async()=>{const db=publishingDb('waiting','campaign');await assert.rejects(()=>api.publishTarget(db,admin,{scheduleId:uid(71)},services));db.assertDone();});

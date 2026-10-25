@@ -87,17 +87,12 @@ export async function saveItemRating(sql: Sql, user: SessionUser, body: Row, ite
     await tx`set local statement_timeout = '15s'`;
     const [locked] = await tx<any[]>`select id,assigned_to,status,formats from marketing.work_items where id=${item.id}::uuid for update`;
     if (!locked) throw new Error('المطلوب غير موجود');
-    const [revision] = await tx<any[]>`select 1 from marketing.work_format_reviews
-      where item_id=${item.id}::uuid and status='revision' limit 1`;
-    const isRevision = locked.status === 'revision' || Boolean(revision);
-    if (locked.status !== 'approved' && !isRevision)
-      throw new Error('تقييم المنفذ متاح بعد اعتماد المنتج 100% أو طلب التعديل أو رفض المطلوب.');
-    if (locked.status === 'approved') {
-      const [complete] = await tx<any[]>`select count(*)::int as approved_count from marketing.work_format_reviews
-        where item_id=${item.id}::uuid and status='approved'`;
-      if (!Array.isArray(locked.formats) || locked.formats.length === 0 || Number(complete?.approved_count) !== locked.formats.length)
-        throw new Error('لا يمكن تقييم المطلوب قبل اعتماد جميع المقاسات بنسبة 100%.');
-    }
+    const configuredFormatIds = Array.isArray(locked.formats)
+      ? locked.formats.map((format: { id?: unknown }) => String(format?.id || '')) : [];
+    const [approval] = await tx<any[]>`select 1 from marketing.work_format_reviews
+      where item_id=${item.id}::uuid and status='approved'
+        and format_id=any(${configuredFormatIds}::text[]) limit 1`;
+    if (!approval) throw new Error('تقييم المنفذ متاح بعد اعتماد الملفات المرفوعة أو رفض المطلوب.');
     const criteria = await tx<{id:string;name:string}[]>`select id::text,name from marketing.work_kpi_criteria where is_active=true order by sort_order,name`;
     const normalized = normalizeItemScores(criteria,scores);
     const percentage = Math.round(normalized.reduce((sum, row) => sum + row.score, 0) / (normalized.length * 3) * 10000) / 100;
