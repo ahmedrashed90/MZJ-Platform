@@ -10,8 +10,9 @@
  * - Correlate Facebook PSID and ManyChat Contact ID without creating duplicate conversations.
  * - Forward every supported inbound event to the platform.
  * - Send text, quick replies and media through Facebook Graph API.
- * - Start a Messenger thread from a Page comment with Facebook Private Replies when no PSID exists yet.
- * - Keep ManyChat as an optional plain-text fallback.
+ * - Keep ManyChat as the comment opt-in identity bridge and optional plain-text fallback.
+ * - Preserve the ManyChat/CRM customer name when a verified Messenger PSID is linked.
+ * - Never treat a Facebook comment/social actor ID as a Messenger PSID.
  * - Return real provider send results.
  *
  * The platform is the single source of truth for automation definitions,
@@ -19,7 +20,7 @@
  * This Worker contains no business-flow messages or distribution logic.
  */
 
-const VERSION = "mzj-facebook-worker-v2.0.4-comment-private-reply";
+const VERSION = "mzj-facebook-worker-v2.0.8-isolated-messenger-inbound";
 const WORKER_CODE = "facebook";
 const DEFAULT_PLATFORM_INBOUND_URL =
   "https://mzj-platform.vercel.app/api/integrations/facebook";
@@ -161,6 +162,13 @@ function healthResponse(env) {
         has_platform_media_url: Boolean(platformMediaEndpoint(env)),
         has_fb_verify_token: Boolean(clean(env?.FB_VERIFY_TOKEN)),
         has_fb_app_secret: Boolean(clean(env?.FB_APP_SECRET)),
+        has_messenger_verify_token: Boolean(clean(env?.FB_MESSENGER_VERIFY_TOKEN)),
+        has_messenger_app_secret: Boolean(clean(env?.FB_MESSENGER_APP_SECRET)),
+        messenger_receiver_ready: Boolean(
+          clean(env?.FB_MESSENGER_VERIFY_TOKEN || env?.FB_VERIFY_TOKEN) &&
+          clean(env?.FB_MESSENGER_APP_SECRET || env?.FB_APP_SECRET) &&
+          clean(env?.FB_PAGE_ID) && clean(env?.MZJ_GATEWAY_SECRET),
+        ),
         has_fb_page_id: Boolean(clean(env?.FB_PAGE_ID)),
         has_fb_page_access_token: Boolean(clean(env?.FB_PAGE_ACCESS_TOKEN)),
         has_manychat_api_token: Boolean(manychatToken(env)),
@@ -177,6 +185,9 @@ function healthResponse(env) {
         manychat_contact_id_is_not_used_as_psid: true,
         inbound_media_is_forwarded_to_platform_storage: true,
         provider_send_result_is_returned: true,
+        manychat_comment_optin_is_identity_bridge: true,
+        generated_facebook_names_do_not_replace_real_names: true,
+        direct_comment_private_reply_is_disabled: true,
       },
     },
     200,
@@ -212,7 +223,9 @@ function handleMetaVerification(url, env) {
   const mode = clean(url.searchParams.get("hub.mode"));
   const token = clean(url.searchParams.get("hub.verify_token"));
   const challenge = clean(url.searchParams.get("hub.challenge"));
-  const expected = clean(env?.FB_VERIFY_TOKEN);
+  // A dedicated Messenger Meta app can verify here without replacing the
+  // publishing/marketing app's existing verification secret.
+  const expected = clean(env?.FB_MESSENGER_VERIFY_TOKEN || env?.FB_VERIFY_TOKEN);
 
   if (
     mode === "subscribe" &&
@@ -228,12 +241,17 @@ function handleMetaVerification(url, env) {
 async function handleMetaWebhook(request, env, ctx) {
   const rawBody = await request.text();
 
-  if (clean(env?.FB_APP_SECRET)) {
+  // When a separate Messenger app is configured, validate its webhook with
+  // THAT app secret. Outbound Page Access Token and marketing stay untouched.
+  const inboundAppSecret = clean(
+    env?.FB_MESSENGER_APP_SECRET || env?.FB_APP_SECRET,
+  );
+  if (inboundAppSecret) {
     const signature = clean(request.headers.get("x-hub-signature-256"));
     const valid = await verifyXHubSignature256(
       signature,
       rawBody,
-      env.FB_APP_SECRET,
+      inboundAppSecret,
     );
 
     if (!valid) {
@@ -287,6 +305,10 @@ async function handleMetaWebhook(request, env, ctx) {
     const events = await normalizeMetaEvents(incoming.value, env);
 
     if (!events.length) {
+      console.info("Messenger inbound webhook: no supported message events", {
+        entryCount: incoming.value.entry.length,
+        configuredPageId: clean(env?.FB_PAGE_ID),
+      });
       const result = {
         processed: 0,
         forwarded: [],
@@ -343,6 +365,12 @@ async function handleMetaWebhook(request, env, ctx) {
       processed: events.length,
       forwarded,
     };
+    // No message text, recipient identity or tokens in Cloudflare logs.
+    console.info("Messenger inbound webhook forwarded to CRM", {
+      processed: events.length,
+      forwardedCount: forwarded.length,
+      pageId: clean(env?.FB_PAGE_ID),
+    });
 
     if (ctx?.waitUntil) {
       ctx.waitUntil(
@@ -389,6 +417,16 @@ async function normalizeMetaEvents(incoming, env) {
 
   for (const entry of Array.isArray(incoming?.entry) ? incoming.entry : []) {
     const pageId = clean(entry?.id || env?.FB_PAGE_ID);
+    const configuredPageId = clean(env?.FB_PAGE_ID);
+    // The Worker serves one Page. Ignore webhooks for other Pages instead
+    // of attaching their Messenger PSIDs to CRM conversations on this Page.
+    if (configuredPageId && pageId !== configuredPageId) {
+      console.warn("Messenger inbound webhook skipped unexpected Page", {
+        expectedPageId: configuredPageId,
+        receivedPageId: pageId,
+      });
+      continue;
+    }
     const entryTime = timestampMs(entry?.time || Date.now());
     const messaging = [
       ...(Array.isArray(entry?.messaging) ? entry.messaging : []),
@@ -620,6 +658,22 @@ async function buildMetaPlatformPayload(event, env) {
   const providerMessageId =
     clean(content.providerMessageId) || clean(event.eventId);
 
+  const identityDisplayName = clean(identity.displayName);
+  const eventDisplayName = clean(event.displayName);
+  const eventNameIsFallback = isGeneratedFacebookDisplayName(eventDisplayName);
+  const trustedCustomerName = first(
+    identityDisplayName,
+    eventNameIsFallback ? "" : eventDisplayName,
+  );
+  const fallbackDisplayName = trustedCustomerName ? "" : eventDisplayName;
+  const customerNameSource = identityDisplayName
+    ? "identity_link"
+    : eventNameIsFallback
+      ? "generated_fallback"
+      : eventDisplayName
+        ? "meta_profile"
+        : "missing";
+
   return {
     eventId: event.eventId,
     event_id: event.eventId,
@@ -671,8 +725,20 @@ async function buildMetaPlatformPayload(event, env) {
     merge_conversation_aliases: identity.linked,
     conversationId,
     conversation_id: conversationId,
-    customerName: event.displayName,
-    customer_name: event.displayName,
+
+    // Only forward a trusted customer name to CRM. A generated label such as
+    // "Facebook User (3897)" is useful for diagnostics, but must never replace
+    // a real customer name already captured from ManyChat / CRM.
+    customerName: trustedCustomerName,
+    customer_name: trustedCustomerName,
+    displayName: trustedCustomerName,
+    display_name: trustedCustomerName,
+    fallbackDisplayName,
+    fallback_display_name: fallbackDisplayName,
+    customerNameSource,
+    customer_name_source: customerNameSource,
+    customerNameIsFallback: !trustedCustomerName && Boolean(fallbackDisplayName),
+    customer_name_is_fallback: !trustedCustomerName && Boolean(fallbackDisplayName),
 
     messageId: providerMessageId,
     message_id: providerMessageId,
@@ -1212,6 +1278,20 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
     subscriberInfo,
   );
 
+  const displayName = clean(
+    first(
+      extractManyChatDisplayName(subscriberInfo),
+      body?.customerName,
+      body?.customer_name,
+      body?.displayName,
+      body?.display_name,
+      body?.fullName,
+      body?.full_name,
+      contactData?.name,
+      contactData?.full_name,
+    ),
+  );
+
   const pageId = clean(
     first(
       body?.pageId,
@@ -1297,32 +1377,12 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
       facebookPsid,
       {
         manychatContactId,
+        displayName,
         source: identitySource || "manychat_compatibility",
       },
       env,
     );
   }
-
-  const displayName = clean(
-    first(
-      subscriberInfo?.subscriber?.name,
-      subscriberInfo?.subscriber?.full_name,
-      subscriberInfo?.root?.name,
-      subscriberInfo?.root?.full_name,
-      [
-        clean(
-          subscriberInfo?.subscriber?.first_name ||
-            subscriberInfo?.root?.first_name,
-        ),
-        clean(
-          subscriberInfo?.subscriber?.last_name ||
-            subscriberInfo?.root?.last_name,
-        ),
-      ]
-        .filter(Boolean)
-        .join(" "),
-    ),
-  );
 
   return {
     facebookPsid,
@@ -1348,6 +1408,7 @@ async function resolveMetaEventIdentity(event, env) {
       canonicalParticipantId: facebookPsid,
       manychatContactId: "",
       facebookPsid,
+      displayName: "",
       aliases: [facebookPsid].filter(Boolean),
       conversationAliases: [],
       identitySource: "meta_psid_only",
@@ -1356,12 +1417,17 @@ async function resolveMetaEventIdentity(event, env) {
 
   let link = await getIdentityLinkByPsid(pageId, facebookPsid, env);
 
+  if (link && !clean(link?.displayName) && clean(link?.manychatContactId)) {
+    link = await enrichIdentityLinkDisplayName(link, env);
+  }
+
   if (!link) {
     const info = await fetchManyChatSubscriberInfo(facebookPsid, env).catch(
       () => null,
     );
 
     const manychatContactId = extractManyChatContactId(info);
+    const displayName = extractManyChatDisplayName(info);
 
     if (manychatContactId) {
       link = await rememberIdentityLink(
@@ -1370,6 +1436,7 @@ async function resolveMetaEventIdentity(event, env) {
         facebookPsid,
         {
           manychatContactId,
+          displayName,
           source: "manychat_lookup_by_psid",
         },
         env,
@@ -1386,17 +1453,32 @@ async function resolveMetaEventIdentity(event, env) {
     }
 
     if (pending?.manychatContactId) {
+      let pendingName = clean(pending?.customerName);
+
+      if (!pendingName) {
+        const info = await fetchManyChatSubscriberInfo(
+          pending.manychatContactId,
+          env,
+        ).catch(() => null);
+        pendingName = extractManyChatDisplayName(info);
+      }
+
       link = await rememberIdentityLink(
         pageId,
         facebookPsid,
         facebookPsid,
         {
           manychatContactId: pending.manychatContactId,
+          displayName: pendingName,
           source: `correlated_${pending.source || "event"}`,
         },
         env,
       );
     }
+  }
+
+  if (link && !clean(link?.displayName) && clean(link?.manychatContactId)) {
+    link = await enrichIdentityLinkDisplayName(link, env);
   }
 
   const canonicalParticipantId = facebookPsid;
@@ -1424,6 +1506,7 @@ async function resolveMetaEventIdentity(event, env) {
     canonicalParticipantId,
     manychatContactId,
     facebookPsid,
+    displayName: clean(link?.displayName),
     aliases,
     conversationAliases,
     identitySource:
@@ -1685,27 +1768,65 @@ async function rememberIdentityLink(
   details,
   env,
 ) {
-  const manychatContactId = clean(details?.manychatContactId);
+  const cleanPageId = clean(pageId);
+  const cleanFacebookPsid = clean(facebookPsid);
+
+  if (!cleanPageId || !cleanFacebookPsid) return null;
+
+  const requestedManyChatContactId = clean(details?.manychatContactId);
+  const previousByPsid = await getIdentityLinkByPsid(
+    cleanPageId,
+    cleanFacebookPsid,
+    env,
+  );
+  const previousByManyChat = requestedManyChatContactId
+    ? await getIdentityLinkByManyChat(
+        cleanPageId,
+        requestedManyChatContactId,
+        env,
+      )
+    : null;
+  const previous = previousByPsid || previousByManyChat || {};
+
+  const manychatContactId = clean(
+    first(requestedManyChatContactId, previous?.manychatContactId),
+  );
+  const displayName = clean(
+    first(
+      details?.displayName,
+      details?.customerName,
+      previous?.displayName,
+      previous?.customerName,
+    ),
+  );
 
   const link = {
-    pageId: clean(pageId),
-    facebookPsid: clean(facebookPsid),
+    pageId: cleanPageId,
+    facebookPsid: cleanFacebookPsid,
     canonicalParticipantId: clean(
-      first(canonicalParticipantId, facebookPsid),
+      first(
+        canonicalParticipantId,
+        previous?.canonicalParticipantId,
+        cleanFacebookPsid,
+      ),
     ),
     manychatContactId,
+    displayName,
     aliases: [
       ...new Set(
-        [facebookPsid, canonicalParticipantId, manychatContactId]
+        [
+          cleanFacebookPsid,
+          canonicalParticipantId,
+          manychatContactId,
+          ...(Array.isArray(previous?.aliases) ? previous.aliases : []),
+        ]
           .map(clean)
           .filter(Boolean),
       ),
     ],
-    source: clean(details?.source) || "identity_link",
+    source: clean(first(details?.source, previous?.source, "identity_link")),
     updatedAt: Date.now(),
   };
-
-  if (!link.pageId || !link.facebookPsid) return null;
 
   const psidKey = identityPsidKey(link.pageId, link.facebookPsid);
   memoryIdentityLinks.set(psidKey, link);
@@ -1734,6 +1855,32 @@ async function rememberIdentityLink(
   }
 
   return link;
+}
+
+async function enrichIdentityLinkDisplayName(link, env) {
+  if (!link || clean(link?.displayName) || !clean(link?.manychatContactId)) {
+    return link;
+  }
+
+  const info = await fetchManyChatSubscriberInfo(
+    link.manychatContactId,
+    env,
+  ).catch(() => null);
+  const displayName = extractManyChatDisplayName(info);
+
+  if (!displayName) return link;
+
+  return rememberIdentityLink(
+    link.pageId,
+    link.facebookPsid,
+    link.canonicalParticipantId || link.facebookPsid,
+    {
+      manychatContactId: link.manychatContactId,
+      displayName,
+      source: clean(link?.source) || "stored_identity_link_name_enriched",
+    },
+    env,
+  );
 }
 
 async function getIdentityLinkByPsid(pageId, facebookPsid, env) {
@@ -1783,6 +1930,26 @@ function extractManyChatContactId(info) {
       info?.root?.subscriberId,
       info?.raw?.data?.id,
       info?.raw?.data?.subscriber_id,
+    ),
+  );
+}
+
+function extractManyChatDisplayName(info) {
+  const root = info?.root || {};
+  const subscriber = info?.subscriber || root;
+
+  return clean(
+    first(
+      subscriber?.name,
+      subscriber?.full_name,
+      root?.name,
+      root?.full_name,
+      [
+        clean(subscriber?.first_name || root?.first_name),
+        clean(subscriber?.last_name || root?.last_name),
+      ]
+        .filter(Boolean)
+        .join(" "),
     ),
   );
 }
@@ -1926,16 +2093,25 @@ async function handleFacebookSend(request, env, ctx) {
 
   const target = await resolveFacebookSendTarget(body, env);
 
-  if (!target.participantId && !target.manychatContactId && !target.commentId) {
+  if (!target.participantId && !target.manychatContactId) {
+    const waitingForMessengerIdentity = Boolean(
+      target.commentId || target.socialActorId,
+    );
+
     return json(
       {
         ok: false,
-        status: "failed",
-        error:
-          "participantId/psid, manychatContactId, commentId, or a valid facebook:PAGE_ID:PSID conversationId is required",
+        status: waitingForMessengerIdentity ? "waiting_identity" : "failed",
+        error: waitingForMessengerIdentity
+          ? "Facebook comment lead is waiting for a verified Messenger PSID / ManyChat identity. Complete the ManyChat Private Reply and customer Quick Reply first."
+          : "participantId/psid, manychatContactId, or a valid facebook:PAGE_ID:PSID conversationId is required",
+        pageId: target.pageId,
+        commentId: target.commentId,
+        socialActorId: target.socialActorId,
+        identityResolution: target.identityResolution,
         version: VERSION,
       },
-      400,
+      waitingForMessengerIdentity ? 409 : 400,
     );
   }
 
@@ -1947,23 +2123,6 @@ async function handleFacebookSend(request, env, ctx) {
         ok: false,
         status: "failed",
         error: "missing text, buttons or media",
-        version: VERSION,
-      },
-      400,
-    );
-  }
-
-  const privateReplyRequested =
-    toBool(body?.privateReply ?? body?.private_reply) ||
-    Boolean(target.commentId && !target.participantId);
-
-  if (privateReplyRequested && target.commentId && (type !== "text" || normalizeButtons(body).length)) {
-    return json(
-      {
-        ok: false,
-        status: "failed",
-        error: "Facebook private reply to a comment supports text only",
-        commentId: target.commentId,
         version: VERSION,
       },
       400,
@@ -2010,7 +2169,7 @@ async function handleFacebookSend(request, env, ctx) {
           : toBool(body?.is_reusable ?? body?.isReusable),
     });
   } else {
-    result = await sendFacebookTextOrButtons(env, target, { ...body, privateReply: privateReplyRequested });
+    result = await sendFacebookTextOrButtons(env, target, body);
   }
 
   const responseBody = {
@@ -2028,8 +2187,8 @@ async function handleFacebookSend(request, env, ctx) {
     commentId: target.commentId,
     socialActorId: target.socialActorId,
     identityResolution: target.identityResolution,
-    privateReply: result?.private_reply === true,
-    private_reply: result?.private_reply === true,
+    privateReply: false,
+    private_reply: false,
     version: VERSION,
   };
 
@@ -2097,49 +2256,47 @@ async function resolveFacebookSendTarget(body, env) {
   let identityResolution = participantId ? "request_psid" : "";
 
   if (!participantId && pageId && manychatContactId) {
-    const stored = await getIdentityLinkByManyChat(pageId, manychatContactId, env);
+    let stored = await getIdentityLinkByManyChat(
+      pageId,
+      manychatContactId,
+      env,
+    );
+
+    if (stored && !clean(stored?.displayName)) {
+      stored = await enrichIdentityLinkDisplayName(stored, env);
+    }
+
     participantId = clean(stored?.facebookPsid);
-    if (participantId) identityResolution = "stored_identity_link_by_manychat";
+
+    if (participantId) {
+      identityResolution = "stored_identity_link_by_manychat";
+    }
 
     if (!participantId) {
-      const info = await fetchManyChatSubscriberInfo(manychatContactId, env).catch(() => null);
+      const info = await fetchManyChatSubscriberInfo(
+        manychatContactId,
+        env,
+      ).catch(() => null);
       const resolvedPsid = extractFacebookPsidFromManyChatInfo(info);
       const resolvedManyChatId = extractManyChatContactId(info);
+      const displayName = extractManyChatDisplayName(info);
+
       if (resolvedManyChatId) manychatContactId = resolvedManyChatId;
+
       if (resolvedPsid) {
         participantId = resolvedPsid;
         identityResolution = "manychat_getinfo_psid";
-        await rememberIdentityLink(pageId, participantId, participantId, {
-          manychatContactId,
-          source: identityResolution,
-        }, env);
-      }
-    }
-  }
-
-  if (!participantId && pageId && socialActorId) {
-    const stored = await getIdentityLinkByPsid(pageId, socialActorId, env);
-    const linkedPsid = clean(stored?.facebookPsid);
-    if (linkedPsid) {
-      participantId = linkedPsid;
-      manychatContactId = clean(stored?.manychatContactId || manychatContactId);
-      identityResolution = "stored_identity_link_by_social_actor";
-    }
-  }
-
-  if (!participantId && socialActorId && manychatToken(env)) {
-    const info = await fetchManyChatSubscriberInfo(socialActorId, env).catch(() => null);
-    const resolvedPsid = extractFacebookPsidFromManyChatInfo(info);
-    const resolvedManyChatId = extractManyChatContactId(info);
-    if (resolvedPsid) {
-      participantId = resolvedPsid;
-      manychatContactId = clean(resolvedManyChatId || manychatContactId);
-      identityResolution = "manychat_lookup_by_social_actor";
-      if (pageId) {
-        await rememberIdentityLink(pageId, participantId, participantId, {
-          manychatContactId,
-          source: identityResolution,
-        }, env);
+        await rememberIdentityLink(
+          pageId,
+          participantId,
+          participantId,
+          {
+            manychatContactId,
+            displayName,
+            source: identityResolution,
+          },
+          env,
+        );
       }
     }
   }
@@ -2155,7 +2312,13 @@ async function resolveFacebookSendTarget(body, env) {
     manychatContactId,
     commentId,
     socialActorId,
-    identityResolution: identityResolution || (commentId ? "comment_private_reply" : "unresolved"),
+    identityResolution:
+      identityResolution ||
+      (manychatContactId
+        ? "manychat_contact_waiting_psid"
+        : commentId || socialActorId
+          ? "waiting_manychat_meta_identity"
+          : "unresolved"),
   };
 }
 
@@ -2234,7 +2397,6 @@ async function sendFacebookTextOrButtons(env, target, body) {
   const textValue = clean(first(body?.text, body?.message));
   const buttons = normalizeButtons(body);
   const attempts = [];
-  const privateReplyRequested = toBool(body?.privateReply ?? body?.private_reply);
 
   const message = buttons.length
     ? {
@@ -2298,31 +2460,6 @@ async function sendFacebookTextOrButtons(env, target, body) {
     }
   }
 
-  const canUsePrivateReply = Boolean(
-    privateReplyRequested &&
-      !buttons.length &&
-      textValue &&
-      clean(target?.commentId),
-  );
-
-  if (canUsePrivateReply) {
-    const privateReply = await sendFacebookCommentPrivateReply(env, {
-      commentId: target.commentId,
-      text: textValue,
-    });
-    attempts.push(providerAttemptSummary("facebook_private_reply", privateReply));
-    if (privateReply.ok) {
-      return {
-        ...privateReply,
-        send_method: "graph_private_reply",
-        private_reply: true,
-        comment_id: target.commentId,
-        commentId: target.commentId,
-        attempts,
-      };
-    }
-  }
-
   const errors = attempts.map((item) => item.error).filter(Boolean);
   return {
     ...failedProviderResult(first(errors.join(" | "), "Facebook send failed")),
@@ -2368,82 +2505,6 @@ async function sendFacebookMedia(env, input) {
     media_url: mediaUrl,
     attempts: [providerAttemptSummary("graph", result)],
   };
-}
-
-async function sendFacebookCommentPrivateReply(env, input) {
-  const pageToken = clean(env?.FB_PAGE_ACCESS_TOKEN);
-  const commentId = clean(input?.commentId);
-  const textValue = clean(input?.text);
-
-  if (!pageToken) return failedProviderResult("FB_PAGE_ACCESS_TOKEN missing");
-  if (!commentId) return failedProviderResult("commentId missing");
-  if (!textValue) return failedProviderResult("private reply text missing");
-
-  const endpoint = `${graphBase(env)}/${encodeURIComponent(commentId)}/private_replies`;
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${pageToken}`,
-      },
-      body: JSON.stringify({ message: textValue }),
-    });
-
-    const rawText = await response.text();
-    const raw = parseJson(rawText);
-    const normalized = normalizeProviderResponse(
-      response.status,
-      response.ok,
-      raw,
-      rawText,
-    );
-    const privateReplyMessageId = first(
-      normalized.provider_message_id,
-      raw?.message_id,
-      raw?.messageId,
-      raw?.id,
-    );
-
-    const result = {
-      ...normalized,
-      ok: normalized.ok || Boolean(privateReplyMessageId),
-      status: normalized.ok || privateReplyMessageId ? "sent" : "failed",
-      provider_status: normalized.ok || privateReplyMessageId ? "sent" : "failed",
-      provider_message_id: privateReplyMessageId,
-      providerMessageId: privateReplyMessageId,
-      message_id: privateReplyMessageId,
-      recipient_id: first(raw?.recipient_id, raw?.recipientId),
-      private_reply: true,
-      comment_id: commentId,
-      commentId,
-    };
-
-    if (!result.ok) {
-      console.error("Facebook private reply rejected", {
-        endpoint,
-        httpStatus: result.httpStatus,
-        code: raw?.error?.code || null,
-        subcode: raw?.error?.error_subcode || null,
-        type: raw?.error?.type || null,
-        message: result.error,
-        fbtraceId: raw?.error?.fbtrace_id || null,
-      });
-    }
-
-    return result;
-  } catch (error) {
-    const failed = failedProviderResult(errorMessage(error));
-    console.error("Facebook private reply request failed", failed.error);
-    return {
-      ...failed,
-      private_reply: true,
-      comment_id: commentId,
-      commentId,
-    };
-  }
 }
 
 async function sendManyChatText(subscriberId, textValue, env) {
@@ -3067,10 +3128,14 @@ function facebookSendEndpoint(env, pageId = "") {
 
   if (override) return override;
 
-  const resolvedPageId = clean(pageId || env?.FB_PAGE_ID);
-  return resolvedPageId
-    ? `${graphBase(env)}/${encodeURIComponent(resolvedPageId)}/messages`
-    : `${graphBase(env)}/me/messages`;
+  // The sending Page must match FB_PAGE_ACCESS_TOKEN. Do not allow a stale
+  // CRM conversation pageId to override the configured sending Page.
+  // Keep CRM pageId unchanged for conversation identity and routing.
+  const configuredPageId = clean(env?.FB_PAGE_ID);
+  if (!configuredPageId) {
+    throw new Error("FB_PAGE_ID missing for Facebook Graph send");
+  }
+  return `${graphBase(env)}/${encodeURIComponent(configuredPageId)}/messages`;
 }
 
 function manychatSendEndpoint(env) {
@@ -3324,6 +3389,10 @@ function fileNameFromUrl(value) {
 /* ========================================================================== */
 /* GENERIC HELPERS                                                            */
 /* ========================================================================== */
+
+function isGeneratedFacebookDisplayName(value) {
+  return /^Facebook User(?:\s*\([^)]*\))?$/i.test(clean(value));
+}
 
 function stableEventId(value) {
   const serialized =

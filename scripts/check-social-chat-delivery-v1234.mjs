@@ -15,10 +15,10 @@ const checks = [
   ['Facebook comment can start with a comment private reply while Messenger identity is pending', messaging.includes('privateReply: true') && messaging.includes('commentId,') && engagement.includes('private_reply_available')],
   ['legacy social lead metadata can supply comment identity before a chat backfill runs', messaging.includes('lead_extra_data') && messaging.includes('return { ...leadMetadata, ...conversationData }')],
   ['Facebook comment private reply is not repeated after the first private message', messaging.includes('messagingStatus === "private_reply_sent"') && messaging.includes('انتظر رد العميل في Messenger')],
-  ['Facebook worker targets the explicit Page messages endpoint', worker.includes('`${graphBase(env)}/${encodeURIComponent(resolvedPageId)}/messages`')],
+  ['Facebook worker targets the configured Page messages endpoint', worker.includes('`${graphBase(env)}/${encodeURIComponent(configuredPageId)}/messages`')],
   ['Facebook worker exposes structured Meta rejection details in logs', worker.includes('Facebook Graph send rejected') && worker.includes('error_subcode') && worker.includes('fbtrace_id')],
-  ['Facebook worker supports comment private replies', worker.includes('/private_replies') && worker.includes('sendFacebookCommentPrivateReply')],
-  ['worker version is comment-private-reply v2.0.4', worker.includes('mzj-facebook-worker-v2.0.4-comment-private-reply')],
+  ['Facebook worker does not create unverified comment private replies', !worker.includes('sendFacebookCommentPrivateReply') && worker.includes('waiting_identity')],
+  ['worker version is isolated Messenger inbound v2.0.8', worker.includes('mzj-facebook-worker-v2.0.8-isolated-messenger-inbound')],
 ];
 
 let passed = 0;

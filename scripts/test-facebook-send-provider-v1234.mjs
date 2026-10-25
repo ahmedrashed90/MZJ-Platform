@@ -87,12 +87,11 @@ try {
   }, { waitUntil() {} });
 
   const privateReplyBody = await privateReply.json();
-  assert.equal(privateReply.status, 200);
-  assert.equal(privateReplyBody.ok, true);
-  assert.equal(privateReplyBody.private_reply, true);
-  assert.equal(privateReplyBody.provider_message_id, 'mid_private_123');
-  assert.equal(privateReplyCalls[0].url, 'https://graph.facebook.com/v25.0/comment_321/private_replies');
-  assert.deepEqual(JSON.parse(privateReplyCalls[0].init.body), { message: 'اهلا من التعليق' });
+  // The current Worker deliberately does not send a private reply to a
+  // comment actor until a verified Messenger PSID is linked.
+  assert.equal(privateReply.status, 409);
+  assert.equal(privateReplyBody.status, 'waiting_identity');
+  assert.equal(privateReplyCalls.length, 0);
 
   const manyChatCalls = [];
   globalThis.fetch = async (url, init = {}) => {
@@ -129,7 +128,7 @@ try {
   console.log('PASS Facebook provider rejection is returned with the real Meta error');
   console.log('PASS Facebook send uses explicit /PAGE_ID/messages');
   console.log('PASS Facebook provider-confirmed send returns the real message id');
-  console.log('PASS Facebook comment can start with /COMMENT_ID/private_replies');
+  console.log('PASS Facebook comment without verified Messenger PSID is held safely');
   console.log('PASS Facebook worker resolves PSID from ManyChat getInfo when available');
   console.log('5/5 checks passed');
 } finally {
