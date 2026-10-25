@@ -195,6 +195,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const approvableFormats = workReviewableFormats(item, 'approve');
   const reviewableFormatIds = new Set(reviewableFormats.map(format => format.id));
   const approvableFormatIds = new Set(approvableFormats.map(format => format.id));
+  const approvedFormatIds = new Set((item.format_reviews || []).filter(row => row.status === 'approved').map(row => row.format_id));
   const configuredIds = new Set(item.formats.map(format => format.id));
   const availableFormats = formatOptions.filter(format => !configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name));
   const categories = settings?.categories || [];
@@ -234,6 +235,14 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     const saved = await run(() => workPost('review', { itemId: item.id, version: version.current, decision,
       ...(formatId ? { formatId } : {}), note: decision === 'revise' ? note : '', categoryId: decision === 'revise' ? noteType : undefined }));
     if (saved) { setRevisionFormat(null); setShowNoteEditor(false); setNote(''); setNoteType(''); }
+  }
+  async function undoApproval(formatId?: string) {
+    const message = formatId
+      ? 'تراجع عن اعتماد هذا المقاس؟ ستبقى الملفات مرفوعة ويعود المقاس للمراجعة.'
+      : 'تراجع عن اعتماد المنتج 100% للملفات المرفوعة؟ ستبقى الملفات مرفوعة وتعود المقاسات المعتمدة للمراجعة.';
+    if (!window.confirm(message)) return;
+    await run(() => workPost('unapprove', { itemId: item.id, version: version.current,
+      ...(formatId ? { formatId } : {}) }));
   }
   async function addFormats() {
     if (!newFormatIds.length) { setError(W.selectFormats); return; }
@@ -321,6 +330,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
               {formatFiles.map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !locked && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
               {canUpload && !locked && <label className="mkw-upload-action"><UploadSimple size={17}/><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
               {capabilities.review && reviewableFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy || !approvableFormatIds.has(format.id)} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}>تعديل</button></div>}
+              {capabilities.review && approvedFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval(format.id)}>تراجع عن الاعتماد</button></div>}
             </div>;
           })}</div>
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
@@ -329,7 +339,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
         </section>
       </div>
       {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
-      {capabilities.review && item.status !== 'approved' && <section className="mkw-review-controls"><div className="mkw-actions">{reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button></>}<button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button></div></section>}
+      {capabilities.review && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
     </div>
 
   </article>;

@@ -24,8 +24,8 @@ assert.match(detail,/workPost\('review', \{ itemId: item\.id, version: version\.
 // ready FINAL files, not whether the executor clicked Submit for review.
 assert.match(detail,/const reviewableFormats = workReviewableFormats\(item, 'revise'\)/);
 assert.match(detail,/const approvableFormats = workReviewableFormats\(item, 'approve'\)/);
-assert.match(detail,/\{capabilities\.review && item\.status !== 'approved' && <section/);
-assert.match(detail,/<button type="button" className="secondary danger" disabled=\{busy\} onClick=\{\(\) => void review\('reject'\)\}/);
+assert.match(detail,/\{capabilities\.review && \(item\.status !== 'approved' \|\| approvedFormatIds\.size > 0\) && <section/);
+assert.match(detail,/onClick=\{\(\) => void review\('reject'\)\}/);
 assert.doesNotMatch(detail,/const hasSubmitted =/);
 assert.match(workflow,/const reviewable = decision === 'reject' \? \[\] : workReviewableFormats\(item, decision === 'approve' \? 'approve' : 'revise'\)/);
 assert.match(workflow,/const targets = requestedFormat \? reviewable\.filter\(format => format\.id === requestedFormat\) : reviewable/);

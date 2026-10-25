@@ -16,7 +16,7 @@ const stubs = {
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
 };
-const privateExports=['reserveTask','createTask','reviewItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
+const privateExports=['reserveTask','createTask','reviewItem','unapproveItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
 const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), evaluations=load('server/marketing/evaluations.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
@@ -311,6 +311,67 @@ test('Client only shows unselected sizes compatible with the requirement media k
   assert(front.includes('<FormatSelector formats={availableFormats} selected={newFormatIds}'));
   assert(api.includes("requirePermission(user, 'marketing.task.review')"));
   assert(api.includes("else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user)"));
+});
+test('Undo buttons are reviewer-only, available per approved size and for complete or partial approval',()=>{
+  const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+  const server=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
+  assert(front.includes('capabilities.review && approvedFormatIds.has(format.id)'));
+  assert(front.includes('تراجع عن الاعتماد</button>'));
+  assert(front.includes('approvedFormatIds.size > 0 && <button'));
+  assert(front.includes('تراجع عن اعتماد - المنتج 100% الملفات المرفوعة'));
+  assert(front.includes("workPost('unapprove', { itemId: item.id, version: version.current"));
+  assert(server.includes("else if (action === 'work_unapprove') result = await unapproveItem(sql, body, user)"));
+});
+test('Executor cannot undo a reviewer approval',async()=>assert.rejects(()=>api.unapproveItem(identitySql,{itemId:item.id,version:1},worker)));
+test('Undoing one approved format retains every other approval and the uploaded files',async()=>{
+  const secondFormat={...format,id:uid(11)};
+  const approvedItem={...item,status:'approved',formats:[format,secondFormat],version:8,
+    format_reviews:[{format_id:format.id,status:'approved'},{format_id:secondFormat.id,status:'approved'}]};
+  const db=scriptedSql([
+    itemRead([approvedItem]),taskLock(),itemLock([approvedItem]),
+    step('select format_id,status,submitted_at,approved_at,approved_by',[
+      {format_id:format.id,status:'approved',approved_at:'2026-10-24',approved_by:admin.id},
+      {format_id:secondFormat.id,status:'approved',approved_at:'2026-10-24',approved_by:admin.id}]),
+    step('select 1 from marketing.work_plan_items line',[]),
+    step('update marketing.work_format_reviews',[],(v,q)=>{assert.deepEqual(v[1],[format.id]);assert(q.includes("status='approved'"));}),
+    step('update marketing.work_items',[],(v,q)=>{assert.equal(v[0],item.id);assert(q.includes("status='submitted'"));assert(q.includes('approved_at=null'));assert(q.includes('version=version+1'));}),
+    step('update marketing.work_action_progress'),
+    step('insert into marketing.work_history',[],v=>{assert.equal(v[2],'format_approval_undone');assert.deepEqual(v[6].formatIds,[format.id]);}),
+    ...recalc([{...approvedItem,status:'submitted',format_reviews:[
+      {format_id:format.id,status:'submitted'},{format_id:secondFormat.id,status:'approved'}],files:[file,{...file,id:uid(81),format_id:secondFormat.id}]}],'active'),
+  ]);
+  const result=await api.unapproveItem(db,{itemId:item.id,version:8,formatId:format.id},admin);
+  assert.equal(result.count,1); assert.equal(result.readiness.percent,75);
+  assert(!db.calls.some(row=>/delete from marketing\.work_item_files|delete from marketing\.work_item_ratings/.test(row.query)));
+  db.assertDone();
+});
+test('Undo all approvals returns 100% item to pending review and leaves files/ratings intact',async()=>{
+  const approvedItem={...item,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
+  const db=scriptedSql([
+    itemRead([approvedItem]),taskLock(),itemLock([approvedItem]),
+    step('select format_id,status,submitted_at,approved_at,approved_by',[{format_id:format.id,status:'approved',approved_at:'2026-10-24',approved_by:admin.id}]),
+    step('select 1 from marketing.work_plan_items line',[]),
+    step('update marketing.work_format_reviews',[],v=>assert.deepEqual(v[1],[format.id])),
+    step('update marketing.work_items'),step('update marketing.work_action_progress'),
+    step('insert into marketing.work_history',[],v=>assert.equal(v[2],'product_approval_undone')),
+    ...recalc([{...approvedItem,status:'submitted',format_reviews:[{format_id:format.id,status:'submitted'}]}],'active'),
+  ]);
+  const result=await api.unapproveItem(db,{itemId:item.id,version:1},admin);
+  assert.equal(result.count,1); assert.equal(result.readiness.percent,50);
+  assert(!db.calls.some(row=>/delete from marketing\.work_item_files|delete from marketing\.work_item_ratings/.test(row.query)));
+  db.assertDone();
+});
+test('Undoing approval fails safely for stale version, no approved formats or active publication',async()=>{
+  const approvedItem={...item,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
+  const staleDb=scriptedSql([itemRead([approvedItem]),taskLock(),itemLock([{...approvedItem,version:2}])]);
+  await assert.rejects(()=>api.unapproveItem(staleDb,{itemId:item.id,version:1},admin)); staleDb.assertDone();
+  const missingDb=scriptedSql([itemRead([approvedItem]),taskLock(),itemLock([approvedItem]),
+    step('select format_id,status,submitted_at,approved_at,approved_by',[{format_id:format.id,status:'submitted'}])]);
+  await assert.rejects(()=>api.unapproveItem(missingDb,{itemId:item.id,version:1},admin));missingDb.assertDone();
+  const scheduledDb=scriptedSql([itemRead([approvedItem]),taskLock(),itemLock([approvedItem]),
+    step('select format_id,status,submitted_at,approved_at,approved_by',[{format_id:format.id,status:'approved'}]),
+    step('select 1 from marketing.work_plan_items line',[{present:1}])]);
+  await assert.rejects(()=>api.unapproveItem(scheduledDb,{itemId:item.id,version:1},admin),/مرتبط.*نشر/);scheduledDb.assertDone();
 });
 test('Executor cannot invoke reviewer API',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'approve',version:1},worker)));
 test('Revision needs a note',async()=>assert.rejects(()=>api.reviewItem(identitySql,{itemId:item.id,decision:'revise',version:1,note:''},admin)));

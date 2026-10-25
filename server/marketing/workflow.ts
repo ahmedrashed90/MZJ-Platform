@@ -503,6 +503,59 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
     decision === 'approve' ? W.approve : W.revise, [result.assigneeId], note);
   return result;
 }
+/** Reverse approval without deleting or replacing uploaded finals. A single
+ * format or all currently approved formats return to the review queue.
+ * Publication that is already scheduled/in progress/published must not be
+ * invalidated by reopening its source product. */
+async function unapproveItem(sql: Sql, body: Row, user: SessionUser) {
+  requirePermission(user, 'marketing.task.review');
+  const itemId = id(body.itemId), requestedFormat = body.formatId ? id(body.formatId) : '';
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const visible = await visibleItem(tx, user, itemId);
+    await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
+    const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
+    const configured = new Set((Array.isArray(locked.formats) ? locked.formats : []).map((format: WorkFormat) => format.id));
+    if (requestedFormat && !configured.has(requestedFormat)) throw new Error(W.selectFormats);
+    const rows = await tx<any[]>`select format_id,status,submitted_at,approved_at,approved_by
+      from marketing.work_format_reviews where item_id=${itemId}::uuid for update`;
+    const approved = rows.filter(row => row.status === 'approved' && configured.has(row.format_id) &&
+      (!requestedFormat || row.format_id === requestedFormat));
+    if (!approved.length) throw new Error('لا توجد مقاسات معتمدة للتراجع عنها');
+    // Reopening published/scheduled creative files could invalidate downstream
+    // publication; require its publication workflow to be resolved first.
+    const [publication] = await tx<any[]>`select 1 from marketing.work_plan_items line
+      join marketing.work_publish_targets target on target.line_id=line.id
+      join marketing.publish_schedule schedule on schedule.id=target.schedule_id
+      where line.product_id=${itemId}::uuid and line.is_deleted=false
+        and schedule.status<>'cancelled' limit 1`;
+    if (publication) throw new Error('لا يمكن التراجع عن اعتماد منتج مرتبط بتجهيز نشر أو نشر مجدول أو منشور. راجع حالة النشر أولًا.');
+    const formatIds = approved.map(row => row.format_id);
+    await tx`update marketing.work_format_reviews
+      set status='submitted',approved_at=null,approved_by=null,
+        submitted_at=coalesce(submitted_at,now()),updated_at=now()
+      where item_id=${itemId}::uuid and format_id=any(${formatIds}::text[]) and status='approved'`;
+    await tx`update marketing.work_items set status='submitted',approved_at=null,approved_by=null,
+      version=version+1,updated_at=now() where id=${itemId}::uuid`;
+    await tx`update marketing.work_action_progress ap
+      set completed=false,completed_by=null,updated_at=now()
+      from marketing.assignment_actions a
+      where ap.item_id=${itemId}::uuid and ap.action_id=a.id and a.is_final_approval=true`;
+    await history(tx, user, locked.task_id, itemId,
+      requestedFormat ? 'format_approval_undone' : 'product_approval_undone',
+      requestedFormat ? 'تراجع عن اعتماد المقاس' : 'تراجع عن اعتماد المنتج 100% للملفات المرفوعة',
+      { formatIds, previousApprovals: approved.map(row => ({ formatId: row.format_id,
+        approvedAt: row.approved_at, approvedBy: row.approved_by })) });
+    const readiness = await recalculateTask(tx, locked.task_id);
+    return { ok: true, taskId: String(locked.task_id), assigneeId: String(locked.assigned_to),
+      count: approved.length, readiness, message: W.saved };
+  });
+  await notify(user, 'approval_undone', result.taskId, 'تراجع عن اعتماد الملفات النهائية', [result.assigneeId]);
+  return result;
+}
+
 async function toggleAction(sql: Sql, body: Row, user: SessionUser) {
   const itemId = id(body.itemId), actionId = id(body.actionId);
   const item = await visibleItem(sql, user, itemId);
@@ -1487,6 +1540,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
     else if (action === 'work_review') result = await reviewItem(sql, body, user);
+    else if (action === 'work_unapprove') result = await unapproveItem(sql, body, user);
     else if (action === 'work_save_evaluation_setting') result = await manageEvaluationSetting(sql, user, body);
     else if (action === 'work_save_rating') {
       const item = await visibleItem(sql, user, id(body.itemId));
