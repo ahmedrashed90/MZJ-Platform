@@ -21,6 +21,16 @@ create table if not exists marketing.lead_forms (
   published_at timestamptz
 );
 alter table marketing.lead_forms add column if not exists published_metadata jsonb;
+-- Reusable user-created visual form designs; independent of published form instances.
+create table if not exists marketing.form_design_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  template text not null check (template in ('steps','visual','chat','quiz','minimal','classic')),
+  config jsonb not null,
+  created_by uuid references core.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 create table if not exists marketing.form_visits (
   id uuid primary key default gen_random_uuid(),
   form_id uuid not null references marketing.lead_forms(id) on delete cascade,
@@ -67,10 +77,10 @@ let ready: Promise<void> | null = null;
 export function ensureMarketingLeadFormsSchema() {
   if (!ready) ready = (async () => {
     const sql = getSql();
-    const [check] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.lead_forms') is not null and to_regclass('marketing.form_visits') is not null and to_regclass('marketing.form_leads') is not null and to_regclass('marketing.form_step_events') is not null as ok`;
+    const [check] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.lead_forms') is not null and to_regclass('marketing.form_visits') is not null and to_regclass('marketing.form_leads') is not null and to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null as ok`;
     if (check?.ok) return;
     await withDatabaseAdvisoryLock('mzj:marketing-lead-forms:20261025', async () => {
-      const [again] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.form_step_events') is not null as ok`;
+      const [again] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null as ok`;
       if (again?.ok) return;
       await runSqlScript(FORM_SCHEMA_SQL);
     });

@@ -1,8 +1,12 @@
 /** MZJ platform forms: isolated schema/types; no dependencies on CRM or marketing workflows. */
+import type { FormDesign } from './lead-form-design';
+export type { FormDesign, DesignBlock, DesignBlockKind } from './lead-form-design';
+export { createTemplateDesign, resolveFormDesign, DESIGN_BLOCK_LABELS } from './lead-form-design';
 export type FormTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'classic';
-export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; required: boolean; showIf?: { fieldId: string; equals: string } | null };
+export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; optionImages?: Record<string,string>; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
 export type FormStyle = { brown: string; cream: string; welcome: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string };
-export type FormConfig = { fields: FormField[]; style: FormStyle };
+export type FormConfig = { fields: FormField[]; style: FormStyle; design?: FormDesign };
+export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_at:string;updated_at:string};
 export type FormStatus = 'draft' | 'published' | 'paused' | 'archived';
 // Legacy string columns remain supported for forms linked before the sheet-header mapper.
 export type SheetColumnMapping = { header: string; source: string; value?: string };

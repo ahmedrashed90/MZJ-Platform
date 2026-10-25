@@ -6,6 +6,7 @@ import { requireUser, requestIp } from '../_auth.js';
 import { requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
+import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
 const sourceName = (v: unknown) => clean(v, 100).replace(/[\r\n\t]/g, ' ') || 'direct';
@@ -21,12 +22,59 @@ function body(req: VercelRequest): Record<string, any> {
 function fail(res: VercelResponse, status: number, error: string) { return res.status(status).json({ ok:false, error }); }
 function validStyleColor(input: unknown, fallback: string) { const value = clean(input, 12); return /^#[a-f0-9]{6}$/i.test(value) ? value : fallback; }
 function imageUrl(input: unknown) {
+  const raw=String(input ?? '').trim();
+  // Embedded images are produced by the in-browser editor after resize/compression.
+  // Never allow SVG/data:text or arbitrary data URLs in public form content.
+  if(raw.length<=250000 && /^data:image\/(?:webp|png|jpeg);base64,[a-zA-Z0-9+/=]+$/.test(raw))return raw;
   const url = clean(input, 1000);
   if (!url) return '';
   if (url === '/logo.png') return url;
   try { const parsed = new URL(url); return parsed.protocol === 'https:' ? url : ''; } catch { return ''; }
 }
+/** Save only declarative, bounded layout data; no arbitrary HTML/CSS or executable content. */
+function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined {
+  if(!input || typeof input!=='object' || Array.isArray(input))return undefined;
+  const raw=input as Record<string,any>;
+  const defaults=createTemplateDesign('steps',fields);
+  const validScreens=new Set([...fields.map(f=>f.id),'contact','success']);
+  const validKinds=new Set(Object.keys(DESIGN_BLOCK_LABELS));
+  const animation=['slide','fade','zoom','none'].includes(raw.animation)?raw.animation:'slide';
+  const choices=['list','cards','tiles','pills'].includes(raw.choices)?raw.choices:'list';
+  const surface=['paper','soft','dark','borderless'].includes(raw.surface)?raw.surface:'paper';
+  const buttonShape=['rounded','pill','square'].includes(raw.buttonShape)?raw.buttonShape:'rounded';
+  const maxWidth=Math.max(360,Math.min(860,Math.round(Number(raw.maxWidth)||490)));
+  const screens:FormDesign['screens']={};
+  const source=raw.screens&&typeof raw.screens==='object'&&!Array.isArray(raw.screens)?raw.screens:{};
+  for(const screen of validScreens){
+    const rows=Array.isArray(source[screen])?source[screen].slice(0,30):defaults.screens[screen];
+    const blocks:DesignBlock[]=[];const seen=new Set<string>();const systemKinds=new Set<string>();
+    for(const [index,entry] of rows.entries()){
+      if(!entry||typeof entry!=='object'||Array.isArray(entry))continue;
+      const kind=clean(entry.kind,24) as DesignBlockKind;
+      if(!validKinds.has(kind))continue;
+      if(kind==='question'&&['contact','success'].includes(screen))continue;
+      if(kind==='contact'&&screen!=='contact')continue;
+      if(kind==='success'&&screen!=='success')continue;
+      if(kind==='actions'&&screen==='success')continue;
+      if(SYSTEM_DESIGN_BLOCKS.includes(kind) && systemKinds.has(kind))continue;
+      systemKinds.add(kind);
+      const id=clean(entry.id,60) || `${screen}_${kind}_${index}`;
+      if(!/^[a-zA-Z0-9_-]{1,60}$/.test(id)||seen.has(id))continue;
+      seen.add(id);
+      const align=['right','center','left'].includes(entry.align)?entry.align:'right';
+      const width=['full','half'].includes(entry.width)?entry.width:'full';
+      const size=['sm','md','lg'].includes(entry.size)?entry.size:'md';
+      const height=Math.max(8,Math.min(280,Math.round(Number(entry.height)||24)));
+      blocks.push({id,kind,text:clean(entry.text,550),imageUrl:imageUrl(entry.imageUrl),align,width,size,height});
+    }
+    const mandatory:DesignBlockKind[]=screen==='contact'?['contact','actions']:screen==='success'?['success']:['question','actions'];
+    for(const kind of mandatory){if(!blocks.some(b=>b.kind===kind))blocks.push({id:`required_${screen}_${kind}`,kind,align:'right',width:'full',size:'md'});}
+    screens[screen]=blocks;
+  }
+  return {version:1,screens,animation,choices,surface,buttonShape,maxWidth};
+}
 function sanitizeConfig(input: unknown): FormConfig {
+  if(JSON.stringify(input ?? {}).length>3_000_000)throw new FormInputError('ملفات الصور أو إعدادات الفورم أكبر من الحجم المسموح');
   const obj = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string,any> : {};
   const rawFields: unknown[] = Array.isArray(obj.fields) ? obj.fields : DEFAULT_FORM_CONFIG.fields;
   if (rawFields.length > 14) throw new FormInputError('الحد الأقصى 14 سؤالًا لكل فورم');
@@ -40,7 +88,10 @@ function sanitizeConfig(input: unknown): FormConfig {
     if (type === 'choice' && options.length < 2) throw new FormInputError(`السؤال ${index+1}: أضف اختيارين على الأقل`);
     const showIfRaw = (f as any).showIf;
     const showIf = showIfRaw && typeof showIfRaw==='object' ? { fieldId: clean(showIfRaw.fieldId,45), equals: clean(showIfRaw.equals,80) } : null;
-    fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], required: (f as any).required !== false, showIf });
+    const rawImages=(f as any).optionImages && typeof (f as any).optionImages==='object' ? (f as any).optionImages as Record<string,unknown> : {};
+    const optionImages:Record<string,string>={};
+    for(const option of options){const url=imageUrl(rawImages[option]);if(url)optionImages[option]=url;}
+    fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], optionImages, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
   }
   if (!fields.length) throw new FormInputError('أضف سؤالًا واحدًا على الأقل');
   // Only allow conditions pointing to an earlier question and one of its options.
@@ -50,7 +101,7 @@ function sanitizeConfig(input: unknown): FormConfig {
   });
   const rawStyle = obj.style && typeof obj.style === 'object' ? obj.style as Record<string,unknown> : {};
   const base = DEFAULT_FORM_CONFIG.style;
-  return { fields, style: {
+  return { fields, design:sanitizeDesign(obj.design,fields), style: {
     brown: validStyleColor(rawStyle.brown,base.brown), cream: validStyleColor(rawStyle.cream,base.cream),
     welcome: clean(rawStyle.welcome,140) || base.welcome,
     actionLabel: clean(rawStyle.actionLabel,60) || base.actionLabel,
@@ -277,6 +328,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       create:'marketing.lead_forms.create', save:'marketing.lead_forms.edit', duplicate:'marketing.lead_forms.create', publish:'marketing.lead_forms.publish', pause:'marketing.lead_forms.publish', archive:'marketing.lead_forms.publish',
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
       sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
+      design_templates:'marketing.lead_forms.view', design_template_save:'marketing.lead_forms.create',
     } as Record<string,string>)[action];
     if (!permission) return fail(res,404,'عملية غير معروفة');
     if (!await requirePermissionForUser(req,res,user,permission,{systemCode:'marketing',pageCode:'lead_forms',action})) return;
@@ -284,6 +336,19 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     await ensureMarketingLeadFormsSchema();
     const sql=getSql();
     res.setHeader('Cache-Control','no-store');
+    if (action==='design_templates' && req.method==='GET') {
+      const rows=await sql<any[]>`select id::text,name,template,config,created_at,updated_at from marketing.form_design_templates order by updated_at desc limit 100`;
+      return res.json({ok:true,templates:rows});
+    }
+    if (action==='design_template_save' && req.method==='POST') {
+      const name=clean(params.name,100),template=clean(params.template,25);
+      if(name.length<3 || !FORM_TEMPLATES.some(t=>t.id===template))return fail(res,400,'اكتب اسمًا صحيحًا للتصميم');
+      const config=sanitizeConfig(params.config);
+      if(!config.design) return fail(res,400,'احفظ إعدادات التصميم أولًا');
+      const [saved]=await sql<any[]>`insert into marketing.form_design_templates(name,template,config,created_by)
+        values(${name},${template},${sql.json(config)},${user.id}::uuid) returning id::text`;
+      return res.json({ok:true,id:saved.id,message:'تم حفظ التصميم في مكتبة القوالب'});
+    }
     if (action==='sheet_status' && req.method==='GET') {
       const account=sheetServiceAccount(); return res.json({ok:true,configured:!!account,serviceEmail:account?.client_email || ''});
     }

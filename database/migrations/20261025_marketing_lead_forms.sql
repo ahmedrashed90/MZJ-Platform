@@ -20,6 +20,16 @@ create table if not exists marketing.lead_forms (
   published_at timestamptz
 );
 alter table marketing.lead_forms add column if not exists published_metadata jsonb;
+-- User-created reusable visual form designs (isolated from existing marketing tables).
+create table if not exists marketing.form_design_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  template text not null check (template in ('steps','visual','chat','quiz','minimal','classic')),
+  config jsonb not null,
+  created_by uuid references core.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 create table if not exists marketing.form_visits (
   id uuid primary key default gen_random_uuid(),
   form_id uuid not null references marketing.lead_forms(id) on delete cascade,
