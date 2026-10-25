@@ -171,7 +171,7 @@ async function syncLead(leadId: string) {
   try {
     const token = await googleToken();
     const allowed = new Set(['name','phone','source','campaign','medium','ad_id','form','vehicle','purchase','timeline','submitted_at','lead_id']);
-    const extra = new Set((row.config?.fields || []).map((f:any)=>`answers.${f.id}`));
+    const extra = new Set<string>((row.config?.fields || []).map((f:any)=>`answers.${f.id}`));
     const columns: unknown[] = Array.isArray(row.sheet_columns) ? row.sheet_columns : DEFAULT_SHEET_COLUMNS;
     const mapped=columns.length>0 && columns.every(v=>v && typeof v==='object' && !Array.isArray(v));
     let values: string[];
