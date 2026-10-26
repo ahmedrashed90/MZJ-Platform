@@ -83,15 +83,29 @@ export function aggregateWindsorSnapchat(input: unknown, from: string, to: strin
 }
 
 const resultCache = new Map<string, { time: number; payload: WindsorPayload }>();
-async function windsorRows(key: string, from: string, to: string, fields: string[], connector: 'snapchat' | 'all'): Promise<unknown> {
+// Windsor's server-side query cache is independent of MZJ's five-minute cache.
+// Sub-hourly intervals require an eligible Windsor.ai plan. Never silently
+// pretend that an MZJ refresh necessarily bypasses the upstream cache.
+function providerRefreshInterval() {
+  const interval = text(process.env.WINDSOR_SNAPCHAT_REFRESH_INTERVAL).toLowerCase();
+  return /^(?:[1-9]\d*h|(?:15|30|45)min)$/.test(interval) ? interval : '';
+}
+async function windsorRows(key: string, from: string, to: string, fields: string[], connector: 'snapchat' | 'all', fresh = false): Promise<unknown> {
   const url = new URL(`https://connectors.windsor.ai/${connector}`);
   url.searchParams.set('date_from', from);
   url.searchParams.set('date_to', to);
   url.searchParams.set('fields', fields.join(','));
   url.searchParams.set('api_key', key);
   url.searchParams.set('_max_rows', '50000');
+  const interval = providerRefreshInterval();
+  // Documented public API parameters; never append random cache-busting keys
+  // that could evade provider rate limits or return unverified data.
+  if (fresh || interval) {
+    url.searchParams.set('refresh_since', '3d');
+    if (interval) url.searchParams.set('refresh_interval', interval);
+  }
   let response: Response;
-  try { response = await fetch(url, { headers: { Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(22_000) }); }
+  try { response = await fetch(url, { headers: { Accept: 'application/json' }, cache: fresh ? 'no-store' : 'default', redirect: 'manual', signal: AbortSignal.timeout(22_000) }); }
   catch { throw new Error('تعذر الوصول لخدمة Windsor.ai أو انتهت المهلة'); }
   // Never include the upstream URL, query, headers or full error body: API key is in the URL.
   if (!response.ok) throw new Error(`Windsor.ai HTTP ${response.status} - تحقق من صلاحية مفتاح API والاشتراك`);
@@ -104,23 +118,23 @@ async function windsorRows(key: string, from: string, to: string, fields: string
   if (data.data.length > 35_000) throw new Error('عدد السجلات كبير؛ اختر فترة أقصر لتجنب النتائج الناقصة');
   return data.data;
 }
-export async function windsorSnapchatAdsData(from: string, to: string): Promise<WindsorPayload> {
+export async function windsorSnapchatAdsData(from: string, to: string, fresh = false): Promise<WindsorPayload> {
   validateCampaignReportRange(from, to);
   const key = text(process.env.WINDSOR_SNAPCHAT_API_KEY);
   if (!key) return { status: 'unavailable', note: 'اضبط WINDSOR_SNAPCHAT_API_KEY داخل متغيرات Vercel لربط Snapchat Ads عبر Windsor.ai.', reports: [], errors: [] };
-  const cacheKey = createHash('sha256').update(`${key}|${from}|${to}|${text(process.env.WINDSOR_SNAPCHAT_CURRENCY)}|${text(process.env.WINDSOR_SNAPCHAT_EXTRA_FIELDS)}`).digest('hex');
+  const cacheKey = createHash('sha256').update(`${key}|${from}|${to}|${text(process.env.WINDSOR_SNAPCHAT_CURRENCY)}|${text(process.env.WINDSOR_SNAPCHAT_EXTRA_FIELDS)}|${providerRefreshInterval()}`).digest('hex');
   const old = resultCache.get(cacheKey);
-  if (old && old.time > Date.now()) return old.payload;
+  if (!fresh && old && old.time > Date.now()) return old.payload;
   const extra = text(process.env.WINDSOR_SNAPCHAT_EXTRA_FIELDS).split(',').map(x => x.trim()).filter(x => OPTIONAL_FIELDS.has(x));
   const detailedFields = [...new Set([...FIELDS, ...VERIFIED_DETAILS, ...extra])];
   let rows: unknown;
   let fallback: 'none' | 'all' | 'basic' = 'none';
   // Official Snapchat connector has account/campaign IDs and account currency.
   // Preserve the proven /all six-field Postman request as a last fallback.
-  try { rows = await windsorRows(key, from, to, detailedFields, 'snapchat'); }
+  try { rows = await windsorRows(key, from, to, detailedFields, 'snapchat', fresh); }
   catch {
-    try { rows = await windsorRows(key, from, to, detailedFields, 'all'); fallback = 'all'; }
-    catch { rows = await windsorRows(key, from, to, [...FIELDS], 'all'); fallback = 'basic'; }
+    try { rows = await windsorRows(key, from, to, detailedFields, 'all', fresh); fallback = 'all'; }
+    catch { rows = await windsorRows(key, from, to, [...FIELDS], 'all', fresh); fallback = 'basic'; }
   }
   const aggregated = aggregateWindsorSnapchat(rows, from, to, text(process.env.WINDSOR_SNAPCHAT_CURRENCY));
   const warnings = [...aggregated.warnings];
@@ -133,5 +147,6 @@ export async function windsorSnapchatAdsData(from: string, to: string): Promise<
     note: '', reports: aggregated.reports.map(report => ({ ...report, warnings })), errors: [] };
   resultCache.set(cacheKey, { time: Date.now() + 5 * 60_000, payload });
   if (resultCache.size > 16) resultCache.delete(resultCache.keys().next().value!);
-  return payload;
+  if (!fresh) return payload;
+  return { ...payload, note: 'تم طلب قراءة جديدة من Windsor.ai؛ لكن البيانات الحديثة قد تظل مخزنة لدى Windsor حسب فترة التحديث واشتراك الحساب. وقت التقرير لا يثبت وقت تحديث Snapchat الفعلي.' };
 }

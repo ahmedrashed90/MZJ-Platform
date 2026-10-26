@@ -58,7 +58,9 @@ function CampaignBars({ title, metric, rows, onSelect }: { title: string; metric
 }
 
 /** Unified paid-ads reporting. No organic or campaign-management loads on this tab. */
-export function CampaignReportPage() {
+export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
+  refreshToken?: number; onLoadingChange?: (busy: boolean) => void;
+} = {}) {
   const [from, setFrom] = useState(() => marketingLocalDateKey(new Date(Date.now() - RECENT)));
   const [to, setTo] = useState(() => marketingLocalDateKey());
   const [applied, setApplied] = useState(() => ({from: marketingLocalDateKey(new Date(Date.now() - RECENT)), to: marketingLocalDateKey()}));
@@ -78,36 +80,44 @@ export function CampaignReportPage() {
   const seq = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const prefetchedExportReport = useRef<CampaignReportPayload | null>(null);
+  const lastRefreshToken = useRef(refreshToken);
   const valid = Boolean(from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to && (Date.parse(to) - Date.parse(from)) / 86_400_000 <= 366);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
     const requestId = ++seq.current;
     controller.current?.abort();
+    if (fresh) prefetchedExportReport.current = null;
     // Exporting a newly selected date range already fetched this report. Reuse
     // that response instead of calling paid-ad providers a second time.
     const prefetched = prefetchedExportReport.current;
-    if (prefetched && prefetched.from === applied.from && prefetched.to === applied.to) {
+    if (!fresh && prefetched && prefetched.from === applied.from && prefetched.to === applied.to) {
       prefetchedExportReport.current = null;
       controller.current = null;
       setData(prefetched);
       setError('');
       setLoading(false);
+      onLoadingChange?.(false);
       return;
     }
     const signal = new AbortController(); controller.current = signal;
-    setLoading(true); setError('');
+    setLoading(true); onLoadingChange?.(true); setError('');
     const timeout = window.setTimeout(() => signal.abort(), 56_000);
     try {
-      const response = await marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({resource: 'campaign_report', dateFrom: applied.from, dateTo: applied.to})}`, { signal: signal.signal });
+      const response = await marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({resource: 'campaign_report', dateFrom: applied.from, dateTo: applied.to, refresh: fresh ? 'true' : undefined})}`, { signal: signal.signal });
       if (requestId === seq.current) setData(response);
     } catch (failure) {
       if (requestId === seq.current) setError(signal.signal.aborted ? 'انتهت مهلة قراءة تقرير الحملات. جرّب تحديد فترة أقصر أو أعد المحاولة.' : failure instanceof Error ? failure.message : 'تعذر قراءة تقرير الحملات');
     } finally {
       window.clearTimeout(timeout);
-      if (requestId === seq.current) { controller.current = null; setLoading(false); }
+      if (requestId === seq.current) { controller.current = null; setLoading(false); onLoadingChange?.(false); }
     }
-  }, [applied]);
-  useEffect(() => { void load(); return () => { controller.current?.abort(); ++seq.current; }; }, [load]);
+  }, [applied, onLoadingChange]);
+  useEffect(() => {
+    const fresh = refreshToken !== lastRefreshToken.current;
+    lastRefreshToken.current = refreshToken;
+    void load(fresh);
+    return () => { controller.current?.abort(); ++seq.current; onLoadingChange?.(false); };
+  }, [load, refreshToken, onLoadingChange]);
   const rows = useMemo(() => filterCampaignReportRows(data?.rows || [], platform, search), [data, platform, search]);
   const selectedCampaign = rows.find(row => row.key === selectedKey) || null;
   function selectCampaign(key: string) {
@@ -194,7 +204,7 @@ export function CampaignReportPage() {
       <div className="mcr-filter-row"><label><span>من تاريخ</span><input type="date" value={from} max={to || undefined} onChange={event => setFrom(event.target.value)}/></label>
         <label><span>إلى تاريخ</span><input type="date" value={to} min={from || undefined} onChange={event => setTo(event.target.value)}/></label>
         <button type="button" className="primary-button" disabled={!valid || loading} onClick={() => setApplied({from, to})}>عرض التقرير</button>
-        <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} className={loading ? 'marketing-spin' : ''}/> تحديث</button></div>
+        <button type="button" className="secondary-button" disabled={loading} onClick={() => void load(Boolean(data?.canRefreshReport))}><ArrowClockwise size={18} className={loading ? 'marketing-spin' : ''}/> تحديث</button></div>
       {!valid && <small className="mcr-error">حدد تاريخ بداية ونهاية صحيحين، بفترة لا تزيد عن سنة.</small>}
       <div className="mcr-filter-row mcr-secondary-filters"><label><span>المنصة</span><select value={platform} onChange={event => setPlatform(event.target.value)}><option value="all">كل المنصات</option>{(data?.providers || []).map(item => <option key={item.platform} value={item.platform}>{item.name}</option>)}</select></label>
         <span className="mcr-currency-fixed" title="الإنفاق بالدولار الأمريكي يُحوّل بسعر 3.75 ريال سعودي">العملة: ريال سعودي (1 USD = 3.75 SAR)</span>
@@ -205,7 +215,7 @@ export function CampaignReportPage() {
     {loading && <div className="mcr-loading" role="status"><ArrowClockwise size={20} className="marketing-spin"/> جاري قراءة الحملات من المنصات الإعلانية…</div>}
     {data && <>
       <div className="mcr-provider-status" aria-label="حالة الربط والبيانات">{data.providers.map(provider => <article key={provider.platform} className={`mcr-provider ${provider.status}`}><strong>{provider.name}</strong><span>{provider.status === 'ready' ? 'متصل' : provider.status === 'failed' ? 'تعذر القراءة' : 'الربط مطلوب'}</span><small>{number(provider.campaignCount)} حملة</small></article>)}</div>
-      {data.providers.filter(provider => provider.status !== 'ready' || (provider.platform !== 'snapchat' && (provider.incomplete || provider.warnings.length))).map(provider => <div key={provider.platform} className="mcr-warning"><strong>{provider.name}:</strong> {provider.note || (provider.incomplete ? 'بعض النتائج غير مكتملة.' : 'تحقق من الربط.')}{provider.warnings.length ? ` • ${provider.warnings.join(' • ')}` : ''}</div>)}
+      {data.providers.filter(provider => provider.status !== 'ready' || ((provider.platform !== 'snapchat' && (provider.incomplete || provider.warnings.length)) || (provider.platform === 'snapchat' && Boolean(provider.note)))).map(provider => <div key={provider.platform} className="mcr-warning"><strong>{provider.name}:</strong> {provider.note || (provider.incomplete ? 'بعض النتائج غير مكتملة.' : 'تحقق من الربط.')}{provider.warnings.length ? ` • ${provider.warnings.join(' • ')}` : ''}</div>)}
       <section className="mcr-summary" aria-label="ملخص الحملات">
         <article><Megaphone size={23}/><span>الحملات</span><strong>{number(rows.length)}</strong><small>وفق الفلاتر المختارة</small></article>
         <article><Wallet size={23}/><span>المبلغ المصروف</span><strong>{allSpendKnown ? currencyValue(totalSpend, 'ر.س') : '—'}</strong><small>المبالغ بالدولار تُضرب × 3.75</small></article>
@@ -213,7 +223,7 @@ export function CampaignReportPage() {
         <article><ChartLineUp size={23}/><span>تكلفة الليد</span><strong>{currencyValue(totalCpl, 'ر.س')}</strong><small>المبلغ المصروف ÷ الليدات المؤكدة</small></article>
         <article><ChartBar size={23}/><span>تفاعلات الإعلانات</span><strong>{allInteractionsKnown ? number(totalInteractions) : '—'}</strong><small>{allInteractionsKnown ? 'وفق تعريف كل منصة' : 'بعض المنصات لا تعيد التفاعلات'}</small></article>
       </section>
-      <section className="panel mcr-table-panel"><header><div><h4>الحملات</h4><p>{number(rows.length)} حملة • {data.from} إلى {data.to}</p></div><small>آخر تحديث: {new Date(data.generatedAt).toLocaleString('ar-SA-u-nu-latn')}</small></header>
+      <section className="panel mcr-table-panel"><header><div><h4>الحملات</h4><p>{number(rows.length)} حملة • {data.from} إلى {data.to}</p></div><small title="وقت جلب تقرير MZJ؛ وقد تكون بيانات Windsor.ai مخزنة لدى المزود">آخر تحديث: {new Date(data.generatedAt).toLocaleString('ar-SA-u-nu-latn')}</small></header>
         <div className="mcr-table-scroll"><table><thead><tr><th>المنصة</th><th>الحساب</th><th>الحملات</th><th>مدير الحملة</th><th>العملة</th><th>المبلغ المصروف</th><th>إجمالي الليدات</th><th>تكلفة الليد</th><th>تفاعلات الإعلانات</th><th>النقرات</th></tr></thead>
           {rows.map(row => <tbody key={row.key} className={row.key === selectedKey ? 'mcr-selected-campaign' : ''}>
             <tr ref={element => { if (row.key === selectedKey) highlightedRow.current = element; }}

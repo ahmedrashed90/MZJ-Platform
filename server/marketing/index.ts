@@ -4537,7 +4537,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
-      if(resource==='campaign_report'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتقرير الحملات'});return response.status(200).json({...await consolidatedCampaignReport(sql,request.query.dateFrom,request.query.dateTo),canEditManager:hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.engagement.refresh')||hasPermission(user,'settings.marketing.manage')||hasPermission(user,'platform.superadmin')});}
+      if(resource==='campaign_report'){
+        if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتقرير الحملات'});
+        const canRefreshReport=hasPermission(user,'marketing.engagement.refresh');
+        const fresh=clean(request.query.refresh)==='true';
+        if(fresh&&!canRefreshReport)return response.status(403).json({ok:false,error:'لا توجد صلاحية لتحديث بيانات الحملات مباشرة'});
+        return response.status(200).json({...await consolidatedCampaignReport(sql,request.query.dateFrom,request.query.dateTo,fresh),
+          canRefreshReport,canEditManager:hasPermission(user,'marketing.campaign.edit')||canRefreshReport||hasPermission(user,'settings.marketing.manage')||hasPermission(user,'platform.superadmin')});
+      }
       if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
       if(resource==='social_accounts_overview'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض الحسابات'});return response.status(200).json(await marketingSocialAccountsOverview(sql,request.query));}

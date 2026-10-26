@@ -13,7 +13,7 @@ import { normalizeCampaignReportRow, validateCampaignReportRange,
 type Sql = ReturnType<typeof getSql>;
 type Json = Record<string, any>;
 type Adapter = { code: string; name: string; interactionField: string; interactionDefinition: string;
-  read: (sql: Sql, from: string, to: string) => Promise<Json> };
+  read: (sql: Sql, from: string, to: string, fresh: boolean) => Promise<Json> };
 
 /** Canonical provider registry. Register additional paid-ad sources here. */
 const ADAPTERS: readonly Adapter[] = [
@@ -22,14 +22,14 @@ const ADAPTERS: readonly Adapter[] = [
   { code: 'google', name: 'Google Ads', interactionField: 'engagements', interactionDefinition: 'مقياس engagements في Google Ads (قد يختلف عن إعجابات وتعليقات Meta)',
     read: (sql, from, to) => googleAdsData(sql, 'last_30d', '', from, to) },
   { code: 'tiktok', name: 'TikTok Ads', interactionField: 'interactions', interactionDefinition: 'تفاعلات TikTok الإعلانية عند إتاحتها (إعجابات + تعليقات + مشاركات)، دون المشاهدات',
-    read: (sql, from, to) => tiktokAdsData(sql, 'last_30d', '', from, to, false) },
+    read: (sql, from, to, fresh) => tiktokAdsData(sql, 'last_30d', '', from, to, fresh ? 'true' : false) },
   { code: 'snapchat', name: 'Snapchat Ads', interactionField: 'interactions', interactionDefinition: 'تفاعلات إعلانات Snapchat عند توفر engagements من Windsor.ai؛ لا تُحسب النقرات تفاعلات',
-    read: (_sql, from, to) => windsorSnapchatAdsData(from, to) },
+    read: (_sql, from, to, fresh) => windsorSnapchatAdsData(from, to, fresh) },
 ];
 
-export async function consolidatedCampaignReport(sql: Sql, fromInput: unknown, toInput: unknown): Promise<CampaignReportPayload> {
+export async function consolidatedCampaignReport(sql: Sql, fromInput: unknown, toInput: unknown, fresh = false): Promise<CampaignReportPayload> {
   const { from, to } = validateCampaignReportRange(fromInput, toInput);
-  const completed = await Promise.allSettled(ADAPTERS.map(adapter => adapter.read(sql, from, to)));
+  const completed = await Promise.allSettled(ADAPTERS.map(adapter => adapter.read(sql, from, to, fresh)));
   const rows: CampaignReportRow[] = [];
   const providers: CampaignReportProvider[] = [];
   for (let index = 0; index < ADAPTERS.length; index++) {

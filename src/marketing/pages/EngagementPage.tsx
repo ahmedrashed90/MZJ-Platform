@@ -232,6 +232,8 @@ export function EngagementPage() {
   const [view, setView] = useState<PageView>(() => pageView(searchParams.get("view")));
   const [accountRange, setAccountRange] = useState(accountDates);
   const [organicRefresh, setOrganicRefresh] = useState(0);
+  const [campaignRefreshToken, setCampaignRefreshToken] = useState(0);
+  const [campaignReportLoading, setCampaignReportLoading] = useState(false);
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
@@ -445,6 +447,12 @@ export function EngagementPage() {
   }
 
   async function refresh() {
+    // The same top toolbar button refreshes the *active* tab. Paid campaigns
+    // use their own read-only provider route, never the organic/Meta post path.
+    if (view === "report") {
+      if (!campaignReportLoading) setCampaignRefreshToken(value => value + 1);
+      return;
+    }
     setLoading(true);
     setError("");
     setMessage("");
@@ -589,7 +597,7 @@ export function EngagementPage() {
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
       {data && canViewWebhookUrl ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
       {canRefresh ? <button type="button" className="secondary-button" disabled={loading} onClick={syncMeta}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> مزامنة Meta والأرشيف</button> : null}
-      {canRefresh ? <button type="button" className="primary-button" disabled={loading} onClick={refresh}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
+      {canRefresh ? <button type="button" className="primary-button" disabled={loading || (view === "report" && campaignReportLoading)} onClick={refresh}><ArrowClockwise size={18} className={loading || campaignReportLoading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
     </div>}
   >
     <div className="marketing-engagement-shell">
@@ -602,7 +610,7 @@ export function EngagementPage() {
         <button type="button" className={view === "report" ? "active" : ""} onClick={() => changeView("report")}>تقرير الحملات</button>
       </div>
 
-      {view === "report" ? <CampaignReportPage /> : view === "engagement" ? <>
+      {view === "report" ? <CampaignReportPage refreshToken={campaignRefreshToken} onLoadingChange={setCampaignReportLoading} /> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{data ? count(summary.posts) : "—"}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{data ? count(summary.likes) : "—"}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>

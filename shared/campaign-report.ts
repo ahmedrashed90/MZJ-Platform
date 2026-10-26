@@ -17,7 +17,7 @@ export type CampaignReportProvider = {
 };
 export type CampaignReportPayload = {
   ok: true; from: string; to: string; generatedAt: string;
-  rows: CampaignReportRow[]; providers: CampaignReportProvider[]; canEditManager?: boolean;
+  rows: CampaignReportRow[]; providers: CampaignReportProvider[]; canEditManager?: boolean; canRefreshReport?: boolean;
 };
 
 /** Accounting conversion requested by MZJ: fixed USD/SAR peg for reports. */
