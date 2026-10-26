@@ -1,0 +1,355 @@
+import { getSql } from "./_db.js";
+import type { DashboardData } from "../src/types.js";
+import type { SessionUser } from "./_auth.js";
+import { canAccessSystem } from "../shared/system-access.js";
+import { getSystemAccess } from "./_access-control.js";
+import { getTrackingCountSummary } from "./_tracking-counts.js";
+import { ensureCrmSchema } from "./_crm-schema.js";
+import { crmVisibleCustomerCohortSql } from "./_crm-customer-cohort.js";
+import { userScope, crmLeadScopeSql } from "./_crm-utils.js";
+import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
+import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
+
+const locationNames = [
+  ["warehouse", "المستودع"],
+  ["agency", "الوكالة"],
+  ["hall", "الصالة"],
+  ["qadisiyah", "القادسية"],
+  ["multaqa", "الملتقى"],
+] as const;
+
+function emptyData(range: { from: string; to: string }): DashboardData {
+  return {
+    connected: false,
+    generatedAt: new Date().toISOString(),
+    range,
+    sectionErrors: {},
+    crm: { totalCustomers: null, uniqueCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, newInRange: null, otherCustomers: null, representatives: [], recentConversations: [], newCustomersSeries: [] },
+    marketing: { campaigns: null, agendas: null, scheduled: null, delayed: null },
+    tracking: { requests: null, inProgress: null, completed: null },
+    operations: {
+      inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, reservedByLocation: [], underDelivery: null, delivered: null, hasNotes: null },
+      locations: locationNames.map(([key, name]) => ({ key, name, actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null })),
+      approvals: { total: null, missingFinancial: null, missingAdministrative: null, completed: null, recentNotes: [] },
+      shortages: { total: null, multaqa: null, hall: null, qadisiyah: null },
+      transfers: { total: null, transferTotal: null, photographyTotal: null, requestReceived: null, vehicleReceived: null, vehicleSent: null, completed: null },
+      salesTracking: { total: null, notStarted: null, inProgress: null, completed: null },
+    },
+  };
+}
+
+function asNumber(value: unknown): number { return Number(value ?? 0); }
+function errorText(error: unknown) { return error instanceof Error ? error.message : "تعذر تحميل القسم"; }
+
+export async function getDashboardData(user: SessionUser, range: { from: string; to: string }): Promise<DashboardData> {
+  const data = emptyData(range);
+  const { from, to } = range;
+  let sql: ReturnType<typeof getSql>;
+  try {
+    sql = getSql();
+    await sql`select 1`;
+    data.connected = true;
+  } catch (error) {
+    console.error("Dashboard database health check failed", error);
+    return data;
+  }
+
+  if (canAccessSystem(user, "crm")) {
+    try {
+      await ensureCrmSchema();
+      const crmScope = userScope(user);
+      const visibleLeadScope = crmLeadScopeSql(sql, crmScope);
+      // The headline, department donut and representative list all count the
+      // same unique customer cohort as the CRM dashboard/report period mode.
+      // Conversation, no-answer and dated-sales facts stay separate KPIs;
+      // adding those three activity counts is NOT a customer total.
+      const [row] = await sql<any[]>`
+        with scoped_input as (
+          select l.* from crm.leads l
+          where l.is_deleted=false
+            and ${crmVisibleCustomerCohortSql(sql, from, to)}
+            and ${visibleLeadScope}
+        ), scoped_leads as (
+          select distinct on (coalesce(nullif(l.phone_normalized,''),nullif(regexp_replace(l.phone,'[^0-9]','','g'),''),l.id::text)) l.*
+          from scoped_input l
+          order by coalesce(nullif(l.phone_normalized,''),nullif(regexp_replace(l.phone,'[^0-9]','','g'),''),l.id::text),
+            coalesce(l.registered_at,l.created_at) desc,l.id desc
+        ), scoped_sold as (
+          select coalesce(st.department_code,l.department_code) as department_code,
+            greatest(coalesce(st.quantity,1),1)::int as quantity
+          from crm.sales_transactions st
+          join crm.leads l on l.id=st.lead_id and l.is_deleted=false
+          where coalesce(st.is_cancelled,false)=false
+            and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and ${visibleLeadScope}
+        ), open_counts as (
+          select l.department_code,count(*)::int as event_count
+          from crm.conversations c
+          join scoped_leads l on l.id=c.lead_id
+          where c.status='open' and c.closed_at is null
+            and coalesce(c.classification_state,'')<>'closed'
+          group by l.department_code
+        ), no_answer_counts as (
+          select l.department_code,count(*)::int as event_count
+          from scoped_leads l where l.status_label='لم يتم الرد'
+          group by l.department_code
+        ), sold_counts as (
+          select department_code,sum(quantity)::int as event_count
+          from scoped_sold group by department_code
+        ), department_activity as (
+          -- Activity is preserved for the independent conversation/no-answer/
+          -- transaction KPIs only. It does not define a unique customer.
+          select department_code,sum(opened)::int as opened,
+            sum(no_answer)::int as no_answer,sum(sold)::int as sold,
+            sum(opened+no_answer+sold)::int as total
+          from (
+            select department_code,event_count as opened,0::int as no_answer,0::int as sold from open_counts
+            union all
+            select department_code,0::int,event_count,0::int from no_answer_counts
+            union all
+            select department_code,0::int,0::int,event_count from sold_counts
+          ) activity_events
+          group by department_code
+        ), reps as (
+          select l.assigned_to::text as id,
+            coalesce(u.full_name,'غير موزع') as name,
+            coalesce(current_branch.name, case when l.assigned_to is null then l.branch_code end,'بدون فرع') as branch,
+            count(*)::int as customers
+          from scoped_leads l
+          left join core.users u on u.id=l.assigned_to
+          left join lateral (
+            select b.name from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+            where usb.user_id=l.assigned_to and usb.system_code='crm'
+            order by usb.is_primary desc,b.sort_order,b.name limit 1
+          ) current_branch on true
+          group by l.assigned_to,u.full_name,current_branch.name,
+            case when l.assigned_to is null then l.branch_code end
+        ), daily as (
+          select d.day::date as day,to_char(d.day,'DD/MM') as label,count(l.id)::int as value
+          from generate_series(${from}::date,${to}::date,interval '1 day') d(day)
+          left join scoped_leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=d.day::date
+          group by d.day order by d.day
+        )
+        select
+          count(*)::int as total_customers,
+          count(*)::int as unique_customers,
+          coalesce((select sum(no_answer) from department_activity),0)::int as no_answer_customers,
+          coalesce((select sum(sold) from department_activity),0)::int as sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
+          count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
+          count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
+          count(*) filter(where department_code='customer_service')::int as customer_service,
+          count(*) filter(where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null)::int as other_customers,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_today,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_this_week,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_in_range,
+          coalesce((select sum(opened) from department_activity),0)::int as open_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as open_cash_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('finance_sales','call_center')),0)::int as open_finance_conversations,
+          coalesce((select sum(opened) from department_activity where department_code='customer_service'),0)::int as open_service_conversations,
+          (select coalesce(json_agg(r order by r.customers desc,r.name),'[]'::json) from reps r) as representatives,
+          (select coalesce(json_agg(d order by d.day),'[]'::json) from daily d) as daily_series
+        from scoped_leads
+      `;
+      data.crm = {
+        totalCustomers: asNumber(row?.total_customers), uniqueCustomers: asNumber(row?.unique_customers), openConversations: asNumber(row?.open_conversations),
+        openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations),
+        openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers),
+        sold: asNumber(row?.sold), cashSold: asNumber(row?.cash_sold), financeSold: asNumber(row?.finance_sold),
+        cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service),
+        otherCustomers: asNumber(row?.other_customers), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week), newInRange: asNumber(row?.new_in_range),
+        representatives: Array.isArray(row?.representatives) ? row.representatives.map((rep: any) => ({ id: String(rep.id || ''), name: String(rep.name || 'غير موزع'), branch: String(rep.branch || 'بدون فرع'), customers: asNumber(rep.customers) })) : [],
+        recentConversations: [],
+        newCustomersSeries: Array.isArray(row?.daily_series) ? row.daily_series.map((item: any) => ({ label: String(item.label || ''), value: asNumber(item.value) })) : [],
+      };
+    } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
+  }
+
+  if (canAccessSystem(user, "marketing")) {
+    try {
+      const marketingAccess = getSystemAccess(user, "marketing");
+      const marketingAll = marketingAccess.dataScope === "all";
+      const [[campaignRow], [agendaRow]] = await Promise.all([
+        sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed
+          from marketing.campaigns c
+          where is_deleted=false
+            and coalesce(c.campaign_date,(c.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+        sql<any[]>`select count(*)::int as agendas
+          from marketing.agendas a
+          where a.archived_at is null
+            and coalesce(a.publish_start,(a.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or a.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+      ]);
+      data.marketing = { campaigns: asNumber(campaignRow?.campaigns), agendas: asNumber(agendaRow?.agendas), scheduled: asNumber(campaignRow?.scheduled), delayed: asNumber(campaignRow?.delayed) };
+    } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
+  }
+
+  if (canAccessSystem(user, "tracking")) {
+    try {
+      // The unified dashboard must mirror the Tracking system counters exactly,
+      // so these figures intentionally use the canonical all-active-orders count
+      // rather than the dashboard date range used by the other dashboard cards.
+      const counts = await getTrackingCountSummary(sql, user);
+      data.tracking = { requests: counts.total, inProgress: counts.inProgress, completed: counts.completed };
+      data.operations.salesTracking = {
+        total: counts.total,
+        notStarted: counts.notStarted,
+        inProgress: counts.inProgress,
+        completed: counts.completed,
+      };
+    } catch (error) { data.sectionErrors!.tracking = errorText(error); console.error("Dashboard tracking query failed", error); }
+  }
+
+  if (canAccessSystem(user, "operations")) {
+  try {
+    const operationsAccess = getSystemAccess(user, "operations");
+    const globalOperationsAccess = operationsAccess.dataScope === "all";
+    const operationBranches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
+    const operationStatusUnrestricted = !operationsAccess.vehicleStatusCodes?.length;
+    const operationStatusCodes = operationsAccess.vehicleStatusCodes?.length ? operationsAccess.vehicleStatusCodes : ["__none__"];
+    const canSeeMultaqa = globalOperationsAccess || operationBranches.includes("multaqa");
+    const canSeeHall = globalOperationsAccess || operationBranches.includes("hall");
+    const canSeeQadisiyah = globalOperationsAccess || operationBranches.includes("qadisiyah");
+    const approvalVisibilityScope = operationsApprovalVisibilityScope(sql, user);
+    const requestAccessScope = operationsRequestAccessScope(sql, user);
+    const requestHasActiveVehicle = operationsRequestHasActiveVehicle(sql, user);
+    const [locations, [inventory], [approval], [shortage], [transfer]] = await Promise.all([
+      sql<any[]>`select l.code as key,l.name,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")})::int as actual_total,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")})::int as available_for_sale,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "reserved")})::int as reserved,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "has_notes")})::int as has_notes
+        from operations.locations l
+        left join operations.vehicles v on v.location_id=l.id
+          and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})
+        left join operations.vehicle_statuses s on s.code=v.status_code
+        where l.is_active=true and (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
+        group by l.code,l.name,l.sort_order order by l.sort_order`,
+      sql<any[]>`select
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and coalesce(l.code,'')<>'agency')::int as branch_actual_total,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "agency_inventory")} and l.code='agency')::int as agency,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")} and coalesce(l.code,'')<>'agency')::int as available_for_sale,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")} and coalesce(l.code,'')<>'agency')::int as reserved,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "has_notes")})::int as has_notes
+        from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
+        where (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
+          and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})`,
+      sql<any[]>`with visible_approvals as (
+          select a.id::text,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,a.updated_at,
+            v.vin,coalesce(nullif(trim(v.car_name),''),'—') as car_name
+          from operations.vehicle_approvals a
+          join operations.vehicles v on v.id=a.vehicle_id
+          left join operations.locations l on l.id=v.location_id
+          where ${approvalVisibilityScope}
+        )
+        select
+          count(*)::int as total,
+          count(*) filter(where financial_approved=false)::int as missing_financial,
+          count(*) filter(where administrative_approved=false)::int as missing_administrative,
+          count(*) filter(where financial_approved=true and administrative_approved=true)::int as completed,
+          coalesce((
+            select json_agg(json_build_object(
+              'id',note_row.id,
+              'vin',note_row.vin,
+              'carName',note_row.car_name,
+              'financialNote',coalesce(note_row.financial_note,''),
+              'administrativeNote',coalesce(note_row.administrative_note,''),
+              'updatedAt',note_row.updated_at
+            ) order by note_row.updated_at desc)
+            from (
+              select * from visible_approvals
+              where nullif(trim(coalesce(financial_note,'')),'') is not null
+                 or nullif(trim(coalesce(administrative_note,'')),'') is not null
+              order by updated_at desc
+              limit 3
+            ) note_row
+          ),'[]'::json) as recent_notes
+        from visible_approvals`,
+      sql<any[]>`with combinations as (
+          select
+            coalesce(nullif(trim(v.car_name),''),'—') as car_name,
+            coalesce(nullif(trim(v.statement),''),'—') as statement,
+            coalesce(nullif(trim(v.model_year),''),'—') as model_year,
+            coalesce(nullif(trim(v.exterior_color),''),'—') as exterior_color,
+            coalesce(nullif(trim(v.interior_color),''),'—') as interior_color,
+            count(*) filter(where l.code='warehouse')::int as warehouse_qty,
+            count(*) filter(where l.code='hall')::int as hall_qty,
+            count(*) filter(where l.code='multaqa')::int as multaqa_qty,
+            count(*) filter(where l.code='qadisiyah')::int as qadisiyah_qty
+          from operations.vehicles v
+          join operations.locations l on l.id=v.location_id
+          where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true
+            and v.status_code in ('available_for_sale','reserved','has_notes')
+            and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})
+            and l.code in ('warehouse','hall','multaqa','qadisiyah')
+            and regexp_replace(coalesce(v.statement,''), '[[:space:]]+', '', 'g') !~* '(حساس|كاميرا|شاشة|مسجل|ريموت|فرشات|طفاية|شنطةسلامة|اسبير|إسبير)'
+          group by coalesce(nullif(trim(v.car_name),''),'—'),coalesce(nullif(trim(v.statement),''),'—'),coalesce(nullif(trim(v.model_year),''),'—'),coalesce(nullif(trim(v.exterior_color),''),'—'),coalesce(nullif(trim(v.interior_color),''),'—')
+        ), shortages as (
+          select *,warehouse_qty+hall_qty+multaqa_qty+qadisiyah_qty as total_qty
+          from combinations
+        )
+        select
+          (count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)
+           + count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)
+           + count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true))::int as total,
+          count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)::int as multaqa,
+          count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)::int as hall,
+          count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true)::int as qadisiyah
+        from shortages`,
+      sql<any[]>`select
+          count(*)::int as total,
+          count(*) filter(where r.request_kind='transfer')::int as transfer_total,
+          count(*) filter(where r.request_kind='photography')::int as photography_total,
+          count(*) filter(where r.status='request_received')::int as request_received,
+          count(*) filter(where r.status='vehicle_received')::int as vehicle_received,
+          count(*) filter(where r.status='vehicle_sent')::int as vehicle_sent,
+          count(*) filter(where r.status='completed')::int as completed
+        from operations.transfer_requests r
+        where r.is_deleted=false
+          and ${requestAccessScope}
+          and (r.cancelled_at is not null or ${requestHasActiveVehicle})
+          and (r.requested_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date`,
+    ]);
+    data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));
+    const branchActualTotal = asNumber(inventory?.branch_actual_total);
+    const agencyActualTotal = asNumber(inventory?.agency);
+    data.operations.inventory = {
+      actualTotal: branchActualTotal + agencyActualTotal,
+      agency: agencyActualTotal,
+      availableForSale: asNumber(inventory?.available_for_sale),
+      reserved: asNumber(inventory?.reserved),
+      reservedByLocation: data.operations.locations.filter((item) => item.key !== "agency").map((item) => ({ key: item.key, name: item.name, value: item.reserved })),
+      underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes),
+    };
+    if (!data.operations.locations.length) data.operations.locations = emptyData(range).operations.locations;
+    data.operations.approvals = {
+      total: asNumber(approval?.total),
+      missingFinancial: asNumber(approval?.missing_financial),
+      missingAdministrative: asNumber(approval?.missing_administrative),
+      completed: asNumber(approval?.completed),
+      recentNotes: (Array.isArray(approval?.recent_notes) ? approval.recent_notes : []).map((item: any) => ({
+        id: String(item?.id || ""),
+        vin: String(item?.vin || ""),
+        carName: String(item?.carName || "—"),
+        financialNote: String(item?.financialNote || ""),
+        administrativeNote: String(item?.administrativeNote || ""),
+        updatedAt: String(item?.updatedAt || ""),
+      })),
+    };
+    data.operations.shortages = { total: asNumber(shortage?.total), multaqa: asNumber(shortage?.multaqa), hall: asNumber(shortage?.hall), qadisiyah: asNumber(shortage?.qadisiyah) };
+    data.operations.transfers = { total: asNumber(transfer?.total), transferTotal: asNumber(transfer?.transfer_total), photographyTotal: asNumber(transfer?.photography_total), requestReceived: asNumber(transfer?.request_received), vehicleReceived: asNumber(transfer?.vehicle_received), vehicleSent: asNumber(transfer?.vehicle_sent), completed: asNumber(transfer?.completed) };
+  } catch (error) { data.sectionErrors!.operations = errorText(error); console.error("Dashboard operations query failed", error); }
+  }
+
+  data.generatedAt = new Date().toISOString();
+  return data;
+}
