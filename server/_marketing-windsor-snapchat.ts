@@ -100,7 +100,10 @@ async function windsorRows(key: string, from: string, to: string, fields: string
   const interval = providerRefreshInterval();
   // Documented public API parameters; never append random cache-busting keys
   // that could evade provider rate limits or return unverified data.
-  if (fresh || interval) {
+  // Request provider-side hourly refresh only for an explicit user refresh.
+  // Normal page loads keep the existing proven API request without optional
+  // parameters, even when WINDSOR_SNAPCHAT_REFRESH_INTERVAL is configured.
+  if (fresh) {
     url.searchParams.set('refresh_since', '3d');
     if (interval) url.searchParams.set('refresh_interval', interval);
   }
@@ -127,26 +130,51 @@ export async function windsorSnapchatAdsData(from: string, to: string, fresh = f
   if (!fresh && old && old.time > Date.now()) return old.payload;
   const extra = text(process.env.WINDSOR_SNAPCHAT_EXTRA_FIELDS).split(',').map(x => x.trim()).filter(x => OPTIONAL_FIELDS.has(x));
   const detailedFields = [...new Set([...FIELDS, ...VERIFIED_DETAILS, ...extra])];
-  let rows: unknown;
-  let fallback: 'none' | 'all' | 'basic' = 'none';
-  // Official Snapchat connector has account/campaign IDs and account currency.
-  // Preserve the proven /all six-field Postman request as a last fallback.
-  try { rows = await windsorRows(key, from, to, detailedFields, 'snapchat', fresh); }
-  catch {
-    try { rows = await windsorRows(key, from, to, detailedFields, 'all', fresh); fallback = 'all'; }
-    catch { rows = await windsorRows(key, from, to, [...FIELDS], 'all', fresh); fallback = 'basic'; }
+  let rows: unknown = [];
+  let fallback: 'none' | 'legacy' | 'all' | 'basic' = 'none';
+  let failedRefreshCode = '';
+  // Optional hourly refresh parameters are not supported by every Windsor
+  // account. Never let their rejection disconnect a formerly working report.
+  // Retry the proven non-refresh request before trying the established /all
+  // field fallbacks. No guessed cache-busting parameters or credential leaks.
+  const attempts: Array<{ connector: 'snapchat' | 'all'; fields: string[];
+    providerRefresh: boolean; fallback: 'none' | 'legacy' | 'all' | 'basic' }> = [
+    { connector: 'snapchat', fields: detailedFields, providerRefresh: fresh, fallback: 'none' },
+    ...(fresh ? [{ connector: 'snapchat' as const, fields: detailedFields, providerRefresh: false, fallback: 'legacy' as const }] : []),
+    { connector: 'all', fields: detailedFields, providerRefresh: false, fallback: 'all' },
+    { connector: 'all', fields: [...FIELDS], providerRefresh: false, fallback: 'basic' },
+  ];
+  let succeeded = false;
+  let lastError: unknown = null;
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+    const attempt = attempts[attemptIndex];
+    try {
+      rows = await windsorRows(key, from, to, attempt.fields, attempt.connector, attempt.providerRefresh);
+      fallback = attempt.fallback;
+      succeeded = true;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attemptIndex === 0 && fresh) {
+        const message = error instanceof Error ? error.message : '';
+        failedRefreshCode = /Windsor\.ai HTTP (\d{3})/.exec(message)?.[1] || '';
+      }
+    }
   }
+  if (!succeeded) throw lastError || new Error('تعذر قراءة بيانات Windsor.ai');
   const aggregated = aggregateWindsorSnapchat(rows, from, to, text(process.env.WINDSOR_SNAPCHAT_CURRENCY));
   const warnings = [...aggregated.warnings];
   if (fallback === 'basic') warnings.push('الحقول الموسعة غير متاحة لهذا الحساب؛ تم استخدام طلب Postman المجرب. راجع العملات ومعرفات الحملات.');
   if (fallback === 'all') warnings.push('تم جلب البيانات عبر /all بدل مسار Snapchat المباشر.');
   if (Array.isArray(rows) && rows.length >= 50000) warnings.push('نتيجة Windsor وصلت للحد الأعلى من الصفوف؛ قد تكون الفترة غير مكتملة. اختر فترة أقصر.');
+  const failedRefresh = fresh && fallback !== 'none';
+  const fallbackNotice = failedRefresh
+    ? `تعذر تطبيق تحديث Windsor.ai السريع${failedRefreshCode ? ` (HTTP ${failedRefreshCode})` : ''}؛ تم عرض آخر بيانات متاحة عبر الطلب العادي. قد تكون الأرقام مخزنة لدى Windsor ولم تتحدث بعد. راجع خطة الاشتراك أو عطّل WINDSOR_SNAPCHAT_REFRESH_INTERVAL عند استمرار المشكلة.`
+    : '';
   const payload: WindsorPayload = { status: 'ready',
-    // Informational connector implementation notes are internal only. The
-    // report shows real provider failures, not technical explanations.
-    note: '', reports: aggregated.reports.map(report => ({ ...report, warnings })), errors: [] };
+    note: fallbackNotice, reports: aggregated.reports.map(report => ({ ...report, warnings })), errors: [] };
   resultCache.set(cacheKey, { time: Date.now() + 5 * 60_000, payload });
   if (resultCache.size > 16) resultCache.delete(resultCache.keys().next().value!);
-  if (!fresh) return payload;
+  if (!fresh || fallbackNotice) return payload;
   return { ...payload, note: 'تم طلب قراءة جديدة من Windsor.ai؛ لكن البيانات الحديثة قد تظل مخزنة لدى Windsor حسب فترة التحديث واشتراك الحساب. وقت التقرير لا يثبت وقت تحديث Snapchat الفعلي.' };
 }

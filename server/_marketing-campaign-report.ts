@@ -36,8 +36,18 @@ export async function consolidatedCampaignReport(sql: Sql, fromInput: unknown, t
     const adapter = ADAPTERS[index];
     const result = completed[index];
     if (result.status === 'rejected') {
+      // Snapchat connector failures contain safe, normalized upstream status
+      // codes; surface the code (not the API URL/key) so a rejected optional
+      // refresh is not misdiagnosed as a disconnected Snapchat ad account.
+      const message = result.reason instanceof Error ? result.reason.message : '';
+      const windsorStatus = adapter.code === 'snapchat' ? /Windsor\.ai HTTP (\d{3})/.exec(message)?.[1] : undefined;
+      const snapchatNote = windsorStatus
+        ? `تعذر قراءة Snapchat من Windsor.ai (HTTP ${windsorStatus}). راجع صلاحيات حساب Windsor وحدود الاشتراك، أو جرّب تعطيل التحديث السريع.`
+        : message.includes('انتهت المهلة') || message.includes('تعذر الوصول لخدمة Windsor.ai')
+          ? 'تعذر الوصول إلى Windsor.ai أو انتهت مهلة الطلب. تحقق من حالة الخدمة وأعد المحاولة.'
+          : 'تعذر الاتصال بالمنصة الإعلانية. افتح لوحة المنصة للتحقق من حالة الربط.';
       providers.push({ platform: adapter.code, name: adapter.name, status: 'failed',
-        note: 'تعذر الاتصال بالمنصة الإعلانية. افتح لوحة المنصة للتحقق من حالة الربط.', incomplete: true, warnings: [], campaignCount: 0 });
+        note: adapter.code === 'snapchat' ? snapchatNote : 'تعذر الاتصال بالمنصة الإعلانية. افتح لوحة المنصة للتحقق من حالة الربط.', incomplete: true, warnings: [], campaignCount: 0 });
       continue;
     }
     const data = result.value;
