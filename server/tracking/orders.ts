@@ -9,6 +9,7 @@ import { ensureOperationsSchema } from "../_operations-schema.js";
 import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
 import { clean, ensureVehicleStageRows, recalculateTrackingOrder } from "../_tracking-utils.js";
 import { emitTrackingNotification } from "../_notifications.js";
+import { isApprovalControlledTrackingStage } from "../_tracking-approval-sync.js";
 
 function validDate(value: unknown) {
   const text = clean(value);
@@ -61,6 +62,19 @@ async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<t
       order by s.sort_order
     `;
   }
+
+  const [updatedSummary] = await sql<any[]>`
+    select o.status,o.updated_at,
+      count(vs.id)::int as total_stages,
+      count(vs.id) filter (where vs.status='completed')::int as completed_stages
+    from tracking.orders o
+    left join tracking.order_vehicles tv on tv.order_id=o.id
+    left join tracking.vehicle_stages vs on vs.vehicle_id=tv.id
+    left join tracking.stages st on st.id=vs.stage_id and st.is_active=true
+    where o.id=${id}::uuid and (vs.id is null or st.id is not null)
+    group by o.id
+  `;
+  if (updatedSummary) Object.assign(order, updatedSummary);
 
   const events = await sql<any[]>`
     select e.id::text,e.action,e.actor_name,e.note,e.created_at,s.name as stage_name,s.sort_order,v.vin,v.item_no
@@ -238,6 +252,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       || (scope.workflowAssignedOnly && workflowAssigned)
       || (scope.branchScoped && branches.includes(clean(row.branch)));
     if (!canAccessOrder) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });
+    if (isApprovalControlledTrackingStage(row.sort_order)) {
+      return response.status(409).json({ ok: false,
+        error: "المرحلتان 6 و7 مرتبطتان بالموافقة المالية والإدارية من تبويب الموافقات، ولا يمكن تعديلهما يدويًا من التراكينج" });
+    }
     const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
     const permissionCode = action === "revert_stage" ? `tracking.stage.${stageNo}.rollback` : `tracking.stage.${stageNo}.complete`;
     if (!hasPermission(user, permissionCode)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه المرحلة", permission: permissionCode });

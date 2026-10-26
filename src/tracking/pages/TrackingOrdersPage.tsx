@@ -378,7 +378,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                     <label htmlFor="tracking-bulk-stage">المرحلة</label>
                     <select id="tracking-bulk-stage" value={bulkStageId} disabled={Boolean(actionKey)} onChange={event => setBulkStageId(event.target.value)}>
                       <option value="">اختر المرحلة</option>
-                      {activeVehicle?.stages.filter(stage => hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.complete`)).map(stage => <option key={stage.stage_id} value={stage.stage_id}>{stage.sort_order} - {stage.name}</option>)}
+                      {activeVehicle?.stages.filter(stage => ![6, 7].includes(Number(stage.sort_order)) && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.complete`)).map(stage => <option key={stage.stage_id} value={stage.stage_id}>{stage.sort_order} - {stage.name}</option>)}
                     </select>
                     <button type="button" disabled={Boolean(actionKey) || !selectedVehicleIds.length || !bulkStageId} onClick={() => void completeSelectedStage()}><CheckSquare size={19} />{actionKey === 'complete_stage_bulk' ? 'جاري إنهاء المراحل...' : `تم الانتهاء للمحدد (${selectedVehicleIds.length})`}</button>
                   </div>}
@@ -411,6 +411,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                       const completeKey = `complete_stage:${activeVehicle.id}:${stage.stage_id}`;
                       const revertKey = `revert_stage:${activeVehicle.id}:${stage.stage_id}`;
                       const smsKey = `sms:${activeVehicle.id}:${stage.stage_id}`;
+                      const approvalControlled = [6, 7].includes(Number(stage.sort_order));
                       return (
                         <article key={stage.stage_id} className={`tracking-stage-card ${done ? "done" : ""}`}>
                           <div className="tracking-stage-number">{done ? <CheckCircle size={20} weight="fill" /> : stage.sort_order}</div>
@@ -420,8 +421,9 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                             <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
                           </div>
                           <div className="tracking-stage-actions">
-                            {!selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                            {!selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                            {approvalControlled ? <small>تُحدَّث تلقائيًا من تبويب الموافقات</small> : null}
+                            {!approvalControlled && !selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
+                            {!approvalControlled && !selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
                             {!selected.is_archived && !selected.is_cancelled && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className={`sms ${stage.sms_sent ? "sent" : ""}`} onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)} title={stage.sms_sent ? "تم إرسال SMS+ لهذه المرحلة" : "إرسال SMS+"}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
                           </div>
                         </article>

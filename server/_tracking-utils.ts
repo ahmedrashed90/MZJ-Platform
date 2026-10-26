@@ -1,4 +1,5 @@
 import { getSql } from "./_db.js";
+import { syncTrackingApprovalStagesForTrackingVehicle } from "./_tracking-approval-sync.js";
 
 export function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -52,6 +53,7 @@ export async function ensureVehicleStageRows(vehicleId: string) {
         e.stage_id,e.action,e.actor_id,e.created_at
       from tracking.stage_events e
       join vehicle_order vo on vo.order_id=e.order_id
+      join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
       order by e.stage_id,e.created_at desc,e.id desc
     )
     insert into tracking.vehicle_stages(
@@ -83,6 +85,7 @@ export async function ensureVehicleStageRows(vehicleId: string) {
         e.stage_id,e.action,e.actor_id,e.created_at
       from tracking.stage_events e
       join vehicle_order vo on vo.order_id=e.order_id
+      join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
       order by e.stage_id,e.created_at desc,e.id desc
     )
     update tracking.vehicle_stages vs
@@ -101,6 +104,10 @@ export async function ensureVehicleStageRows(vehicleId: string) {
         or (le.action='reverted' and vs.status<>'pending')
       )
   `;
+
+  // Approval-driven stages are never healed from manual Tracking events.
+  // Their canonical values come exclusively from operations approvals.
+  await syncTrackingApprovalStagesForTrackingVehicle(sql, vehicleId);
 }
 
 export async function recalculateTrackingOrder(orderId: string) {

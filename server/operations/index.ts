@@ -7,6 +7,7 @@ import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
+import { syncTrackingApprovalStagesForOperationsVehicle } from "../_tracking-approval-sync.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
@@ -1847,6 +1848,10 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
     }
     await tx`insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data) values (${a.id}::uuid,${vehicleId}::uuid,${a.cycle_no},${type},${action},${note||null},${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(a)})`;
 
+    // Stage 6 and 7 reflect this approval cycle in the same transaction.
+    // Reset/revert must also clear the corresponding Tracking milestones.
+    await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, { id: who.id, name: who.name, note: "تحديث الموافقات من سيستم العمليات" });
+
     let delivered = false;
     if (a.financial_approved && a.administrative_approved && a.pending_delivery) {
       assertVehicleStatusAccess(user, "delivered", "لا تملك صلاحية إتمام التسليم إلى حالة مباع تم التسليم");
@@ -2169,11 +2174,11 @@ async function listSalesOrderFollowup(
       coalesce(stage_status.stage_3_completed,false) as stage_3_completed,
       coalesce(stage_status.stage_4_completed,false) as stage_4_completed,
       coalesce(stage_status.stage_5_completed,false) as stage_5_completed,
-      coalesce(stage_status.stage_6_completed,false) as stage_6_completed,
-      coalesce(stage_status.stage_7_completed,false) as stage_7_completed,
+      coalesce(current_approval.financial_approved,false) as stage_6_completed,
+      coalesce(current_approval.administrative_approved,false) as stage_7_completed,
       coalesce(stage_status.stage_9_completed,false) as stage_9_completed,
       coalesce(stage_status.stage_10_completed,false) as stage_10_completed,
-      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at)) as updated_at
+      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at),coalesce(current_approval.updated_at,o.updated_at)) as updated_at
     from tracking.orders o
     join tracking.order_vehicles tv on tv.order_id=o.id
     left join lateral (
@@ -2193,6 +2198,13 @@ async function listSalesOrderFollowup(
       order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
       limit 1
     ) vehicle_match on true
+    left join lateral (
+      select va.financial_approved,va.administrative_approved,va.updated_at
+      from operations.vehicle_approvals va
+      where va.vehicle_id=vehicle_match.id
+      order by va.cycle_no desc,va.updated_at desc
+      limit 1
+    ) current_approval on true
     left join lateral (
       select so.erp_user_id,so.platform_user_id::text,so.platform_branch_code,so.platform_branch_name,so.erp_branch
       from integrations.erpnext_sales_orders so
@@ -2319,8 +2331,6 @@ async function listSalesOrderFollowup(
         bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=4) as stage_4_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=5) as stage_5_completed,
-        bool_or(vs.status='completed') filter (where st.sort_order=6) as stage_6_completed,
-        bool_or(vs.status='completed') filter (where st.sort_order=7) as stage_7_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=9) as stage_9_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=10) as stage_10_completed,
         max(vs.updated_at) as updated_at
