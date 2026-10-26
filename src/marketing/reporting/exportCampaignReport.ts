@@ -96,16 +96,21 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
   values.push(row(notesStart + 1, [cell('A', notesStart + 1, '— تعني أن المنصة لم توفر البيانات أو أن القسمة غير ممكنة. لا تعني صفرًا.', 9)], 27));
   values.push(row(notesStart + 2, [cell('A', notesStart + 2, 'جميع المبالغ بالريال السعودي (SAR). الدولار الأمريكي يحوّل × 3.75؛ العملة غير المحددة لا تُحوّل بالتخمين. تكلفة الليد = الإنفاق ÷ الليدات.', 9)], 27));
   values.push(row(notesStart + 3, [cell('A', notesStart + 3, 'التفاعلات هي مقاييس المنصات الإعلانية المتاحة، وقد تختلف طريقة احتسابها بين المنصات.', 9)], 27));
+  values.push(row(notesStart + 4, [cell('A', notesStart + 4, 'المبلغ المصروف يعكس تكلفة الإعلانات خلال الفترة، وليس خصومات البطاقة أو الدفعات والفواتير؛ قد تختلف الضرائب وتواريخ الخصم وفترات الحساب.', 9)], 27));
   providers.forEach((provider, index) => values.push(row(notesStart + 5 + index, [cell('A', notesStart + 5 + index,
     `${provider.name}: ${provider.status === 'ready' ? 'متصل' : 'غير متاح'} | ${provider.note || ''} ${provider.incomplete ? '| بعض النتائج غير مكتملة' : ''}`, 9)], 27)));
   const last = Math.max(6, 6 + rows.length);
-  const merges = ['A1:I1','A2:I2','A4:C4','D4:I4', ...Array.from({length: 4 + providers.length}, (_, i) => `A${notesStart + i + (i >= 4 ? 1 : 0)}:I${notesStart + i + (i >= 4 ? 1 : 0)}`)];
+  const merges = ['A1:I1','A2:I2','A4:C4','D4:I4', ...Array.from({length: 5 + providers.length}, (_, i) => `A${notesStart + i}:I${notesStart + i}`)];
+  const finalRow = notesStart + 4 + providers.length;
   const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`+
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:I${finalRow}"/><sheetViews><sheetView workbookViewId="0" rightToLeft="1" showGridLines="0"><pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A7" sqref="A7"/></sheetView></sheetViews>`+
     `<sheetFormatPr defaultRowHeight="20"/><cols>${[21,32,56,14,23,23,23,23,19].map((w,i) => `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols>`+
     `<sheetData>${values.join('')}</sheetData>`+
+    // OOXML CT_Worksheet sequence requires autoFilter BEFORE mergeCells.
+    // Reversing these generated files that Excel opened only after repair, dropping sheet1.xml.
+    `<autoFilter ref="A6:I${last}"/>`+
     `<mergeCells count="${merges.length}">${merges.map(ref => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>`+
-    `<autoFilter ref="A6:I${last}"/><printOptions horizontalCentered="1"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>`+
+    `<printOptions horizontalCentered="1"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>`+
     `<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
   const fill = (rgb: string) => `<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`;
   const font = (size: number, rgb: string, bold = false, italic = false) => `<font>${bold ? '<b/>' : ''}${italic ? '<i/>' : ''}<sz val="${size}"/><color rgb="${rgb}"/><name val="Arial"/><family val="2"/></font>`;
