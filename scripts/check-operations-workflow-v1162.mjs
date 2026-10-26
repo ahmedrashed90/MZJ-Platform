@@ -30,7 +30,7 @@ const checks = [
   ["Agency movement checks default every item to correct and persist untouched defaults", movementPage.includes('status: "ok", note: ""') && movementPage.includes("meta.checkItems.map((check) =>") && movementPage.includes('item.checks[check.code] || { status: "ok", note: "" }')],
   ["Movement controls stay grouped and tablet responsive", movementPage.includes("operations-movement-targets") && styles.includes("@media (max-width: 1360px)") && styles.includes(".operations-movement-targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }")],
   ["Movement vehicle search has the wider desktop layout", styles.includes("grid-template-columns: minmax(560px, 3fr) minmax(180px, .72fr) minmax(180px, .72fr)")],
-  ["Movement has one notes field available for every status", movementPage.includes('key: "stateNote", label: "ملاحظات"') && !movementPage.includes('key: "shortage"') && !movementPage.includes('key: "note", label: "ملاحظة السيارة"') && movementPage.includes('required={newStatus === "has_notes"}')],
+  ["Movement has one notes field available for every status", movementPage.includes('key: "stateNote", label: "ملاحظات"') && !movementPage.includes('key: "shortage"') && !movementPage.includes('key: "note", label: "ملاحظة السيارة"') && movementPage.includes('required={(newStatus || row.status_code) === "has_notes"}')],
   ["Tracking request is a compact progress control with percentage tones", vehicleTable.includes("trackingProgressTone") && styles.includes(".operations-tracking-open.low") && styles.includes(".operations-tracking-open.medium") && styles.includes(".operations-tracking-open.high")],
   ["Approval screen closes a vehicle after automatic final delivery", approvalsPage.includes("setSelected(updated || null)")],
 ];

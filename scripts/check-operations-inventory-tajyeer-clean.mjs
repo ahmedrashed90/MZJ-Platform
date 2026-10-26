@@ -39,7 +39,7 @@ const assertChecks = [
   ['Movement has exactly one note input, always visible', (movement.match(/key: "stateNote"/g) || []).length === 1 && !movement.includes('newStatus === "has_notes" ? [')],
   ['Movement removed legacy note/shortage inputs', !movement.includes('shortageNote:') && !movement.includes('note: row.note') && !movement.includes('sharedMovementNote')],
   ['Movement only displays financial approval', !movement.includes('administrative_approved') && movement.includes('row.financial_approved')],
-  ['Movement keeps note mandatory for status has_notes', movement.includes('required={newStatus === "has_notes"}')],
+  ['Movement keeps note mandatory for status has_notes', movement.includes('required={(newStatus || row.status_code) === "has_notes"}')],
   ['Movement backend preserves past shortage notes', server.includes('raw.shortageNote === undefined && !sharedMovementNote ? undefined')],
   ['Movement backend still validates notes for has_notes', server.includes('if (newStatus === "has_notes" && !effectiveStateNote)')],
   ['CSS has approved red and green badges', style.includes('.operations-tajyeer-badge.yes') && style.includes('.operations-tajyeer-badge.no')],

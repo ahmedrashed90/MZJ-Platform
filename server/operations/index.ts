@@ -1500,15 +1500,18 @@ async function persistVehicleMovement(
 async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const items = Array.isArray(body.items) ? body.items : [];
   const destinationLocationId = clean(body.destinationLocationId);
-  const newStatus = clean(body.newStatus);
-  if (!items.length || !destinationLocationId || !newStatus) throw new OperationError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل والمكان والحالة الجديدة");
+  // A status is an optional *explicit* override. Without it, each car keeps its own current status.
+  const requestedNewStatus = clean(body.newStatus);
+  if (!items.length || !destinationLocationId) throw new OperationError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل والمكان الجديد");
   const vehicleIds = [...new Set(items.map((item: any) => clean(item.vehicleId)).filter(Boolean))];
   if (vehicleIds.length !== items.length) throw new OperationError(400, "VALIDATION_ERROR", "لا يمكن اختيار السيارة نفسها أكثر من مرة");
   const [destination] = await sql<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
-  const [status] = await sql<any[]>`select code,name from operations.vehicle_statuses where code=${newStatus} and is_active=true`;
   if (!destination) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", "المكان الجديد غير صحيح");
-  if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
-  assertVehicleStatusAccess(user, newStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
+  if (requestedNewStatus) {
+    const [status] = await sql<any[]>`select code,name from operations.vehicle_statuses where code=${requestedNewStatus} and is_active=true`;
+    if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
+    assertVehicleStatusAccess(user, requestedNewStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
+  }
   assertBranchAccess(user, destination.branch_code, destination.code, "الحركة المباشرة متاحة فقط إلى موقع داخل الفروع المسموح بها؛ استخدم طلب نقل للانتقال إلى فرع آخر");
   const who = actor(user);
   const movementBatchNo = requestId("MB").toUpperCase();
@@ -1518,7 +1521,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (batch) return batch;
       [batch] = await tx<any[]>`
         insert into operations.movement_batches(batch_no,destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
-        values (${movementBatchNo},${destinationLocationId}::uuid,${newStatus},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
+        values (${movementBatchNo},${destinationLocationId}::uuid,${requestedNewStatus || null},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
       `;
       return batch;
     }
@@ -1536,6 +1539,9 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", `السيارة ${vehicleId} غير موجودة`);
       assertBranchAccess(user, v.branch_code, v.location_code, `لا تملك صلاحية تحريك السيارة ${v.vin}`);
       assertVehicleStatusAccess(user, v.status_code, `لا تملك صلاحية التعامل مع الحالة الحالية للسيارة ${v.vin}`);
+      // Resolve within the locked row, so a move without an override cannot change the car's status.
+      const newStatus = requestedNewStatus || v.status_code;
+      assertVehicleStatusAccess(user, newStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
       const sameLocationAndStatus = String(v.location_id) === destinationLocationId && v.status_code === newStatus;
       const sharedMovementNote = clean(body.note);
       const effectiveShortageNote = raw.shortageNote === undefined && !sharedMovementNote ? undefined : sharedMovementNote || clean(raw.shortageNote);
@@ -1573,7 +1579,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
         continue;
       }
 
-      if (newStatus === "delivered") {
+      if (newStatus === "delivered" && v.status_code !== "delivered") {
         const approval = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
         const approvalsComplete = Boolean(approval?.financial_approved && approval?.administrative_approved);
         if (!approvalsComplete) {
@@ -1598,7 +1604,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
 
       const activeBatch = await ensureBatch();
       const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw: persistenceRaw, generalNote: sharedMovementNote, who, batchId: activeBatch.id });
-      if (newStatus === "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
+      if (newStatus === "delivered" && v.status_code !== "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
       moved.push({
         vehicleId,
         vin: v.vin,

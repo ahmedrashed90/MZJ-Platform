@@ -20,7 +20,7 @@ export function MovementPage() {
   const [results, setResults] = useState<VehicleRow[]>([]);
   const [selected, setSelected] = useState<SelectedVehicle[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
-  const [newStatus, setNewStatus] = useState("available_for_sale");
+  const [newStatus, setNewStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -59,7 +59,15 @@ export function MovementPage() {
   }
 
   const destination = useMemo(() => meta.locations.find((item) => item.id === destinationLocationId), [meta.locations, destinationLocationId]);
-  const statusName = statuses.find((status) => status.code === newStatus)?.name || newStatus;
+  // No user-selected override: keep the existing status of each selected vehicle.
+  // A mixed selection must not silently force the first vehicle's status on the others.
+  const currentStatusCodes = [...new Set(selected.map((item) => item.status_code))];
+  const displayedNewStatus = newStatus || (currentStatusCodes.length === 1 ? currentStatusCodes[0] : "");
+  const statusName = newStatus
+    ? statuses.find((status) => status.code === newStatus)?.name || newStatus
+    : currentStatusCodes.length === 1
+      ? selected[0].status_name || statuses.find((status) => status.code === displayedNewStatus)?.name || displayedNewStatus
+      : "الحالة الحالية لكل سيارة";
 
   const columns = useMemo<ResizableOperationsColumn<SelectedVehicle>[]>(() => {
     const base: ResizableOperationsColumn<SelectedVehicle>[] = [
@@ -68,7 +76,7 @@ export function MovementPage() {
       { key: "location", label: "المكان الحالي", width: 135, min: 105, max: 230, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
       { key: "status", label: "الحالة الحالية", width: 155, min: 115, max: 250, value: (row) => row.status_name, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
       { key: "approvals", label: "الموافقة المالية", width: 125, min: 105, max: 185, value: (row) => row.financial_approved, render: (row) => <span className="operations-approval-pair"><small>{row.financial_approved ? "مالي ✓" : "مالي —"}</small></span> },
-      { key: "stateNote", label: "ملاحظات", width: 265, min: 185, max: 470, value: (row) => row.stateNote, render: (row) => <input required={newStatus === "has_notes"} value={row.stateNote} onChange={(event) => patch(row.id, { stateNote: event.target.value })} placeholder={newStatus === "has_notes" ? "اكتب الملاحظات" : "ملاحظة اختيارية"} /> },
+      { key: "stateNote", label: "ملاحظات", width: 265, min: 185, max: 470, value: (row) => row.stateNote, render: (row) => <input required={(newStatus || row.status_code) === "has_notes"} value={row.stateNote} onChange={(event) => patch(row.id, { stateNote: event.target.value })} placeholder={(newStatus || row.status_code) === "has_notes" ? "اكتب الملاحظات" : "ملاحظة اختيارية"} /> },
     ];
     base.push({ key: "delete", label: "حذف", width: 76, min: 68, max: 100, value: () => "", render: (row) => <button type="button" className="operations-row-delete" onClick={() => setSelected((current) => current.filter((item) => item.id !== row.id))} aria-label={`حذف السيارة ${row.vin}`}><Trash size={17} /></button> });
     return base;
@@ -99,6 +107,7 @@ export function MovementPage() {
       setMessage(payload.message);
       setSelected([]);
       setDestinationLocationId("");
+      setNewStatus("");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الحركة");
     } finally {
@@ -118,7 +127,7 @@ export function MovementPage() {
           </div>
           <div className="operations-movement-targets" aria-label="بيانات الحركة الجديدة">
             <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={displayedNewStatus} onChange={(event) => setNewStatus(event.target.value)}><option value="">الحالة الحالية لكل سيارة (بدون تغيير)</option>{displayedNewStatus && !statuses.some((item) => item.code === displayedNewStatus) ? <option value={displayedNewStatus}>{selected[0]?.status_name || displayedNewStatus}</option> : null}{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
           </div>
         </div>
 
@@ -189,7 +198,7 @@ export function MovementPage() {
           </div>
         )}
 
-        <button className="operations-primary-button operations-submit-movement" type="button" disabled={saving || !selected.length || !destinationLocationId || !meta.permissions.canMove || (newStatus === "has_notes" && selected.some((item) => !item.stateNote.trim()))} onClick={() => void submit()}>{saving ? "جاري تنفيذ الحركة..." : `تنفيذ الحركة على ${selected.length} سيارة`}</button>
+        <button className="operations-primary-button operations-submit-movement" type="button" disabled={saving || !selected.length || !destinationLocationId || !meta.permissions.canMove || selected.some((item) => (newStatus || item.status_code) === "has_notes" && !item.stateNote.trim())} onClick={() => void submit()}>{saving ? "جاري تنفيذ الحركة..." : `تنفيذ الحركة على ${selected.length} سيارة`}</button>
       </section>
     </div>
   );
