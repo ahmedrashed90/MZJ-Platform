@@ -1,11 +1,21 @@
 import type { CampaignReportRow, CampaignReportProvider } from '../../../shared/campaign-report';
 
+/** Use the same filtered campaigns for the on-screen report and Excel export. */
+export function filterCampaignReportRows(rows: CampaignReportRow[], platform: string, search: string): CampaignReportRow[] {
+  const searchText = search.trim().toLocaleLowerCase();
+  return rows.filter(item => (platform === 'all' || item.platform === platform) &&
+    (!searchText || `${item.campaignName} ${item.accountName} ${item.platformName}`.toLocaleLowerCase().includes(searchText)));
+}
+
+
 /** Self-contained Office Open XML export: genuine .xlsx without an external
  * library, not CSV renamed as Excel. No uploaded fonts or downloaded services.
  */
 const sanitizeXml = (value: unknown) => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-const safeText = (value: unknown) => String(value ?? '').replace(/<[^>]*>/g, '').slice(0, 32767);
+// Treat provider campaign names as literal text; XML/HTML escaping is handled
+// at serialization time. Stripping <...> can silently remove real name data.
+const safeText = (value: unknown) => String(value ?? '').slice(0, 32767);
 const cell = (col: string, row: number, value: unknown, style = 0, numeric = false) => numeric && typeof value === 'number' && Number.isFinite(value)
   ? `<c r="${col}${row}" s="${style}"><v>${value}</v></c>`
   : `<c r="${col}${row}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${sanitizeXml(value === null || value === undefined ? '—' : safeText(value))}</t></is></c>`;
@@ -57,6 +67,8 @@ function zip(parts: Array<[string, string]>) {
 }
 
 export function campaignReportXlsx(rows: CampaignReportRow[], providers: CampaignReportProvider[], from: string, to: string) {
+  // An empty export previously produced a valid but misleading blank workbook.
+  if (!rows.length) throw new Error('لا توجد حملات مطابقة للتاريخ والفلاتر المحددة لتصديرها إلى Excel.');
   const columns = 'ABCDEFGHI'.split('');
   const heading = ['المنصة', 'الحساب الإعلاني', 'الحملة', 'العملة', 'المبلغ المصروف', 'إجمالي الليدات', 'تكلفة الليد', 'تفاعلات الإعلانات', 'النقرات'];
   const values: string[] = [];

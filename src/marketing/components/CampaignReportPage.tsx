@@ -3,7 +3,7 @@ import { ArrowClockwise, ChartBar, ChartLineUp, FilePdf, FileXls, Funnel, Megaph
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CampaignReportPayload, CampaignReportRow } from '../../../shared/campaign-report';
 import { marketingFetch, marketingLocalDateKey, marketingQuery } from '../api';
-import { downloadCampaignReportXlsx, printCampaignReportPdf } from '../reporting/exportCampaignReport';
+import { downloadCampaignReportXlsx, filterCampaignReportRows, printCampaignReportPdf } from '../reporting/exportCampaignReport';
 
 const number = (value: number | null, decimals = 0) => value === null ? '—' : value.toLocaleString('ar-SA-u-nu-latn', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
 const currencyValue = (value: number | null, currency: string) => value === null ? '—' : `${number(value, 2)} ${currency || 'ر.س'}`;
@@ -68,6 +68,7 @@ export function CampaignReportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [exportError, setExportError] = useState('');
+  const [exportingExcel, setExportingExcel] = useState(false);
   const [selectedKey, setSelectedKey] = useState('');
   const [managerDraft, setManagerDraft] = useState('');
   const [managerBusy, setManagerBusy] = useState(false);
@@ -76,11 +77,23 @@ export function CampaignReportPage() {
   const highlightedRow = useRef<HTMLTableRowElement | null>(null);
   const seq = useRef(0);
   const controller = useRef<AbortController | null>(null);
+  const prefetchedExportReport = useRef<CampaignReportPayload | null>(null);
   const valid = Boolean(from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to && (Date.parse(to) - Date.parse(from)) / 86_400_000 <= 366);
 
   const load = useCallback(async () => {
     const requestId = ++seq.current;
     controller.current?.abort();
+    // Exporting a newly selected date range already fetched this report. Reuse
+    // that response instead of calling paid-ad providers a second time.
+    const prefetched = prefetchedExportReport.current;
+    if (prefetched && prefetched.from === applied.from && prefetched.to === applied.to) {
+      prefetchedExportReport.current = null;
+      controller.current = null;
+      setData(prefetched);
+      setError('');
+      setLoading(false);
+      return;
+    }
     const signal = new AbortController(); controller.current = signal;
     setLoading(true); setError('');
     const timeout = window.setTimeout(() => signal.abort(), 56_000);
@@ -95,8 +108,7 @@ export function CampaignReportPage() {
     }
   }, [applied]);
   useEffect(() => { void load(); return () => { controller.current?.abort(); ++seq.current; }; }, [load]);
-  const rows = useMemo(() => (data?.rows || []).filter(row => (platform === 'all' || row.platform === platform) &&
-    (!search.trim() || `${row.campaignName} ${row.accountName} ${row.platformName}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))), [data, platform, search]);
+  const rows = useMemo(() => filterCampaignReportRows(data?.rows || [], platform, search), [data, platform, search]);
   const selectedCampaign = rows.find(row => row.key === selectedKey) || null;
   function selectCampaign(key: string) {
     const target = rows.find(row => row.key === key);
@@ -130,7 +142,41 @@ export function CampaignReportPage() {
   const totalLeads = rows.reduce((sum, row) => sum + (row.leads || 0), 0);
   const totalCpl = allSpendKnown && allLeadsKnown && totalLeads > 0 ? totalSpend / totalLeads : null;
   const totalInteractions = rows.reduce((sum, row) => sum + (row.interactions || 0), 0);
-  const canExport = Boolean(data && !loading);
+  const canExport = Boolean(data && !loading && !exportingExcel);
+  const exportExcel = async () => {
+    if (loading || exportingExcel) return;
+    setExportError('');
+    if (!valid) {
+      setExportError('حدد تاريخ بداية ونهاية صحيحين قبل تصدير Excel.');
+      return;
+    }
+    setExportingExcel(true);
+    try {
+      let report = data;
+      // The date inputs are separate from the last applied "عرض التقرير" range.
+      // Export must never silently use an older/empty report for newly chosen dates.
+      if (!report || report.from !== from || report.to !== to) {
+        const signal = new AbortController();
+        const timeout = window.setTimeout(() => signal.abort(), 56_000);
+        try {
+          report = await marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({resource: 'campaign_report', dateFrom: from, dateTo: to})}`, {signal: signal.signal});
+        } finally {
+          window.clearTimeout(timeout);
+        }
+        if (report.from !== from || report.to !== to) throw new Error('الفترة المرتجعة من التقرير لا تطابق التاريخ المحدد.');
+        prefetchedExportReport.current = report;
+        setData(report);
+        setApplied({from, to});
+      }
+      const exportRows = filterCampaignReportRows(report.rows, platform, search);
+      if (!exportRows.length) throw new Error('لا توجد حملات مطابقة للتاريخ والفلاتر المحددة لتصديرها إلى Excel.');
+      downloadCampaignReportXlsx(exportRows, report.providers, report.from, report.to);
+    } catch (failure) {
+      setExportError(failure instanceof Error ? failure.message : 'تعذر تجهيز ملف Excel للحملات.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
   const exportPdf = () => {
     if (!data) return;
     setExportError('');
@@ -144,7 +190,7 @@ export function CampaignReportPage() {
       <CampaignBars title="عدد الليدات لكل حملة" metric="leads" rows={rows} onSelect={selectCampaign}/>
       <CampaignBars title="تكلفة الليد لكل حملة" metric="costPerLead" rows={rows} onSelect={selectCampaign}/>
     </div>
-    <section className="panel mcr-filters"><div className="mcr-filter-heading"><Funnel size={19}/><strong>تصفية التقرير</strong><div className="mcr-head-actions"><button type="button" className="secondary-button" disabled={!canExport} onClick={() => data && downloadCampaignReportXlsx(rows, data.providers, data.from, data.to)}><FileXls size={19}/> تصدير Excel</button><button type="button" className="secondary-button" disabled={!canExport} onClick={exportPdf}><FilePdf size={19}/> تصدير PDF</button></div></div>
+    <section className="panel mcr-filters"><div className="mcr-filter-heading"><Funnel size={19}/><strong>تصفية التقرير</strong><div className="mcr-head-actions"><button type="button" className="secondary-button" disabled={!canExport} onClick={() => void exportExcel()}><FileXls size={19}/> {exportingExcel ? "جاري تجهيز Excel..." : "تصدير Excel"}</button><button type="button" className="secondary-button" disabled={!canExport} onClick={exportPdf}><FilePdf size={19}/> تصدير PDF</button></div></div>
       <div className="mcr-filter-row"><label><span>من تاريخ</span><input type="date" value={from} max={to || undefined} onChange={event => setFrom(event.target.value)}/></label>
         <label><span>إلى تاريخ</span><input type="date" value={to} min={from || undefined} onChange={event => setTo(event.target.value)}/></label>
         <button type="button" className="primary-button" disabled={!valid || loading} onClick={() => setApplied({from, to})}>عرض التقرير</button>
