@@ -105,6 +105,11 @@ async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkIt
     coalesce((select jsonb_agg(jsonb_build_object('format_id',fr.format_id,'status',fr.status,
       'submitted_at',fr.submitted_at,'approved_at',fr.approved_at) order by fr.format_id)
       from marketing.work_format_reviews fr where fr.item_id=i.id),'[]'::jsonb) as format_reviews,
+    (select jsonb_build_object('action',h.action,'note',coalesce(h.note,''),
+      'actor_name',coalesce(h.actor_name,''),'created_at',h.created_at)
+      from marketing.work_history h where h.item_id=i.id
+        and h.action in ('revision','revision_declined','submitted','approved','rejected','format_approval_undone','product_approval_undone')
+      order by h.created_at desc,h.id desc limit 1) as latest_review_event,
     (select jsonb_build_object('percentage',r.percentage::float8,'scores',r.scores,
       'created_at',r.created_at,'updated_at',r.updated_at,'reviewer_name',coalesce(ru.full_name,''))
       from marketing.work_item_ratings r left join core.users ru on ru.id=r.rated_by
@@ -423,6 +428,55 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
   await notify(user, 'submitted', result.taskId, `${W.submitted}: ${result.title}`, [...reviewers, result.owner]);
   return result;
 }
+/** The executor may dispute a requested revision, not approve the work.
+ * Re-queue only formats actually awaiting revision; keep uploaded originals and
+ * all approved formats intact. The reviewer still decides approval/rejection.
+ * No migration or new item status is needed: work_history records the dispute.
+ */
+async function declineItemRevision(sql: Sql, body: Row, user: SessionUser) {
+  requirePermission(user, 'marketing.task.final_file.upload');
+  const itemId = id(body.itemId), reason = text(body.reason, 2000);
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const current = await visibleItem(tx, user, itemId);
+    if (current.assigned_to !== user.id) throw new Error(W.denied);
+    await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
+    const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
+    if (!['revision','submitted'].includes(locked.status)) throw new Error(W.immutable);
+    const pending = await tx<any[]>`select format_id::text from marketing.work_format_reviews
+      where item_id=${itemId}::uuid and status='revision' for update`;
+    if (!pending.length) throw new Error('لا يوجد تعديل مطلوب لرفضه');
+    const formatIds = pending.map(row => String(row.format_id));
+    await tx`update marketing.work_format_reviews set status='submitted',
+      submitted_at=now(),approved_at=null,approved_by=null,updated_at=now()
+      where item_id=${itemId}::uuid and status='revision' and format_id=any(${formatIds}::text[])`;
+    await tx`update marketing.work_items set status='submitted',approved_at=null,approved_by=null,
+      submitted_at=coalesce(submitted_at,now()),version=version+1,updated_at=now()
+      where id=${itemId}::uuid`;
+    await history(tx, user, locked.task_id, itemId, 'revision_declined', reason, { formatIds });
+    await recalculateTask(tx, locked.task_id);
+    return { ok: true, taskId: locked.task_id, itemId, owner: current.created_by,
+      title: current.task_name, message: 'تم إرسال رفض التعديل إلى المراجعة' };
+  });
+  // Best effort: a notification failure after commit must never report the
+  // already-saved dispute as a failed action (and encourage a duplicate click).
+  try {
+    const candidates = await sql<any[]>`select u.id::text from core.users u join core.user_systems us on us.user_id=u.id
+      where us.system_code='marketing' and us.is_enabled=true and u.is_active=true and coalesce(u.is_archived,false)=false`;
+    const reviewers: string[] = [];
+    for (const candidate of candidates) {
+      const reviewer = await loadUserProfile(candidate.id);
+      if (!reviewer || !hasPermission(reviewer, 'marketing.task.review')) continue;
+      try { await visibleItem(sql, reviewer, itemId); reviewers.push(candidate.id); } catch { /* Outside reviewer's scope. */ }
+    }
+    await notify(user, 'revision_declined', result.taskId, `المنفذ رفض التعديل: ${result.title}`,
+      [...reviewers, result.owner], reason || 'المطلوب بحاجة لقرار المراجع: اعتماد الملفات الموجودة أو رفض المنتج');
+  } catch (error) { console.error('Marketing revision dispute notification failed', error); }
+  return result;
+}
+
 async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.review');
   const itemId = id(body.itemId), decision = text(body.decision), note = text(body.note, 10000);
@@ -1540,6 +1594,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
     else if (action === 'work_review') result = await reviewItem(sql, body, user);
+    else if (action === 'work_decline_revision') result = await declineItemRevision(sql, body, user);
     else if (action === 'work_unapprove') result = await unapproveItem(sql, body, user);
     else if (action === 'work_save_evaluation_setting') result = await manageEvaluationSetting(sql, user, body);
     else if (action === 'work_save_rating') {

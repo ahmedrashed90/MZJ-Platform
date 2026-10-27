@@ -17,6 +17,7 @@ export type WorkItem = {
   media_kind: WorkMediaKind; idea_name: string; idea: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
   files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
   review_notes?: WorkItemReviewNote[];
+  latest_review_event?: { action: string; note: string; actor_name: string; created_at: string } | null;
   format_reviews?: Array<{ format_id: string; status: 'submitted' | 'approved' | 'revision'; submitted_at?: string | null; approved_at?: string | null }>;
   rating?: WorkItemRating | null; version: number; approved_at?: string | null; submitted_at?: string | null;
   delivery_status?: 'on_time' | 'late' | null;

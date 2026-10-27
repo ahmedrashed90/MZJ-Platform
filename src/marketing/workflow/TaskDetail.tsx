@@ -6,6 +6,7 @@ import { hasPermission } from '../../systemAccess';
 import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, workReviewableFormats, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, supportsWorkMedia, type WorkFormat, type WorkItemRating } from '../../../shared/marketing-workflow';
 import { W, Empty, Field, FileLink, FilesPreview, Formats, FormatSelector, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
+import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 
 function submittedDayInRiyadh(value: string | null | undefined) {
   if (!value) return '—';
@@ -94,6 +95,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                   <Status value={item.status}/>
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
                   {pending > 0 && <span className="mkw-requirement-waiting">{pending} قيد المراجعة</span>}
+                  {item.status === 'submitted' && item.latest_review_event?.action === 'revision_declined' && <span className="mkw-requirement-waiting">المنفذ رفض التعديل · بانتظار قرار المراجع</span>}
                   <span className="mkw-requirement-review-label">{opened ? 'إغلاق' : 'فتح المطلوب'}<CaretDown size={16}/></span>
                 </button>
                 <div className="mkw-requirement-rating-strip">
@@ -170,6 +172,23 @@ export function RatingStars({ percentage }: { percentage: number }) {
     <Star key={n} size={17} weight={n < level.stars ? 'fill' : 'regular'} />)}</span>;
 }
 
+
+function ReviewNoteDocument({ text }: { text: string }) {
+  const blocks = parseReviewNote(text);
+  return <div className="mkw-review-document" dir="rtl">
+    {blocks.map((block, index) => {
+      const content = block.text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, partIndex) =>
+        part.startsWith('**') && part.endsWith('**')
+          ? <strong key={partIndex}>{part.slice(2,-2)}</strong> : <span key={partIndex}>{part}</span>);
+      if (block.kind === 'heading') return <h5 key={index}>{content}</h5>;
+      if (block.kind === 'bullet' || block.kind === 'numbered') return <div key={index} className="mkw-review-document-point">
+        <span aria-hidden="true">{block.kind === 'bullet' ? '•' : `${block.number}.`}</span><p>{content}</p>
+      </div>;
+      return <p key={index}>{content}</p>;
+    })}
+  </div>;
+}
+
 function ItemEditor({ item, number, capabilities, formatOptions, canRate, settings, refresh }: {
   item: WorkItem; number: number; capabilities: WorkCapabilities; formatOptions: WorkFormat[]; canRate: boolean;
   settings: WorkEvaluationSettings | null; refresh: () => Promise<void>;
@@ -202,6 +221,29 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const availableFormats = formatOptions.filter(format => !configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name));
   const categories = settings?.categories || [];
   const rating = item.rating;
+  const revisionPending = (item.format_reviews || []).some(row => row.status === 'revision');
+  const canDeclineRevision = own && canUpload && revisionPending;
+  const awaitingDecision = item.status === 'submitted' && item.latest_review_event?.action === 'revision_declined';
+  const [declineEditor, setDeclineEditor] = useState(false);
+  const [declineReason, setDeclineReason] = useState('');
+  const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  function formatNote(style: 'bold' | 'bullet' | 'numbered' | 'heading') {
+    const editor = noteEditorRef.current;
+    const from = editor?.selectionStart ?? note.length;
+    const to = editor?.selectionEnd ?? note.length;
+    const selected = note.slice(from, to);
+    const replacement = style === 'bold' ? `**${selected || 'نص مهم'}**`
+      : style === 'heading' ? `# ${selected || 'عنوان الملاحظة'}`
+      : (selected || 'نقطة جديدة').split('\n').map((line, index) => `${style === 'bullet' ? '•' : `${index + 1}.`} ${line}`).join('\n');
+    setNote(note.slice(0, from) + replacement + note.slice(to));
+    window.requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(from, from + replacement.length); });
+  }
+  async function declineRevision() {
+    const saved = await run(() => workPost('decline_revision', {
+      itemId: item.id, version: version.current, reason: declineReason.trim(),
+    }));
+    if (saved) { setDeclineEditor(false); setDeclineReason(''); }
+  }
 
   async function persist() {
     if (!editable) return version.current;
@@ -267,6 +309,11 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const completedNotes = (item.review_notes || []).filter(row => Boolean(row.responded_at));
   return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
+      {awaitingDecision && <div className="mkw-revision-declined-state" role="status">
+        <strong>المنفذ رفض التعديل المطلوب — بانتظار قرار المراجع</strong>
+        <p>يمكن للأدمن أو مدير النظام اعتماد الملفات المرفوعة المستوفية للمقاسات أو رفض المنتج. لا يتم الاعتماد تلقائيًا.</p>
+        {item.latest_review_event?.note && <p><strong>رد المنفذ:</strong> {item.latest_review_event.note}</p>}
+      </div>}
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
       <section className="mkw-note-management">
         <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
@@ -276,7 +323,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
         </div>
         {activeNotes.length > 0 && <div className="mkw-review-notes-list">{activeNotes.map(reviewNote =>
           <article key={reviewNote.id} className="mkw-current-review">
-            <div><strong>{reviewNote.category_name || W.reviewNote}</strong><p>{reviewNote.note}</p>
+            <div className="mkw-review-note-content"><div className="mkw-review-note-heading">{reviewNote.category_name || W.reviewNote}</div>
+              <ReviewNoteDocument text={reviewNote.note}/>
               <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
             {canRate && <div className="mkw-actions">
               <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
@@ -285,7 +333,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           </article>)}</div>}
         {completedNotes.length > 0 && <details className="mkw-reviewed-notes-history"><summary>سجل الملاحظات السابقة ({completedNotes.length})</summary>
           <div className="mkw-review-notes-list">{completedNotes.map(reviewNote => <article key={reviewNote.id} className="mkw-current-review is-resolved">
-            <div><strong>{reviewNote.category_name || W.reviewNote}</strong><p>{reviewNote.note}</p>
+            <div className="mkw-review-note-content"><div className="mkw-review-note-heading">{reviewNote.category_name || W.reviewNote}</div>
+              <ReviewNoteDocument text={reviewNote.note}/>
               <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
             {canRate && <div className="mkw-actions">
               <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
@@ -295,11 +344,40 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
         </details>}
         {showNoteEditor && canRate && (editingNoteId !== null || revisionFormat !== null) && <div className="mkw-review-controls"><div className="mkw-note-fields">
           <Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
-          <Field label="تفاصيل الملاحظة"><input value={note} disabled={busy} maxLength={10000} onChange={event => setNote(event.target.value)}/></Field>
+          <div className="mkw-field"><span>تفاصيل الملاحظة</span><div className="mkw-note-composer">
+            <div className="mkw-note-toolbar" aria-label="تنسيق الملاحظة">
+              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('heading')}>عنوان</button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bold')}>غامق</button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bullet')}>• نقاط</button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('numbered')}>1. ترقيم</button>
+            </div>
+            <textarea ref={noteEditorRef} rows={5} dir="rtl" aria-label="تفاصيل الملاحظة" value={note} disabled={busy} maxLength={10000}
+              placeholder="اكتب كل ملاحظة في سطر منفصل، ويمكنك استخدام النقاط أو الترقيم"
+              onChange={event => setNote(event.target.value)} />
+            <small>سيظهر كل سطر في فقرة واضحة، وتُعرض النقاط والعناوين بتنسيق منظم.</small>
+            {!!note.trim() && <details className="mkw-note-preview"><summary>معاينة تنسيق الملاحظة</summary><ReviewNoteDocument text={note}/></details>}
+          </div></div>
         </div><div className="mkw-actions"><button type="button" className="primary" disabled={busy || !noteType || !note.trim()}
           onClick={() => editingNoteId ? void manageNote(false) : void review('revise', revisionFormat === 'all' ? undefined : revisionFormat || undefined)}>
           {editingNoteId ? 'حفظ التعديل' : 'إضافة ملاحظة وتأكيد التعديل'}</button>
           <button type="button" className="secondary" disabled={busy} onClick={() => { setShowNoteEditor(false); setRevisionFormat(null); setEditingNoteId(null); }}>إلغاء</button></div></div>}
+        {canDeclineRevision && <div className="mkw-revision-decline-action">
+          {!declineEditor ? <button type="button" className="secondary danger" disabled={busy} onClick={() => setDeclineEditor(true)}>
+            رفض التعديل
+          </button> : <div className="mkw-revision-decline-form">
+            <strong>رفض التعديل المطلوب</strong>
+            <p>هيتم إرسال الملفات الحالية للمراجعة مرة أخرى دون تغييرها. الأدمن أو مدير النظام هو اللي يقرر اعتماد المنتج 100% أو رفضه.</p>
+            <label>سبب رفض التعديل (اختياري)
+              <textarea rows={3} value={declineReason} maxLength={2000} disabled={busy}
+                placeholder="اكتب سبب الاعتراض لو محتاج توضّح موقفك للمراجع"
+                onChange={event => setDeclineReason(event.target.value)}/>
+            </label>
+            <div className="mkw-actions">
+              <button type="button" className="primary" disabled={busy} onClick={() => void declineRevision()}>تأكيد رفض التعديل وإرساله للمراجعة</button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => { setDeclineEditor(false); setDeclineReason(''); }}>إلغاء</button>
+            </div>
+          </div>}
+        </div>}
       </section>
       {rating && <div className="mkw-rating-reviewer">{rating.reviewer_name} · {showDate(rating.updated_at,true)}</div>}
       <div className="mkw-item-detail-grid">
