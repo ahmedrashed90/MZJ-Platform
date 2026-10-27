@@ -2380,16 +2380,13 @@ async function listSalesOrderFollowup(
                   `
                     : sql`true`;
 
-  // This admin-only selector is built from the SAME tracking order/vehicle
-  // cohort as متابعة طلبات البيع. Do not select every inventory approval:
-  // only actionable pending-sale vehicles may be approved from this shortcut.
+  // List every missing approval belonging to the SAME visible sales-followup
+  // cohort, including already-delivered vehicles. Previous inventory-status
+  // restrictions silently hid many outstanding sales orders from this modal.
+  // Non-actionable rows remain visible with a reason; the POST route still
+  // validates the exact vehicle, latest order, and eligibility on the server.
   const pendingApprovalClause = pendingApprovalsOnly ? sql`
     (stage_6_completed=false or stage_7_completed=false)
-    and operations_vehicle_id is not null
-    and normalized_vin<>''
-    and upper(normalized_vin) not like 'PENDING-%'
-    and order_archived=false
-    and operations_status_code='under_delivery'
   ` : sql`true`;
 
   const [summaryRows, countRows, rows, branchRows] = await Promise.all([
@@ -2463,6 +2460,127 @@ async function listSalesOrderFollowup(
 }
 
 
+/**
+ * Backfill an outstanding approval on an already-delivered sales vehicle.
+ * This is a *recording-only* action. It must never initiate another delivery,
+ * move the car, create a fresh active delivery cycle, or rewrite historical
+ * approval timestamps. The Operations approvals table remains the one source
+ * of truth, and the canonical Tracking stage bridge is used after the update.
+ */
+async function recordDeliveredSalesFollowupApproval(
+  sql: ReturnType<typeof getSql>,
+  vehicleId: string,
+  trackingVehicleId: string,
+  approvalType: "financial" | "administrative",
+  note: string,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  if (!hasPermission(user, approvalType === "financial" ? "operations.approval.financial" : "operations.approval.administrative")) {
+    throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة المطلوبة");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [vehicle] = await tx<any[]>`
+      select id::text,vin,status_code
+      from operations.vehicles
+      where id=${vehicleId}::uuid and is_deleted=false
+      for update
+    `;
+    if (!vehicle || vehicle.status_code !== "delivered") {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة السيارة تغيّرت. حدّث القائمة قبل الموافقة");
+    }
+
+    // Revalidate under the vehicle lock. Never backfill an archived/cancelled
+    // order or an older order for a VIN now belonging to a different sale.
+    const [order] = await tx<any[]>`
+      select tv.id::text as id
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      where tv.id=${trackingVehicleId}::uuid
+        and coalesce(o.is_deleted,false)=false
+        and coalesce(o.is_cancelled,false)=false
+        and coalesce(o.is_archived,false)=false
+        and o.sales_followup_completed_at is null
+        and (
+          tv.vehicle_id=${vehicleId}::uuid
+          or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
+        )
+      limit 1
+    `;
+    const [latest] = await tx<any[]>`
+      select tv.id::text as id
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      where coalesce(o.is_deleted,false)=false
+        and coalesce(o.is_cancelled,false)=false
+        and coalesce(o.is_archived,false)=false
+        and (
+          tv.vehicle_id=${vehicleId}::uuid
+          or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
+        )
+      order by o.order_date desc nulls last,o.created_at desc,tv.created_at desc,tv.id desc
+      limit 1
+    `;
+    if (!order || latest?.id !== trackingVehicleId) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "هذا الطلب غير جارٍ أو توجد عملية بيع أحدث لنفس السيارة");
+    }
+
+    let [approval] = await tx<any[]>`
+      select *,id::text
+      from operations.vehicle_approvals
+      where vehicle_id=${vehicleId}::uuid
+      order by cycle_no desc,updated_at desc
+      limit 1
+      for update
+    `;
+    if (!approval) {
+      const [cycle] = await tx<any[]>`
+        select coalesce(max(cycle_no),0)+1 as next
+        from operations.vehicle_approvals
+        where vehicle_id=${vehicleId}::uuid
+      `;
+      // Retrospective approval is inactive by design: delivery already took
+      // place, so it is not a new pending delivery or a new active stock cycle.
+      [approval] = await tx<any[]>`
+        insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active,pending_delivery)
+        values (${vehicleId}::uuid,${Number(cycle?.next || 1)},false,null)
+        returning *,id::text
+      `;
+    }
+    if (approvalType === "financial" ? approval.financial_approved : approval.administrative_approved) {
+      throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+    }
+    const before = { ...approval };
+    if (approvalType === "financial") {
+      [approval] = await tx<any[]>`
+        update operations.vehicle_approvals
+        set financial_approved=true,financial_note=${note || approval.financial_note || null},
+          financial_approved_by=${who.id}::uuid,financial_approved_by_name=${who.name},financial_approved_at=now(),updated_at=now()
+        where id=${approval.id}::uuid returning *,id::text
+      `;
+    } else {
+      [approval] = await tx<any[]>`
+        update operations.vehicle_approvals
+        set administrative_approved=true,administrative_note=${note || approval.administrative_note || null},
+          administrative_approved_by=${who.id}::uuid,administrative_approved_by_name=${who.name},administrative_approved_at=now(),updated_at=now()
+        where id=${approval.id}::uuid returning *,id::text
+      `;
+    }
+    await tx`
+      insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data)
+      values (${approval.id}::uuid,${vehicleId}::uuid,${approval.cycle_no},${approvalType},'approve',${note || null},
+        ${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(approval)})
+    `;
+    await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, {
+      id: who.id, name: who.name, note: "توثيق موافقة متأخرة من متابعة طلبات البيع بعد التسليم",
+    });
+    return {
+      ok: true, approval, delivered: false, autoArchived: false,
+      message: "تم توثيق الموافقة بعد التسليم دون تغيير حالة السيارة أو نقلها",
+    };
+  });
+}
+
 async function approveSalesFollowupVehicle(
   sql: ReturnType<typeof getSql>,
   body: Record<string, any>,
@@ -2474,12 +2592,12 @@ async function approveSalesFollowupVehicle(
   const vehicleId = clean(body.vehicleId);
   const trackingVehicleId = clean(body.trackingVehicleId);
   const approvalType = clean(body.approvalType);
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuid.test(vehicleId) || !uuid.test(trackingVehicleId) || !["financial", "administrative"].includes(approvalType)) {
     throw new OperationError(400, "VALIDATION_ERROR", "حدد رقم هيكل ونوع الموافقة الصحيحين");
   }
-  // Validate the exact selected tracking vehicle before any approval mutation;
-  // a client-supplied vehicleId must not approve another car or an archived order.
+  // Keep the exact selection tied to the newest active sale of this VIN.
+  // This prevents changing an old sales order when one VIN was sold again.
   const [target] = await sql<any[]>`
     select v.id::text,v.vin,v.status_code,
       coalesce(a.financial_approved,false) as financial_approved,
@@ -2491,21 +2609,41 @@ async function approveSalesFollowupVehicle(
     )
     left join lateral (
       select financial_approved,administrative_approved from operations.vehicle_approvals va
-      where va.vehicle_id=v.id and va.is_active=true
+      where va.vehicle_id=v.id
       order by va.cycle_no desc,va.updated_at desc limit 1
     ) a on true
+    left join lateral (
+      select newer_tv.id from tracking.order_vehicles newer_tv
+      join tracking.orders newer_o on newer_o.id=newer_tv.order_id
+      where coalesce(newer_o.is_deleted,false)=false
+        and coalesce(newer_o.is_cancelled,false)=false
+        and coalesce(newer_o.is_archived,false)=false
+        and (
+          newer_tv.vehicle_id=v.id
+          or (newer_tv.vehicle_id is null and upper(trim(newer_tv.vin))=upper(trim(v.vin)))
+        )
+      order by newer_o.order_date desc nulls last,newer_o.created_at desc,newer_tv.created_at desc,newer_tv.id desc
+      limit 1
+    ) latest_order on true
     where tv.id=${trackingVehicleId}::uuid and v.id=${vehicleId}::uuid
+      and latest_order.id=tv.id
       and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
       and coalesce(o.is_archived,false)=false and o.sales_followup_completed_at is null
       and nullif(trim(tv.vin),'') is not null
       and upper(trim(tv.vin)) not like 'PENDING-%'
     limit 1
   `;
-  if (!target || target.status_code !== "under_delivery") {
-    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست ضمن طلب بيع جارٍ بحالة مباع تحت التسليم");
+  if (!target || !["under_delivery", "delivered"].includes(target.status_code)) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست طلب البيع الجاري الأحدث أو حالتها لا تسمح بالموافقة");
   }
   if (approvalType === "financial" ? target.financial_approved : target.administrative_approved) {
     throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+  }
+  if (target.status_code === "delivered") {
+    return recordDeliveredSalesFollowupApproval(
+      sql, vehicleId, trackingVehicleId, approvalType as "financial" | "administrative",
+      clean(body.note).slice(0, 1000), user,
+    );
   }
   return approvalAction(sql, {
     vehicleId,

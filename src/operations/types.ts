@@ -177,6 +177,7 @@ export type SalesOrderFollowupRow = {
   location_name?: string | null;
   location_branch_code?: string | null;
   operations_status_code?: string | null;
+  order_archived?: boolean;
   total_incl_vat: number | string;
   advance_paid: number | string;
   remaining_amount: number | string;
