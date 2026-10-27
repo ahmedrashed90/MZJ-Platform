@@ -1,9 +1,9 @@
 /**
  * Source-of-truth bridge for Tracking stages 6 (financial) and 7 (administrative).
  * An operations approval is per VIN/approval cycle. Tracking stages are per
- * vehicle within a sales order; only the newest non-cancelled, non-archived
- * order for that VIN may mirror the latest approval cycle. Old orders remain
- * historical and sibling vehicles are never modified.
+ * vehicle within a sales order. Normal syncing targets only the newest active
+ * sale. Late approvals on an archived, newest non-cancelled sale use an explicit
+ * allowArchived path; older orders and sibling vehicles remain untouched.
  *
  * All updates (including the tracking summary and the audit trail) can run
  * inside the caller's operations transaction so the two systems cannot commit
@@ -17,7 +17,12 @@ export function isApprovalControlledTrackingStage(sortOrder: unknown): boolean {
 
 type SyncActor = { id?: string | null; name?: string | null; note?: string | null };
 
-export async function syncTrackingApprovalStagesForTrackingVehicle(db: any, trackingVehicleId: string, actor: SyncActor = {}) {
+export async function syncTrackingApprovalStagesForTrackingVehicle(
+  db: any,
+  trackingVehicleId: string,
+  actor: SyncActor = {},
+  options: { allowArchived?: boolean } = {},
+) {
   const [link] = await db`
     select tv.id::text as tracking_vehicle_id,tv.order_id::text as order_id,
       o.is_archived,o.is_cancelled,o.is_deleted,
@@ -51,16 +56,16 @@ export async function syncTrackingApprovalStagesForTrackingVehicle(db: any, trac
     ) approval on true
     where tv.id=${trackingVehicleId}::uuid
   `;
-  if (!link || link.is_deleted || link.is_cancelled || link.is_archived) return { orderId: "", changed: 0 };
+  if (!link || link.is_deleted || link.is_cancelled || (link.is_archived && !options.allowArchived)) return { orderId: "", changed: 0 };
 
   if (link.operations_vehicle_id) {
-    // Approval flags belong to the latest active sale of this VIN, not every
-    // historical order that happens to reference the same inventory vehicle.
+    // Approval flags belong to the newest eligible sale for this VIN.
+    // Historical/archived sales are never changed by normal sync.
     const [latest] = await db`
       select tv.id::text as id from tracking.order_vehicles tv
       join tracking.orders o on o.id=tv.order_id
       where coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
-        and coalesce(o.is_archived,false)=false
+        and (${options.allowArchived === true}=true or coalesce(o.is_archived,false)=false)
         and (
           tv.vehicle_id=${link.operations_vehicle_id}::uuid
           or (tv.vehicle_id is null and nullif(trim(tv.vin),'') is not null
@@ -126,7 +131,9 @@ export async function syncTrackingApprovalStagesForTrackingVehicle(db: any, trac
     }
   }
 
-  if (changed) {
+  // An archived sale keeps its historical order status and archive markers.
+  // Only its approval-controlled stage rows and audit events are updated.
+  if (changed && !link.is_archived) {
     const [summary] = await db`
       select count(vs.id)::int as total,
         count(vs.id) filter(where vs.status='completed')::int as completed

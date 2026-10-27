@@ -118,6 +118,23 @@ for(const setup of [{oldOrder:true},{latest:false}]) {
   assert.equal(res.changed,0);
   assert.deepEqual(state.statuses,{6:"pending",7:"pending"});
 }
+// Explicit retrospective write on newest archived order updates only 6/7;
+// it never unarchives or rewrites the historical tracking order's status.
+{
+  const {state,sql}=dbHarness({oldOrder:true,financial:true,administrative:false});
+  const result=await syncTrackingApprovalStagesForTrackingVehicle(sql,"tracking-vehicle-1",{id:"superadmin",name:"مدير النظام"},{allowArchived:true});
+  assert.equal(result.changed,1);
+  assert.deepEqual(state.statuses,{6:"completed",7:"pending"});
+  assert.equal(state.events.length,1);
+  assert.equal(state.orderStatus,"in_progress");
+  assert.ok(!state.queries.some(q=>q.includes("update tracking.orders set status")));
+}
+{
+  const {state,sql}=dbHarness({oldOrder:true,financial:true,latest:false});
+  const result=await syncTrackingApprovalStagesForTrackingVehicle(sql,"tracking-vehicle-1",{}, {allowArchived:true});
+  assert.equal(result.changed,0);
+  assert.deepEqual(state.statuses,{6:"pending",7:"pending"});
+}
 // Operations approval actions call the same canonical routine with no second source.
 {
   const {state,sql}=dbHarness({financial:true,administrative:false});

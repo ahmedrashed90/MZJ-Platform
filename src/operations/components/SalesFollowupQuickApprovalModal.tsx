@@ -9,11 +9,10 @@ type ApprovalType = "financial" | "administrative";
 // Keep missing sales visible even when an operations approval cannot safely
 // be performed. Display a concrete reason rather than silently hiding them.
 function approvalUnavailableReason(row: SalesOrderFollowupRow): string {
-  if (row.order_archived) return "الطلب مؤرشف، لا يمكن اعتماده";
   const vin = String(row.normalized_vin || row.vin || "").trim();
   if (!vin || vin.toUpperCase().startsWith("PENDING-")) return "رقم الهيكل غير مكتمل";
   if (!row.operations_vehicle_id) return "السيارة غير مرتبطة بمخزون العمليات";
-  if (!["under_delivery", "delivered"].includes(String(row.operations_status_code || ""))) {
+  if (!row.order_archived && !["under_delivery", "delivered"].includes(String(row.operations_status_code || ""))) {
     return "حالة السيارة لا تسمح بالموافقة من هذا الزر";
   }
   return "";
@@ -76,10 +75,12 @@ export function SalesFollowupQuickApprovalModal({ open, onClose, onChanged }: {
     if (type === "financial" && selected.stage_6_completed) return;
     if (type === "administrative" && selected.stage_7_completed) return;
     const label = type === "financial" ? "المالية" : "الإدارية";
-    const retrospective = selected.operations_status_code === "delivered";
-    const confirmation = retrospective
-      ? `السيارة ${selected.vin} تم تسليمها بالفعل. هل تريد توثيق الموافقة ${label} الآن دون إعادة التسليم أو تغيير حالة السيارة؟`
-      : `اعتماد الموافقة ${label} لرقم الهيكل ${selected.vin}؟`;
+    const retrospective = Boolean(selected.order_archived || selected.operations_status_code === "delivered");
+    const confirmation = selected.order_archived
+      ? `طلب البيع للسيارة ${selected.vin} مؤرشف. هل تريد توثيق الموافقة ${label} الآن مع الاحتفاظ بالأرشفة وحالة السيارة وتسجيل تاريخ الموافقة الفعلي؟`
+      : retrospective
+        ? `السيارة ${selected.vin} تم تسليمها بالفعل. هل تريد توثيق الموافقة ${label} الآن دون إعادة التسليم أو تغيير حالة السيارة؟`
+        : `اعتماد الموافقة ${label} لرقم الهيكل ${selected.vin}؟`;
     if (!window.confirm(confirmation)) return;
     setSaving(true);
     setError("");
@@ -108,7 +109,7 @@ export function SalesFollowupQuickApprovalModal({ open, onClose, onChanged }: {
   }
 
   return (
-    <Modal open={open} onClose={() => { if (!saving) onClose(); }} title="اعتماد السيارات الناقصة" subtitle="اختَر رقم الهيكل من طلبات البيع الجارية، ثم اعتمد المالية أو الإدارية. هذا الإجراء خاص بمدير النظام." className="sales-followup-quick-approval-modal">
+    <Modal open={open} onClose={() => { if (!saving) onClose(); }} title="اعتماد السيارات الناقصة" subtitle="اختَر رقم الهيكل من طلبات البيع غير الملغاة، بما فيها المؤرشفة، ثم اعتمد المالية أو الإدارية. هذا الإجراء خاص بمدير النظام." className="sales-followup-quick-approval-modal">
       <div className="sales-followup-quick-approval" dir="rtl">
         <form onSubmit={searchVehicles} className="sales-followup-approval-search">
           <label><MagnifyingGlass size={18} /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="ابحث برقم الهيكل أو رقم الطلب أو العميل" /></label>
@@ -126,7 +127,7 @@ export function SalesFollowupQuickApprovalModal({ open, onClose, onChanged }: {
                   <label key={row.tracking_vehicle_id} className={selectedId === row.tracking_vehicle_id ? "active" : ""}>
                     <input type="radio" name="sales-followup-approval-vehicle" value={row.tracking_vehicle_id} checked={selectedId === row.tracking_vehicle_id} onChange={() => { setSelectedId(row.tracking_vehicle_id); setNote(""); setNotice(""); }} />
                     <span><b dir="ltr">{row.vin}</b><small dir="ltr">{row.sales_order_no}</small><small>{row.customer_name || "بدون اسم عميل"}</small></span>
-                    <span className="sales-followup-approval-flags"><em className={row.stage_6_completed ? "done" : "pending"}>مالي: {row.stage_6_completed ? "تم" : "ناقص"}</em><em className={row.stage_7_completed ? "done" : "pending"}>إداري: {row.stage_7_completed ? "تم" : "ناقص"}</em>{approvalUnavailableReason(row) ? <small title={approvalUnavailableReason(row)}>غير متاح للاعتماد</small> : row.operations_status_code === "delivered" ? <small>تم التسليم — توثيق لاحق</small> : null}</span>
+                    <span className="sales-followup-approval-flags"><em className={row.stage_6_completed ? "done" : "pending"}>مالي: {row.stage_6_completed ? "تم" : "ناقص"}</em><em className={row.stage_7_completed ? "done" : "pending"}>إداري: {row.stage_7_completed ? "تم" : "ناقص"}</em>{approvalUnavailableReason(row) ? <small title={approvalUnavailableReason(row)}>غير متاح للاعتماد</small> : row.order_archived ? <small>طلب مؤرشف — توثيق لاحق</small> : row.operations_status_code === "delivered" ? <small>تم التسليم — توثيق لاحق</small> : null}</span>
                   </label>
                 ))}
               </div>
@@ -137,7 +138,7 @@ export function SalesFollowupQuickApprovalModal({ open, onClose, onChanged }: {
             <header><strong>اعتماد السيارة المحددة</strong><small>التحديث ينعكس في الموافقات ومتابعة البيع والخطوتين 6 و7 بالتراكينج.</small></header>
             {selected ? <>
               <div className="sales-followup-approval-selected"><span>رقم الهيكل</span><b dir="ltr">{selected.vin}</b><small>{selected.customer_name || "بدون اسم عميل"}</small></div>
-              {unavailableReason ? <div className="operations-alert error"><WarningCircle size={18} />{unavailableReason}</div> : selected.operations_status_code === "delivered" ? <p className="sales-followup-approval-empty">السيارة تم تسليمها. الاعتماد هنا يوثّق الموافقة بتاريخ اليوم دون إعادة التسليم.</p> : null}
+              {unavailableReason ? <div className="operations-alert error"><WarningCircle size={18} />{unavailableReason}</div> : selected.order_archived ? <p className="sales-followup-approval-empty">الطلب مؤرشف. يتم توثيق الموافقة بتاريخ الاعتماد الفعلي دون فك الأرشفة أو تغيير حالة السيارة.</p> : selected.operations_status_code === "delivered" ? <p className="sales-followup-approval-empty">السيارة تم تسليمها. الاعتماد هنا يوثّق الموافقة بتاريخ اليوم دون إعادة التسليم.</p> : null}
               <label className="sales-followup-approval-note"><span>ملاحظة الاعتماد (اختيارية)</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} maxLength={1000} disabled={saving} placeholder="اكتب ملاحظة خاصة بالموافقة المطلوبة" /></label>
               <button type="button" className="sales-followup-approval-financial" disabled={saving || loading || Boolean(unavailableReason) || selected.stage_6_completed} onClick={() => void approve("financial")}><CurrencyCircleDollar size={20} />{selected.stage_6_completed ? "الموافقة المالية مكتملة" : "اعتماد الموافقة المالية"}</button>
               <button type="button" className="sales-followup-approval-administrative" disabled={saving || loading || Boolean(unavailableReason) || selected.stage_7_completed} onClick={() => void approve("administrative")}><ShieldCheck size={20} />{selected.stage_7_completed ? "الموافقة الإدارية مكتملة" : "اعتماد الموافقة الإدارية"}</button>

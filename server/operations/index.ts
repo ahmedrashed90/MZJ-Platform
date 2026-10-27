@@ -7,7 +7,7 @@ import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
-import { syncTrackingApprovalStagesForOperationsVehicle } from "../_tracking-approval-sync.js";
+import { syncTrackingApprovalStagesForOperationsVehicle, syncTrackingApprovalStagesForTrackingVehicle } from "../_tracking-approval-sync.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
@@ -2343,7 +2343,13 @@ async function listSalesOrderFollowup(
     where coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
       and (${ownOrdersOnly}=false or lower(trim(coalesce(erp_order.erp_user_id,'')))=${nextErpUserId})
-      and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
+      and (
+        (${pendingApprovalsOnly}=true and (o.sales_followup_completed_at is null or coalesce(o.is_archived,false)=true))
+        or (${pendingApprovalsOnly}=false and (
+          (${completedOnly}=true and o.sales_followup_completed_at is not null)
+          or (${completedOnly}=false and o.sales_followup_completed_at is null)
+        ))
+      )
       and (
         ${unrestricted}=true
         or coalesce(effective_branch.code,'') in ${sql(branchCodes)}
@@ -2461,13 +2467,13 @@ async function listSalesOrderFollowup(
 
 
 /**
- * Backfill an outstanding approval on an already-delivered sales vehicle.
- * This is a *recording-only* action. It must never initiate another delivery,
- * move the car, create a fresh active delivery cycle, or rewrite historical
- * approval timestamps. The Operations approvals table remains the one source
- * of truth, and the canonical Tracking stage bridge is used after the update.
+ * Record a late approval for a delivered car or an archived sales order.
+ * This is a *recording-only* action: never re-deliver, move the vehicle,
+ * activate another delivery cycle, unarchive the order, or backdate approvals.
+ * The canonical Operations approval and its audit event remain the source of
+ * truth. Only the selected Tracking vehicle's stages 6 and 7 may be synced.
  */
-async function recordDeliveredSalesFollowupApproval(
+async function recordRetrospectiveSalesFollowupApproval(
   sql: ReturnType<typeof getSql>,
   vehicleId: string,
   trackingVehicleId: string,
@@ -2486,21 +2492,21 @@ async function recordDeliveredSalesFollowupApproval(
       where id=${vehicleId}::uuid and is_deleted=false
       for update
     `;
-    if (!vehicle || vehicle.status_code !== "delivered") {
-      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة السيارة تغيّرت. حدّث القائمة قبل الموافقة");
+    if (!vehicle) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة غير موجودة. حدّث القائمة قبل الموافقة");
     }
 
-    // Revalidate under the vehicle lock. Never backfill an archived/cancelled
-    // order or an older order for a VIN now belonging to a different sale.
+    // Revalidate inside the vehicle lock. Archived orders are eligible only
+    // when they are the newest non-cancelled sale of this VIN. Never attach
+    // the approval of a historical sale to a newer sale cycle.
     const [order] = await tx<any[]>`
-      select tv.id::text as id
+      select tv.id::text as id,coalesce(o.is_archived,false) as is_archived
       from tracking.order_vehicles tv
       join tracking.orders o on o.id=tv.order_id
       where tv.id=${trackingVehicleId}::uuid
         and coalesce(o.is_deleted,false)=false
         and coalesce(o.is_cancelled,false)=false
-        and coalesce(o.is_archived,false)=false
-        and o.sales_followup_completed_at is null
+        and (coalesce(o.is_archived,false)=true or o.sales_followup_completed_at is null)
         and (
           tv.vehicle_id=${vehicleId}::uuid
           or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
@@ -2513,7 +2519,6 @@ async function recordDeliveredSalesFollowupApproval(
       join tracking.orders o on o.id=tv.order_id
       where coalesce(o.is_deleted,false)=false
         and coalesce(o.is_cancelled,false)=false
-        and coalesce(o.is_archived,false)=false
         and (
           tv.vehicle_id=${vehicleId}::uuid
           or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
@@ -2521,9 +2526,13 @@ async function recordDeliveredSalesFollowupApproval(
       order by o.order_date desc nulls last,o.created_at desc,tv.created_at desc,tv.id desc
       limit 1
     `;
-    if (!order || latest?.id !== trackingVehicleId) {
-      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "هذا الطلب غير جارٍ أو توجد عملية بيع أحدث لنفس السيارة");
+    if (!order || latest?.id !== trackingVehicleId || (!order.is_archived && vehicle.status_code !== "delivered")) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "الطلب ملغي أو مرتبط بعملية بيع أحدث أو حالة السيارة لا تسمح بالتوثيق");
     }
+    const archivedOrder = order.is_archived === true;
+    const auditNote = archivedOrder
+      ? ["توثيق موافقة لاحقة على طلب مؤرشف", note].filter(Boolean).join(" - ")
+      : note;
 
     let [approval] = await tx<any[]>`
       select *,id::text
@@ -2539,8 +2548,8 @@ async function recordDeliveredSalesFollowupApproval(
         from operations.vehicle_approvals
         where vehicle_id=${vehicleId}::uuid
       `;
-      // Retrospective approval is inactive by design: delivery already took
-      // place, so it is not a new pending delivery or a new active stock cycle.
+      // A retrospective approval is not a new pending delivery or active
+      // stock cycle, whether the sale was delivered or archived.
       [approval] = await tx<any[]>`
         insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active,pending_delivery)
         values (${vehicleId}::uuid,${Number(cycle?.next || 1)},false,null)
@@ -2568,15 +2577,26 @@ async function recordDeliveredSalesFollowupApproval(
     }
     await tx`
       insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data)
-      values (${approval.id}::uuid,${vehicleId}::uuid,${approval.cycle_no},${approvalType},'approve',${note || null},
+      values (${approval.id}::uuid,${vehicleId}::uuid,${approval.cycle_no},${approvalType},'approve',${auditNote || null},
         ${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(approval)})
     `;
-    await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, {
-      id: who.id, name: who.name, note: "توثيق موافقة متأخرة من متابعة طلبات البيع بعد التسليم",
-    });
+    if (archivedOrder) {
+      // Standard sync intentionally skips archived sales. This explicit path
+      // updates only the selected archived order's stages, without reopening
+      // the order or changing its original tracking status and archive flags.
+      await syncTrackingApprovalStagesForTrackingVehicle(tx, trackingVehicleId, {
+        id: who.id, name: who.name, note: auditNote,
+      }, { allowArchived: true });
+    } else {
+      await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, {
+        id: who.id, name: who.name, note: "توثيق موافقة متأخرة من متابعة طلبات البيع بعد التسليم",
+      });
+    }
     return {
-      ok: true, approval, delivered: false, autoArchived: false,
-      message: "تم توثيق الموافقة بعد التسليم دون تغيير حالة السيارة أو نقلها",
+      ok: true, approval, delivered: false, autoArchived: false, archivedOrder,
+      message: archivedOrder
+        ? "تم توثيق الموافقة على الطلب المؤرشف دون فك الأرشفة أو تغيير حالة السيارة"
+        : "تم توثيق الموافقة بعد التسليم دون تغيير حالة السيارة أو نقلها",
     };
   });
 }
@@ -2592,14 +2612,15 @@ async function approveSalesFollowupVehicle(
   const vehicleId = clean(body.vehicleId);
   const trackingVehicleId = clean(body.trackingVehicleId);
   const approvalType = clean(body.approvalType);
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuid.test(vehicleId) || !uuid.test(trackingVehicleId) || !["financial", "administrative"].includes(approvalType)) {
     throw new OperationError(400, "VALIDATION_ERROR", "حدد رقم هيكل ونوع الموافقة الصحيحين");
   }
-  // Keep the exact selection tied to the newest active sale of this VIN.
-  // This prevents changing an old sales order when one VIN was sold again.
+  // Keep the selection tied to the newest non-cancelled sale of this VIN,
+  // including archived sales. Historical sales with a newer sale stay locked.
   const [target] = await sql<any[]>`
     select v.id::text,v.vin,v.status_code,
+      coalesce(o.is_archived,false) as order_archived,
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved
     from tracking.order_vehicles tv
@@ -2617,7 +2638,6 @@ async function approveSalesFollowupVehicle(
       join tracking.orders newer_o on newer_o.id=newer_tv.order_id
       where coalesce(newer_o.is_deleted,false)=false
         and coalesce(newer_o.is_cancelled,false)=false
-        and coalesce(newer_o.is_archived,false)=false
         and (
           newer_tv.vehicle_id=v.id
           or (newer_tv.vehicle_id is null and upper(trim(newer_tv.vin))=upper(trim(v.vin)))
@@ -2628,19 +2648,19 @@ async function approveSalesFollowupVehicle(
     where tv.id=${trackingVehicleId}::uuid and v.id=${vehicleId}::uuid
       and latest_order.id=tv.id
       and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
-      and coalesce(o.is_archived,false)=false and o.sales_followup_completed_at is null
+      and (coalesce(o.is_archived,false)=true or o.sales_followup_completed_at is null)
       and nullif(trim(tv.vin),'') is not null
       and upper(trim(tv.vin)) not like 'PENDING-%'
     limit 1
   `;
-  if (!target || !["under_delivery", "delivered"].includes(target.status_code)) {
-    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست طلب البيع الجاري الأحدث أو حالتها لا تسمح بالموافقة");
+  if (!target || (!target.order_archived && !["under_delivery", "delivered"].includes(target.status_code))) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست أحدث عملية بيع غير ملغاة أو حالتها لا تسمح بالموافقة");
   }
   if (approvalType === "financial" ? target.financial_approved : target.administrative_approved) {
     throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
   }
-  if (target.status_code === "delivered") {
-    return recordDeliveredSalesFollowupApproval(
+  if (target.order_archived || target.status_code === "delivered") {
+    return recordRetrospectiveSalesFollowupApproval(
       sql, vehicleId, trackingVehicleId, approvalType as "financial" | "administrative",
       clean(body.note).slice(0, 1000), user,
     );
