@@ -286,6 +286,50 @@ function permissionForReportShift(dayPermissions: any[], periodId: string, isFri
     || null;
 }
 
+// The nominal daily duty is configured separately for each employee and can
+// change across historical assignments. The report must use that duty target,
+// not assume that everyone assigned to the same clock periods owes identical
+// hours. Friday's special shortened shift never requires extra hours beyond
+// its explicitly configured start/end time.
+function attendanceReportExpectedMinutes(
+  slots: Array<{ startTime: string; endTime: string }>,
+  dailyWorkHours: unknown,
+  isDayOff: boolean,
+  isFridaySpecialShift: boolean,
+): number {
+  if (isDayOff) return 0;
+  const scheduled = slots.reduce((sum, slot) => {
+    if (!validTime(slot.startTime) || !validTime(slot.endTime)) return sum;
+    const start = timeMinutes(slot.startTime);
+    const end = timeMinutes(slot.endTime);
+    return sum + (end > start ? end - start : end + 1440 - start);
+  }, 0);
+  if (scheduled === 0) return 0;
+  if (dailyWorkHours === null || dailyWorkHours === undefined || dailyWorkHours === '') return scheduled;
+  const assignedHours = Number(dailyWorkHours);
+  if (!Number.isFinite(assignedHours) || assignedHours <= 0 || assignedHours > 24) return scheduled;
+  const assignedMinutes = Math.round(assignedHours * 60);
+  return isFridaySpecialShift ? Math.min(assignedMinutes, scheduled) : assignedMinutes;
+}
+
+// An approved absence is credited only against hours the employee was due
+// to work. When the employee's daily target is shorter than the clock periods,
+// the authorization must not create fictitious overtime. Real clocked overtime
+// stays intact because it is not an authorization credit.
+function attendanceReportCapAuthorizedCredits(
+  shifts: Array<{ period: { creditedMinutes: number }; attendedMinutes: number }>,
+  requiredMinutes: number,
+) {
+  const attended = shifts.reduce((sum, shift) => sum + shift.attendedMinutes, 0);
+  let remaining = Math.max(0, requiredMinutes - attended);
+  for (const shift of shifts) {
+    const authorized = Math.max(0, shift.period.creditedMinutes - shift.attendedMinutes);
+    const allowed = Math.min(authorized, remaining);
+    shift.period.creditedMinutes = shift.attendedMinutes + allowed;
+    remaining -= allowed;
+  }
+}
+
 // Attendance reports credit scheduled shift minutes, with the configured grace
 // already reflected in delayMinutes. Raw work_minutes remains untouched in the
 // database for audit/history and must not be mistaken for the report total.
@@ -1037,8 +1081,12 @@ async function reportData(request: VercelRequest) {
         });
       }
       slots.sort((a, b) => a.sortOrder - b.sortOrder);
+      const expectedMinutes = attendanceReportExpectedMinutes(
+        slots, assignment?.daily_work_hours, isDayOff, isFriday && fridayScheduleEnabled,
+      );
 
       const periodsByKey = new Map<string, any>();
+      const creditedShifts: Array<{ period: { creditedMinutes: number }; attendedMinutes: number }> = [];
       for (const slot of slots) {
         const record = slot.record;
         const delayMinutes = reportDelayMinutes(record?.check_in, day, slot.startTime, slot.graceMinutes, Number(record?.delay_minutes || 0));
@@ -1070,7 +1118,7 @@ async function reportData(request: VercelRequest) {
           const meta = headerMeta.get(key)!;
           meta.sortOrder = Math.min(meta.sortOrder, slot.sortOrder);
         }
-        periodsByKey.set(key, {
+        const periodForReport = {
           id: clean(slot.id),
           name: slot.name,
           startTime: slot.startTime,
@@ -1093,7 +1141,20 @@ async function reportData(request: VercelRequest) {
           delayMinutes,
           workMinutes: liveWorkMinutes(record),
           creditedMinutes: attendanceReportCreditedMinutes(record, day, slot.startTime, slot.endTime, delayMinutes, permissionForShift),
+        };
+        periodsByKey.set(key, periodForReport);
+        creditedShifts.push({
+          period: periodForReport,
+          attendedMinutes: permissionForShift
+            ? attendanceReportCreditedMinutes(record, day, slot.startTime, slot.endTime, delayMinutes, null)
+            : periodForReport.creditedMinutes,
         });
+      }
+      // Keep credited vacation and exceptional hours within this employee's
+      // configured target; a fully authorized day cannot generate overtime.
+      const scheduledTotal = attendanceReportExpectedMinutes(slots, null, false, false);
+      if (assignment?.daily_work_hours != null && !isDayOff && expectedMinutes < scheduledTotal) {
+        attendanceReportCapAuthorizedCredits(creditedShifts, expectedMinutes);
       }
 
       const mappedPermissions = dayPermissions.map((permission) => ({
@@ -1117,6 +1178,7 @@ async function reportData(request: VercelRequest) {
         name: user.full_name,
         scheduleName: assignment?.schedule_name || null,
         isDayOff,
+        expectedMinutes,
         earlyDeparturePermissions: mappedPermissions,
         earlyDeparturePermission: mappedPermissions[0] || null,
         periodsByKey,

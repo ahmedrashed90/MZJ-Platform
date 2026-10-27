@@ -63,6 +63,7 @@ type ReportRow = {
   name: string;
   scheduleName: string | null;
   isDayOff: boolean;
+  expectedMinutes?: number;
   earlyDeparturePermission: ReportPermission | null;
   earlyDeparturePermissions: ReportPermission[];
   periods: Array<ReportPeriod | null>;
@@ -165,8 +166,13 @@ function attendanceHourTotals(rows: ReportRow[]) {
   return rows.reduce((total, row) => {
     if (row.isDayOff) return total;
     const periods = row.periods.filter((period): period is ReportPeriod => Boolean(period));
+    // A daily target is supplied by the server from the employee's effective
+    // assignment on this date. Older reports without that field still use the
+    // original sum of scheduled periods for backwards compatibility.
+    total.expected += typeof row.expectedMinutes === 'number' && Number.isFinite(row.expectedMinutes)
+      ? Math.max(0, Math.round(row.expectedMinutes))
+      : periods.reduce((sum, period) => sum + scheduledMinutes(period), 0);
     for (const period of periods) {
-      total.expected += scheduledMinutes(period);
       total.actual += Math.max(0, Math.round(Number(period.creditedMinutes ?? period.workMinutes ?? 0)));
     }
     return total;
