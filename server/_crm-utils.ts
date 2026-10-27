@@ -69,6 +69,7 @@ export type Scope = {
   departmentCodes: string[];
   branchCodes: string[];
   branchRestricted: boolean;
+  branchManager: boolean;
   userId: string;
   callCenterOnly: boolean;
 };
@@ -94,7 +95,7 @@ export function userScope(user: SessionUser): Scope {
   // branch assignments must not keep a transferred manager able to view old staff.
   const branchCodes = branchRestricted ? (isBranchManager ? access.branchCodes.slice(0, 1) : access.branchCodes) : [];
   const callCenterOnly = includeAssigned && access.departmentCodes.includes("call_center") && !access.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
-  return { all, includeAssigned, departmentCodes, branchCodes, branchRestricted, userId: user.id, callCenterOnly };
+  return { all, includeAssigned, departmentCodes, branchCodes, branchRestricted, branchManager: isBranchManager, userId: user.id, callCenterOnly };
 }
 
 /** CRM lead access follows the assigned rep's CURRENT primary CRM branch.

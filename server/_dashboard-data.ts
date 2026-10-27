@@ -82,6 +82,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where coalesce(st.is_cancelled,false)=false
             and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and ${visibleLeadScope}
+            and (not ${crmScope.branchManager}::boolean or coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),'')=any(${crmScope.branchCodes}::text[]))
         ), open_counts as (
           select l.department_code,count(*)::int as event_count
           from crm.conversations c
@@ -191,10 +192,9 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
 
   if (canAccessSystem(user, "tracking")) {
     try {
-      // The unified dashboard must mirror the Tracking system counters exactly,
-      // so these figures intentionally use the canonical all-active-orders count
-      // rather than the dashboard date range used by the other dashboard cards.
-      const counts = await getTrackingCountSummary(sql, user);
+      // Period reports use the same canonical Tracking count helper and the
+      // selected dashboard date range. Live inventory remains a current snapshot.
+      const counts = await getTrackingCountSummary(sql, user, { from, to });
       data.tracking = { requests: counts.total, inProgress: counts.inProgress, completed: counts.completed };
       data.operations.salesTracking = {
         total: counts.total,

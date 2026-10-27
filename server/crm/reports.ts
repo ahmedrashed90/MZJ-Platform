@@ -410,6 +410,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       else l.report_department_code
     end
   `;
+
+  // Managers' sales are authorized by the sale transaction's own branch,
+  // not the customer's or representative's current CRM assignment.
+  const transactionAccessBranchSql = scope.branchManager ? transactionBranchCodeSql : transactionCurrentBranchCodeSql;
   // The open detail drawer must use the SAME department and current branch
   // key as its report group. Otherwise the totals can reconcile but clicking
   // a row shows a different cohort (or an empty table).
@@ -570,7 +574,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionAccessBranchSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
@@ -664,7 +668,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionAccessBranchSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
@@ -753,7 +757,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionAccessBranchSql})=any(${scope.branchCodes}::text[])))
             )
             and ${transactionDepartmentFilterSql}
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
@@ -946,7 +950,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-        or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])))
+        or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or (${transactionAccessBranchSql})=any(${scope.branchCodes}::text[])))
       )
       and ${transactionDepartmentFilterSql}
       and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
@@ -1009,7 +1013,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (summaryOnly) {
     return response.status(200).json({
       ok: true,
-      filters: { from, to, q, department, branch, agent, callCenter, source },
+      filters: { from, to, q, department, branch: scope.branchManager ? scope.branchCodes[0] || "" : branch, agent, callCenter, source },
       totals: makeMetrics(reportRows, reportFacts),
       quality: { ...quality, summary_cards: summaryCards },
     });
@@ -1087,7 +1091,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const websiteDepartmentDetail = "cash_sales|website";
   const websiteDepartmentVisible = !department || ["cash", "cash_sales"].includes(department);
   const websiteBranchVisible = !branch || branch === "website";
-  if (websiteDepartmentVisible && websiteBranchVisible && !departments.some((row) => row.detailValue === websiteDepartmentDetail)) {
+  if (websiteDepartmentVisible && websiteBranchVisible && (!scope.branchRestricted || scope.branchCodes.includes("website")) && !departments.some((row) => row.detailValue === websiteDepartmentDetail)) {
     departments.push({
       name: "مبيعات الكاش - الموقع الإلكتروني",
       department: "مبيعات الكاش",
@@ -1333,7 +1337,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   return response.status(200).json({
     ok: true,
-    filters: { from, to, q, department, branch, agent, callCenter, source },
+    filters: { from, to, q, department, branch: scope.branchManager ? scope.branchCodes[0] || "" : branch, agent, callCenter, source },
     totals: makeMetrics(reportRows, reportFacts),
     digitalSources: digitalSources.rows,
     directSources: directSources.rows,

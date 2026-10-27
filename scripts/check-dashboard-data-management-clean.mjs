@@ -18,7 +18,7 @@ const styles = read("src/styles.css");
 expect(dashboard.includes('crm?.cashSold') && dashboard.includes('crm?.financeSold'), "Department sold totals are not split on the dashboard");
 expect(!/title: "خدمة العملاء"[\s\S]{0,650}label: "تم البيع"/.test(dashboard), "Customer service still displays a sold metric");
 expect(dashboardData.includes("as cash_sold") && dashboardData.includes("as finance_sold"), "Dashboard SQL does not calculate department sold totals");
-expect(dashboardData.includes("is_archived,false)=false and status='completed'"), "Completed tracking count still includes archived requests");
+expect(dashboardData.includes("getTrackingCountSummary(sql, user, { from, to })") && read("server/_tracking-counts.ts").includes("coalesce(o.is_archived,false)=false and o.status='completed'"), "Completed Tracking counts exclude archived requests and honor the selected dashboard period");
 expect(dashboard.includes("DashboardTrackingOrderModal") && dashboard.includes("setTrackingTarget(order)"), "Tracking order details are not opened inside the dashboard");
 expect(trackingModal.includes("سجل الإجراءات") && trackingModal.includes("السيارات ومراحل التتبع"), "Inline tracking modal is incomplete");
 expect(operationsModal.includes("dashboard-approval-action-first") && operationsModal.indexOf("dashboard-approval-detail-cards") < operationsModal.indexOf("dashboard-approval-more-details"), "Approval actions are not positioned before extended details");

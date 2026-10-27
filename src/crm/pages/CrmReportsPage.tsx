@@ -5,6 +5,8 @@ import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmMeta } from "../types";
 import { downloadXlsx } from "../xlsx";
+import { useAuth } from "../../auth/AuthContext";
+import { isPlatformAdmin } from "../../systemAccess";
 
 type ReportRow = {
   name: string;
@@ -164,11 +166,18 @@ function reportExportRows(section: ReportSection) {
 }
 
 export function CrmReportsPage() {
+  const { user } = useAuth();
+  const managerIsBranchRestricted = !isPlatformAdmin(user) && (user?.systemAccess?.crm?.roleCode === "branch_manager" || user?.roleCodes.includes("branch_manager"));
+  const managerBranch = managerIsBranchRestricted ? String(user?.systemAccess?.crm?.branchCodes?.[0] || "") : "";
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const defaultMonth = currentReportMonth();
   const defaultMonthRange = monthDateRange(defaultMonth)!;
   const [filters, setFilters] = useState({ ...emptyFilters, from: defaultMonthRange.from, to: defaultMonthRange.to });
   const [selectedMonth, setSelectedMonth] = useState(defaultMonth);
+  useEffect(() => {
+    if (!managerIsBranchRestricted) return;
+    setFilters((current) => current.branch === managerBranch ? current : { ...current, branch: managerBranch });
+  }, [managerIsBranchRestricted, managerBranch]);
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
@@ -251,6 +260,10 @@ export function CrmReportsPage() {
   const selectedAgentIds = useMemo(() => filters.agent.split(",").map((value) => value.trim()).filter(Boolean), [filters.agent]);
   const selectedAgentNames = useMemo(() => salesUsers.filter((user) => selectedAgentIds.includes(user.id)).map((user) => user.full_name), [salesUsers, selectedAgentIds]);
   const agentFilterLabel = selectedAgentNames.length === 0 ? "كل المناديب" : selectedAgentNames.length <= 2 ? selectedAgentNames.join("، ") : `${selectedAgentNames.length} مناديب محددين`;
+  const reportBranches = managerIsBranchRestricted
+    ? (meta?.branches || []).filter((item) => item.code === managerBranch)
+    : (meta?.branches || []);
+  const reportBranchValue = managerIsBranchRestricted ? managerBranch : filters.branch;
   const sections: ReportSection[] = [
     { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.digitalSources },
     { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.directSources },
@@ -287,7 +300,7 @@ export function CrmReportsPage() {
     const month = currentReportMonth();
     const range = monthDateRange(month)!;
     setSelectedMonth(month);
-    setFilters({ ...emptyFilters, from: range.from, to: range.to });
+    setFilters({ ...emptyFilters, branch: managerBranch, from: range.from, to: range.to });
   }
 
   function exportAll() {
@@ -387,7 +400,7 @@ export function CrmReportsPage() {
             <div className="crm-report-filter-block-head"><span><Buildings size={19} /></span><div><strong>القسم والفرع</strong><small>حدد نطاق الإدارة أو الموقع</small></div></div>
             <div className="crm-report-filter-fields two-columns">
               <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="wholesale">قسم الجملة</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
-              <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+              <label><span>الفرع</span><select value={reportBranchValue} disabled={managerIsBranchRestricted} onChange={(event) => setFilter("branch", event.target.value)}>{managerIsBranchRestricted ? (!managerBranch ? <option value="">لا يوجد فرع مسموح</option> : null) : <option value="">كل الفروع</option>}{reportBranches.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
             </div>
           </section>
           <section className="crm-report-filter-block wide">

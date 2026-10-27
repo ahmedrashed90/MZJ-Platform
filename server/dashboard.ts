@@ -34,8 +34,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
   const requestedFrom = validDate(request.query.from);
   const requestedTo = validDate(request.query.to);
-  const to = requestedTo || riyadhDate();
-  const from = requestedFrom || riyadhDate(-6);
+  const today = riyadhDate();
+  const currentMonth = today.slice(0, 7);
+  const lastCalendarDay = new Date(Date.UTC(Number(currentMonth.slice(0, 4)), Number(currentMonth.slice(5, 7)), 0)).getUTCDate();
+  const to = requestedTo || `${currentMonth}-${String(lastCalendarDay).padStart(2, "0")}`;
+  const from = requestedFrom || `${currentMonth}-01`;
   if (from > to) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
   await Promise.all([ensureTrackingSchema(), ensureOperationsSchema(), ensureErpNextSalesOrderSchema()]);
   const [data, layout] = await Promise.all([getDashboardData(user, { from, to }), getDashboardLayout(user.id)]);

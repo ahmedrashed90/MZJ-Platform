@@ -16,7 +16,7 @@ const visibleForHallManager = visiblePrimaryTeam("hall", sample);
 const checks = [
   [meta.includes('getSystemAccess(user, "crm")'), "CRM meta resolves the current system access"],
   [meta.includes('crmAccess.roleCode === "branch_manager"'), "branch-manager scope is explicit"],
-  [meta.includes('crmAccess.dataScope === "branch"'), "the restriction applies only to primary-branch data scope"],
+  [meta.includes('crmAccess.roleCode === "branch_manager"') && meta.includes('crmAccess.branchCodes[0]'), "branch-manager team visibility is tied to the primary branch even with old wider scopes"],
   [meta.includes('crmAccess.branchCodes[0]'), "the manager team branch is the primary CRM branch"],
   [meta.includes('row.primary_branch_code'), "representatives are matched by their primary branch"],
   [!meta.includes('row.branch_codes || []).includes(managerPrimaryBranchCode)'), "shared allowed branches are not used as team identity"],

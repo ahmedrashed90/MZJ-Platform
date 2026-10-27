@@ -25,7 +25,7 @@ expect("Stage actions validate the same assignee", orders.includes("scope.assign
 expect("SMS validates the same assignee", sms.includes("scope.assignedOnly && clean(row.assigned_to) === user.id"));
 expect("Delete actions validate the same assignee", deleted.includes("scope.assignedOnly && clean(order.assigned_to) === user.id"));
 expect("Canonical Tracking counters use the same assignee", counts.includes("scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid"));
-expect("Unified dashboard tracking metrics use the canonical scoped counters", dashboard.includes("getTrackingCountSummary(sql, user)"));
+expect("Unified dashboard tracking metrics use the canonical scoped counters", dashboard.includes("getTrackingCountSummary(sql, user, { from, to })"));
 expect("Old unconditional branch-or-event tracking predicate is removed", !orders.includes('access.dataScope === "all" || access.branchCodes.includes'));
 
 console.log("Tracking assigned-order visibility checks passed.");

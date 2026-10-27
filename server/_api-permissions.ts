@@ -75,6 +75,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
     const map: Record<string, string> = {
       meta: "system.operations.access", vehicles: "operations.inventory.view", vehicle: "operations.vehicle.view",
       movements: "operations.movements.view", transfers: "operations.transfers.view", approvals: "operations.approvals.view", sales_orders_followup: "operations.sales_orders_followup.view",
+      sales_followup_approval_candidates: "platform.superadmin",
       dashboard_vehicles: "operations.inventory.view", dashboard_requests: "operations.transfers.view", dashboard_shortages: "operations.inventory.view",
     };
     return req(map[resource] || "system.operations.access", "operations", resource, "view");
@@ -85,7 +86,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
     create_vehicle: "operations.vehicle.create", update_vehicle: "operations.vehicle.edit", delete_vehicle: "operations.vehicle.delete",
     archive_vehicle: "operations.vehicle.archive", import_vehicles: "operations.vehicle.import", move_vehicles: "operations.movement.create",
     create_transfer: "operations.transfer.create", transfer_action: "operations.request.receive_order", approval_action: "operations.approval.financial",
-    save_setting: "settings.operations.manage",
+    save_setting: "settings.operations.manage", sales_followup_approval_action: "platform.superadmin",
   };
   if (action === "approval_action" && clean(payload.type) === "administrative") return req("operations.approval.administrative", "operations", "approvals", action);
   if (action === "move_vehicles" && clean(payload.newStatus) === "delivered") return req("operations.movement.delivered", "operations", "movement", action);

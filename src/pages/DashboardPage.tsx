@@ -418,8 +418,16 @@ function isToday(value: unknown) {
   return riyadhDateKey(value) === riyadhDateKey(new Date());
 }
 
+function dashboardMonthRange(month: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
 function defaultDashboardRange() {
-  return { from: riyadhDateKey(new Date(Date.now() - 6 * 86400000)), to: riyadhDateKey(new Date()) };
+  // Calendar month in Saudi time, including its last day (not only days elapsed).
+  return dashboardMonthRange(riyadhDateKey(new Date()).slice(0, 7))!;
 }
 
 function dashboardRangeIsMonthly(range: { from: string; to: string }) {
@@ -435,8 +443,11 @@ function dashboardRangeIsWeekly(range: { from: string; to: string }) {
 }
 
 function dashboardRangeLabel(range: { from: string; to: string }) {
-  const defaultRange = defaultDashboardRange();
-  if (range.from === defaultRange.from && range.to === defaultRange.to) return "آخر 7 أيام";
+  if (dashboardRangeIsMonthly(range)) {
+    const [year, month] = range.from.slice(0, 7).split("-").map(Number);
+    return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", { month: "long", year: "numeric", timeZone: "Asia/Riyadh" })
+      .format(new Date(Date.UTC(year, month - 1, 15)));
+  }
   return `${range.from} — ${range.to}`;
 }
 
@@ -559,9 +570,9 @@ export function DashboardPage() {
 
   async function openTrackingList(title: string, status: TrackingStatus) {
     const requestId = ++detailsRequestId.current;
-    setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
+    setDetails({ title, subtitle: "طلبات الفترة المختارة حسب الحالة", loading: true, trackingOrders: [] });
     try {
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false })}`);
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false, from: appliedRange.from, to: appliedRange.to })}`);
       if (detailsRequestId.current !== requestId) return;
       const trackingOrders = [...(payload.orders || [])].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
       setDetails({ title, subtitle: "اضغط على أي طلب لفتح تفاصيله داخل الداش بورد", trackingOrders });
@@ -742,13 +753,14 @@ export function DashboardPage() {
                 <CalendarBlank size={19} /> {dashboardRangeLabel(appliedRange)}
               </button>
               {dateOpen ? <div className="dashboard-date-popover">
-                <header><strong>مدة بيانات الداش بورد</strong><span>اختر تاريخ البداية والنهاية</span></header>
+                <header><strong>مدة بيانات الداش بورد</strong><span>الشهر الميلادي كاملًا افتراضيًا، ويمكنك اختيار شهر آخر أو تحديد فترة مخصصة.</span></header>
+                <label className="dashboard-month-picker"><span>اختيار شهر</span><input type="month" value={dashboardRangeIsMonthly(draftRange) ? draftRange.from.slice(0, 7) : ""} onChange={(event) => { const range = dashboardMonthRange(event.target.value); if (range) setDraftRange(range); }} /></label>
                 <div className="dashboard-date-fields">
                   <label><span>من تاريخ</span><input type="date" value={draftRange.from} max={draftRange.to || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, from: event.target.value }))} /></label>
                   <label><span>إلى تاريخ</span><input type="date" value={draftRange.to} min={draftRange.from || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, to: event.target.value }))} /></label>
                 </div>
                 {rangeInvalid ? <p>تأكد أن تاريخ البداية يسبق تاريخ النهاية.</p> : null}
-                <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>آخر 7 أيام</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
+                <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>الشهر الحالي</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
               </div> : null}
             </div>
         </div>

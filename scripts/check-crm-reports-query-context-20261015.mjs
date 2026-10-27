@@ -27,8 +27,8 @@ verify('separate reports expressions use matching schema context', source.includ
 const salesFactsStart = source.indexOf('const salesFacts = await sql<any[]>`');
 const salesFactsEnd = source.indexOf('const [storedQuality]', salesFactsStart);
 const salesFacts = source.slice(salesFactsStart, salesFactsEnd);
-verify('sales facts select raw crm.leads and use the base-table branch expression', salesFacts.includes('left join crm.leads l on l.id=st.lead_id') && salesFacts.includes('(${transactionCurrentBranchCodeSql})=any(${scope.branchCodes}::text[])'));
-verify('sales facts use no effective-only branch fragment and retain current branch only for access scope', !salesFacts.includes('currentLeadBranchCodeSql') && (salesFacts.match(/transactionCurrentBranchCodeSql/g) || []).length >= 2);
+verify('sales facts select raw crm.leads and use the base-table branch expression', salesFacts.includes('left join crm.leads l on l.id=st.lead_id') && salesFacts.includes('(${transactionAccessBranchSql})=any(${scope.branchCodes}::text[])'));
+verify('sales facts use no effective-lead-only SQL and switch branch authorization for branch managers', !salesFacts.includes('currentLeadBranchCodeSql') && salesFacts.includes('transactionAccessBranchSql') && source.includes('scope.branchManager ? transactionBranchCodeSql : transactionCurrentBranchCodeSql'));
 verify('sale attribution and explicit branch filter both use the historical sale branch', salesFacts.includes('(${transactionBranchCodeSql}) as branch_code') && salesFacts.includes('(${transactionBranchCodeSql})=${branch || null}') && !salesFacts.includes('then ${transactionCurrentBranchCodeSql} else (${transactionBranchCodeSql}) end'));
 verify('no database schema mutation is introduced by the report fix', !/\b(?:alter table|drop table|create table)\b/i.test(salesFacts));
 console.log(`CRM reports SQL query-context checks: ${validations.length}/${validations.length} passed`);

@@ -19,7 +19,7 @@ const styles = read("src/styles.css");
 
 assert(trackingCounts.includes("export async function getTrackingCountSummary"), "Tracking counters have one canonical server helper");
 assert(trackingCounts.includes("status='not_started'") && trackingCounts.includes("status='in_progress'") && trackingCounts.includes("status='completed'"), "Canonical Tracking helper counts the three active statuses");
-assert(dashboardData.includes("const counts = await getTrackingCountSummary(sql, user);"), "Unified dashboard uses canonical all-active Tracking counters");
+assert(dashboardData.includes("const counts = await getTrackingCountSummary(sql, user, { from, to });"), "Unified dashboard uses canonical Tracking counters filtered to the selected month");
 assert(!dashboardData.includes("data.operations.salesTracking.notStarted ="), "Unified dashboard no longer maintains a separate drifting not-started query");
 assert(trackingOrders.includes("getTrackingCountSummary(sql, user, { from, to })"), "Tracking orders page uses the same canonical counter helper");
 
@@ -27,7 +27,7 @@ const trackingListStart = dashboardPage.indexOf("async function openTrackingList
 const trackingListEnd = dashboardPage.indexOf("async function openTrackingOrder", trackingListStart);
 const trackingListBlock = dashboardPage.slice(trackingListStart, trackingListEnd);
 assert(trackingListStart >= 0 && trackingListEnd > trackingListStart, "Unified dashboard Tracking list opener is present");
-assert(!trackingListBlock.includes("appliedRange"), "Unified dashboard Tracking drawers use the same unbounded active list as Tracking");
+assert(trackingListBlock.includes("from: appliedRange.from, to: appliedRange.to"), "Unified dashboard Tracking drawers match the dashboard date range");
 assert(dashboardPage.includes('title="إجمالي المخزون" badge={operations?.inventory.actualTotal ?? null}'), "Inventory card exposes its total in the card header");
 assert(dashboardPage.includes('badge !== undefined ? "operation-card-has-badge"'), "Operation cards mark headers that contain total badges");
 assert(styles.includes(".dashboard-operation-widget .operation-card-has-badge .operation-card-head { padding-left: 52px; }"), "Operation total badge is clear of the drag handle");

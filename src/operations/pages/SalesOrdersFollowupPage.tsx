@@ -4,12 +4,16 @@ import {
   CheckCircle,
   ClipboardText,
   CurrencyCircleDollar,
+  ShieldCheck,
   MagnifyingGlass,
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
 import { operationsFetch, queryString } from "../api";
 import type { SalesOrderFollowupRow, SalesOrdersFollowupResponse } from "../types";
+import { useAuth } from "../../auth/AuthContext";
+import { isPlatformAdmin } from "../../systemAccess";
+import { SalesFollowupQuickApprovalModal } from "../components/SalesFollowupQuickApprovalModal";
 
 const statusOptions = [
   ["", "كل الحالات"],
@@ -46,6 +50,9 @@ function StateBadge({ done }: { done: boolean }) {
 }
 
 export function SalesOrdersFollowupPage() {
+  const { user } = useAuth();
+  const canUseQuickApprovals = isPlatformAdmin(user);
+  const [quickApprovalsOpen, setQuickApprovalsOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -121,7 +128,7 @@ export function SalesOrdersFollowupPage() {
       </section>
 
       <section className="panel sales-orders-followup-panel">
-        <form className="sales-orders-followup-toolbar" onSubmit={submitSearch}>
+        <form className={`sales-orders-followup-toolbar ${canUseQuickApprovals ? "has-admin-approvals" : ""}`} onSubmit={submitSearch}>
           <label className="sales-orders-followup-search">
             <MagnifyingGlass size={19} />
             <input
@@ -147,6 +154,7 @@ export function SalesOrdersFollowupPage() {
           <button type="button" className="sales-orders-followup-refresh" disabled={loading} onClick={() => void load(page)}>
             <ArrowClockwise size={17} className={loading ? "spin" : ""} />تحديث
           </button>
+          {canUseQuickApprovals ? <button type="button" className="sales-orders-followup-refresh sales-orders-followup-approve" onClick={() => setQuickApprovalsOpen(true)}><ShieldCheck size={18} />الموافقات الناقصة</button> : null}
         </form>
 
         <div className="sales-orders-followup-table-wrap">
@@ -205,6 +213,7 @@ export function SalesOrdersFollowupPage() {
           </div>
         </footer>
       </section>
+      {canUseQuickApprovals ? <SalesFollowupQuickApprovalModal open={quickApprovalsOpen} onClose={() => setQuickApprovalsOpen(false)} onChanged={() => void load(page)} /> : null}
     </div>
   );
 }

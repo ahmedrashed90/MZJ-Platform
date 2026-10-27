@@ -2133,6 +2133,7 @@ async function listSalesOrderFollowup(
   const requestedBranch = clean(request.query.branch);
   const branch = requestedBranch.toLowerCase() === "online" ? "hall" : requestedBranch;
   const completedOnly = clean(request.query.completed).toLowerCase() === "true";
+  const pendingApprovalsOnly = clean(request.query.resource) === "sales_followup_approval_candidates";
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const access = getSystemAccess(user, "operations");
@@ -2168,6 +2169,7 @@ async function listSalesOrderFollowup(
         else 0
       end)::numeric(14,2) as remaining_amount,
       o.sales_followup_completed_at,
+      coalesce(o.is_archived,false) as order_archived,
       o.sales_followup_completed_by::text,
       o.sales_followup_completed_by_name,
       erp_order.erp_user_id,
@@ -2378,6 +2380,18 @@ async function listSalesOrderFollowup(
                   `
                     : sql`true`;
 
+  // This admin-only selector is built from the SAME tracking order/vehicle
+  // cohort as متابعة طلبات البيع. Do not select every inventory approval:
+  // only actionable pending-sale vehicles may be approved from this shortcut.
+  const pendingApprovalClause = pendingApprovalsOnly ? sql`
+    (stage_6_completed=false or stage_7_completed=false)
+    and operations_vehicle_id is not null
+    and normalized_vin<>''
+    and upper(normalized_vin) not like 'PENDING-%'
+    and order_archived=false
+    and operations_status_code='under_delivery'
+  ` : sql`true`;
+
   const [summaryRows, countRows, rows, branchRows] = await Promise.all([
     sql<any[]>`
       with scoped as (${scopedRows})
@@ -2389,11 +2403,11 @@ async function listSalesOrderFollowup(
         count(*) filter (where stage_10_completed=true)::int as delivered
       from scoped
     `,
-    sql<any[]>`with scoped as (${scopedRows}) select count(*)::int as total from scoped where ${statusClause}`,
+    sql<any[]>`with scoped as (${scopedRows}) select count(*)::int as total from scoped where ${statusClause} and ${pendingApprovalClause}`,
     sql<any[]>`
       with scoped as (${scopedRows})
       select * from scoped
-      where ${statusClause}
+      where ${statusClause} and ${pendingApprovalClause}
       order by (stage_3_completed and stage_4_completed and stage_5_completed and stage_6_completed and stage_7_completed and stage_9_completed and stage_10_completed),updated_at desc,sales_order_no desc,tracking_vehicle_id
       limit ${pageSize} offset ${offset}
     `,
@@ -2448,6 +2462,58 @@ async function listSalesOrderFollowup(
   };
 }
 
+
+async function approveSalesFollowupVehicle(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, any>,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  if (!hasPermission(user, "platform.superadmin")) {
+    throw new OperationError(403, "FORBIDDEN", "اعتماد السيارات من متابعة طلبات البيع متاح لمدير النظام فقط");
+  }
+  const vehicleId = clean(body.vehicleId);
+  const trackingVehicleId = clean(body.trackingVehicleId);
+  const approvalType = clean(body.approvalType);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(vehicleId) || !uuid.test(trackingVehicleId) || !["financial", "administrative"].includes(approvalType)) {
+    throw new OperationError(400, "VALIDATION_ERROR", "حدد رقم هيكل ونوع الموافقة الصحيحين");
+  }
+  // Validate the exact selected tracking vehicle before any approval mutation;
+  // a client-supplied vehicleId must not approve another car or an archived order.
+  const [target] = await sql<any[]>`
+    select v.id::text,v.vin,v.status_code,
+      coalesce(a.financial_approved,false) as financial_approved,
+      coalesce(a.administrative_approved,false) as administrative_approved
+    from tracking.order_vehicles tv
+    join tracking.orders o on o.id=tv.order_id
+    join operations.vehicles v on v.is_deleted=false and (
+      tv.vehicle_id=v.id or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(v.vin)))
+    )
+    left join lateral (
+      select financial_approved,administrative_approved from operations.vehicle_approvals va
+      where va.vehicle_id=v.id and va.is_active=true
+      order by va.cycle_no desc,va.updated_at desc limit 1
+    ) a on true
+    where tv.id=${trackingVehicleId}::uuid and v.id=${vehicleId}::uuid
+      and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+      and coalesce(o.is_archived,false)=false and o.sales_followup_completed_at is null
+      and nullif(trim(tv.vin),'') is not null
+      and upper(trim(tv.vin)) not like 'PENDING-%'
+    limit 1
+  `;
+  if (!target || target.status_code !== "under_delivery") {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست ضمن طلب بيع جارٍ بحالة مباع تحت التسليم");
+  }
+  if (approvalType === "financial" ? target.financial_approved : target.administrative_approved) {
+    throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+  }
+  return approvalAction(sql, {
+    vehicleId,
+    approvalType,
+    approvalAction: "approve",
+    note: clean(body.note).slice(0, 1000),
+  }, user);
+}
 
 async function completeSalesOrderFollowup(
   sql: ReturnType<typeof getSql>,
@@ -2544,6 +2610,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
         return response.status(200).json(await listSalesOrderFollowup(sql, request, user));
       }
+      if (resource === "sales_followup_approval_candidates") {
+        if (!requireOperationsPermission(user, "platform.superadmin", response)) return;
+        if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
+        return response.status(200).json(await listSalesOrderFollowup(sql, request, user));
+      }
       if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
       if (resource === "dashboard_shortages") return response.status(200).json(await dashboardShortages(sql, request, user));
       if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));
@@ -2579,6 +2650,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       result = await transferAction(sql, body, user);
     } else if (action === "approval_action") {
       result = await approvalAction(sql, body, user);
+    } else if (action === "sales_followup_approval_action") {
+      if (!requireOperationsPermission(user, "platform.superadmin", response)) return;
+      result = await approveSalesFollowupVehicle(sql, body, user);
     } else if (action === "save_setting") {
       if (!requireOperationsPermission(user, "settings.operations.manage", response)) return;
       result = await saveOperationSetting(sql, body, user);
@@ -2591,7 +2665,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
     }
-    await emitOperationsNotification(user, action, body, result).catch((error) => console.error("Operations notification failed", error));
+    await emitOperationsNotification(user, action === "sales_followup_approval_action" ? "approval_action" : action, body, result).catch((error) => console.error("Operations notification failed", error));
     return response.status(200).json({ ...(result as object), requestId: traceId });
   } catch (error) {
     console.error("Operations API failed", { traceId, method: request.method, resource: request.query.resource, error });
