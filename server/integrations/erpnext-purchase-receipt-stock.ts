@@ -24,6 +24,7 @@ type NormalizedVehicle = {
   exteriorColor: string;
   warehouse: string;
   locationCode: string;
+  providedLocationCode: string;
   erpStatus: string;
   statusCode: string;
   stateNote: string;
@@ -31,12 +32,20 @@ type NormalizedVehicle = {
 
 const text = (value: unknown) => String(value ?? '').trim();
 
-// Explicitly verified locations only. Never guess a warehouse -> platform location.
+// Match NEXT ERP's warehouse names to existing Operations location CODES.
+// Never rename either system's locations, create a new location, or interpret
+// the NEXT ERP "جميع المخازن - ممزال" display filter as a physical warehouse.
 const ERP_WAREHOUSE_LOCATIONS: Record<string, string> = {
+  'الصالة - ممزال': 'hall',
+  'الوكالات - ممزال': 'agency',
+  'خارج الصالة - ممزال': 'hall_out',
+  'مستودع عكاظ - ممزال': 'warehouse',
+  'معرض القادسية - ممزال': 'qadisiyah',
+  'معرض الملتقي - ممزال': 'multaqa',
+  // Earlier confirmed NEXT ERP names / spelling variants.
   'الصالة - منزل': 'hall',
   'معرض القادسية': 'qadisiyah',
-  'معرض الملتقي - ممزال': 'multaqa',
-  'خارج الصالة - ممزال': 'hall_out',
+  'معرض الملتقى - ممزال': 'multaqa',
 };
 
 export function mapNextReceiptVehicle(raw: IncomingVehicle): NormalizedVehicle {
@@ -45,6 +54,9 @@ export function mapNextReceiptVehicle(raw: IncomingVehicle): NormalizedVehicle {
   const erpStatus = text(raw.car_status);
   const stateNote = text(raw.detail);
   const locationCode = ERP_WAREHOUSE_LOCATIONS[warehouse] || '';
+  // The Worker may provide the resolved code too; verify it against the
+  // literal NEXT warehouse name instead of trusting an arbitrary override.
+  const providedLocationCode = text(raw.locationCode);
   const statusCode = stateNote
     ? 'has_notes'
     : erpStatus === 'محجوزة'
@@ -62,6 +74,7 @@ export function mapNextReceiptVehicle(raw: IncomingVehicle): NormalizedVehicle {
     exteriorColor: text(raw.custom_external_color),
     warehouse,
     locationCode,
+    providedLocationCode,
     erpStatus,
     statusCode,
     stateNote,
@@ -125,6 +138,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     seen.add(key);
     if (!car.carName || !car.statement || !car.modelYear) errors.push({ index, vin: car.vin, error: 'Missing car identity' });
     if (!car.locationCode) errors.push({ index, vin: car.vin, error: `Unmapped NEXT warehouse: ${car.warehouse || '(blank)'}` });
+    else if (car.providedLocationCode && car.providedLocationCode !== car.locationCode) {
+      errors.push({ index, vin: car.vin, error: `NEXT warehouse/locationCode mismatch: ${car.warehouse} -> ${car.providedLocationCode} (expected ${car.locationCode})` });
+    }
     if (!car.statusCode) errors.push({ index, vin: car.vin, error: `Unmapped NEXT status: ${car.erpStatus || '(blank)'}` });
   });
   if (errors.length) return response.status(422).json({ ok: false, receipt, dryRun, errors });

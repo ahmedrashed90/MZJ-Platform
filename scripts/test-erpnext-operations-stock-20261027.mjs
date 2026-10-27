@@ -80,9 +80,11 @@ const sql = function (parts, ...values) {
   const query = parts.join('?');
   if (query.includes('from operations.locations')) return Promise.resolve([
     { id: 'location-multaqa', code: 'multaqa' }, { id: 'location-hallout', code: 'hall_out' },
+    { id: 'location-agency', code: 'agency' }, { id: 'location-warehouse', code: 'warehouse' },
+    { id: 'location-hall', code: 'hall' }, { id: 'location-qadisiyah', code: 'qadisiyah' },
   ]);
   if (query.includes('from operations.vehicle_statuses')) return Promise.resolve([
-    { code: 'has_notes' }, { code: 'reserved' },
+    { code: 'has_notes' }, { code: 'reserved' }, { code: 'available_for_sale' },
   ]);
   if (query.includes('from operations.vehicles')) return Promise.resolve(
     query.includes('limit 1') && values.includes('283542')
@@ -108,6 +110,25 @@ assert.equal(mapNextReceiptVehicle(second).locationCode, 'hall_out');
 assert.equal(mapNextReceiptVehicle({ ...primary, serial_no: '001689' }).vin, '001689');
 assert.equal(mapNextReceiptVehicle({ ...primary, detail: '' }).statusCode, 'available_for_sale');
 assert.equal(mapNextReceiptVehicle({ ...primary, warehouse: 'unknown' }).locationCode, '');
+// Every real NEXT ERP location must map to an EXISTING Operations code,
+// without changing the source name or inventing a seventh location.
+const warehouseCases = [
+  ['الصالة - ممزال', 'hall'],
+  ['الوكالات - ممزال', 'agency'],
+  ['خارج الصالة - ممزال', 'hall_out'],
+  ['مستودع عكاظ - ممزال', 'warehouse'],
+  ['معرض القادسية - ممزال', 'qadisiyah'],
+  ['معرض الملتقي - ممزال', 'multaqa'],
+  ['الصالة - منزل', 'hall'],
+  ['معرض القادسية', 'qadisiyah'],
+  ['معرض الملتقى - ممزال', 'multaqa'],
+];
+for (const [warehouse, locationCode] of warehouseCases) {
+  const converted = mapNextReceiptVehicle({ ...primary, warehouse, locationCode });
+  assert.equal(converted.locationCode, locationCode, `Incorrect location for ${warehouse}`);
+  assert.equal(converted.warehouse, warehouse, 'NEXT warehouse name must stay unchanged');
+}
+assert.equal(mapNextReceiptVehicle({ ...primary, warehouse: 'جميع المخازن - ممزال', locationCode: 'warehouse' }).locationCode, '');
 const resp = {
   headers: {}, statusCode: 200, setHeader(k, v) { this.headers[k] = v; return this; },
   status(code) { this.statusCode = code; return this; },
@@ -122,6 +143,34 @@ assert.equal(resp.body.results[0].action, 'would_insert');
 assert.equal(resp.body.results[0].statusCode, 'has_notes');
 assert.equal(resp.body.results[1].action, 'existing_unchanged');
 assert.equal(resp.body.results[1].existingStatus, 'delivered');
+
+const agencyVehicle = {
+  ...primary, serial_no: '10203066', name: '10203066',
+  warehouse: 'الوكالات - ممزال', locationCode: 'agency', detail: '',
+};
+await handler({ method: 'POST', headers: { 'x-mzj-stock-key': 'test-platform-key' }, body: {
+  receipt: 'MAT-PRE-2026-00148', event: 'on_submit', dryRun: true, vehicles: [agencyVehicle],
+} }, resp);
+assert.equal(resp.statusCode, 200);
+assert.equal(resp.body.results[0].locationCode, 'agency');
+assert.equal(resp.body.results[0].action, 'would_insert');
+assert.equal(resp.body.writes, 0);
+
+// Do not let a Worker-supplied code override the actual NEXT warehouse name.
+await handler({ method: 'POST', headers: { 'x-mzj-stock-key': 'test-platform-key' }, body: {
+  receipt: 'MAT-PRE-2026-00148', event: 'on_submit', dryRun: true,
+  vehicles: [{ ...agencyVehicle, locationCode: 'hall' }],
+} }, resp);
+assert.equal(resp.statusCode, 422);
+assert.match(resp.body.errors[0].error, /warehouse\/locationCode mismatch/);
+
+// "All warehouses" is a UI filter, not a valid vehicle location.
+await handler({ method: 'POST', headers: { 'x-mzj-stock-key': 'test-platform-key' }, body: {
+  receipt: 'MAT-PRE-2026-00148', event: 'on_submit', dryRun: true,
+  vehicles: [{ ...agencyVehicle, warehouse: 'جميع المخازن - ممزال', locationCode: 'warehouse' }],
+} }, resp);
+assert.equal(resp.statusCode, 422);
+assert.match(resp.body.errors[0].error, /Unmapped NEXT warehouse/);
 assert.equal(writes, 0);
 assert.equal(schemaBootstraps, 0);
-console.log('PASS: Worker preview; original receipt VINs; site isolation; Platform mapping; dry-run; duplicates; sale protection; zero writes');
+console.log('PASS: Worker preview; original receipt VINs; site isolation; six exact NEXT warehouse mappings; unchanged names; strict locationCode validation; dry-run; duplicates; sale protection; zero writes');
