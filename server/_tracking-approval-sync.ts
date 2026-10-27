@@ -1,9 +1,10 @@
 /**
  * Source-of-truth bridge for Tracking stages 6 (financial) and 7 (administrative).
- * An operations approval is per VIN/approval cycle. Tracking stages are per
- * vehicle within a sales order. Normal syncing targets only the newest active
- * sale. Late approvals on an archived, newest non-cancelled sale use an explicit
- * allowArchived path; older orders and sibling vehicles remain untouched.
+ * Inventory vehicles use operations.vehicle_approvals (per VIN/cycle).
+ * External sales without inventory use tracking.sale_vehicle_approvals (per
+ * sales-order vehicle). Tracking stages are projections of the corresponding
+ * approval, not a second approval system. Syncing targets only the newest
+ * sale; archived late approvals require explicit allowArchived.
  *
  * All updates (including the tracking summary and the audit trail) can run
  * inside the caller's operations transaction so the two systems cannot commit
@@ -26,12 +27,15 @@ export async function syncTrackingApprovalStagesForTrackingVehicle(
   const [link] = await db`
     select tv.id::text as tracking_vehicle_id,tv.order_id::text as order_id,
       o.is_archived,o.is_cancelled,o.is_deleted,
-      ov.id::text as operations_vehicle_id,ov.vin,
-      approval.financial_approved,approval.administrative_approved,
-      approval.financial_approved_by::text as financial_approved_by,
-      approval.administrative_approved_by::text as administrative_approved_by,
-      approval.financial_approved_by_name,approval.administrative_approved_by_name,
-      approval.financial_approved_at,approval.administrative_approved_at
+      ov.id::text as operations_vehicle_id,coalesce(ov.vin,tv.vin) as vin,
+      (coalesce(external_approval.financial_approved,false) or coalesce(approval.financial_approved,false)) as financial_approved,
+      (coalesce(external_approval.administrative_approved,false) or coalesce(approval.administrative_approved,false)) as administrative_approved,
+      (case when external_approval.financial_approved then external_approval.financial_approved_by else approval.financial_approved_by end)::text as financial_approved_by,
+      (case when external_approval.administrative_approved then external_approval.administrative_approved_by else approval.administrative_approved_by end)::text as administrative_approved_by,
+      case when external_approval.financial_approved then external_approval.financial_approved_by_name else approval.financial_approved_by_name end as financial_approved_by_name,
+      case when external_approval.administrative_approved then external_approval.administrative_approved_by_name else approval.administrative_approved_by_name end as administrative_approved_by_name,
+      case when external_approval.financial_approved then external_approval.financial_approved_at else approval.financial_approved_at end as financial_approved_at,
+      case when external_approval.administrative_approved then external_approval.administrative_approved_at else approval.administrative_approved_at end as administrative_approved_at
     from tracking.order_vehicles tv
     join tracking.orders o on o.id=tv.order_id
     left join lateral (
@@ -54,22 +58,25 @@ export async function syncTrackingApprovalStagesForTrackingVehicle(
       order by va.cycle_no desc,va.updated_at desc
       limit 1
     ) approval on true
+    left join tracking.sale_vehicle_approvals external_approval
+      on external_approval.tracking_vehicle_id=tv.id
     where tv.id=${trackingVehicleId}::uuid
   `;
   if (!link || link.is_deleted || link.is_cancelled || (link.is_archived && !options.allowArchived)) return { orderId: "", changed: 0 };
 
-  if (link.operations_vehicle_id) {
-    // Approval flags belong to the newest eligible sale for this VIN.
-    // Historical/archived sales are never changed by normal sync.
+  if (link.operations_vehicle_id || link.vin) {
+    // Both inventory and external approvals belong to the newest eligible
+    // sale for this VIN. Historical sales keep their own stage snapshots.
     const [latest] = await db`
       select tv.id::text as id from tracking.order_vehicles tv
       join tracking.orders o on o.id=tv.order_id
       where coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
         and (${options.allowArchived === true}=true or coalesce(o.is_archived,false)=false)
         and (
-          tv.vehicle_id=${link.operations_vehicle_id}::uuid
-          or (tv.vehicle_id is null and nullif(trim(tv.vin),'') is not null
-              and upper(trim(tv.vin))=upper(trim(${link.vin})))
+          (${link.operations_vehicle_id || null}::uuid is not null
+            and tv.vehicle_id=${link.operations_vehicle_id || null}::uuid)
+          or (nullif(trim(tv.vin),'') is not null
+              and upper(trim(tv.vin))=upper(trim(${link.vin || ""})))
         )
       order by o.order_date desc nulls last,o.created_at desc,tv.created_at desc,tv.id desc
       limit 1

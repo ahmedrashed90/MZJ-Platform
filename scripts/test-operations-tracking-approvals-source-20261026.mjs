@@ -15,8 +15,8 @@ const tracking = read("server/tracking/orders.ts");
 const trackingPage = read("src/tracking/pages/TrackingOrdersPage.tsx");
 const trackingUtils = read("server/_tracking-utils.ts");
 const approvalCycle = read("server/_operations-approval-cycle.ts");
-assert.match(operations, /coalesce\(current_approval\.financial_approved,false\) as stage_6_completed/);
-assert.match(operations, /coalesce\(current_approval\.administrative_approved,false\) as stage_7_completed/);
+assert.ok(operations.includes('(coalesce(external_approval.financial_approved,false) or coalesce(current_approval.financial_approved,false)) as stage_6_completed'));
+assert.ok(operations.includes('(coalesce(external_approval.administrative_approved,false) or coalesce(current_approval.administrative_approved,false)) as stage_7_completed'));
 assert.match(operations, /await syncTrackingApprovalStagesForOperationsVehicle\(tx, vehicleId/);
 assert.match(tracking, /if \(isApprovalControlledTrackingStage\(row.sort_order\)\)/);
 assert.match(trackingPage, /!approvalControlled && !selected.is_archived/);
@@ -135,6 +135,15 @@ for(const setup of [{oldOrder:true},{latest:false}]) {
   assert.equal(result.changed,0);
   assert.deepEqual(state.statuses,{6:"pending",7:"pending"});
 }
+// An external sale with no Operations vehicle still projects its canonical
+// order-vehicle approval into stage 6 and leaves stage 7 independent.
+{
+  const {state,sql}=dbHarness({linked:false,financial:true});
+  const result=await syncTrackingApprovalStagesForTrackingVehicle(sql,"tracking-vehicle-1",{id:"finance-user"});
+  assert.equal(result.changed,1);
+  assert.deepEqual(state.statuses,{6:"completed",7:"pending"});
+  assert.ok(state.queries.some(q=>q.includes("tracking.sale_vehicle_approvals")));
+}
 // Operations approval actions call the same canonical routine with no second source.
 {
   const {state,sql}=dbHarness({financial:true,administrative:false});
@@ -142,4 +151,4 @@ for(const setup of [{oldOrder:true},{latest:false}]) {
   assert.equal(state.statuses[6],"completed");
   assert.equal(state.statuses[7],"pending");
 }
-console.log("PASS: operations approvals exclusively own tracking 6/7; approve, revert, reset, historic, idempotency, multi-vehicle guards, and UI/API write protection");
+console.log("PASS: stock and external sales approvals own tracking 6/7; approve, revert, reset, historic, idempotency, multi-vehicle guards, and UI/API write protection");

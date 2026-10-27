@@ -15,12 +15,12 @@ function check(label, value) { assert.ok(value, label); passed++; console.log(`P
 const clause = operations.match(/const pendingApprovalClause = pendingApprovalsOnly \? sql`([\s\S]*?)` : sql`true`;/)?.[1];
 check('Candidate listing includes either approval missing', !!clause && clause.includes('stage_6_completed=false or stage_7_completed=false'));
 check('Candidate listing never silently hides archived or delivered', !!clause && !/operations_status_code|order_archived|operations_vehicle_id/.test(clause));
-check('Archived completed orders are included in approval candidates', operations.includes('(${pendingApprovalsOnly}=true and (o.sales_followup_completed_at is null or coalesce(o.is_archived,false)=true))'));
+check('Every non-cancelled sale with missing approvals is considered, including completed and archived', operations.includes('${pendingApprovalsOnly}=true') && operations.includes('coalesce(o.is_cancelled,false)=false'));
 check('Candidate paging and searches preserved', modal.includes('payload.pagination.pages > 1') && operations.includes('limit ${pageSize} offset ${offset}'));
 check('Superadmin required at gateway and endpoint', gateway.includes('sales_followup_approval_candidates: "platform.superadmin"') && gateway.includes('sales_followup_approval_action: "platform.superadmin"') && operations.includes('hasPermission(user, "platform.superadmin")'));
-check('Archived order is eligible but cancelled and deleted never are', operations.includes('(coalesce(o.is_archived,false)=true or o.sales_followup_completed_at is null)') && operations.includes('coalesce(o.is_cancelled,false)=false') && operations.includes('coalesce(o.is_deleted,false)=false'));
+check('Archived and completed sales are eligible but cancelled and deleted never are', operations.includes('coalesce(o.is_cancelled,false)=false') && operations.includes('coalesce(o.is_deleted,false)=false'));
 check('Guard against older sales for same VIN remains', operations.includes('latest_order.id=tv.id') && operations.includes('latest?.id !== trackingVehicleId'));
-check('UI enables archived order while preserving invalid VIN/inventory guard', !modal.includes('if (row.order_archived) return') && modal.includes('!row.order_archived && !["under_delivery", "delivered"]') && modal.includes('if (!row.operations_vehicle_id)'));
+check('UI enables archived and external order while preserving invalid VIN guard', !modal.includes('if (row.order_archived) return') && modal.includes('if (row.operations_vehicle_id && !row.order_archived') && !modal.includes('if (!row.operations_vehicle_id) return'));
 check('UI confirms retrospective approval and preserves archive', modal.includes('selected.order_archived') && modal.includes('الاحتفاظ بالأرشفة'));
 check('Archived stages use specific vehicle not all historical orders', operations.includes('syncTrackingApprovalStagesForTrackingVehicle(tx, trackingVehicleId') && operations.includes('{ allowArchived: true }'));
 check('Normal delivered approval and under_delivery approval paths stay intact', operations.includes('syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId') && operations.includes('return approvalAction(sql, {'));
@@ -102,7 +102,7 @@ const handler=new Function('OperationError','clean','hasPermission','recordRetro
  async (...args)=>{route.push({type:'normal',args});return {ok:true};},
 );
 const mockUser={...who,superadmin:true};
-function row(status_code,order_archived,financial_approved=false){return {id:vehicleId,vin:'VIN-123',status_code,order_archived,financial_approved,administrative_approved:false};}
+function row(status_code,order_archived,financial_approved=false){return {operations_vehicle_id:vehicleId,vin:'VIN-123',status_code,order_archived,financial_approved,administrative_approved:false};}
 function sqlTarget(target){return async()=>target?[target]:[];}
 const input={vehicleId,trackingVehicleId:trackingId,approvalType:'financial'};
 route=[];await handler(sqlTarget(row('available_for_sale',true)),input,mockUser);

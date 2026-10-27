@@ -2176,11 +2176,12 @@ async function listSalesOrderFollowup(
       coalesce(stage_status.stage_3_completed,false) as stage_3_completed,
       coalesce(stage_status.stage_4_completed,false) as stage_4_completed,
       coalesce(stage_status.stage_5_completed,false) as stage_5_completed,
-      coalesce(current_approval.financial_approved,false) as stage_6_completed,
-      coalesce(current_approval.administrative_approved,false) as stage_7_completed,
+      (coalesce(external_approval.financial_approved,false) or coalesce(current_approval.financial_approved,false)) as stage_6_completed,
+      (coalesce(external_approval.administrative_approved,false) or coalesce(current_approval.administrative_approved,false)) as stage_7_completed,
       coalesce(stage_status.stage_9_completed,false) as stage_9_completed,
       coalesce(stage_status.stage_10_completed,false) as stage_10_completed,
-      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at),coalesce(current_approval.updated_at,o.updated_at)) as updated_at
+      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at),
+        coalesce(current_approval.updated_at,o.updated_at),coalesce(external_approval.updated_at,o.updated_at)) as updated_at
     from tracking.orders o
     join tracking.order_vehicles tv on tv.order_id=o.id
     left join lateral (
@@ -2207,6 +2208,7 @@ async function listSalesOrderFollowup(
       order by va.cycle_no desc,va.updated_at desc
       limit 1
     ) current_approval on true
+    left join tracking.sale_vehicle_approvals external_approval on external_approval.tracking_vehicle_id=tv.id
     left join lateral (
       select so.erp_user_id,so.platform_user_id::text,so.platform_branch_code,so.platform_branch_name,so.erp_branch
       from integrations.erpnext_sales_orders so
@@ -2344,7 +2346,7 @@ async function listSalesOrderFollowup(
       and coalesce(o.is_cancelled,false)=false
       and (${ownOrdersOnly}=false or lower(trim(coalesce(erp_order.erp_user_id,'')))=${nextErpUserId})
       and (
-        (${pendingApprovalsOnly}=true and (o.sales_followup_completed_at is null or coalesce(o.is_archived,false)=true))
+        ${pendingApprovalsOnly}=true
         or (${pendingApprovalsOnly}=false and (
           (${completedOnly}=true and o.sales_followup_completed_at is not null)
           or (${completedOnly}=false and o.sales_followup_completed_at is null)
@@ -2506,7 +2508,7 @@ async function recordRetrospectiveSalesFollowupApproval(
       where tv.id=${trackingVehicleId}::uuid
         and coalesce(o.is_deleted,false)=false
         and coalesce(o.is_cancelled,false)=false
-        and (coalesce(o.is_archived,false)=true or o.sales_followup_completed_at is null)
+
         and (
           tv.vehicle_id=${vehicleId}::uuid
           or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
@@ -2601,6 +2603,119 @@ async function recordRetrospectiveSalesFollowupApproval(
   });
 }
 
+/**
+ * Approve a vehicle sold outside Operations inventory. A Tracking sales-order
+ * vehicle is sufficient to record an approval; do not insert fake inventory
+ * cars or use an inventory approval cycle for an external sale.
+ */
+async function recordExternalSalesFollowupApproval(
+  sql: ReturnType<typeof getSql>,
+  trackingVehicleId: string,
+  approvalType: "financial" | "administrative",
+  note: string,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  const permission = approvalType === "financial" ? "operations.approval.financial" : "operations.approval.administrative";
+  if (!hasPermission(user, "platform.superadmin") || !hasPermission(user, permission)) {
+    throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة المطلوبة");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [sale] = await tx<any[]>`
+      select tv.id::text as tracking_vehicle_id,tv.vin,o.id::text as order_id,
+        o.sales_order_no,coalesce(o.is_archived,false) as is_archived,
+        inventory.id::text as operations_vehicle_id
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      left join lateral (
+        select v.id from operations.vehicles v
+        where v.is_deleted=false and (
+          v.id=tv.vehicle_id or
+          (tv.vehicle_id is null and upper(trim(v.vin))=upper(trim(tv.vin)))
+        )
+        order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
+        limit 1
+      ) inventory on true
+      where tv.id=${trackingVehicleId}::uuid
+        and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+
+        and nullif(trim(tv.vin),'') is not null
+        and upper(trim(tv.vin)) not like 'PENDING-%'
+      for update of tv
+    `;
+    if (!sale || sale.operations_vehicle_id) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة ربط السيارة أو طلب البيع تغيّرت. حدّث القائمة قبل الاعتماد");
+    }
+    // A VIN may appear in multiple sales over time. Never approve an older
+    // transaction by mistake, even if its order is already archived.
+    const [latest] = await tx<any[]>`
+      select newer_tv.id::text as id
+      from tracking.order_vehicles newer_tv
+      join tracking.orders newer_o on newer_o.id=newer_tv.order_id
+      where coalesce(newer_o.is_deleted,false)=false
+        and coalesce(newer_o.is_cancelled,false)=false
+        and upper(trim(newer_tv.vin))=upper(trim(${sale.vin}))
+      order by newer_o.order_date desc nulls last,newer_o.created_at desc,
+        newer_tv.created_at desc,newer_tv.id desc
+      limit 1
+    `;
+    if (latest?.id !== trackingVehicleId) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "توجد عملية بيع أحدث لرقم الهيكل؛ لا يمكن اعتماد الطلب القديم");
+    }
+
+    await tx`
+      insert into tracking.sale_vehicle_approvals(tracking_vehicle_id)
+      values (${trackingVehicleId}::uuid)
+      on conflict (tracking_vehicle_id) do nothing
+    `;
+    const [before] = await tx<any[]>`
+      select * from tracking.sale_vehicle_approvals
+      where tracking_vehicle_id=${trackingVehicleId}::uuid
+      for update
+    `;
+    if (approvalType === "financial" ? before.financial_approved : before.administrative_approved) {
+      throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+    }
+    const [approval] = approvalType === "financial"
+      ? await tx<any[]>`
+          update tracking.sale_vehicle_approvals set
+            financial_approved=true,financial_approved_at=now(),
+            financial_approved_by=${who.id}::uuid,financial_approved_by_name=${who.name},
+            financial_note=${note || null},updated_at=now()
+          where tracking_vehicle_id=${trackingVehicleId}::uuid
+          returning *
+        `
+      : await tx<any[]>`
+          update tracking.sale_vehicle_approvals set
+            administrative_approved=true,administrative_approved_at=now(),
+            administrative_approved_by=${who.id}::uuid,administrative_approved_by_name=${who.name},
+            administrative_note=${note || null},updated_at=now()
+          where tracking_vehicle_id=${trackingVehicleId}::uuid
+          returning *
+        `;
+    const auditNote = [sale.is_archived ? "توثيق موافقة لاحقة على طلب مؤرشف" : "موافقة سيارة من خارج مخزون العمليات", note]
+      .filter(Boolean).join(" - ");
+    await tx`
+      insert into tracking.sale_vehicle_approval_events(
+        tracking_vehicle_id,order_id,approval_type,action,actor_id,actor_name,actor_role,note,before_data,after_data
+      ) values (
+        ${trackingVehicleId}::uuid,${sale.order_id}::uuid,${approvalType},'approve',
+        ${who.id}::uuid,${who.name},${who.role},${auditNote},${tx.json(before)},${tx.json(approval)}
+      )
+    `;
+    // Stage 6 / 7 are projections of the recorded approval, not independent
+    // clickable tracking actions. Sync the selected car only, atomically.
+    await syncTrackingApprovalStagesForTrackingVehicle(tx, trackingVehicleId, {
+      id: who.id,name: who.name,note: auditNote,
+    }, { allowArchived: sale.is_archived === true });
+    return {
+      ok: true,approval,externalVehicle: true,archivedOrder: sale.is_archived,
+      delivered: false,autoArchived: false,
+      message: "تم توثيق الموافقة للسيارة الخارجية وربطها بطلب البيع والتراكينج دون إنشاء سيارة في المخزون",
+    };
+  });
+}
+
 async function approveSalesFollowupVehicle(
   sql: ReturnType<typeof getSql>,
   body: Record<string, any>,
@@ -2613,63 +2728,81 @@ async function approveSalesFollowupVehicle(
   const trackingVehicleId = clean(body.trackingVehicleId);
   const approvalType = clean(body.approvalType);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuid.test(vehicleId) || !uuid.test(trackingVehicleId) || !["financial", "administrative"].includes(approvalType)) {
+  if (!uuid.test(trackingVehicleId) || (vehicleId && !uuid.test(vehicleId)) || !["financial", "administrative"].includes(approvalType)) {
     throw new OperationError(400, "VALIDATION_ERROR", "حدد رقم هيكل ونوع الموافقة الصحيحين");
   }
-  // Keep the selection tied to the newest non-cancelled sale of this VIN,
-  // including archived sales. Historical sales with a newer sale stay locked.
+  // The sale itself is the required record; inventory is optional. Never
+  // accept a client-provided inventory ID without matching the selected sale.
   const [target] = await sql<any[]>`
-    select v.id::text,v.vin,v.status_code,
+    select tv.id::text as tracking_vehicle_id,tv.vin,
+      inventory.id::text as operations_vehicle_id,inventory.status_code,
       coalesce(o.is_archived,false) as order_archived,
-      coalesce(a.financial_approved,false) as financial_approved,
-      coalesce(a.administrative_approved,false) as administrative_approved
+      (coalesce(external_approval.financial_approved,false) or coalesce(approval.financial_approved,false)) as financial_approved,
+      (coalesce(external_approval.administrative_approved,false) or coalesce(approval.administrative_approved,false)) as administrative_approved
     from tracking.order_vehicles tv
     join tracking.orders o on o.id=tv.order_id
-    join operations.vehicles v on v.is_deleted=false and (
-      tv.vehicle_id=v.id or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(v.vin)))
-    )
     left join lateral (
-      select financial_approved,administrative_approved from operations.vehicle_approvals va
-      where va.vehicle_id=v.id
+      select v.id,v.vin,v.status_code from operations.vehicles v
+      where v.is_deleted=false and (
+        v.id=tv.vehicle_id or
+        (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(v.vin)))
+      )
+      order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
+      limit 1
+    ) inventory on true
+    left join lateral (
+      select financial_approved,administrative_approved
+      from operations.vehicle_approvals va
+      where va.vehicle_id=inventory.id
       order by va.cycle_no desc,va.updated_at desc limit 1
-    ) a on true
+    ) approval on true
+    left join tracking.sale_vehicle_approvals external_approval on external_approval.tracking_vehicle_id=tv.id
     left join lateral (
       select newer_tv.id from tracking.order_vehicles newer_tv
       join tracking.orders newer_o on newer_o.id=newer_tv.order_id
       where coalesce(newer_o.is_deleted,false)=false
         and coalesce(newer_o.is_cancelled,false)=false
         and (
-          newer_tv.vehicle_id=v.id
-          or (newer_tv.vehicle_id is null and upper(trim(newer_tv.vin))=upper(trim(v.vin)))
+          (inventory.id is not null and newer_tv.vehicle_id=inventory.id)
+          or upper(trim(newer_tv.vin))=upper(trim(tv.vin))
         )
-      order by newer_o.order_date desc nulls last,newer_o.created_at desc,newer_tv.created_at desc,newer_tv.id desc
+      order by newer_o.order_date desc nulls last,newer_o.created_at desc,
+        newer_tv.created_at desc,newer_tv.id desc
       limit 1
     ) latest_order on true
-    where tv.id=${trackingVehicleId}::uuid and v.id=${vehicleId}::uuid
-      and latest_order.id=tv.id
+    where tv.id=${trackingVehicleId}::uuid and latest_order.id=tv.id
       and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
-      and (coalesce(o.is_archived,false)=true or o.sales_followup_completed_at is null)
+
       and nullif(trim(tv.vin),'') is not null
       and upper(trim(tv.vin)) not like 'PENDING-%'
     limit 1
   `;
-  if (!target || (!target.order_archived && !["under_delivery", "delivered"].includes(target.status_code))) {
-    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة ليست أحدث عملية بيع غير ملغاة أو حالتها لا تسمح بالموافقة");
+  if (!target || (vehicleId && target.operations_vehicle_id !== vehicleId)) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "رقم الهيكل غير مؤهل أو لديه طلب بيع أحدث. حدّث القائمة");
+  }
+  if (target.operations_vehicle_id && !target.order_archived && !["under_delivery", "delivered"].includes(target.status_code)) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة سيارة المخزون لا تسمح بالموافقة");
   }
   if (approvalType === "financial" ? target.financial_approved : target.administrative_approved) {
     throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
   }
+  const note = clean(body.note).slice(0, 1000);
+  if (!target.operations_vehicle_id) {
+    return recordExternalSalesFollowupApproval(
+      sql, trackingVehicleId, approvalType as "financial" | "administrative", note, user,
+    );
+  }
   if (target.order_archived || target.status_code === "delivered") {
     return recordRetrospectiveSalesFollowupApproval(
-      sql, vehicleId, trackingVehicleId, approvalType as "financial" | "administrative",
-      clean(body.note).slice(0, 1000), user,
+      sql, target.operations_vehicle_id, trackingVehicleId,
+      approvalType as "financial" | "administrative", note, user,
     );
   }
   return approvalAction(sql, {
-    vehicleId,
+    vehicleId: target.operations_vehicle_id,
     approvalType,
     approvalAction: "approve",
-    note: clean(body.note).slice(0, 1000),
+    note,
   }, user);
 }
 

@@ -109,6 +109,42 @@ alter table tracking.order_vehicles add column if not exists updated_at timestam
 create index if not exists tracking_order_vehicles_item_idx on tracking.order_vehicles(order_id, item_no);
 create index if not exists tracking_order_vehicles_vin_idx on tracking.order_vehicles(vin);
 
+-- Approvals for vehicles sold directly through NEXT ERP that have no inventory
+-- record. The sales-order vehicle (not VIN alone) is the stable key, so two
+-- different sales of the same car cannot share an approval accidentally.
+-- Existing inventory approvals stay in operations.vehicle_approvals unchanged.
+create table if not exists tracking.sale_vehicle_approvals (
+  tracking_vehicle_id uuid primary key references tracking.order_vehicles(id) on delete cascade,
+  financial_approved boolean not null default false,
+  administrative_approved boolean not null default false,
+  financial_note text,
+  administrative_note text,
+  financial_approved_by uuid references core.users(id) on delete set null,
+  administrative_approved_by uuid references core.users(id) on delete set null,
+  financial_approved_by_name text,
+  administrative_approved_by_name text,
+  financial_approved_at timestamptz,
+  administrative_approved_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create table if not exists tracking.sale_vehicle_approval_events (
+  id bigserial primary key,
+  tracking_vehicle_id uuid not null references tracking.order_vehicles(id) on delete cascade,
+  order_id uuid not null references tracking.orders(id) on delete cascade,
+  approval_type text not null check (approval_type in ('financial','administrative')),
+  action text not null check (action in ('approve','revert','reset')),
+  actor_id uuid references core.users(id) on delete set null,
+  actor_name text,
+  actor_role text,
+  note text,
+  before_data jsonb,
+  after_data jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists tracking_sale_vehicle_approval_events_vehicle_idx
+  on tracking.sale_vehicle_approval_events(tracking_vehicle_id,created_at desc);
+
 alter table tracking.stages add column if not exists description text;
 alter table tracking.stages add column if not exists sms_message_template text;
 alter table tracking.stages add column if not exists sms_message_template_legacy text;

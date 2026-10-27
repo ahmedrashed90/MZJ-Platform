@@ -106,7 +106,8 @@ export async function ensureVehicleStageRows(vehicleId: string) {
   `;
 
   // Approval-driven stages are never healed from manual Tracking events.
-  // Their canonical values come exclusively from operations approvals.
+  // Their canonical values come from Operations inventory approvals or
+  // the sales-order approval record for cars supplied outside inventory.
   await syncTrackingApprovalStagesForTrackingVehicle(sql, vehicleId);
 }
 
