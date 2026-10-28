@@ -1,7 +1,7 @@
 import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo } from './marketing-publishing.js';
 
 export type WorkMediaKind = 'image' | 'video';
-export type WorkItemStatus = 'in_progress' | 'submitted' | 'revision' | 'approved';
+export type WorkItemStatus = 'in_progress' | 'submitted' | 'revision' | 'editing' | 'approved' | 'rejected';
 /** Only the product acceptance/rejection criterion is binary; all others keep 0,1,2,3. */
 export function isBinaryProductDecisionCriterion(name: unknown): boolean {
   const normalized = String(name ?? '').toLowerCase()
@@ -26,15 +26,17 @@ export type WorkItem = {
 };
 export type WorkItemReviewNote = {
   id: string; category_id: string | null; category_name: string;
-  note: string; created_at: string; updated_at: string;
-  author_name: string; responded_at: string | null;
+  note: string; created_at: string; updated_at: string; revision_number: number | null;
+  author_name: string; responded_at: string | null; executor_response?: 'accepted' | 'declined' | null;
 };
 export type WorkItemRating = {
   percentage: number; scores: Array<{ criterionId: string; criterionName: string; score: number }>;
   created_at: string; updated_at: string; reviewer_name: string;
 };
 export type WorkEvaluationSetting = { id: string; name: string; sort_order: number; is_active: boolean };
-export type WorkEvaluationSettings = { ok: true; categories: WorkEvaluationSetting[]; criteria: WorkEvaluationSetting[]; canManage: boolean };
+export type WorkEvaluationSettings = { ok: true; categories: WorkEvaluationSetting[]; criteria: WorkEvaluationSetting[]; canManage: boolean;
+  reviewers: Array<{slot: number; user_id: string; name: string}>;
+  reviewerOptions: Array<{id: string; name: string}>; };
 
 export type WorkTask = {
   id: string; task_no: string; name: string; type_id: string; type_name: string; created_at: string; created_by: string;
@@ -104,9 +106,14 @@ export function matchingWorkflowPublishFiles(
 /**
  * Each requirement contributes equally to the parent task: 0 before its
  * final outputs are complete, 50 after complete final uploads, and 100 once
- * the reviewer approves them. Both screens use these same milestones.
+ * the reviewer approves them. A rejected requirement is 100% ready
+ * (terminal decision), but never becomes an approved product. Both screens
+ * use these same milestones.
  */
 export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>): number {
+  // Rejection closes the requirement without producing an approved product.
+  // Retain its denominator and record the terminal decision as 100% readiness.
+  if (item.status === 'rejected') return 100;
   if (!item.formats.length) return 0;
   const byFormat = new Map((item.format_reviews || []).map(format => [format.format_id, format.status]));
   const total = item.formats.reduce((sum, format) => {
@@ -138,14 +145,18 @@ export function workReviewableFormats(
 export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>>) {
   const total = items.length;
   let approved = 0;
+  let resolved = 0;
   let readinessPoints = 0;
   for (const item of items) {
     const itemPercent = workItemReadiness(item);
     readinessPoints += itemPercent;
-    if (itemPercent === 100) approved += 1;
+    if (itemPercent === 100) {
+      resolved += 1;
+      if (item.status !== 'rejected') approved += 1;
+    }
   }
   return { total, approved, percent: total ? Math.round(readinessPoints * 10 / total) / 10 : 0,
-    complete: total > 0 && approved === total };
+    complete: total > 0 && resolved === total };
 }
 export function isWorkDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

@@ -17,6 +17,7 @@ function submittedDayInRiyadh(value: string | null | undefined) {
 type RejectedRatingItem = {
   id: string; assignee_name: string; idea_name: string; media_kind: 'image' | 'video';
   status: 'rejected'; rejected_at: string; rejection_note: string; rating: WorkItemRating | null;
+  revision_notes?: Array<{revision_number: number;note: string;created_at: string;executor_response?: string}>;
 };
 
 type Detail = {
@@ -29,10 +30,7 @@ type Detail = {
 };
 
 function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
-  if (item.status === 'rejected') return true;
-  // Rating follows a reviewer approval of the uploaded files, even when other
-  // formats or requirements in the task are still awaiting completion.
-  return item.status === 'approved' || (item.format_reviews || []).some(row => row.status === 'approved');
+  return item.status === 'approved' || item.status === 'rejected';
 }
 
 export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
@@ -62,10 +60,11 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
     setRatingError(''); setRatingItemId(item.id);
   }
   async function saveItemRating() {
-    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد اعتماد الملفات المرفوعة أو رفض المطلوب، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
+    if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد اعتماد المنتج 100% أو رفض المطلوب، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
     setRatingBusy(true); setRatingError('');
     try {
-      await workPost(selectedRatingItem.status === 'rejected' ? 'save_rejected_rating' : 'save_rating', { itemId: selectedRatingItem.id,
+      const legacyArchive = !task?.items.some(item => item.id === selectedRatingItem.id);
+      await workPost(legacyArchive ? 'save_rejected_rating' : 'save_rating', { itemId: selectedRatingItem.id,
         scores: ratingRows.map(row => ({ criterionId: row.id, score: ratingScores[row.id] })) });
       await refresh(); setRatingItemId('');
     } catch (e) { setRatingError(e instanceof Error ? e.message : W.invalid); }
@@ -88,7 +87,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               const pending = reviews.filter(r => r.status === 'submitted').length;
               const approved = reviews.filter(r => r.status === 'approved').length;
               const gradeReady = canEvaluateItem(item);
-              return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''}`}>
+              return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
                   <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} <span className="mkw-requirement-review-idea">({item.idea?.trim() || 'لم تُحدد الفكرة'})</span></strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
@@ -107,7 +106,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                   {gradeReady && (canRate || item.rating) && <button type="button" className="secondary" onClick={() => openItemRating(item)}>
                     {canRate ? (item.rating ? 'تعديل التقييم' : 'تقييم المنفذ') : 'عرض التقييم'}
                   </button>}
-                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد الملفات المرفوعة أو رفض المطلوب</span>}
+                  {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100% أو رفض المطلوب</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
@@ -116,11 +115,14 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
             })}
           </div>}
           {!!rejectedItems.length && <div className="mkw-rejected-section">
-            <h3>المطلوبات المرفوضة — محفوظة للتقييم فقط ولا تدخل في الجاهزية</h3>
+            <h3>المطلوبات المرفوضة سابقًا — سجل تاريخي للإصدارات السابقة</h3>
             {rejectedItems.map(item => <section key={item.id} className="mkw-requirement-review-entry is-rejected">
               <div className="mkw-rejected-summary">
                 <div><strong>{item.idea_name}</strong><small>المنفذ: {item.assignee_name} · مرفوض · {showDate(item.rejected_at,true)}</small>
-                  {item.rejection_note && <small>{item.rejection_note}</small>}</div>
+                  {item.rejection_note && <small>{item.rejection_note}</small>}
+                  {!!item.revision_notes?.length && <div className="mkw-review-revision-records">{item.revision_notes.map((revision, index) =>
+                    <div key={index} className="mkw-review-revision-record"><strong>التعديل {revision.revision_number || index+1}</strong>
+                      <ReviewNoteDocument text={revision.note}/></div>)}</div>}</div>
                 <div className="mkw-actions">
                   {item.rating && <div className="mkw-requirement-rating-result"><strong>تقييم المنفذ</strong>
                     <strong dir="ltr">{Number(item.rating.percentage).toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>
@@ -195,15 +197,14 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
 }) {
   const { user } = useAuth();
   const own = user?.id === item.assigned_to;
-  const editable = item.status !== 'approved' && (own || capabilities.editTask);
-  const canUpload = item.status !== 'approved' && own && hasPermission(user, 'marketing.task.final_file.upload');
+  const editable = !['approved','revision','rejected'].includes(item.status) && (own || capabilities.editTask);
+  const canUpload = !['approved','revision','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
   const [showFormatPicker, setShowFormatPicker] = useState(false);
   const [newFormatIds, setNewFormatIds] = useState<string[]>([]);
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
   const controller = useRef<AbortController | null>(null), version = useRef(item.version);
@@ -211,9 +212,10 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const ideaFiles = item.files.filter(file => file.category === 'idea');
   const finals = item.files.filter(file => file.category === 'final');
   const states = new Map((item.format_reviews || []).map(r => [r.format_id, r.status]));
-  const readyToSubmit = item.formats.some(format => !states.has(format.id) && finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
-  const reviewableFormats = workReviewableFormats(item, 'revise');
-  const approvableFormats = workReviewableFormats(item, 'approve');
+  const readyToSubmit = !item.format_reviews?.some(r=>r.status === 'revision') &&
+    item.formats.some(format => !states.has(format.id) && finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
+  const reviewableFormats = item.status === 'rejected' ? [] : workReviewableFormats(item, 'revise');
+  const approvableFormats = item.status === 'rejected' ? [] : workReviewableFormats(item, 'approve');
   const reviewableFormatIds = new Set(reviewableFormats.map(format => format.id));
   const approvableFormatIds = new Set(approvableFormats.map(format => format.id));
   const approvedFormatIds = new Set((item.format_reviews || []).filter(row => row.status === 'approved').map(row => row.format_id));
@@ -222,8 +224,12 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const categories = settings?.categories || [];
   const rating = item.rating;
   const revisionPending = (item.format_reviews || []).some(row => row.status === 'revision');
-  const canDeclineRevision = own && canUpload && revisionPending;
+  const canRespondRevision = own && hasPermission(user, 'marketing.task.final_file.upload') && item.status === 'revision' && revisionPending;
   const awaitingDecision = item.status === 'submitted' && item.latest_review_event?.action === 'revision_declined';
+  const revisionNotes = [...(item.review_notes || [])].sort((a,b) => (a.revision_number || 0) - (b.revision_number || 0) || a.created_at.localeCompare(b.created_at));
+  const revisionsLeft = Math.max(0, 3 - revisionNotes.length);
+  const canAddRevision = capabilities.review && revisionsLeft > 0 && (item.status === 'revision' ||
+    (['in_progress','submitted'].includes(item.status) && reviewableFormats.length > 0 && !awaitingDecision));
   const [declineEditor, setDeclineEditor] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
   const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -237,6 +243,10 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
       : (selected || 'نقطة جديدة').split('\n').map((line, index) => `${style === 'bullet' ? '•' : `${index + 1}.`} ${line}`).join('\n');
     setNote(note.slice(0, from) + replacement + note.slice(to));
     window.requestAnimationFrame(() => { editor?.focus(); editor?.setSelectionRange(from, from + replacement.length); });
+  }
+  async function acceptRevision() {
+    const saved = await run(() => workPost('accept_revision', {itemId:item.id,version:version.current}));
+    if (saved) {setDeclineEditor(false);setDeclineReason('');}
   }
   async function declineRevision() {
     const saved = await run(() => workPost('decline_revision', {
@@ -271,7 +281,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   }
   function beginRevision(formatId?: string) {
     setRevisionFormat(formatId || 'all');
-    setEditingNoteId(null); setNoteType(''); setNote(''); setShowNoteEditor(false); setError('');
+    setNoteType(''); setNote(''); setShowNoteEditor(true); setError('');
   }
   async function review(decision: 'approve' | 'revise' | 'reject', formatId?: string) {
     if (decision === 'revise' && (!note.trim() || !noteType)) { setError('اختر نوع الملاحظة واكتب التفاصيل'); return; }
@@ -293,22 +303,12 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     const saved = await run(() => workPost('add_item_formats', { itemId: item.id, version: version.current, formatIds: newFormatIds }));
     if (saved) { setNewFormatIds([]); setShowFormatPicker(false); }
   }
-  async function manageNote(remove = false, noteId: string | null = editingNoteId) {
-    if (remove && !noteId) return;
-    if (remove && !window.confirm('حذف الملاحظة؟')) return;
-    if (!remove && (!noteType || !note.trim())) { setError('اختر نوع الملاحظة واكتب التفاصيل'); return; }
-    const saved = await run(() => workPost('manage_note', { itemId: item.id,
-      ...(noteId ? { noteId } : {}), remove,
-      categoryId: remove ? null : noteType, note: remove ? '' : note.trim() }));
-    if (saved) { setNote(''); setNoteType(''); setEditingNoteId(null); setShowNoteEditor(false); }
-  }
-  function editNote(id: string, categoryId: string | null, text: string) {
-    setEditingNoteId(id); setNoteType(categoryId || ''); setNote(text); setShowNoteEditor(true);
-  }
-  const activeNotes = (item.review_notes || []).filter(row => !row.responded_at);
-  const completedNotes = (item.review_notes || []).filter(row => Boolean(row.responded_at));
   return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
+      {item.status === 'rejected' && <div className="mkw-rejected-final-message" role="status">
+        <strong>✕ مرفوض — تم حسم المطلوب</strong>
+        <p>المطلوب محفوظ داخل التاسك ويحتسب 100% في جاهزيته، لكنه ليس منتجًا معتمدًا ولا يظهر في المنتجات.</p>
+      </div>}
       {awaitingDecision && <div className="mkw-revision-declined-state" role="status">
         <strong>المنفذ رفض التعديل المطلوب — بانتظار قرار المراجع</strong>
         <p>يمكن للأدمن أو مدير النظام اعتماد الملفات المرفوعة المستوفية للمقاسات أو رفض المنتج. لا يتم الاعتماد تلقائيًا.</p>
@@ -317,66 +317,56 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
       <section className="mkw-note-management">
         <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
-          {canRate && revisionFormat !== null && reviewableFormats.length > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => {
-            setEditingNoteId(null); setNote(''); setNoteType(''); setShowNoteEditor(true);
-          }}>إضافة ملاحظة</button>}
+          <span className="mkw-revision-limit">التعديلات المسجلة: {revisionNotes.length} / 3 · لا يمكن تعديل أو حذف أي تعديل محفوظ</span>
+          {canAddRevision && <button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>
+            <Plus size={16}/> + إضافة تعديل</button>}
         </div>
-        {activeNotes.length > 0 && <div className="mkw-review-notes-list">{activeNotes.map(reviewNote =>
-          <article key={reviewNote.id} className="mkw-current-review">
-            <div className="mkw-review-note-content"><div className="mkw-review-note-heading">{reviewNote.category_name || W.reviewNote}</div>
-              <ReviewNoteDocument text={reviewNote.note}/>
-              <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
-            {canRate && <div className="mkw-actions">
-              <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
-              <button type="button" className="secondary danger" disabled={busy} onClick={() => void manageNote(true,reviewNote.id)}><Trash size={15}/> حذف</button>
-            </div>}
-          </article>)}</div>}
-        {completedNotes.length > 0 && <details className="mkw-reviewed-notes-history"><summary>سجل الملاحظات السابقة ({completedNotes.length})</summary>
-          <div className="mkw-review-notes-list">{completedNotes.map(reviewNote => <article key={reviewNote.id} className="mkw-current-review is-resolved">
-            <div className="mkw-review-note-content"><div className="mkw-review-note-heading">{reviewNote.category_name || W.reviewNote}</div>
-              <ReviewNoteDocument text={reviewNote.note}/>
-              <small>{reviewNote.author_name} · {showDate(reviewNote.created_at,true)}</small></div>
-            {canRate && <div className="mkw-actions">
-              <button type="button" className="secondary" disabled={busy} onClick={() => editNote(reviewNote.id,reviewNote.category_id,reviewNote.note)}><PencilSimple size={15}/> تعديل</button>
-              <button type="button" className="secondary danger" disabled={busy} onClick={() => void manageNote(true,reviewNote.id)}><Trash size={15}/> حذف</button>
-            </div>}
-          </article>)}</div>
-        </details>}
-        {showNoteEditor && canRate && (editingNoteId !== null || revisionFormat !== null) && <div className="mkw-review-controls"><div className="mkw-note-fields">
-          <Field label="نوع الملاحظة"><select value={noteType} disabled={busy} onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>{categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
-          <div className="mkw-field"><span>تفاصيل الملاحظة</span><div className="mkw-note-composer">
-            <div className="mkw-note-toolbar" aria-label="تنسيق الملاحظة">
-              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('heading')}>عنوان</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bold')}>غامق</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bullet')}>• نقاط</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('numbered')}>1. ترقيم</button>
-            </div>
-            <textarea ref={noteEditorRef} rows={5} dir="rtl" aria-label="تفاصيل الملاحظة" value={note} disabled={busy} maxLength={10000}
-              placeholder="اكتب كل ملاحظة في سطر منفصل، ويمكنك استخدام النقاط أو الترقيم"
-              onChange={event => setNote(event.target.value)} />
-            <small>سيظهر كل سطر في فقرة واضحة، وتُعرض النقاط والعناوين بتنسيق منظم.</small>
-            {!!note.trim() && <details className="mkw-note-preview"><summary>معاينة تنسيق الملاحظة</summary><ReviewNoteDocument text={note}/></details>}
-          </div></div>
-        </div><div className="mkw-actions"><button type="button" className="primary" disabled={busy || !noteType || !note.trim()}
-          onClick={() => editingNoteId ? void manageNote(false) : void review('revise', revisionFormat === 'all' ? undefined : revisionFormat || undefined)}>
-          {editingNoteId ? 'حفظ التعديل' : 'إضافة ملاحظة وتأكيد التعديل'}</button>
-          <button type="button" className="secondary" disabled={busy} onClick={() => { setShowNoteEditor(false); setRevisionFormat(null); setEditingNoteId(null); }}>إلغاء</button></div></div>}
-        {canDeclineRevision && <div className="mkw-revision-decline-action">
-          {!declineEditor ? <button type="button" className="secondary danger" disabled={busy} onClick={() => setDeclineEditor(true)}>
-            رفض التعديل
-          </button> : <div className="mkw-revision-decline-form">
-            <strong>رفض التعديل المطلوب</strong>
-            <p>هيتم إرسال الملفات الحالية للمراجعة مرة أخرى دون تغييرها. الأدمن أو مدير النظام هو اللي يقرر اعتماد المنتج 100% أو رفضه.</p>
-            <label>سبب رفض التعديل (اختياري)
-              <textarea rows={3} value={declineReason} maxLength={2000} disabled={busy}
-                placeholder="اكتب سبب الاعتراض لو محتاج توضّح موقفك للمراجع"
-                onChange={event => setDeclineReason(event.target.value)}/>
-            </label>
-            <div className="mkw-actions">
-              <button type="button" className="primary" disabled={busy} onClick={() => void declineRevision()}>تأكيد رفض التعديل وإرساله للمراجعة</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => { setDeclineEditor(false); setDeclineReason(''); }}>إلغاء</button>
-            </div>
-          </div>}
+        {revisionNotes.length > 0 ? <div className="mkw-review-revision-records">{revisionNotes.map((entry,index) =>
+          <article key={entry.id} className="mkw-review-revision-record">
+            <header><strong>التعديل {entry.revision_number || index+1}</strong>
+              <span>{entry.category_name || W.reviewNote}</span></header>
+            <ReviewNoteDocument text={entry.note}/>
+            <footer>{entry.author_name} · {showDate(entry.created_at,true)}
+              {entry.executor_response === 'accepted' ? ' · المنفذ قبل التعديل' :
+               entry.executor_response === 'declined' ? ' · المنفذ رفض التعديل' :
+               item.status === 'revision' ? ' · بانتظار رد المنفذ' : ''}
+            </footer>
+          </article>)}</div> : <span className="mkw-muted">لا توجد تعديلات محفوظة لهذا المطلوب.</span>}
+        {revisionsLeft === 0 && <p className="mkw-revision-limit">تم استنفاد التعديلات الثلاثة لهذا المطلوب. لا يمكن إضافة تعديل رابع حتى بعد رفع ملفات جديدة.</p>}
+        {showNoteEditor && canAddRevision && revisionFormat !== null && <div className="mkw-review-controls">
+          <div className="mkw-note-fields"><Field label="نوع التعديل"><select value={noteType} disabled={busy}
+            onChange={event => setNoteType(event.target.value)}><option value="">اختر النوع</option>
+            {categories.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
+            <div className="mkw-field"><span>ملاحظات التعديل {revisionNotes.length+1}</span><div className="mkw-note-composer">
+              <div className="mkw-note-toolbar" aria-label="تنسيق الملاحظة">
+                <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('heading')}>عنوان</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bold')}>غامق</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('bullet')}>• نقاط</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => formatNote('numbered')}>1. ترقيم</button>
+              </div>
+              <textarea ref={noteEditorRef} rows={5} dir="rtl" aria-label="تفاصيل ملاحظة التعديل" value={note} disabled={busy}
+                maxLength={10000} placeholder="اكتب التعديل المطلوب. بعد الحفظ لا يمكن تغيير الملاحظة أو حذفها."
+                onChange={event=>setNote(event.target.value)}/>
+              {!!note.trim() && <details className="mkw-note-preview"><summary>معاينة التنسيق قبل الحفظ</summary><ReviewNoteDocument text={note}/></details>}
+            </div></div>
+          </div><div className="mkw-actions">
+            <button type="button" className="primary" disabled={busy || !noteType || !note.trim()}
+              onClick={()=>void review('revise',revisionFormat==='all' ? undefined : revisionFormat || undefined)}>حفظ التعديل {revisionNotes.length+1} نهائيًا</button>
+            <button type="button" className="secondary" disabled={busy} onClick={()=>{setShowNoteEditor(false);setRevisionFormat(null);}}>إلغاء قبل الحفظ</button>
+          </div>
+        </div>}
+        {canRespondRevision && <div className="mkw-revision-decline-action">
+          <div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={()=>void acceptRevision()}>قبول التعديل · قيد التعديل</button>
+            {!declineEditor && <button type="button" className="secondary danger" disabled={busy}
+              onClick={()=>setDeclineEditor(true)}>رفض التعديل · قيد المراجعة</button>}</div>
+          {declineEditor && <div className="mkw-revision-decline-form"><strong>رفض التعديل المطلوب</strong>
+            <p>ستعود الملفات الحالية للمراجعة، ويكون للأدمن أو مدير النظام فقط قرار اعتماد المنتج 100% أو رفضه.</p>
+            <label>سبب الرفض (اختياري)<textarea rows={3} value={declineReason} maxLength={2000} disabled={busy}
+              onChange={event=>setDeclineReason(event.target.value)}/></label>
+            <div className="mkw-actions"><button type="button" className="primary" disabled={busy}
+              onClick={()=>void declineRevision()}>تأكيد الرفض وإرسال للمراجعة</button>
+              <button type="button" className="secondary" disabled={busy}
+                onClick={()=>{setDeclineEditor(false);setDeclineReason('');}}>إلغاء</button></div></div>}
         </div>}
       </section>
       {rating && <div className="mkw-rating-reviewer">{rating.reviewer_name} · {showDate(rating.updated_at,true)}</div>}
@@ -394,8 +384,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           </section>
         </section>
         <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><div className="mkw-actions"><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span>
-          {capabilities.review && <button type="button" className="secondary" disabled={busy} onClick={() => { setShowFormatPicker(open => !open); setNewFormatIds([]); setError(''); }}><Plus size={17}/>{W.addFormats}</button>}</div></div>
-          {showFormatPicker && capabilities.review && <div className="mkw-upload-format">
+          {capabilities.review && item.status !== 'rejected' && <button type="button" className="secondary" disabled={busy} onClick={() => { setShowFormatPicker(open => !open); setNewFormatIds([]); setError(''); }}><Plus size={17}/>{W.addFormats}</button>}</div></div>
+          {showFormatPicker && capabilities.review && item.status !== 'rejected' && <div className="mkw-upload-format">
             <strong>{W.addFormats} — {item.media_kind === 'image' ? W.image : W.video}</strong>
             <FormatSelector formats={availableFormats} selected={newFormatIds} disabled={busy} onChange={setNewFormatIds}/>
             <div className="mkw-actions"><button type="button" className="primary" disabled={busy || newFormatIds.length === 0} onClick={() => void addFormats()}>{W.save} {W.sizes}</button>
@@ -405,21 +395,21 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
             const state = states.get(format.id);
             const locked = state === 'submitted' || state === 'approved';
             const formatFiles = finals.filter(file => file.format_id === format.id);
-            return <div className={`mkw-upload-format ${state === 'approved' ? 'mkw-format-approved' : ''}`} key={format.id}>
-              <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><span className="mkw-format-state">{state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div>
+            return <div className={`mkw-upload-format ${state === 'approved' && item.status !== 'rejected' ? 'mkw-format-approved' : ''}`} key={format.id}>
+              <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><span className="mkw-format-state">{item.status === 'rejected' ? 'مرفوض' : state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? item.status === 'editing' ? 'قيد التعديل' : 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {item.status === 'rejected' ? <X size={19} weight="bold"/> : state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div>
               {formatFiles.map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !locked && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
               {canUpload && !locked && <label className="mkw-upload-action"><UploadSimple size={17}/><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
-              {capabilities.review && reviewableFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy || !approvableFormatIds.has(format.id)} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}>تعديل</button></div>}
-              {capabilities.review && approvedFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval(format.id)}>تراجع عن الاعتماد</button></div>}
+              {capabilities.review && item.status !== 'rejected' && item.status !== 'revision' && reviewableFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy || !approvableFormatIds.has(format.id)} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button>{canAddRevision && <button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}><Plus size={15}/> إضافة تعديل</button>}</div>}
+              {capabilities.review && item.status !== 'rejected' && approvedFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval(format.id)}>تراجع عن الاعتماد</button></div>}
             </div>;
           })}</div>
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
           {progress && <div className="mkw-upload-format"><span>{progress.name} {progress.percent}%</span><progress max={100} value={progress.percent} /><button type="button" className="secondary" onClick={() => controller.current?.abort()}>{W.cancel}</button></div>}
-          {!!finals.length && <details><summary><FileArrowDown size={17} />{W.viewProduct}</summary><FilesPreview files={finals} /></details>}
+          {!!finals.length && <details><summary><FileArrowDown size={17} />{item.status === 'rejected' ? 'معاينة الملفات المرفوضة' : W.viewProduct}</summary><FilesPreview files={finals} /></details>}
         </section>
       </div>
       {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
-      {capabilities.review && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button><button type="button" className="secondary" disabled={busy} onClick={() => beginRevision()}>تعديل الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
+      {capabilities.review && item.status !== 'rejected' && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && item.status !== 'revision' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
     </div>
 
   </article>;

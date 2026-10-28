@@ -1,5 +1,5 @@
 import { cloneElement, isValidElement, useState, type ReactElement, type ReactNode } from 'react';
-import { ArrowClockwise, Eye, FileArrowDown, FilmStrip, ImageSquare, MagnifyingGlass, X } from '@phosphor-icons/react';
+import { ArrowClockwise, Eye, FileArrowDown, FilmStrip, ImageSquare, MagnifyingGlass, X, XCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import type { WorkFile, WorkFormat, WorkMediaKind, WorkProduct } from '../../../shared/marketing-workflow';
 import { W } from '../../../shared/marketing-workflow-labels';
@@ -20,8 +20,8 @@ export function Search({ value, onChange }: { value: string; onChange: (value: s
   return <label className="mkw-search"><MagnifyingGlass size={19} /><input aria-label={W.search} placeholder={W.search} value={value} onChange={event => onChange(event.target.value)} /></label>;
 }
 export function MediaLabel({ kind }: { kind: WorkMediaKind }) { return <span className="mkw-media-label">{kind === 'video' ? <FilmStrip size={19} /> : <ImageSquare size={19} />}{kind === 'video' ? W.video : W.image}</span>; }
-const statuses: Record<string, string> = { in_progress: W.in_progress, submitted: W.submitted, revision: W.revision, approved: W.approved, completed: W.completed, active: W.execution, empty: W.emptyTask, waiting: W.waiting, ready_publish: W.prepared, publishing: W.processing, prepared: W.prepared, processing: W.processing, scheduled: "مجدول للنشر", published: W.published, failed: W.failed, verification_required: W.verificationRequired, cancelled: W.cancel, created: W.createdEvent, edited: W.edit, file_removed: W.fileRemoved, formats_added: W.addFormats, action: W.assignmentActions, rejected: W.rejectedEvent };
-export function Status({ value }: { value: string }) { return <span className={`mkw-status status-${value}`}>{statuses[value] || value}</span>; }
+const statuses: Record<string, string> = { in_progress: W.in_progress, submitted: W.submitted, revision: W.revision, editing: "قيد التعديل", approved: W.approved, completed: W.completed, active: W.execution, empty: W.emptyTask, waiting: W.waiting, ready_publish: W.prepared, publishing: W.processing, prepared: W.prepared, processing: W.processing, scheduled: "مجدول للنشر", published: W.published, failed: W.failed, verification_required: W.verificationRequired, cancelled: W.cancel, created: W.createdEvent, edited: W.edit, file_removed: W.fileRemoved, formats_added: W.addFormats, action: W.assignmentActions, rejected: 'مرفوض' };
+export function Status({ value }: { value: string }) { return <span className={`mkw-status status-${value}`}>{value === 'rejected' && <XCircle size={15} weight="fill" aria-hidden="true" />}{statuses[value] || value}</span>; }
 export function Readiness({ value }: { value: number }) { const normalized = Math.max(0, Math.min(100, Number(value) || 0)); return <div className="mkw-readiness"><span>{W.readiness}<strong>{normalized}%</strong></span><progress aria-label={W.readiness} max={100} value={normalized} /></div>; }
 export function Formats({ formats }: { formats: WorkFormat[] }) {
   return <div className="mkw-chips">{formats.map(format => <span key={format.id}>{format.platform_name} · {format.name}{format.width && format.height ? <b dir="ltr">{format.width} × {format.height}</b> : null}</span>)}</div>;

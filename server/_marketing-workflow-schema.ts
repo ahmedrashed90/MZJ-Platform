@@ -28,7 +28,7 @@ create table if not exists marketing.work_items (
   client_key uuid not null, department_id uuid not null references marketing.departments(id), assigned_to uuid not null references core.users(id),
   media_kind text not null check(media_kind in ('image','video')),
   idea_name text not null default '', idea text not null default '', formats jsonb not null default '[]', due_on date not null,
-  status text not null default 'in_progress' check(status in ('in_progress','submitted','revision','approved')),
+  status text not null default 'in_progress' check(status in ('in_progress','submitted','revision','editing','approved','rejected')),
   submitted_at timestamptz, approved_at timestamptz, approved_by uuid references core.users(id),
   review_note text not null default '', version integer not null default 1, sort_order integer not null default 0,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
@@ -126,6 +126,49 @@ create index if not exists work_rejected_items_ratings on marketing.work_rejecte
 insert into marketing.workflow_migrations(code) values('schema-7') on conflict do nothing;
 commit;
 `;
+
+// One durable revision sequence per requirement and exactly two configurable raters.
+// This is additive, transactional, and never rewrites approved products or prior ratings.
+export const MARKETING_WORKFLOW_REVISION_POLICY_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+alter table marketing.work_items drop constraint if exists work_items_status_check;
+alter table marketing.work_items add constraint work_items_status_check
+  check(status in ('in_progress','submitted','revision','editing','approved'));
+alter table marketing.work_item_review_notes add column if not exists revision_number integer;
+alter table marketing.work_item_review_notes add column if not exists executor_response text;
+alter table marketing.work_item_review_notes drop constraint if exists work_item_review_notes_executor_response_check;
+alter table marketing.work_item_review_notes add constraint work_item_review_notes_executor_response_check
+  check(executor_response is null or executor_response in ('accepted','declined'));
+-- Number every historical note in its original creation order. Past notes remain unchanged.
+with numbered as (
+  select id,row_number() over(partition by item_id order by created_at,id)::integer as seq
+  from marketing.work_item_review_notes
+)
+update marketing.work_item_review_notes n set revision_number=x.seq
+from numbered x where x.id=n.id and n.revision_number is null;
+create unique index if not exists work_item_review_notes_sequence_unique
+  on marketing.work_item_review_notes(item_id,revision_number) where revision_number is not null;
+create table if not exists marketing.work_rating_reviewers (
+  slot smallint primary key check(slot in (1,2)),
+  user_id uuid not null unique references core.users(id),
+  updated_by uuid references core.users(id),
+  updated_at timestamptz not null default now()
+);
+alter table marketing.work_rejected_items add column if not exists revision_notes jsonb not null default '[]'::jsonb;
+insert into marketing.workflow_migrations(code) values('schema-8') on conflict do nothing;
+commit;`;
+
+// Keep rejected requirements in the same task, independently from approved products.
+// This short, additive schema-9 migration is safe after schema-8 and retains all data.
+export const MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+alter table marketing.work_items drop constraint if exists work_items_status_check;
+alter table marketing.work_items add constraint work_items_status_check
+  check(status in ('in_progress','submitted','revision','editing','approved','rejected'));
+insert into marketing.workflow_migrations(code) values('schema-9') on conflict do nothing;
+commit;`;
 
 export const MARKETING_WORKFLOW_TASK_DELETE_SQL = `begin;
 set local lock_timeout = '3s';
@@ -338,11 +381,11 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9') };
     };
-    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await flags()).hasRejected && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
+    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await flags()).hasRejected && (await flags()).hasRevisionPolicy && (await flags()).hasTerminalRejection && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -354,6 +397,8 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasKpi) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
       if (!(await flags()).hasNotes) await runSqlScript(MARKETING_WORKFLOW_NOTES_SQL);
       if (!(await flags()).hasRejected) await runSqlScript(MARKETING_WORKFLOW_REJECTED_RATINGS_SQL);
+      if (!(await flags()).hasRevisionPolicy) await runSqlScript(MARKETING_WORKFLOW_REVISION_POLICY_SQL);
+      if (!(await flags()).hasTerminalRejection) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
@@ -374,7 +419,7 @@ let workflowStructureReady: Promise<void> | null = null;
 export function assertMarketingWorkflowReady(sql = getSql()) {
   if (!workflowStructureReady) {
     workflowStructureReady = (async () => {
-      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean; notes: boolean; social: boolean }[]>`
+      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean; notes: boolean; reviewers: boolean; revisionNumbers: boolean; editingState: boolean; rejectedState: boolean; social: boolean }[]>`
         select
           to_regclass('marketing.work_tasks') is not null as tasks,
           to_regclass('marketing.work_items') is not null as items,
@@ -385,9 +430,13 @@ export function assertMarketingWorkflowReady(sql = getSql()) {
           to_regclass('marketing.work_format_reviews') is not null as formats,
           to_regclass('marketing.work_review_categories') is not null as categories,
           to_regclass('marketing.work_item_review_notes') is not null as notes,
+          to_regclass('marketing.work_rating_reviewers') is not null as reviewers,
+          exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_item_review_notes' and column_name='revision_number') as revisionNumbers,
+          exists (select 1 from pg_constraint where conrelid='marketing.work_items'::regclass and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%editing%') as editingState,
+          exists (select 1 from pg_constraint where conrelid='marketing.work_items'::regclass and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%rejected%') as rejectedState,
           to_regclass('marketing.social_follower_snapshots') is not null as social
       `;
-      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories || !state.notes || !state.social) {
+      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories || !state.notes || !state.reviewers || !state.revisionNumbers || !state.editingState || !state.rejectedState || !state.social) {
         const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
         (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
         throw error;

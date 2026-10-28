@@ -37,6 +37,7 @@ async function main(){
   });
   await check('Admin saves a complete 0-3 per-criterion grade at the correct percentage',async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),
       step('select 1 from marketing.work_format_reviews',[{approved:1}],(_,sql)=>{
         assert(sql.includes("status='approved'"));assert(sql.includes('format_id=any('));
@@ -53,8 +54,9 @@ async function main(){
   });
   await check('Out-of-range values and executor grading are rejected',async()=>{
     const input={scores:[{criterionId:id(201),score:4}]};
-    await assert.rejects(()=>ratings.saveItemRating(scriptedSql([]),executor,input,item));
+    await assert.rejects(()=>ratings.saveItemRating(scriptedSql([step('select 1 from marketing.work_rating_reviewers',[])]),executor,input,item), /صلاحية/);
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),
       step('select 1 from marketing.work_format_reviews',[{approved:1}]),
       step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'Design'}]),
@@ -63,32 +65,31 @@ async function main(){
   });
   await check('Unapproved requirements cannot be rated by an administrator', async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'submitted',formats:item.formats}]),
-      step('select 1 from marketing.work_format_reviews',[]),
     ]);
-    await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:3}]},item), /اعتماد الملفات المرفوعة/);
+    await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:3}]},item), /تقييم المنفذ متاح/);
     db.assertDone();
   });
   await check('Requesting revision alone does not authorize grading',async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'revision',formats:item.formats}]),
-      step('select 1 from marketing.work_format_reviews',[]),
     ]);
-    await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[]},item), /اعتماد الملفات المرفوعة/);
+    await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[]},item), /تقييم المنفذ متاح/);
     db.assertDone();
   });
-  await check('Partial approval enables grading before other sizes or the task are completed',async()=>{
+  await check('Partial approval does not permit rating until final approval or rejection',async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'in_progress',formats:item.formats}]),
-      step('select 1 from marketing.work_format_reviews',[{approved:1}]),
-      step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'الجودة'}]),
-      step('insert into marketing.work_item_ratings'),
     ]);
-    const result=await ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:3}]},item);
-    assert.equal(result.percentage,100);db.assertDone();
+    await assert.rejects(()=>ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:3}]},item),/تقييم المنفذ متاح/);
+    db.assertDone();
   });
   await check('Binary acceptance criterion rejects 1 or 2 on the server',async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'approved',formats:item.formats}]),
       step('select 1 from marketing.work_format_reviews',[{approved:1}]),
       step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'قبول أو رفض المنتج'}]),
@@ -98,6 +99,7 @@ async function main(){
   });
   await check('Rejected requirement rating is saved only in archival table',async()=>{
     const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
       step('select item_id,assigned_to',[{item_id:item.id,assigned_to:executor.id}]),
       step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'قبول أو رفض المنتج'},{id:id(202),name:'الجودة'}]),
       step('update marketing.work_rejected_items',[],values=>{
@@ -107,6 +109,16 @@ async function main(){
     ]);
     const result=await ratings.saveRejectedItemRating(db,admin,{scores:[{criterionId:id(201),score:0},{criterionId:id(202),score:3}]},{item_id:item.id});
     assert.equal(result.percentage,50);db.assertDone();
+  });
+  await check('New rejected requirements are rated in place, without archival deletion',async()=>{
+    const db=scriptedSql([
+      step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
+      step('select id,assigned_to,status,formats',[{id:item.id,assigned_to:executor.id,status:'rejected',formats:item.formats}]),
+      step('select id::text,name from marketing.work_kpi_criteria',[{id:id(201),name:'قبول أو رفض المنتج'}]),
+      step('insert into marketing.work_item_ratings'),
+    ]);
+    const result=await ratings.saveItemRating(db,admin,{scores:[{criterionId:id(201),score:0}]},item);
+    assert.equal(result.percentage,0);db.assertDone();
   });
   await check('Approved and rejected ratings both appear in the executor ratings report',async()=>{
     const timestamp='2026-10-22T16:24:47.000Z';
@@ -124,26 +136,11 @@ async function main(){
     assert.deepEqual(result.rows.map(row=>row.outcome),['approved','rejected']);
     assert.equal(result.rows[1].percentage,83.33);db.assertDone();
   });
-  await check('Only managers may change review notes, and categories validate against settings',async()=>{
-    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),executor,{remove:true},item));
-    const db=scriptedSql([step('select id',[{id:item.id}]),step('select id from marketing.work_review_categories',[{id:id(301)}]),step('insert into marketing.work_item_review_notes'),step('update marketing.work_items')]);
-    await ratings.manageItemReviewNote(db,admin,{categoryId:id(301),note:'Please fix text'},item);db.assertDone();
-  });
-  await check('Review notes support independent creation, editing, and deletion',async()=>{
-    const db=scriptedSql([
-      step('select id',[{id:item.id}]),
-      step('select id from marketing.work_review_categories',[{id:id(301)}]),
-      step('select id from marketing.work_item_review_notes',[{id:id(400)}]),
-      step('update marketing.work_item_review_notes'),step('update marketing.work_items'),
-    ]);
-    await ratings.manageItemReviewNote(db,admin,{noteId:id(400),categoryId:id(301),note:'Updated comment'},item);
-    db.assertDone();
-    const deleting=scriptedSql([step('select id',[{id:item.id}]),
-      step('select id from marketing.work_item_review_notes',[{id:id(400)}]),
-      step('update marketing.work_item_review_notes'),step('update marketing.work_items')]);
-    await ratings.manageItemReviewNote(deleting,admin,{noteId:id(400),remove:true},item);
-    deleting.assertDone();
-    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),admin,{remove:true},item));
+  await check('Review notes are immutable, including for admin and marketing manager',async()=>{
+    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),executor,{remove:true},item),/نهائية/);
+    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),admin,{note:'Unauthorized new note'},item),/نهائية/);
+    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),admin,{noteId:id(400),note:'Cannot edit'},item),/نهائية/);
+    await assert.rejects(()=>ratings.manageItemReviewNote(scriptedSql([]),admin,{noteId:id(400),remove:true},item),/نهائية/);
   });
   await check('New schema keeps existing reviews and tracks daily organic followers',()=>{
     const sql=fs.readFileSync(path.join(root,'database/migrations/20261022_marketing_review_notes.sql'),'utf8');

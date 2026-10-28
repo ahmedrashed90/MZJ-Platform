@@ -1,6 +1,5 @@
 import type { SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
-import { getSystemAccess } from '../_access-control.js';
 import { getSql } from '../_db.js';
 import { isBinaryProductDecisionCriterion } from '../../shared/marketing-workflow.js';
 
@@ -12,30 +11,61 @@ const validId = (value: unknown) => {
   if (!uuidPattern.test(id)) throw new Error('معرّف غير صالح');
   return id;
 };
-const canGrade = (user: SessionUser) => hasPermission(user, 'platform.superadmin') ||
-  hasPermission(user, 'settings.marketing.manage') ||
-  (hasPermission(user, 'marketing.task.review') &&
-    getSystemAccess(user, 'marketing').dataScope === 'all');
-const canSee = (user: SessionUser) => canGrade(user) ||
+const canManage = (user: SessionUser) => hasPermission(user, 'settings.marketing.manage') || hasPermission(user, 'platform.superadmin');
+const canSee = (user: SessionUser) => canManage(user) ||
   ['marketing.task.view_assigned', 'marketing.dashboard.view', 'marketing.task.review', 'settings.marketing.view']
     .some(permission => hasPermission(user, permission));
 const requireAccess = (allowed: boolean) => { if (!allowed) throw new Error('ليس لديك صلاحية لتنفيذ الإجراء'); };
-export function canGradeWorkItem(user: SessionUser) { return canGrade(user); }
+/** A grader is one of the TWO active, explicitly configured Marketing users. */
+export async function canGradeWorkItem(sql: Sql, user: SessionUser): Promise<boolean> {
+  const [entry] = await sql<any[]>`select 1 from marketing.work_rating_reviewers rr
+    join core.users u on u.id=rr.user_id and u.is_active=true and coalesce(u.is_archived,false)=false
+    join core.user_systems us on us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true
+    where rr.user_id=${user.id}::uuid limit 1`;
+  return Boolean(entry);
+}
 
 /** Shared database-backed catalogs for the review dropdown and KPI criteria. */
 export async function evaluationSettings(sql: Sql, user: SessionUser) {
   requireAccess(canSee(user));
-  const [categories, criteria] = await Promise.all([
+  const allowed = canManage(user);
+  const [categories, criteria, reviewers, reviewerOptions] = await Promise.all([
     sql<any[]>`select id::text,name,sort_order,is_active from marketing.work_review_categories
       where is_active=true order by sort_order,name`,
     sql<any[]>`select id::text,name,sort_order,is_active from marketing.work_kpi_criteria
       where is_active=true order by sort_order,name`,
+    sql<any[]>`select rr.slot,rr.user_id::text,coalesce(u.full_name,'') as name
+      from marketing.work_rating_reviewers rr join core.users u on u.id=rr.user_id
+      order by rr.slot`,
+    allowed ? sql<any[]>`select u.id::text,coalesce(u.full_name,'') as name
+      from core.users u join core.user_systems us on us.user_id=u.id
+      where us.system_code='marketing' and us.is_enabled=true
+        and u.is_active=true and coalesce(u.is_archived,false)=false
+      order by u.full_name,u.id` : Promise.resolve([]),
   ]);
-  return { ok: true, categories, criteria, canManage: hasPermission(user, 'settings.marketing.manage') || hasPermission(user, 'platform.superadmin') };
+  return { ok: true, categories, criteria, reviewers, reviewerOptions, canManage: allowed };
 }
 
 export async function manageEvaluationSetting(sql: Sql, user: SessionUser, body: Row) {
-  requireAccess(hasPermission(user, 'settings.marketing.manage') || hasPermission(user, 'platform.superadmin'));
+  requireAccess(canManage(user));
+  if (body.kind === 'raters') {
+    const selected = Array.isArray(body.userIds) ? body.userIds.map(validId) : [];
+    if (selected.length !== 2 || new Set(selected).size !== 2)
+      throw new Error('لازم تختار مستخدمين مختلفين فقط لتقييم المنفذين');
+    return sql.begin(async tx => {
+      await tx`set local lock_timeout='3s'`;
+      await tx`lock table marketing.work_rating_reviewers in exclusive mode`;
+      const valid = await tx<any[]>`select u.id::text from core.users u
+        join core.user_systems us on us.user_id=u.id
+        where u.id=any(${selected}::uuid[]) and u.is_active=true
+          and coalesce(u.is_archived,false)=false and us.system_code='marketing' and us.is_enabled=true`;
+      if (valid.length !== 2) throw new Error('اختار مستخدمين نشطين من مستخدمي نظام التسويق');
+      await tx`delete from marketing.work_rating_reviewers`;
+      for (let i=0;i<2;i++) await tx`insert into marketing.work_rating_reviewers(slot,user_id,updated_by)
+        values(${i+1},${selected[i]}::uuid,${user.id}::uuid)`;
+      return { ok: true };
+    });
+  }
   const table = body.kind === 'category' ? 'marketing.work_review_categories' :
     body.kind === 'criterion' ? 'marketing.work_kpi_criteria' : null;
   if (!table) throw new Error('نوع الإعداد غير صالح');
@@ -80,19 +110,22 @@ function normalizeItemScores(criteria: {id:string; name:string}[], scores: unkno
 
 /** The task/item visibility predicate is also enforced by the workflow caller. */
 export async function saveItemRating(sql: Sql, user: SessionUser, body: Row, item: Row) {
-  requireAccess(canGrade(user));
+  requireAccess(await canGradeWorkItem(sql,user));
   const scores = Array.isArray(body.scores) ? body.scores : [];
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
     const [locked] = await tx<any[]>`select id,assigned_to,status,formats from marketing.work_items where id=${item.id}::uuid for update`;
     if (!locked) throw new Error('المطلوب غير موجود');
-    const configuredFormatIds = Array.isArray(locked.formats)
-      ? locked.formats.map((format: { id?: unknown }) => String(format?.id || '')) : [];
-    const [approval] = await tx<any[]>`select 1 from marketing.work_format_reviews
-      where item_id=${item.id}::uuid and status='approved'
-        and format_id=any(${configuredFormatIds}::text[]) limit 1`;
-    if (!approval) throw new Error('تقييم المنفذ متاح بعد اعتماد الملفات المرفوعة أو رفض المطلوب.');
+    if (locked.status !== 'approved' && locked.status !== 'rejected') throw new Error('تقييم المنفذ متاح بعد اعتماد المنتج 100% أو رفضه.');
+    if (locked.status === 'approved') {
+      const configuredFormatIds = Array.isArray(locked.formats)
+        ? locked.formats.map((format: { id?: unknown }) => String(format?.id || '')) : [];
+      const [approval] = await tx<any[]>`select 1 from marketing.work_format_reviews
+        where item_id=${item.id}::uuid and status='approved'
+          and format_id=any(${configuredFormatIds}::text[]) limit 1`;
+      if (!approval) throw new Error('تقييم المنفذ متاح بعد اعتماد الملفات المرفوعة أو رفض المطلوب.');
+    }
     const criteria = await tx<{id:string;name:string}[]>`select id::text,name from marketing.work_kpi_criteria where is_active=true order by sort_order,name`;
     const normalized = normalizeItemScores(criteria,scores);
     const percentage = Math.round(normalized.reduce((sum, row) => sum + row.score, 0) / (normalized.length * 3) * 10000) / 100;
@@ -104,10 +137,10 @@ export async function saveItemRating(sql: Sql, user: SessionUser, body: Row, ite
   });
 }
 
-/** Rejected requirements are absent from active execution. Grade their archival
- * record only; never reintroduce rejected files/products to work_items. */
+/** Preserve grading for historical rejections archived by earlier versions.
+ * Newly rejected requirements stay in work_items and use saveItemRating. */
 export async function saveRejectedItemRating(sql: Sql, user: SessionUser, body: Row, item: Row) {
-  requireAccess(canGrade(user));
+  requireAccess(await canGradeWorkItem(sql,user));
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
@@ -125,42 +158,9 @@ export async function saveRejectedItemRating(sql: Sql, user: SessionUser, body: 
   });
 }
 
-export async function manageItemReviewNote(sql: Sql, user: SessionUser, body: Row, item: Row) {
-  requireAccess(canGrade(user));
-  const noteId = body.noteId ? validId(body.noteId) : null;
-  const remove = body.remove === true;
-  const note = String(body.note ?? '').trim().slice(0, 10000);
-  const categoryId = !remove && body.categoryId ? validId(body.categoryId) : null;
-  if (remove && !noteId) throw new Error('حدد الملاحظة المطلوب حذفها');
-  if (!remove && (!categoryId || !note)) throw new Error('اختر نوع الملاحظة واكتب التفاصيل');
-  return sql.begin(async tx => {
-    await tx`set local lock_timeout = '3s'`;
-    await tx`set local statement_timeout = '15s'`;
-    const [current] = await tx<any[]>`select id from marketing.work_items where id=${item.id}::uuid for update`;
-    if (!current) throw new Error('المطلوب غير موجود');
-    if (categoryId) {
-      const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`;
-      if (!category) throw new Error('نوع الملاحظة غير متاح');
-    }
-    if (noteId) {
-      const [existing] = await tx<any[]>`select id from marketing.work_item_review_notes
-        where id=${noteId}::uuid and item_id=${item.id}::uuid and deleted_at is null for update`;
-      if (!existing) throw new Error('الملاحظة غير موجودة');
-      if (remove) {
-        await tx`update marketing.work_item_review_notes set deleted_at=now(),updated_at=now()
-          where id=${noteId}::uuid and item_id=${item.id}::uuid`;
-      } else {
-        await tx`update marketing.work_item_review_notes
-          set category_id=${categoryId}::uuid,note=${note},updated_at=now()
-          where id=${noteId}::uuid and item_id=${item.id}::uuid`;
-      }
-    } else {
-      await tx`insert into marketing.work_item_review_notes(item_id,category_id,note,created_by)
-        values(${item.id}::uuid,${categoryId}::uuid,${note},${user.id}::uuid)`;
-    }
-    await tx`update marketing.work_items set updated_at=now(),version=version+1 where id=${item.id}::uuid`;
-    return { ok: true };
-  });
+/** Notes become immutable at creation; only the atomic revision request can add a note. */
+export async function manageItemReviewNote(_sql: Sql, _user: SessionUser, _body: Row, _item: Row) {
+  throw new Error('ملاحظات التعديل المحفوظة نهائية ولا يمكن تعديلها أو حذفها. استخدم + إضافة تعديل (بحد أقصى 3).');
 }
 
 export async function ratingsReport(sql: Sql, user: SessionUser, query: Row) {
@@ -169,11 +169,12 @@ export async function ratingsReport(sql: Sql, user: SessionUser, query: Row) {
   const valid = (s: string) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const d = new Date(`${s}T12:00:00Z`); return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s; };
   if (!valid(from) || !valid(to) || from > to || Date.parse(to) - Date.parse(from) > 366 * 5 * 86400000) throw new Error('فترة التقييم غير صالحة');
   const person = query.assigneeId && query.assigneeId !== 'all' ? validId(query.assigneeId) : null;
-  const showAll = canGrade(user);
+  const showAll = canManage(user) || await canGradeWorkItem(sql,user);
   const rows = await sql<any[]>`
     with all_ratings as (
       select r.item_id,r.assignee_id,r.percentage,r.scores,r.created_at,r.updated_at,
-        i.idea_name,t.name as task_name,t.task_no,r.rated_by,'approved'::text as outcome
+        i.idea_name,t.name as task_name,t.task_no,r.rated_by,
+        case when i.status='rejected' then 'rejected' else 'approved' end as outcome
       from marketing.work_item_ratings r
       join marketing.work_items i on i.id=r.item_id
       join marketing.work_tasks t on t.id=i.task_id and t.is_deleted=false

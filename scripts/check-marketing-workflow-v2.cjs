@@ -15,6 +15,9 @@ const stubs = {
   '../_notifications.js': { createNotification:async e=>events.push(e) },
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
+  // This workflow suite checks access through visibleItem; rating permission
+  // itself is tested against the real two-person table by the rating suite.
+  './evaluations.js': {canGradeWorkItem:async()=>false},
 };
 const privateExports=['reserveTask','createTask','reviewItem','unapproveItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
@@ -306,7 +309,7 @@ test('Client only shows unselected sizes compatible with the requirement media k
   const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
   const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
   assert(front.includes("workPost('add_item_formats'"));
-  assert(front.includes('capabilities.review && <button type="button" className="secondary"'));
+  assert(front.includes("capabilities.review && item.status !== 'rejected'"));
   assert(front.includes('!configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name)'));
   assert(front.includes('<FormatSelector formats={availableFormats} selected={newFormatIds}'));
   assert(api.includes("requirePermission(user, 'marketing.task.review')"));
@@ -315,7 +318,7 @@ test('Client only shows unselected sizes compatible with the requirement media k
 test('Undo buttons are reviewer-only, available per approved size and for complete or partial approval',()=>{
   const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
   const server=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
-  assert(front.includes('capabilities.review && approvedFormatIds.has(format.id)'));
+  assert(front.includes("capabilities.review && item.status !== 'rejected' && approvedFormatIds.has(format.id)"));
   assert(front.includes('تراجع عن الاعتماد</button>'));
   assert(front.includes('approvedFormatIds.size > 0 && <button'));
   assert(front.includes('تراجع عن اعتماد - المنتج 100% الملفات المرفوعة'));
@@ -391,17 +394,16 @@ test('Approval completes a fully delivered single-output task',async()=>{
   const result=await api.reviewItem(db,{itemId:item.id,decision:'approve',version:1},admin);
   assert.equal(result.readiness.percent,100);db.assertDone();
 });
-test('Admin can reject an unsubmitted requirement with NO final files',async()=>{
+test('Admin can reject without files and keep the same requirement at 100 percent readiness',async()=>{
   const empty={...item,status:'in_progress',format_reviews:[],files:[]};
   const db=scriptedSql([
     itemRead([empty]),taskLock(),itemLock([empty]),itemLoad([empty]),
     step('insert into marketing.work_history',[],v=>assert.deepEqual(v[6].formatIds,[])),
-    step('insert into marketing.work_rejected_items',[],v=>assert.equal(v[0],empty.id)),
-    step('delete from marketing.work_items',[],v=>assert.deepEqual(v,[empty.id])),
-    ...recalc([],'empty'),
+    step("update marketing.work_items set status='rejected'",[],v=>assert.equal(v[0],empty.id)),
+    ...recalc([{...empty,status:'rejected'}],'completed'),
   ]);
   const result=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);
-  assert.equal(result.readiness.total,0);db.assertDone();
+  assert.equal(result.readiness.total,1);assert.equal(result.readiness.approved,0);assert.equal(result.readiness.percent,100);db.assertDone();
 });
 test('Admin can approve uploaded files directly without executor Submit',async()=>{
   const ready={...item,status:'in_progress',format_reviews:[],submitted_at:null};
@@ -422,6 +424,7 @@ test('Admin can request revision immediately after final upload, before Submit',
   const categoryId=uid(72);
   const db=scriptedSql([
     itemRead([ready]),taskLock(),itemLock([ready]),itemLoad([ready]),
+    step('select coalesce(max(revision_number)',[{number:0,count:0}]),
     step('select id from marketing.work_review_categories',[{id:categoryId}]),
     step('insert into marketing.work_history',[],v=>assert.deepEqual(v[6].formatIds,[format.id])),
     step('insert into marketing.work_format_reviews',[],v=>assert.equal(v[2],'revision')),
@@ -439,23 +442,20 @@ test('Admin cannot revise a requirement with only an idea attachment',async()=>{
   await assert.rejects(()=>api.reviewItem(db,{itemId:item.id,decision:'revise',categoryId:uid(72),note:'تعديل',version:1},admin));
   db.assertDone();
 });
-test('Executor can be rated after reviewer requested changes, without 100% approval',async()=>{
+test('A reviewer change request does not authorize ratings before approval or rejection',async()=>{
   const revised={...item,status:'revision'};
-  const criterionId=uid(95);
   const db=scriptedSql([
+    step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
     step('select id,assigned_to,status,formats',[revised]),
-    step('select 1 from marketing.work_format_reviews',[{ready:1}]),
-    step('select id::text,name from marketing.work_kpi_criteria',[{id:criterionId,name:'جودة التنفيذ'}]),
-    step('insert into marketing.work_item_ratings',[],v=>assert.equal(v[4],100)),
   ]);
-  const result=await evaluations.saveItemRating(db,admin,{scores:[{criterionId,score:3}]},revised);
-  assert.equal(result.percentage,100);db.assertDone();
+  await assert.rejects(()=>evaluations.saveItemRating(db,admin,{scores:[]},revised),/تقييم المنفذ متاح/);
+  db.assertDone();
 });
 test('Cannot rate an unreviewed executor who merely uploaded files',async()=>{
   const draft={...item,status:'in_progress'};
   const db=scriptedSql([
+    step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
     step('select id,assigned_to,status,formats',[draft]),
-    step('select 1 from marketing.work_format_reviews',[]),
   ]);
   await assert.rejects(()=>evaluations.saveItemRating(db,admin,{scores:[]},draft),/تقييم المنفذ متاح/);
   db.assertDone();
@@ -463,6 +463,7 @@ test('Cannot rate an unreviewed executor who merely uploaded files',async()=>{
 test('Rating a rejected requirement does not require any submitted files',async()=>{
   const criterionId=uid(95), rejected={item_id:item.id,assigned_to:worker.id};
   const db=scriptedSql([
+    step('select 1 from marketing.work_rating_reviewers',[{one:1}]),
     step('select item_id,assigned_to from marketing.work_rejected_items',[rejected]),
     step('select id::text,name from marketing.work_kpi_criteria',[{id:criterionId,name:'جودة التنفيذ'}]),
     step('update marketing.work_rejected_items',[],v=>{assert.equal(v[1],100);assert.equal(v[3],item.id);}),
@@ -470,38 +471,32 @@ test('Rating a rejected requirement does not require any submitted files',async(
   const result=await evaluations.saveRejectedItemRating(db,admin,{scores:[{criterionId,score:3}]},rejected);
   assert.equal(result.percentage,100);db.assertDone();
 });
-test('Reject archives selected output for grading before deletion and recalculates remaining readiness',async()=>{
+test('Reject keeps requirement and preserves one approved product with task readiness 100',async()=>{
   const remaining={...item,id:uid(52),status:'approved'};
   const db=scriptedSql([
     itemRead([item]),taskLock(),itemLock([item]),itemLoad([item,remaining]),
     step('insert into marketing.work_history'),
-    step('insert into marketing.work_rejected_items',[],v=>{
-      assert.equal(v[0],item.id); assert.equal(v[1],item.task_id);
-      assert.equal(v[2],worker.id); assert.equal(v[4],item.media_kind);
-      assert.equal(v[5],admin.id);
-    }),
-    step('delete from marketing.work_items',[],v=>assert.deepEqual(v,[item.id])),
-    ...recalc([remaining],'completed'),
+    step("update marketing.work_items set status='rejected'",[],v=>assert.equal(v[0],item.id)),
+    ...recalc([{...item,status:'rejected'},remaining],'completed'),
   ]);
   const r=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);
-  assert.equal(r.readiness.total,1);assert.equal(r.readiness.percent,100);db.assertDone();
+  assert.equal(r.readiness.total,2);assert.equal(r.readiness.approved,1);assert.equal(r.readiness.percent,100);db.assertDone();
 });
-test('Rejecting last output archives it for grading but leaves task empty, not a product',async()=>{
+test('Rejecting last requirement completes task and keeps rejected item for review',async()=>{
   const db=scriptedSql([
     itemRead([item]),taskLock(),itemLock([item]),itemLoad([item]),
     step('insert into marketing.work_history'),
-    step('insert into marketing.work_rejected_items',[],v=>assert.equal(v[0],item.id)),
-    step('delete from marketing.work_items',[],v=>assert.deepEqual(v,[item.id])),
-    ...recalc([],'empty'),
+    step("update marketing.work_items set status='rejected'",[],v=>assert.equal(v[0],item.id)),
+    ...recalc([{...item,status:'rejected'}],'completed'),
   ]);
   const r=await api.reviewItem(db,{itemId:item.id,decision:'reject',version:1},admin);
-  assert.equal(r.readiness.total,0);assert.equal(r.readiness.complete,false);db.assertDone();
+  assert.equal(r.readiness.total,1);assert.equal(r.readiness.complete,true);assert.equal(r.readiness.approved,0);db.assertDone();
 });
 test('Submitting someone else output is denied',async()=>{const db=scriptedSql([itemRead([{...item,assigned_to:uid(3),status:'in_progress'}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
 test('Pending uploads block submission',async()=>{const current={...item,status:'in_progress'};const db=scriptedSql([itemRead([current]),taskLock(),itemLock([current]),itemLoad([current]),step('select count(*)::int as count',[{count:1}])]);await assert.rejects(()=>api.submitItem(db,{itemId:item.id,version:1},worker));db.assertDone();});
 test('Resubmitting new final files after requested revision changes state to under review',async()=>{
   // Commit of a replacement file clears the obsolete per-format revision row.
-  const corrected={...item,status:'revision',format_reviews:[],version:2};
+  const corrected={...item,status:'editing',format_reviews:[],version:2};
   const pending={...corrected,status:'submitted',format_reviews:[{format_id:format.id,status:'submitted'}]};
   const db=scriptedSql([
     itemRead([corrected]),taskLock(),itemLock([corrected]),itemLoad([corrected]),

@@ -1,151 +1,84 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { createLoader, scriptedSql } = require('./marketing-workflow-test-support.cjs');
-const root = process.cwd();
-const uuid = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
-const worker = { id: uuid(1), fullName: 'Executor', permissions: [
-  'system.marketing.access', 'marketing.task.view_assigned', 'marketing.task.final_file.upload',
-], deniedPermissions: [], systemAccess: { marketing: {enabled:true,dataScope:'assigned',roleCode:'executor',branchCodes:[],departmentCodes:[]} } };
-const otherWorker = { ...worker, id: uuid(2), fullName:'Other executor' };
-const reviewer = { ...worker, id: uuid(3), fullName:'Reviewer', permissions:['platform.superadmin'], systemAccess: {marketing:{enabled:true,dataScope:'all',roleCode:'admin',branchCodes:[],departmentCodes:[]}} };
-const notifications=[];
-const load=createLoader(root, {
-  '../_db.js': {getSql:()=>{throw Error('No database')},withDatabaseAdvisoryLock:async(_key,fn)=>fn()},
-  '../_auth.js': {loadUserProfile:async()=>null},
-  '../_access-control.js': {getSystemAccess:user=>user.systemAccess.marketing},
-  '../_marketing-workflow-schema.js': {ensureMarketingWorkflowSchema:async()=>{}},
-  '../_notifications.js': {createNotification:async event=>notifications.push(event)},
-  '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>''},
-  '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://example.invalid'})},
-}, {'server/marketing/workflow.ts':'\nexport { declineItemRevision, reviewItem };'});
-const {declineItemRevision,reviewItem}=load('server/marketing/workflow.ts');
-const {workReviewableFormats}=load('shared/marketing-workflow.ts');
+// Regression checks for the current immutable, three-revision marketing workflow.
+// Replaces the superseded single "decline revision" contract used before Oct 28.
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const root=path.resolve(__dirname,'..');
+const read=file=>fs.readFileSync(path.join(root,file),'utf8');
+const {createLoader}=require('./marketing-workflow-test-support.cjs');
+const load=createLoader(root);
 const {parseReviewNote}=load('shared/marketing-review-note-format.ts');
-const format={id:uuid(10),platform_id:uuid(30),platform_name:'Instagram',name:'صورة',width:1080,height:1080};
-const original={id:uuid(20),task_id:uuid(21),created_by:reviewer.id,task_name:'Test',assigned_to:worker.id,
-  media_kind:'image',department_id:uuid(30),formats:[format],files:[{id:uuid(31),name:'asset.jpg',category:'final',format_id:format.id,mime_type:'image/jpeg',status:'ready'}],
-  status:'revision',version:4};
-const step=(match,rows=[],check)=>({match,rows,check});
-const taskLock=()=>step('select id from marketing.work_tasks');
-const itemRead=rows=>step('select i.*,t.name as task_name',rows);
-const itemLock=rows=>step('select * from marketing.work_items',rows);
-const itemLoad=rows=>step('coalesce(d.name',rows);
-function declineSteps(current=original, formatRows=[{format_id:format.id}], reason='ملف صحيح') {
-  const reviewed={...current,status:'submitted',format_reviews:[{format_id:format.id,status:'submitted'}]};
-  const steps=[itemRead([current]),taskLock(),itemLock([current]),step('select format_id::text',formatRows)];
-  if (formatRows.length) steps.push(
-    step('update marketing.work_format_reviews',[],(_vals,sql)=>assert(sql.includes("set status='submitted'"))),
-    step('update marketing.work_items',[],(_vals,sql)=>assert(sql.includes("status='submitted'"))),
-    step('insert into marketing.work_history',[],values=>{
-      assert.equal(values[2],'revision_declined');
-      assert.equal(values[3],reason);
-      assert.deepEqual(values[6].formatIds,formatRows.map(row=>String(row.format_id)));
-    }),
-    taskLock(),itemLoad([reviewed]),
-    step('update marketing.work_tasks',[],values=>assert.equal(values[0],'active')),
-    step('select u.id::text',[])
-  );
-  return steps;
-}
+const {workReviewableFormats,workReadiness}=load('shared/marketing-workflow.ts');
+const source=read('server/marketing/workflow.ts');
+const ui=read('src/marketing/workflow/TaskDetail.tsx');
+const css=read('src/marketing/workflow/workflow.css');
+const evals=read('server/marketing/evaluations.ts');
 const tests=[];
 const test=(name,fn)=>tests.push([name,fn]);
-
-test('Executor can decline requested revision and return its format to review without new upload',async()=>{
-  const db=scriptedSql(declineSteps());
-  const result=await declineItemRevision(db,{itemId:original.id,version:original.version,reason:'ملف صحيح'},worker);
-  assert.equal(result.ok,true);assert.equal(result.message,'تم إرسال رفض التعديل إلى المراجعة');db.assertDone();
-  assert(notifications.some(row=>row.eventType==='workflow.revision_declined'));
+test('Document notes preserve paragraphs, lists and headings',()=>{
+ const rows=parseReviewNote('## الجودة\n1. وضوح الصورة\n• رقم الهاتف\n\nارجع إلى حاسبة التمويل');
+ assert.deepEqual(rows.map(row=>row.kind),['heading','numbered','bullet','paragraph']);
+ assert.equal(rows.at(-1).text,'ارجع إلى حاسبة التمويل');
 });
-test('Reviewer can approve original files after executor declines revision, reaching 100%',async()=>{
-  const resubmitted={...original,status:'submitted',version:5,format_reviews:[{format_id:format.id,status:'submitted'}]};
-  const fullyApproved={...resubmitted,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
-  const db=scriptedSql([
-    itemRead([resubmitted]),taskLock(),itemLock([resubmitted]),itemLoad([resubmitted]),
-    step('insert into marketing.work_history',[],values=>assert.equal(values[2],'approved')),
-    step('insert into marketing.work_format_reviews',[],values=>assert.equal(values[2],'approved')),
-    step('select format_id,status',[{format_id:format.id,status:'approved'}]),
-    step('update marketing.work_items',[],values=>assert.equal(values[0],'approved')),
-    step('insert into marketing.work_action_progress'),
-    taskLock(),itemLoad([fullyApproved]),step('update marketing.work_tasks',[],values=>assert.equal(values[0],'completed')),
-  ]);
-  const result=await reviewItem(db,{itemId:original.id,version:5,decision:'approve'},reviewer);
-  assert.equal(result.readiness.percent,100);db.assertDone();
+test('Old plus-separated notes render as bullet points without editing stored content',()=>{
+ assert.deepEqual(parseReviewNote('شاشة حقيقية + وضوح الهاتف + حاسبة التمويل').map(x=>x.text), ['شاشة حقيقية','وضوح الهاتف','حاسبة التمويل']);
 });
-test('Reviewer may reject the disputed product without creating an approved product',async()=>{
-  const resubmitted={...original,status:'submitted',version:5,format_reviews:[{format_id:format.id,status:'submitted'}]};
-  const db=scriptedSql([
-    itemRead([resubmitted]),taskLock(),itemLock([resubmitted]),itemLoad([resubmitted]),
-    step('insert into marketing.work_history',[],values=>assert.equal(values[2],'rejected')),
-    step('insert into marketing.work_rejected_items'),
-    step('delete from marketing.work_items'),
-    taskLock(),itemLoad([]),step('update marketing.work_tasks',[],values=>assert.equal(values[0],'empty')),
-  ]);
-  const result=await reviewItem(db,{itemId:original.id,version:5,decision:'reject'},reviewer);
-  assert.equal(result.readiness.approved,0);db.assertDone();
+test('Phone numbers and simple arithmetic are not split into notes',()=>{
+ assert.deepEqual(parseReviewNote('اتصل +966550000000 للمتابعة 2+3').map(x=>x.kind),['paragraph']);
 });
-test('Second decline is blocked when there are no revision formats',async()=>{
-  const db=scriptedSql(declineSteps(original,[]));
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:4},worker),/لا يوجد تعديل مطلوب/);db.assertDone();
+test('Previously approved formats remain outside a new revision',()=>{
+ const fmt={id:'a',platform_id:'p',platform_name:'Meta',name:'صورة'};
+ const second={...fmt,id:'b'};
+ const itm={formats:[fmt,second],files:[{id:'f',format_id:'a',category:'final',status:'ready',name:'design.png'}],media_kind:'image',format_reviews:[{format_id:'a',status:'submitted'},{format_id:'b',status:'approved'}]};
+ assert.deepEqual(workReviewableFormats(itm,'revise').map(x=>x.id),['a']);
 });
-test('Other executors cannot decline a revision they do not own',async()=>{
-  const db=scriptedSql([itemRead([original])]);
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:4},otherWorker),/صلاحية|صلاحيات|مسموح|permission|denied|المسموح/);db.assertDone();
+test('Reject remains in task and counts as terminal 100% readiness',()=>{
+ const approved={status:'approved',formats:[{id:'f1'}],files:[{id:'u1',format_id:'f1',category:'final',status:'ready'}]};
+ const rejected={status:'rejected',formats:[],files:[]};
+ assert.deepEqual(workReadiness([rejected,rejected]),{total:2,approved:0,percent:100,complete:true});
+ assert.deepEqual(workReadiness([approved,rejected]),{total:2,approved:1,percent:100,complete:true});
 });
-test('A user without file-upload permission cannot decline',async()=>{
-  const unauthorized={...worker,permissions:['system.marketing.access','marketing.task.view_assigned']};
-  const db=scriptedSql([]);
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:4},unauthorized));db.assertDone();
+test('Server retains the rejected item and its files instead of deleting it',()=>{
+ const section=source.slice(source.indexOf("if (decision === 'reject')"),source.indexOf('} else {',source.indexOf("if (decision === 'reject')")));
+ assert(section.includes("status='rejected'"));
+ assert(!section.includes('delete from marketing.work_items'));
+ assert(!section.includes('delete from marketing.work_item_files'));
 });
-test('Reviewer cannot decline on behalf of assigned executor',async()=>{
-  const db=scriptedSql([itemRead([original])]);
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:4},reviewer));db.assertDone();
+test('Executor accept and decline share one authoritative response handler',()=>{
+ assert(source.includes('async function respondToItemRevision('));
+ assert(source.includes("accept ? 'editing' : 'submitted'"));
+ assert(source.includes("action === 'work_accept_revision'"));
+ assert(source.includes("action === 'work_decline_revision'"));
 });
-test('Stale version cannot reopen revision or duplicate a decision',async()=>{
-  const db=scriptedSql([itemRead([original]),taskLock(),itemLock([original])]);
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:3},worker));db.assertDone();
+test('Executor response validates owner, permission, pending revision and version',()=>{
+ const section=source.slice(source.indexOf('async function respondToItemRevision('),source.indexOf('async function reviewItem('));
+ for(const term of ["requirePermission(user, 'marketing.task.final_file.upload')","current.assigned_to !== user.id","locked.version !== Number(body.version)","locked.status !== 'revision'",'for update']) assert(section.includes(term));
 });
-test('Approved item cannot be reopened by executor',async()=>{
-  const done={...original,status:'approved'};
-  const db=scriptedSql([itemRead([done]),taskLock(),itemLock([done])]);
-  await assert.rejects(()=>declineItemRevision(db,{itemId:original.id,version:4},worker));db.assertDone();
+test('Revision limit is enforced under SQL row lock, not just UI',()=>{
+ const section=source.slice(source.indexOf('async function reviewItem('),source.indexOf('async function unapproveItem('));
+ assert(section.includes('for update'));
+ assert(section.includes('max(revision_number)'));
+ assert(section.includes('nextRevisionNumber > 3'));
 });
-test('Previously approved other formats remain excluded from reconsideration',()=>{
-  const extra={...format,id:uuid(11)};
-  const previouslyApproved={...original,formats:[format,extra],format_reviews:[
-    {format_id:format.id,status:'submitted'}, {format_id:extra.id,status:'approved'}
-  ]};
-  const reviewable=workReviewableFormats(previouslyApproved,'approve');
-  assert.deepEqual(reviewable.map(row=>row.id),[format.id]);
+test('Saved revision notes cannot be edited or removed from API',()=>{
+ assert(evals.includes('export async function manageItemReviewNote'));
+ assert(evals.includes('ملاحظات التعديل المحفوظة نهائية'));
+ assert(!ui.includes('manageNote('));
+ assert(!ui.includes('editNote('));
 });
-test('Document notes preserve paragraphs, lists and headings without running together',()=>{
-  const blocks=parseReviewNote('## الجودة\n1. وضوح الصورة\n• رقم الهاتف\n\nارجع إلى حاسبة التمويل');
-  assert.deepEqual(blocks.map(row=>row.kind),['heading','numbered','bullet','paragraph']);
-  assert.equal(blocks[3].text,'ارجع إلى حاسبة التمويل');
+test('UI offers explicit accept/decline and three permanent named notes',()=>{
+ for(const term of ['+ إضافة تعديل','قبول التعديل','رفض التعديل','قيد التعديل','قيد المراجعة','التعديل {entry.revision_number','revisionNotes.length','revisionsLeft'])assert(ui.includes(term));
 });
-test('Existing compact notes separated by plus become visible bullet points',()=>{
-  assert.deepEqual(parseReviewNote('شاشة حقيقية + وضوح الهاتف + حاسبة التمويل').map(x=>x.text),
-    ['شاشة حقيقية','وضوح الهاتف','حاسبة التمويل']);
-  assert.deepEqual(parseReviewNote('اتصل +966550000000 للمتابعة 2+3').map(x=>x.kind),['paragraph']);
+test('Reviewer and executor actions have distinct permissions',()=>{
+ assert(source.includes("requirePermission(user, 'marketing.task.review')"));
+ assert(source.includes("requirePermission(user, 'marketing.task.final_file.upload')"));
 });
-test('UI enforces executor-only action, server endpoint, safe formatting and reviewer decision',()=>{
-  const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
-  const backend=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
-  const css=fs.readFileSync(path.join(root,'src/marketing/workflow/workflow.css'),'utf8');
-  assert(ui.includes('canDeclineRevision = own && canUpload && revisionPending'));
-  assert(ui.includes("workPost('decline_revision'"));
-  assert(backend.includes("action === 'work_decline_revision'"));
-  assert(backend.includes("requirePermission(user, 'marketing.task.review')"));
-  assert(ui.includes('ReviewNoteDocument text={reviewNote.note}'));
-  assert(ui.includes('<textarea ref={noteEditorRef}'));
-  assert(css.includes('.mkw-review-document'));
-  assert(!ui.includes('dangerouslySetInnerHTML'));
+test('Safe formatted notes, reviewer controls and rejected item visual remain',()=>{
+ assert(ui.includes('ReviewNoteDocument text={entry.note}'));
+ assert(ui.includes('<textarea ref={noteEditorRef}'));
+ assert(css.includes('.mkw-review-document'));
+ assert(ui.includes('مرفوض — تم حسم المطلوب'));
+ assert(!ui.includes('dangerouslySetInnerHTML'));
 });
-(async()=>{
- let passed=0;
- for(const [name,fn] of tests) {
-  try{await fn();console.log('PASS',name);passed++;}
-  catch(error){console.error('FAIL',name,error.stack||error);process.exitCode=1;}
- }
- console.log(`${passed}/${tests.length} review-format/revision-decline tests passed`);
-})();
+(async()=>{let passed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);passed++;}catch(e){console.error('FAIL',name,e.stack||e);process.exitCode=1;}}console.log(`${passed}/${tests.length} immutable-revision regression checks passed`);})().catch(e=>{console.error(e);process.exitCode=1});
