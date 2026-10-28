@@ -89,14 +89,20 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
       ${(isManager(user) || gradeAccess)} or i.assigned_to=${user.id}::uuid or
       (${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))} and t.created_by=${user.id}::uuid) or d.code=any(${scopes}::text[]))`;
   if (!row) throw new Error(W.notFound);
-  if (forEdit && !['in_progress', 'editing', 'submitted'].includes(row.status)) throw new Error(W.immutable);
+  if (forEdit && !['in_progress', 'editing', 'revision', 'submitted'].includes(row.status)) throw new Error(W.immutable);
   return row;
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
   const rows = await db`select i.*,i.due_on::text,coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
     case when i.status='approved' and i.approved_at is not null and i.submitted_at is not null
-      then case when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
+      then case when exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved') then 'exception_approved'
+        when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
       else null end as delivery_status,
+    (select jsonb_build_object('id',de.id::text,'status',de.status,'request_note',de.request_note,
+      'requested_at',de.requested_at,'decision_note',de.decision_note,'decided_at',de.decided_at,
+      'decided_by_name',coalesce(du.full_name,''))
+      from marketing.work_item_deadline_exceptions de left join core.users du on du.id=de.decided_by
+      where de.item_id=i.id) as deadline_exception,
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,
       'file_size',f.file_size,'category',j.category,'format_id',j.format_id,'status',f.status,'order_index',j.order_index)
       order by j.order_index,j.created_at,j.id) from marketing.work_item_files j join marketing.files f on f.id=j.file_id
@@ -202,7 +208,7 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     -- Show delivery badges only after final approval. Classify punctuality by
     -- the executor's original submission date in Riyadh, not admin review time.
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
-      and (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on)::int as submitted_on_time_count,
+      and ((i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on or exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved')))::int as submitted_on_time_count,
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as submitted_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
@@ -400,7 +406,7 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
     if (locked.version !== Number(body.version)) throw new Error(W.conflict);
-    if (!['in_progress','editing','submitted'].includes(locked.status)) throw new Error(W.immutable);
+    if (!['in_progress','editing','revision','submitted'].includes(locked.status)) throw new Error(W.immutable);
     const items = await loadItems(tx, current.task_id), item = items.find(row => row.id === itemId);
     if (!item) throw new Error(W.notFound);
     const pending = new Set((item.format_reviews || []).filter(r => r.status === 'submitted').map(r => r.format_id));
@@ -408,7 +414,7 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
     const revision = new Set((item.format_reviews || []).filter(r => r.status === 'revision').map(r => r.format_id));
     const selectable = item.formats.filter(format => !pending.has(format.id) && !approved.has(format.id) && !revision.has(format.id) &&
       finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
-    if (locked.status === 'editing' && revision.size > 0)
+    if (['editing','revision'].includes(locked.status) && revision.size > 0)
       throw new Error('ارفع الملفات الجديدة لكل المقاسات المطلوبة تعديلها قبل الإرسال للمراجعة');
     if (!selectable.length) throw new Error(W.incompleteFiles);
     const [uploads] = await tx<any[]>`select count(*)::int as count from marketing.work_uploads up join marketing.files f on f.id=up.file_id
@@ -433,6 +439,51 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
     try { await visibleItem(sql, reviewer, itemId); reviewers.push(candidate.id); } catch { /* Outside this reviewer's scope. */ }
   }
   await notify(user, 'submitted', result.taskId, `${W.submitted}: ${result.title}`, [...reviewers, result.owner]);
+  return result;
+}
+
+async function requestDeadlineException(sql: Sql, body: Row, user: SessionUser) {
+  requirePermission(user, 'marketing.task.final_file.upload');
+  const itemId = id(body.itemId), note = text(body.note, 2000);
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const current = await visibleItem(tx, user, itemId);
+    if (current.assigned_to !== user.id || current.status !== 'submitted') throw new Error(W.denied);
+    const [late] = await tx<any[]>`select id,due_on from marketing.work_items
+      where id=${itemId}::uuid and due_on < (now() at time zone 'Asia/Riyadh')::date`;
+    if (!late) throw new Error('لا يمكن طلب الاستثناء قبل تجاوز تاريخ التسليم');
+    await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
+    const [saved] = await tx<any[]>`insert into marketing.work_item_deadline_exceptions(item_id,requested_by,request_note,status,decided_by,decided_at,decision_note)
+      values(${itemId}::uuid,${user.id}::uuid,${note},'pending',null,null,'')
+      on conflict(item_id) do update set requested_by=excluded.requested_by,requested_at=now(),request_note=excluded.request_note,
+        status='pending',decided_by=null,decided_at=null,decision_note=''
+      returning id::text`;
+    await tx`update marketing.work_items set version=version+1,updated_at=now() where id=${itemId}::uuid`;
+    await history(tx,user,current.task_id,itemId,'deadline_exception_requested',note,{dueOn:String(current.due_on)});
+    return { ok:true, taskId:current.task_id, itemId, owner:current.created_by, exceptionId:saved.id, message:'تم إرسال طلب استثناء التأخير للمراجعة' };
+  });
+  const raters = await sql<any[]>`select user_id::text from marketing.work_rating_reviewers`;
+  await notify(user,'deadline_exception',result.taskId,'طلب استثناء عن موعد التسليم',raters.map(row => String(row.user_id)),result.message);
+  return result;
+}
+
+async function decideDeadlineException(sql: Sql, body: Row, user: SessionUser, decision: 'approved' | 'rejected') {
+  if (!(await canGradeWorkItem(sql,user))) throw new Error(W.denied);
+  const itemId = id(body.itemId), note = text(body.note, 2000);
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const current = await visibleItem(tx,user,itemId);
+    if (current.status !== 'submitted') throw new Error('لا يمكن اتخاذ قرار في طلب الاستثناء بعد تغيير حالة المطلوب');
+    const [exception] = await tx<any[]>`select * from marketing.work_item_deadline_exceptions where item_id=${itemId}::uuid for update`;
+    if (!exception || exception.status !== 'pending') throw new Error('لا يوجد طلب استثناء معلق');
+    await tx`update marketing.work_item_deadline_exceptions set status=${decision},decided_by=${user.id}::uuid,decided_at=now(),decision_note=${note} where item_id=${itemId}::uuid`;
+    await tx`update marketing.work_items set version=version+1,updated_at=now() where id=${itemId}::uuid`;
+    await history(tx,user,current.task_id,itemId,decision === 'approved' ? 'deadline_exception_approved' : 'deadline_exception_rejected',note,{exceptionId:exception.id});
+    return { ok:true,taskId:current.task_id,itemId,assigneeId:current.assigned_to,message:decision === 'approved' ? 'تم اعتماد استثناء التأخير' : 'تم رفض استثناء التأخير' };
+  });
+  await notify(user,'deadline_exception',result.taskId,result.message,[result.assigneeId],result.message);
   return result;
 }
 /** Executor response to an immutable review request. Accept => editing,
@@ -737,7 +788,7 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
       const item = await visibleItem(tx, user, upload.item_id, true);
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${upload.item_id}::uuid for update`;
-      if (!current || !['in_progress','editing','submitted'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','editing','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
       await visibleItem(tx, user, upload.item_id, true);
       if (upload.category === 'final') { requirePermission(user, 'marketing.task.final_file.upload'); if (current.assigned_to !== user.id) throw new Error(W.denied); }
       else if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
@@ -796,7 +847,7 @@ async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
       // Same ordering as submit/review/commit: task -> item -> upload.
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${itemId}::uuid for update`;
-      if (!current || !['in_progress','editing','submitted'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','editing','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
       await visibleItem(tx, user, itemId, true);
       if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
       const [linked] = await tx<any[]>`select 1 from marketing.work_item_files where item_id=${itemId}::uuid and file_id=${fileId}::uuid`;
@@ -1652,6 +1703,9 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_save_item') result = await saveItem(sql, body, user);
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
+    else if (action === 'work_request_deadline_exception') result = await requestDeadlineException(sql, body, user);
+    else if (action === 'work_approve_deadline_exception') result = await decideDeadlineException(sql, body, user, 'approved');
+    else if (action === 'work_reject_deadline_exception') result = await decideDeadlineException(sql, body, user, 'rejected');
     else if (action === 'work_review') result = await reviewItem(sql, body, user);
     else if (action === 'work_decline_revision') result = await respondToItemRevision(sql, body, user, false);
     else if (action === 'work_accept_revision') result = await respondToItemRevision(sql, body, user, true);

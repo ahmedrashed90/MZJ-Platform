@@ -65,6 +65,19 @@ create table if not exists marketing.work_action_progress (
   action_id uuid not null references marketing.assignment_actions(id), completed boolean not null default false,
   completed_by uuid references core.users(id), updated_at timestamptz not null default now(), primary key(item_id,action_id)
 );
+create table if not exists marketing.work_item_deadline_exceptions (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references marketing.work_items(id) on delete cascade,
+  requested_by uuid not null references core.users(id),
+  requested_at timestamptz not null default now(),
+  request_note text not null default '',
+  status text not null default 'pending' check(status in ('pending','approved','rejected')),
+  decided_by uuid references core.users(id),
+  decided_at timestamptz,
+  decision_note text not null default '',
+  unique(item_id)
+);
+create index if not exists work_item_deadline_exceptions_status on marketing.work_item_deadline_exceptions(status,requested_at desc);
 create table if not exists marketing.work_plans (
   id uuid primary key default gen_random_uuid(), request_key uuid not null, plan_number bigint not null default nextval('marketing.work_plan_number_seq'),
   plan_no text not null unique, kind text not null check(kind in ('agenda','campaign')), name text not null,
@@ -168,6 +181,29 @@ alter table marketing.work_items drop constraint if exists work_items_status_che
 alter table marketing.work_items add constraint work_items_status_check
   check(status in ('in_progress','submitted','revision','editing','approved','rejected'));
 insert into marketing.workflow_migrations(code) values('schema-9') on conflict do nothing;
+commit;`;
+
+// A late submission exception is a separate approval record. It never changes
+// the original due date; it only records the executor request and the decision
+// made by one of the two configured Marketing raters.
+export const MARKETING_WORKFLOW_DEADLINE_EXCEPTION_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_item_deadline_exceptions (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references marketing.work_items(id) on delete cascade,
+  requested_by uuid not null references core.users(id),
+  requested_at timestamptz not null default now(),
+  request_note text not null default '',
+  status text not null default 'pending' check(status in ('pending','approved','rejected')),
+  decided_by uuid references core.users(id),
+  decided_at timestamptz,
+  decision_note text not null default '',
+  unique(item_id)
+);
+create index if not exists work_item_deadline_exceptions_status
+  on marketing.work_item_deadline_exceptions(status,requested_at desc);
+insert into marketing.workflow_migrations(code) values('schema-10') on conflict do nothing;
 commit;`;
 
 export const MARKETING_WORKFLOW_TASK_DELETE_SQL = `begin;
@@ -381,7 +417,7 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
   const [state] = await sql<{
     tasks: boolean; items: boolean; plans: boolean; drafts: boolean;
     files: boolean; ratings: boolean; formats: boolean; categories: boolean;
-    notes: boolean; rejected: boolean; reviewers: boolean;
+    notes: boolean; rejected: boolean; reviewers: boolean; deadlineExceptions: boolean;
     revisionNumbers: boolean; executorResponse: boolean; rejectedRevisionNotes: boolean;
     editingState: boolean; rejectedState: boolean;
   }[]>`
@@ -397,6 +433,7 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
       to_regclass('marketing.work_item_review_notes') is not null as notes,
       to_regclass('marketing.work_rejected_items') is not null as rejected,
       to_regclass('marketing.work_rating_reviewers') is not null as reviewers,
+      to_regclass('marketing.work_item_deadline_exceptions') is not null as "deadlineExceptions",
       exists (select 1 from information_schema.columns where table_schema='marketing'
         and table_name='work_item_review_notes' and column_name='revision_number') as "revisionNumbers",
       exists (select 1 from information_schema.columns where table_schema='marketing'
@@ -417,6 +454,7 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
     rejectedReady: Boolean(state?.rejected),
     revisionReady: Boolean(state?.reviewers && state?.revisionNumbers && state?.executorResponse && state?.rejectedRevisionNotes && state?.editingState),
     terminalReady: Boolean(state?.rejectedState),
+    deadlineExceptionsReady: Boolean(state?.deadlineExceptions),
   };
 }
 
@@ -426,12 +464,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -446,6 +484,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasRejected || !(await marketingWorkflowStructureStatus(sql)).rejectedReady) await runSqlScript(MARKETING_WORKFLOW_REJECTED_RATINGS_SQL);
       if (!(await flags()).hasRevisionPolicy || !(await marketingWorkflowStructureStatus(sql)).revisionReady) await runSqlScript(MARKETING_WORKFLOW_REVISION_POLICY_SQL);
       if (!(await flags()).hasTerminalRejection || !(await marketingWorkflowStructureStatus(sql)).terminalReady) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
+      if (!(await flags()).hasDeadlineExceptions || !(await marketingWorkflowStructureStatus(sql)).deadlineExceptionsReady) await runSqlScript(MARKETING_WORKFLOW_DEADLINE_EXCEPTION_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

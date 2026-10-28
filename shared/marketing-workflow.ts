@@ -20,7 +20,8 @@ export type WorkItem = {
   latest_review_event?: { action: string; note: string; actor_name: string; created_at: string } | null;
   format_reviews?: Array<{ format_id: string; status: 'submitted' | 'approved' | 'revision'; submitted_at?: string | null; approved_at?: string | null }>;
   rating?: WorkItemRating | null; version: number; approved_at?: string | null; submitted_at?: string | null;
-  delivery_status?: 'on_time' | 'late' | null;
+  delivery_status?: 'on_time' | 'late' | 'exception_approved' | null;
+  deadline_exception?: { id: string; status: 'pending' | 'approved' | 'rejected'; request_note: string; requested_at: string; decision_note?: string; decided_at?: string | null; decided_by_name?: string } | null;
   pending_uploads?: { id: string; name: string; category: string }[];
   sort_order: number; task_name?: string; task_no?: string; actions?: { id: string; name: string; completed: boolean; admin_only: boolean; is_final_approval: boolean }[];
 };

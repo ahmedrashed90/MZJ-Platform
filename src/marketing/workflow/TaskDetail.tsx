@@ -13,6 +13,11 @@ function submittedDayInRiyadh(value: string | null | undefined) {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh' }) : '—';
 }
+function riyadhToday() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
 
 type RejectedRatingItem = {
   id: string; assignee_name: string; idea_name: string; media_kind: 'image' | 'video';
@@ -198,7 +203,9 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const { user } = useAuth();
   const own = user?.id === item.assigned_to;
   const editable = !['approved','revision','rejected'].includes(item.status) && (own || capabilities.editTask);
-  const canUpload = !['approved','revision','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
+  const canUpload = !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
+  const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
+  const lateForSubmission = item.due_on < riyadhToday();
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
@@ -303,7 +310,15 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     const saved = await run(() => workPost('add_item_formats', { itemId: item.id, version: version.current, formatIds: newFormatIds }));
     if (saved) { setNewFormatIds([]); setShowFormatPicker(false); }
   }
-  return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : W.deliveryLate}</span>}</div></header>
+  async function requestDeadlineException() {
+    const note = window.prompt('سبب طلب استثناء التأخير (اختياري)؟', '') ?? '';
+    await run(() => workPost('request_deadline_exception', { itemId: item.id, note }));
+  }
+  async function decideDeadlineException(decision: 'approve' | 'reject') {
+    const note = window.prompt(decision === 'approve' ? 'ملاحظة اعتماد الاستثناء (اختياري)؟' : 'سبب رفض الاستثناء (اختياري)؟', '') ?? '';
+    await run(() => workPost(decision === 'approve' ? 'approve_deadline_exception' : 'reject_deadline_exception', { itemId: item.id, note }));
+  }
+  return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' || item.delivery_status === 'exception_approved' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : item.delivery_status === 'exception_approved' ? W.deliveryExceptionApproved : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
       {item.status === 'rejected' && <div className="mkw-rejected-final-message" role="status">
         <strong>✕ مرفوض — تم حسم المطلوب</strong>
@@ -315,6 +330,13 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
         {item.latest_review_event?.note && <p><strong>رد المنفذ:</strong> {item.latest_review_event.note}</p>}
       </div>}
       {item.delivery_status && <div className="mkw-execution-delivery"><span>{W.dueOn}: <strong>{showDate(item.due_on)}</strong></span><span>{W.deliveredAt}: <strong>{submittedDayInRiyadh(item.submitted_at)}</strong></span></div>}
+      {canRate && item.deadline_exception?.status === 'pending' && <section className="mkw-deadline-exception" role="status">
+        <strong>طلب استثناء عن موعد التسليم</strong><p>{item.deadline_exception.request_note || 'طلب المنفذ اعتماد استثناء التأخير.'}</p>
+        <div className="mkw-actions"><button type="button" className="primary" disabled={busy} onClick={() => void decideDeadlineException('approve')}>قبول الاستثناء</button>
+          <button type="button" className="secondary danger" disabled={busy} onClick={() => void decideDeadlineException('reject')}>رفض الاستثناء</button></div>
+      </section>}
+      {item.deadline_exception?.status === 'approved' && <div className="mkw-revision-declined-state" role="status"><strong>استثناء التأخير معتمد</strong><p>تم اعتماد الاستثناء بواسطة {item.deadline_exception.decided_by_name || 'المراجع'}.</p></div>}
+      {item.deadline_exception?.status === 'rejected' && <div className="mkw-revision-declined-state" role="status"><strong>تم رفض استثناء التأخير</strong>{item.deadline_exception.decision_note && <p>{item.deadline_exception.decision_note}</p>}</div>}
       <section className="mkw-note-management">
         <div className="mkw-section-title"><h4>ملاحظات المراجعة</h4>
           <span className="mkw-revision-limit">التعديلات المسجلة: {revisionNotes.length} / 3 · لا يمكن تعديل أو حذف أي تعديل محفوظ</span>
@@ -408,7 +430,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           {!!finals.length && <details><summary><FileArrowDown size={17} />{item.status === 'rejected' ? 'معاينة الملفات المرفوضة' : W.viewProduct}</summary><FilesPreview files={finals} /></details>}
         </section>
       </div>
-      {editable && <footer className="mkw-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>{canUpload && <button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>}</footer>}
+      {(editable || canSubmit) && <footer className="mkw-actions">{editable && <button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>}{canSubmit && <><button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>{item.status === 'submitted' && lateForSubmission && item.deadline_exception?.status !== 'approved' && item.deadline_exception?.status !== 'pending' && <button type="button" className="secondary" disabled={busy} onClick={() => void requestDeadlineException()}>{W.deadlineException}</button>}</>}</footer>}
       {capabilities.review && item.status !== 'rejected' && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && item.status !== 'revision' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
     </div>
 

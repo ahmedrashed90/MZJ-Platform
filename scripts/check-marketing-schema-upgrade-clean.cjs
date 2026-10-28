@@ -110,7 +110,7 @@ const schema = load('server/_marketing-workflow-schema.ts');
       if (query.includes("to_regclass('marketing.work_tasks')")) return [{
         tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true,
         notes:true,rejected:true,reviewers:reviewingReady,revisionNumbers:reviewingReady,
-        executorResponse:reviewingReady,rejectedRevisionNotes:reviewingReady,
+        executorResponse:reviewingReady,rejectedRevisionNotes:reviewingReady,deadlineExceptions:reviewingReady,
         editingState:reviewingReady,rejectedState:terminalReady,
       }];
       throw new Error('Unexpected SQL in review upgrade fixture: '+query);
@@ -121,11 +121,13 @@ const schema = load('server/_marketing-workflow-schema.ts');
         runSqlScript:async script => {
           assert(!/\bdrop table\b|\btruncate table\b/i.test(script));
           const code = script.includes("values('schema-8')") ? 'schema-8'
-            : script.includes("values('schema-9')") ? 'schema-9' : 'unexpected';
+            : script.includes("values('schema-9')") ? 'schema-9'
+            : script.includes("values('schema-10')") ? 'schema-10' : 'unexpected';
           assert.notEqual(code,'unexpected','Only review migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
           if(code==='schema-9') terminalReady=true;
+          if(code==='schema-10') reviewingReady=true;
         },
         tryWithDatabaseAdvisoryLock:async(key,work) => {
           assert.equal(key,'mzj:marketing:schema-setup');
@@ -139,8 +141,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9']);
-  console.log('PASS: schema-7 to schema-9 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10']);
+  console.log('PASS: schema-7 to schema-10 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });

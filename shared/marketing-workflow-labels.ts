@@ -30,7 +30,7 @@ export const W = {
  publishDate: '\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0646\u0634\u0631',
  fundingDate: '\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u062a\u0645\u0648\u064a\u0644',
  productCount: '\u0639\u062f\u062f \u0627\u0644\u0645\u0646\u062a\u062c\u0627\u062a',
- deliveryOnTime: 'التسليم في الموعد', deliveryLate: 'تأخر في التسليم', deliveredAt: 'تاريخ التسليم الفعلي', readiness: '\u0627\u0644\u062c\u0627\u0647\u0632\u064a\u0629',
+ deliveryOnTime: 'التسليم في الموعد', deliveryLate: 'تأخر في التسليم', deliveryExceptionApproved: 'استثناء التأخير معتمد', deadlineException: 'استثناء عن الموعد', deliveredAt: 'تاريخ التسليم الفعلي', readiness: '\u0627\u0644\u062c\u0627\u0647\u0632\u064a\u0629',
  statement: '\u0628\u064a\u0627\u0646 \u0627\u0644\u0645\u0646\u062a\u062c', viewProduct: '\u0645\u0634\u0627\u0647\u062f\u0629 \u0627\u0644\u0645\u0646\u062a\u062c',
  selectProduct: '\u0627\u062e\u062a\u064a\u0627\u0631 \u0645\u0646\u062a\u062c', addDate: '\u0625\u0636\u0627\u0641\u0629 \u064a\u0648\u0645',
  finalFiles: '\u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0646\u0647\u0627\u0626\u064a\u0629', upload: '\u0631\u0641\u0639 \u0645\u0644\u0641',
