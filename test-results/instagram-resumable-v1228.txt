@@ -1,0 +1,19 @@
+=== Instagram focused checks ===
+PASS: Instagram publishing is centralized in one service
+PASS: the old direct video_url Reel flow is removed
+PASS: video containers start a resumable upload session
+PASS: Zoho/R2 video bytes are uploaded directly to Meta
+PASS: container readiness is checked before media_publish
+PASS: processing ERROR and EXPIRED states stop publishing
+PASS: Media ID race is retried only after readiness
+PASS: Instagram Stories can publish ordered batches of images
+PASS: Facebook Stories can publish ordered batches of images
+PASS: Instagram carousels remain ordered and capped at ten images
+Instagram resumable publishing checks: 10/10 passed
+Instagram resumable publisher behavior tests: 2/2 passed
+
+=== Existing project node checks ===
+Existing project node checks passed: 66/66
+
+=== Isolated TypeScript check ===
+server/_instagram-publisher.ts: passed

@@ -1,0 +1,21 @@
+# EXAMPLE ONLY: merge these bindings into the EXISTING worker config.
+# Keep the existing worker name, main entry, routes, secrets and bindings unchanged.
+# Set the actual D1 database_id from your Cloudflare dashboard.
+
+[[d1_databases]]
+binding = "MZJ_STOCK_DB"
+database_name = "mzj-operations-stock"
+database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
+
+[[queues.producers]]
+binding = "MZJ_STOCK_QUEUE"
+queue = "mzj-operations-stock"
+
+[[queues.consumers]]
+queue = "mzj-operations-stock"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 100
+
+[triggers]
+crons = ["* * * * *"]

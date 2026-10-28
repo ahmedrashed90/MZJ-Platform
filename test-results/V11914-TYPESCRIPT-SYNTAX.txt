@@ -1,0 +1,12 @@
+PASS: server/crm/history.ts
+PASS: src/crm/pages/CrmFinanceHistoryPage.tsx
+PASS: src/crm/CrmLayout.tsx
+PASS: shared/access-control.ts
+PASS: server/_access-control-schema.ts
+PASS: server/_api-permissions.ts
+PASS: server/operations/index.ts
+PASS: src/operations/pages/SalesOrdersFollowupPage.tsx
+PASS: server/marketing/index.ts
+PASS: src/marketing/components/CampaignBudgetManager.tsx
+PASS: src/marketing/pages/MarketingDatabasePage.tsx
+TypeScript syntax checks: 11/11 passed

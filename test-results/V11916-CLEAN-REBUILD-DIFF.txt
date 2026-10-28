@@ -1,0 +1,19 @@
+Files /mnt/data/mzj11915baseline/package.json and /mnt/data/mzj11916rebuild/package.json differ
+Files /mnt/data/mzj11915baseline/scripts/check-activity-dashboard-nabil-fixes.mjs and /mnt/data/mzj11916rebuild/scripts/check-activity-dashboard-nabil-fixes.mjs differ
+Files /mnt/data/mzj11915baseline/scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs and /mnt/data/mzj11916rebuild/scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs differ
+Files /mnt/data/mzj11915baseline/scripts/check-crm-database-wholesale-department-v11915.mjs and /mnt/data/mzj11916rebuild/scripts/check-crm-database-wholesale-department-v11915.mjs differ
+Only in /mnt/data/mzj11916rebuild/scripts: check-crm-wholesale-branch-marketing-budget-v11916.mjs
+Files /mnt/data/mzj11915baseline/scripts/check-customer-registry-operations-budget-v11914.mjs and /mnt/data/mzj11916rebuild/scripts/check-customer-registry-operations-budget-v11914.mjs differ
+Files /mnt/data/mzj11915baseline/server/_erpnext-sales-order-sync.ts and /mnt/data/mzj11916rebuild/server/_erpnext-sales-order-sync.ts differ
+Files /mnt/data/mzj11915baseline/server/crm/contacts.ts and /mnt/data/mzj11916rebuild/server/crm/contacts.ts differ
+Files /mnt/data/mzj11915baseline/server/crm/leads.ts and /mnt/data/mzj11916rebuild/server/crm/leads.ts differ
+Files /mnt/data/mzj11915baseline/server/crm/reports.ts and /mnt/data/mzj11916rebuild/server/crm/reports.ts differ
+Files /mnt/data/mzj11915baseline/src/crm/components/LeadDrawer.tsx and /mnt/data/mzj11916rebuild/src/crm/components/LeadDrawer.tsx differ
+Files /mnt/data/mzj11915baseline/src/marketing/components/CampaignBudgetManager.tsx and /mnt/data/mzj11916rebuild/src/marketing/components/CampaignBudgetManager.tsx differ
+Files /mnt/data/mzj11915baseline/src/marketing/marketing.css and /mnt/data/mzj11916rebuild/src/marketing/marketing.css differ
+Files /mnt/data/mzj11915baseline/src/marketing/pages/MarketingDatabasePage.tsx and /mnt/data/mzj11916rebuild/src/marketing/pages/MarketingDatabasePage.tsx differ
+Only in /mnt/data/mzj11916rebuild/test-results: V11916-CLEAN-REBUILD-DIFF.txt
+Only in /mnt/data/mzj11916rebuild/test-results: V11916-CLEAN-REBUILD-VERIFICATION.txt
+Only in /mnt/data/mzj11916rebuild/test-results: V11916-STATIC-CHECKS.txt
+Only in /mnt/data/mzj11915baseline: tsconfig.app.tsbuildinfo
+Only in /mnt/data/mzj11915baseline: tsconfig.node.tsbuildinfo

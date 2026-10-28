@@ -1,0 +1,34 @@
+MZJ Platform — NEXT ERP Sales Rep / Operations Admin / Optional Phone
+Source: MZJ-Platform-main (12).zip
+
+RESULTS
+=======
+1. Project static scripts from package typecheck: 39/39 PASS
+2. NEXT ERP normalizer runtime:
+   - Sales rep email is independent from modified_by: PASS
+   - Operations admin is captured from modified_by: PASS
+   - ERP customer identity is retained: PASS
+   - Customer without phone is accepted: PASS
+   - owner/modified_by are not sales-rep fallbacks: PASS
+   - Cancellation without items remains accepted: PASS
+3. Webhook rendering with mocked Frappe linked documents:
+   - on_submit JSON renders and parses: PASS
+   - on_cancel JSON renders and parses: PASS
+   - Sales Person -> Employee -> user_id resolution: PASS
+   - operations_admin_email/name fields: PASS
+   - stable customer_id field: PASS
+4. TypeScript/TSX syntax transpile: 173/173 PASS
+5. Modified TypeScript source syntax diagnostics: PASS
+6. Database directory diff against uploaded source: NONE
+7. ZIP integrity: PASS after packaging
+
+DATABASE
+========
+No new SQL or migration is required. CRM contact and lead phone fields are nullable,
+and crm.contact_identities already exists for stable ERP customer identity.
+
+BUILD NOTE
+==========
+A full production build was not run because the uploaded source does not include
+node_modules. All available project scripts, runtime normalization checks, webhook
+rendering checks, and TypeScript/TSX syntax checks passed.

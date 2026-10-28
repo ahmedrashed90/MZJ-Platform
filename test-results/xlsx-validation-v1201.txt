@@ -1,0 +1,10 @@
+XLSX ZIP: OK
+OpenPyXL load: OK
+Sheet: Task Template
+RTL: true
+Rows: 16
+Columns: 3
+Headers: key | الحقل | القيمة
+Column widths: A=27, B=34, C=58
+mainScript row height: 120
+mainScript wrap text: true
