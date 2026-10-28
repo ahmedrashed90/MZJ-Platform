@@ -21,10 +21,11 @@ export function MarketingDashboardPage() {
   const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; canUpgrade: boolean }>('schema_status');
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
   async function upgradeSchema() {
-    if (schemaUpgrading || !schema.data?.canUpgrade || !schema.data?.baseReady) return;
+    if (schemaUpgrading || !schema.data?.canUpgrade) return;
     setSchemaUpgrading(true); setSchemaError('');
     try {
-      await workPost('upgrade_schema', {});
+      const upgraded = await workPost<{ ready: boolean }>('upgrade_schema', {});
+      if (!upgraded.ready) throw new Error('لم تكتمل تهيئة قاعدة بيانات التسويق');
       await schema.reload();
       await query.reload();
     } catch (error) { setSchemaError(error instanceof Error ? error.message : W.invalid); }
@@ -50,7 +51,7 @@ export function MarketingDashboardPage() {
   return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
     {schema.data && !schema.data.ready && <div className="mkw-schema-upgrade" role="alert">
       <span>{schema.data.baseReady ? 'تحتاج قاعدة بيانات التسويق إلى تحديث الجداول حتى تظهر بيانات التنفيذ والنشر الحالية.' : 'قاعدة بيانات التسويق تحتاج إلى التهيئة الأساسية.'}</span>
-      {schema.data.baseReady && schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
+      {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
     </div>}
     <div className="mkw-toolbar mkw-dashboard-search"><Search value={search} onChange={setSearch}/></div>

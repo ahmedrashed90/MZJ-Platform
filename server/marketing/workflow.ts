@@ -5,7 +5,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { loadUserProfile, type SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { assertMarketingWorkflowReady, marketingPlanScheduleSchemaStatus, ensureMarketingWorkflowSchema } from '../_marketing-workflow-schema.js';
+import { assertMarketingWorkflowReady, marketingPlanScheduleSchemaStatus, marketingWorkflowStructureStatus, ensureMarketingWorkflowSchema } from '../_marketing-workflow-schema.js';
 import { createNotification } from '../_notifications.js';
 import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketingStorageKey } from '../_media-storage.js';
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
@@ -1565,7 +1565,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     // immutable revision/rater schema. A plan-only readiness check would report
     // "ready" on existing installations and hide the migration button forever.
     const status = await marketingPlanScheduleSchemaStatus(sql);
-    const [kpi] = await sql<{ current: boolean }[]>`select to_regclass('marketing.work_item_ratings') is not null and to_regclass('marketing.work_format_reviews') is not null and to_regclass('marketing.work_kpi_criteria') is not null as current`;
+    const structure = await marketingWorkflowStructureStatus(sql);
     let reviewSchemaReady = false;
     if (status.baseReady) {
       const [review] = await sql<{ revision_policy: boolean; terminal_rejection: boolean;
@@ -1584,15 +1584,22 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
         review.revision_numbers && review.editing_state && review.rejected_state);
     }
     response.status(200).json({ ok: true, ...status,
-      ready: Boolean(status.ready && kpi?.current && reviewSchemaReady),
+      ready: Boolean(status.ready && structure.ready && reviewSchemaReady),
+      missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
     return true;
   }
   if (request.method === 'POST' && action === 'work_upgrade_schema') {
     requirePermission(user, 'platform.superadmin');
     await ensureMarketingWorkflowSchema();
+    // A successful migration must also satisfy the SAME guard used by all
+    // workflow reads. Never report success based on schedule columns alone.
+    await assertMarketingWorkflowReady(sql);
     const upgraded = await marketingPlanScheduleSchemaStatus(sql);
-    response.status(200).json({ ok: true, ...upgraded, message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
+    const structure = await marketingWorkflowStructureStatus(sql);
+    response.status(200).json({ ok: true, ready: upgraded.ready && structure.ready,
+      baseReady: upgraded.baseReady, missing: [...upgraded.missing, ...structure.missing],
+      message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
     return true;
   }
   await assertMarketingWorkflowReady(sql);

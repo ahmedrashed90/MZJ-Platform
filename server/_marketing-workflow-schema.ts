@@ -134,7 +134,7 @@ set local lock_timeout = '3s';
 set local statement_timeout = '12s';
 alter table marketing.work_items drop constraint if exists work_items_status_check;
 alter table marketing.work_items add constraint work_items_status_check
-  check(status in ('in_progress','submitted','revision','editing','approved'));
+  check(status in ('in_progress','submitted','revision','editing','approved','rejected'));
 alter table marketing.work_item_review_notes add column if not exists revision_number integer;
 alter table marketing.work_item_review_notes add column if not exists executor_response text;
 alter table marketing.work_item_review_notes drop constraint if exists work_item_review_notes_executor_response_check;
@@ -375,6 +375,51 @@ export async function upgradeMarketingPlanScheduleSchema() {
   return { ready: true, alreadyApplied: false };
 }
 
+/** Read-only health check for the Marketing workflow, including the newest
+ * revision/rating columns. Do not run DDL in dashboard loads or API GETs. */
+export async function marketingWorkflowStructureStatus(sql = getSql()) {
+  const [state] = await sql<{
+    tasks: boolean; items: boolean; plans: boolean; drafts: boolean;
+    files: boolean; ratings: boolean; formats: boolean; categories: boolean;
+    notes: boolean; rejected: boolean; reviewers: boolean;
+    revisionNumbers: boolean; executorResponse: boolean; rejectedRevisionNotes: boolean;
+    editingState: boolean; rejectedState: boolean;
+  }[]>`
+    select
+      to_regclass('marketing.work_tasks') is not null as tasks,
+      to_regclass('marketing.work_items') is not null as items,
+      to_regclass('marketing.work_plans') is not null as plans,
+      to_regclass('marketing.work_product_drafts') is not null as drafts,
+      to_regclass('marketing.work_item_files') is not null as files,
+      to_regclass('marketing.work_item_ratings') is not null as ratings,
+      to_regclass('marketing.work_format_reviews') is not null as formats,
+      to_regclass('marketing.work_review_categories') is not null as categories,
+      to_regclass('marketing.work_item_review_notes') is not null as notes,
+      to_regclass('marketing.work_rejected_items') is not null as rejected,
+      to_regclass('marketing.work_rating_reviewers') is not null as reviewers,
+      exists (select 1 from information_schema.columns where table_schema='marketing'
+        and table_name='work_item_review_notes' and column_name='revision_number') as "revisionNumbers",
+      exists (select 1 from information_schema.columns where table_schema='marketing'
+        and table_name='work_item_review_notes' and column_name='executor_response') as "executorResponse",
+      exists (select 1 from information_schema.columns where table_schema='marketing'
+        and table_name='work_rejected_items' and column_name='revision_notes') as "rejectedRevisionNotes",
+      exists (select 1 from pg_constraint where conrelid=to_regclass('marketing.work_items')
+        and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%editing%') as "editingState",
+      exists (select 1 from pg_constraint where conrelid=to_regclass('marketing.work_items')
+        and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%rejected%') as "rejectedState"
+  `;
+  const missing = Object.entries(state || {}).filter(([,present]) => !present).map(([name]) => name);
+  return {
+    ready: missing.length === 0,
+    missing,
+    kpiReady: Boolean(state?.ratings && state?.formats && state?.categories),
+    notesReady: Boolean(state?.notes),
+    rejectedReady: Boolean(state?.rejected),
+    revisionReady: Boolean(state?.reviewers && state?.revisionNumbers && state?.executorResponse && state?.rejectedRevisionNotes && state?.editingState),
+    terminalReady: Boolean(state?.rejectedState),
+  };
+}
+
 let ready: Promise<void> | null = null;
 export function ensureMarketingWorkflowSchema() {
   if (!ready) ready = (async () => {
@@ -385,7 +430,9 @@ export function ensureMarketingWorkflowSchema() {
       const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9')`;
       return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9') };
     };
-    if ((await flags()).current && (await flags()).hasKpi && (await flags()).hasNotes && (await flags()).hasRejected && (await flags()).hasRevisionPolicy && (await flags()).hasTerminalRejection && (await marketingPlanScheduleSchemaStatus(sql)).ready) return;
+    const existing = await flags();
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection
+      && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
     const { acquired } = await tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
@@ -394,15 +441,22 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasTaskDeletion) await runSqlScript(MARKETING_WORKFLOW_TASK_DELETE_SQL);
       if (!(await flags()).hasDrafts) await runSqlScript(MARKETING_WORKFLOW_UPGRADE_SQL);
       if (!(await marketingPlanScheduleSchemaStatus(sql)).ready) await runSqlScript(MARKETING_WORKFLOW_PLAN_SCHEDULE_SQL);
-      if (!(await flags()).hasKpi) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
-      if (!(await flags()).hasNotes) await runSqlScript(MARKETING_WORKFLOW_NOTES_SQL);
-      if (!(await flags()).hasRejected) await runSqlScript(MARKETING_WORKFLOW_REJECTED_RATINGS_SQL);
-      if (!(await flags()).hasRevisionPolicy) await runSqlScript(MARKETING_WORKFLOW_REVISION_POLICY_SQL);
-      if (!(await flags()).hasTerminalRejection) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
+      if (!(await flags()).hasKpi || !(await marketingWorkflowStructureStatus(sql)).kpiReady) await runSqlScript(MARKETING_WORKFLOW_KPI_SQL);
+      if (!(await flags()).hasNotes || !(await marketingWorkflowStructureStatus(sql)).notesReady) await runSqlScript(MARKETING_WORKFLOW_NOTES_SQL);
+      if (!(await flags()).hasRejected || !(await marketingWorkflowStructureStatus(sql)).rejectedReady) await runSqlScript(MARKETING_WORKFLOW_REJECTED_RATINGS_SQL);
+      if (!(await flags()).hasRevisionPolicy || !(await marketingWorkflowStructureStatus(sql)).revisionReady) await runSqlScript(MARKETING_WORKFLOW_REVISION_POLICY_SQL);
+      if (!(await flags()).hasTerminalRejection || !(await marketingWorkflowStructureStatus(sql)).terminalReady) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
       (error as Error & { code?: string }).code = 'MARKETING_MIGRATION_BUSY';
+      throw error;
+    }
+    const structure = await marketingWorkflowStructureStatus(sql);
+    const plan = await marketingPlanScheduleSchemaStatus(sql);
+    if (!structure.ready || !plan.ready) {
+      const error = new Error('لم يكتمل تحديث جداول التسويق، راجع صلاحيات قاعدة البيانات وسجل التهيئة');
+      (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
       throw error;
     }
   })().catch(error => { ready = null; throw error; });
@@ -419,24 +473,8 @@ let workflowStructureReady: Promise<void> | null = null;
 export function assertMarketingWorkflowReady(sql = getSql()) {
   if (!workflowStructureReady) {
     workflowStructureReady = (async () => {
-      const [state] = await sql<{ tasks: boolean; items: boolean; plans: boolean; drafts: boolean; files: boolean; ratings: boolean; formats: boolean; categories: boolean; notes: boolean; reviewers: boolean; revisionNumbers: boolean; editingState: boolean; rejectedState: boolean; social: boolean }[]>`
-        select
-          to_regclass('marketing.work_tasks') is not null as tasks,
-          to_regclass('marketing.work_items') is not null as items,
-          to_regclass('marketing.work_plans') is not null as plans,
-          to_regclass('marketing.work_product_drafts') is not null as drafts,
-          to_regclass('marketing.work_item_files') is not null as files,
-          to_regclass('marketing.work_item_ratings') is not null as ratings,
-          to_regclass('marketing.work_format_reviews') is not null as formats,
-          to_regclass('marketing.work_review_categories') is not null as categories,
-          to_regclass('marketing.work_item_review_notes') is not null as notes,
-          to_regclass('marketing.work_rating_reviewers') is not null as reviewers,
-          exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_item_review_notes' and column_name='revision_number') as revisionNumbers,
-          exists (select 1 from pg_constraint where conrelid='marketing.work_items'::regclass and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%editing%') as editingState,
-          exists (select 1 from pg_constraint where conrelid='marketing.work_items'::regclass and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%rejected%') as rejectedState,
-          to_regclass('marketing.social_follower_snapshots') is not null as social
-      `;
-      if (!state || !state.tasks || !state.items || !state.plans || !state.drafts || !state.files || !state.ratings || !state.formats || !state.categories || !state.notes || !state.reviewers || !state.revisionNumbers || !state.editingState || !state.rejectedState || !state.social) {
+      const structure = await marketingWorkflowStructureStatus(sql);
+      if (!structure.ready) {
         const error = new Error('قاعدة بيانات التسويق تحتاج إلى تهيئة أولية منفصلة قبل تشغيل الفلو الجديد');
         (error as Error & { code?: string }).code = 'MARKETING_SCHEMA_NOT_READY';
         throw error;

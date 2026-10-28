@@ -15,7 +15,7 @@ const sql = async (parts) => {
   const query = parts.join('?').replace(/\s+/g, ' ').trim();
   log.push(query);
   if (query.includes("to_regclass('marketing.work_tasks')")) {
-    return [{tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true,notes:true,reviewers:true,revisionNumbers:true,editingState:true,rejectedState:true,social:true}];
+    return [{tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true,notes:true,rejected:true,reviewers:true,revisionNumbers:true,executorResponse:true,rejectedRevisionNotes:true,editingState:true,rejectedState:true}];
   }
   if (query.includes("to_regclass('marketing.work_plan_unique_entry')")) {
     return [{plans:true,lines:true,migrations:true,unique_index:applied}];
@@ -79,7 +79,7 @@ const schema = load('server/_marketing-workflow-schema.ts');
   assert(perms.includes('work_upgrade_schema: "platform.superadmin"'));
   const dashboard = fs.readFileSync(path.join(root,'src/marketing/pages/MarketingDashboardPage.tsx'),'utf8');
   assert(dashboard.includes("useWorkQuery<{ ready: boolean; baseReady: boolean; canUpgrade: boolean }>('schema_status')"));
-  assert(dashboard.includes("workPost('upgrade_schema', {})"));
+  assert(/workPost(?:<[^>]+>)?\('upgrade_schema', \{\}\)/.test(dashboard));
   assert(dashboard.includes('await query.reload()'));
   console.log('PASS: missing post_type_id detected before list queries');
   console.log('PASS: dashboard reads never run DDL');
@@ -87,4 +87,60 @@ const schema = load('server/_marketing-workflow-schema.ts');
   console.log('PASS: controlled additive upgrade succeeds and is idempotent');
   console.log('PASS: upgrade action requires platform superadmin');
   console.log('PASS: dashboard shows one-click upgrade and reloads data');
+
+  // A production install may already contain schema-1 through schema-7.
+  // The explicit admin action must apply only schema-8 and schema-9,
+  // without replaying the initial bootstrap or deleting any existing task.
+  async function reviewUpgradeFixture(missingReviewTables = false) {
+    const appliedCodes = new Set(Array.from({length:9}, (_,i) => `schema-${i+1}`)
+      .filter(code => !missingReviewTables ? !['schema-8','schema-9'].includes(code) : true));
+    let reviewingReady = !missingReviewTables, terminalReady = !missingReviewTables;
+    const executed = [];
+    const modernSql = async (parts) => {
+      const query = parts.join('?').replace(/\s+/g,' ');
+      if (query.includes("to_regclass('marketing.workflow_migrations')::text as relation"))
+        return [{ relation:'marketing.workflow_migrations' }];
+      if (query.includes('from marketing.workflow_migrations where code in'))
+        return [...appliedCodes].map(code => ({code}));
+      if (query.includes("to_regclass('marketing.work_plan_unique_entry')"))
+        return [{plans:true,lines:true,migrations:true,unique_index:true}];
+      if (query.includes('table_name in (\'work_plans\',\'work_plan_items\')'))
+        return Object.entries(allColumns).flatMap(([table_name, fields]) => fields.map(column_name => ({table_name,column_name})));
+      if (query.includes("where code='schema-4'")) return [{code:'schema-4'}];
+      if (query.includes("to_regclass('marketing.work_tasks')")) return [{
+        tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true,
+        notes:true,rejected:true,reviewers:reviewingReady,revisionNumbers:reviewingReady,
+        executorResponse:reviewingReady,rejectedRevisionNotes:reviewingReady,
+        editingState:reviewingReady,rejectedState:terminalReady,
+      }];
+      throw new Error('Unexpected SQL in review upgrade fixture: '+query);
+    };
+    const fixtureLoader = createLoader(root, {
+      './_db.js':{
+        getSql:() => modernSql,
+        runSqlScript:async script => {
+          assert(!/\bdrop table\b|\btruncate table\b/i.test(script));
+          const code = script.includes("values('schema-8')") ? 'schema-8'
+            : script.includes("values('schema-9')") ? 'schema-9' : 'unexpected';
+          assert.notEqual(code,'unexpected','Only review migrations are needed');
+          executed.push(code); appliedCodes.add(code);
+          if(code==='schema-8') reviewingReady=true;
+          if(code==='schema-9') terminalReady=true;
+        },
+        tryWithDatabaseAdvisoryLock:async(key,work) => {
+          assert.equal(key,'mzj:marketing:schema-setup');
+          return {acquired:true,result:await work()};
+        },
+      },
+    });
+    const loaded = fixtureLoader('server/_marketing-workflow-schema.ts');
+    await loaded.ensureMarketingWorkflowSchema();
+    await loaded.assertMarketingWorkflowReady(modernSql);
+    await loaded.ensureMarketingWorkflowSchema();
+    return executed;
+  }
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9']);
+  console.log('PASS: schema-7 to schema-9 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9']);
+  console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });
