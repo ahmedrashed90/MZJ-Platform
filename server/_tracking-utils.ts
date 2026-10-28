@@ -39,21 +39,16 @@ export function publicTrackingUrl(requestOrigin: string, trackingToken: string) 
 export async function ensureVehicleStageRows(vehicleId: string) {
   const sql = getSql();
 
-  // Stage actions are order-wide: completing or reverting a stage updates every
-  // vehicle that belongs to the order. If ERP synchronization adds a vehicle
-  // later, its stage rows must inherit the last explicit order-level stage
-  // action instead of being recreated as pending and making progress regress.
+  // Manual Tracking stages belong to this *specific* sale vehicle. A new
+  // vehicle never inherits another VIN's actions, including during ERP sync.
+  // Existing rows without a matching event are deliberately preserved.
   await sql`
-    with vehicle_order as (
-      select order_id
-      from tracking.order_vehicles
-      where id=${vehicleId}::uuid
-    ), latest_stage_events as (
+    with latest_stage_events as (
       select distinct on (e.stage_id)
         e.stage_id,e.action,e.actor_id,e.created_at
       from tracking.stage_events e
-      join vehicle_order vo on vo.order_id=e.order_id
       join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
+      where e.vehicle_id=${vehicleId}::uuid
       order by e.stage_id,e.created_at desc,e.id desc
     )
     insert into tracking.vehicle_stages(
@@ -72,20 +67,15 @@ export async function ensureVehicleStageRows(vehicleId: string) {
     on conflict (vehicle_id, stage_id) do nothing
   `;
 
-  // Heal rows created by an older sync after a stage had already been completed.
-  // Only an explicit stage event can change the canonical state, so the normal
-  // rollback action remains fully supported and no unrelated workflow changes.
+  // Repair a stale materialized stage only from its own VIN's explicit event.
+  // A sibling's completion/reversal is not evidence for this vehicle.
   await sql`
-    with vehicle_order as (
-      select order_id
-      from tracking.order_vehicles
-      where id=${vehicleId}::uuid
-    ), latest_stage_events as (
+    with latest_stage_events as (
       select distinct on (e.stage_id)
         e.stage_id,e.action,e.actor_id,e.created_at
       from tracking.stage_events e
-      join vehicle_order vo on vo.order_id=e.order_id
       join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
+      where e.vehicle_id=${vehicleId}::uuid
       order by e.stage_id,e.created_at desc,e.id desc
     )
     update tracking.vehicle_stages vs

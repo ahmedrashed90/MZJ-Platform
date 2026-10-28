@@ -33,6 +33,7 @@ type ApprovalRow = {
   model_year?: string | null;
   location_name?: string | null;
   status_code: string;
+  archived_at?: string | null;
 };
 
 function formatApprovalDate(value?: string | null) {
@@ -55,6 +56,7 @@ export function ApprovalsPage() {
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState<ApprovalRow[]>([]);
+  const [counts, setCounts] = useState({ all: 0, missingFinancial: 0, missingAdministrative: 0, completed: 0 });
   const [selected, setSelected] = useState<ApprovalRow | null>(null);
   const [financialNote, setFinancialNote] = useState("");
   const [administrativeNote, setAdministrativeNote] = useState("");
@@ -66,10 +68,11 @@ export function ApprovalsPage() {
     setLoading(true);
     setError("");
     try {
-      const payload = await operationsFetch<{ rows: ApprovalRow[] }>(
+      const payload = await operationsFetch<{ rows: ApprovalRow[]; counts: typeof counts }>(
         `/api/operations${queryString({ resource: "approvals", filter, search })}`,
       );
       setRows(payload.rows);
+      setCounts(payload.counts);
       if (selected) {
         const updated = payload.rows.find((row) => row.vehicle_id === selected.vehicle_id);
         setSelected(updated || null);
@@ -140,16 +143,6 @@ export function ApprovalsPage() {
     }
   }
 
-  const counts = useMemo(
-    () => ({
-      all: rows.length,
-      missingFinancial: rows.filter((row) => !row.financial_approved).length,
-      missingAdministrative: rows.filter((row) => !row.administrative_approved).length,
-      completed: rows.filter((row) => row.financial_approved && row.administrative_approved).length,
-    }),
-    [rows],
-  );
-
   const columns = useMemo<ResizableOperationsColumn<ApprovalRow>[]>(() => [
     {
       key: "vin",
@@ -158,7 +151,7 @@ export function ApprovalsPage() {
       min: 125,
       max: 240,
       value: (row) => row.vin,
-      render: (row) => <strong dir="ltr">{row.vin}</strong>,
+      render: (row) => <div className="operations-cell-stack"><strong dir="ltr">{row.vin}</strong>{row.archived_at ? <small>مؤرشفة في العمليات</small> : null}</div>,
     },
     {
       key: "vehicle",
@@ -294,6 +287,10 @@ export function ApprovalsPage() {
               <div><MapPin size={20} /><span><small>المكان الحالي</small><strong>{selected.location_name || "—"}</strong></span></div>
             </section>
 
+            {selected.archived_at ? (
+              <div className="operations-alert success"><CheckCircle size={18} />تمت أرشفة السيارة في العمليات بتاريخ {formatApprovalDate(selected.archived_at)}. الموافقات محفوظة للعرض فقط.</div>
+            ) : null}
+
             <div className="operations-approval-cards">
               <article className={selected.financial_approved ? "complete" : "pending"}>
                 <header>
@@ -310,10 +307,10 @@ export function ApprovalsPage() {
                 </div>
                 <label>
                   <span>الملاحظة المالية</span>
-                  <textarea value={financialNote} onChange={(event) => setFinancialNote(event.target.value)} placeholder="اكتب الملاحظة المالية هنا" />
+                  <textarea disabled={Boolean(selected.archived_at)} value={financialNote} onChange={(event) => setFinancialNote(event.target.value)} placeholder="اكتب الملاحظة المالية هنا" />
                 </label>
                 <footer>
-                  {meta.permissions.canApproveFinancial ? (
+                  {meta.permissions.canApproveFinancial && !selected.archived_at ? (
                     <>
                       <button type="button" onClick={() => void act("financial", "note")} disabled={loading}>حفظ الملاحظة</button>
                       {selected.financial_approved ? (
@@ -322,7 +319,7 @@ export function ApprovalsPage() {
                         <button type="button" className="primary" onClick={() => void act("financial", "approve")} disabled={loading}><CheckCircle size={17} />اعتماد مالي</button>
                       )}
                     </>
-                  ) : <span className="operations-no-permission">لا توجد صلاحية للموافقة المالية</span>}
+                  ) : <span className="operations-no-permission">{selected.archived_at ? "موافقة مؤرشفة للعرض فقط" : "لا توجد صلاحية للموافقة المالية"}</span>}
                 </footer>
               </article>
 
@@ -341,10 +338,10 @@ export function ApprovalsPage() {
                 </div>
                 <label>
                   <span>الملاحظة الإدارية</span>
-                  <textarea value={administrativeNote} onChange={(event) => setAdministrativeNote(event.target.value)} placeholder="اكتب الملاحظة الإدارية هنا" />
+                  <textarea disabled={Boolean(selected.archived_at)} value={administrativeNote} onChange={(event) => setAdministrativeNote(event.target.value)} placeholder="اكتب الملاحظة الإدارية هنا" />
                 </label>
                 <footer>
-                  {meta.permissions.canApproveAdministrative ? (
+                  {meta.permissions.canApproveAdministrative && !selected.archived_at ? (
                     <>
                       <button type="button" onClick={() => void act("administrative", "note")} disabled={loading}>حفظ الملاحظة</button>
                       {selected.administrative_approved ? (
@@ -353,12 +350,12 @@ export function ApprovalsPage() {
                         <button type="button" className="primary" onClick={() => void act("administrative", "approve")} disabled={loading}><CheckCircle size={17} />اعتماد إداري</button>
                       )}
                     </>
-                  ) : <span className="operations-no-permission">لا توجد صلاحية للموافقة الإدارية</span>}
+                  ) : <span className="operations-no-permission">{selected.archived_at ? "موافقة مؤرشفة للعرض فقط" : "لا توجد صلاحية للموافقة الإدارية"}</span>}
                 </footer>
               </article>
             </div>
 
-            <div className="operations-approval-reset-row">
+            {!selected.archived_at ? <div className="operations-approval-reset-row">
               <div>
                 <strong>إلغاء طلب الموافقات</strong>
                 <span>يمسح الموافقتين الحاليتين مع الاحتفاظ بسجل الإجراءات.</span>
@@ -366,7 +363,7 @@ export function ApprovalsPage() {
               <button type="button" className="operations-reset-approvals" onClick={() => void reset()} disabled={loading}>
                 إلغاء الطلب ومسح الموافقات
               </button>
-            </div>
+            </div> : null}
           </div>
         ) : null}
       </Modal>

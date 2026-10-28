@@ -19,6 +19,7 @@ import {
 import { emitOperationsNotification } from "../_notifications.js";
 import {
   operationsApprovalVisibilityScope,
+  operationsArchivedCompletedApprovalVisibilityScope,
   operationsRequestAccessScope,
   operationsRequestHasActiveVehicle,
 } from "../_operations-query-scope.js";
@@ -1074,28 +1075,65 @@ async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequ
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
   const visibilityScope = operationsApprovalVisibilityScope(sql, user);
-  const rows = await sql<any[]>`
-    select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
-      a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
-      v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
-      v.notes,v.state_note,v.shortage_note,v.status_code,coalesce(s.name,v.status_code) as status_name,
-      l.code as location_code,l.name as location_name,dl.name as pending_destination_name
-    from operations.vehicle_approvals a
-    join operations.vehicles v on v.id=a.vehicle_id
-    left join operations.locations l on l.id=v.location_id
-    left join operations.vehicle_statuses s on s.code=v.status_code
-    left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
-    where ${visibilityScope}
-      and (${filter}='' or (${filter}='missing_financial' and a.financial_approved=false) or (${filter}='missing_administrative' and a.administrative_approved=false) or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true))
-      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}
-        or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern}
-        or coalesce(l.name,'') ilike ${pattern} or coalesce(a.financial_note,'') ilike ${pattern}
-        or coalesce(a.administrative_note,'') ilike ${pattern}
-        or coalesce(a.financial_approved_by_name,'') ilike ${pattern}
-        or coalesce(a.administrative_approved_by_name,'') ilike ${pattern})
-    order by a.updated_at desc
-  `;
-  return { ok: true, rows };
+  const archivedCompletedScope = operationsArchivedCompletedApprovalVisibilityScope(sql, user);
+  // Unarchived cars remain in the normal queue. Archived cars are visible only
+  // in the read-only Completed tab and do not inflate active approval counts.
+  const [rows, activeCounts, archivedCounts] = await Promise.all([
+    sql<any[]>`
+      select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
+        a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
+        v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
+        v.notes,v.state_note,v.shortage_note,v.status_code,v.archived_at,v.archive_reason,coalesce(s.name,v.status_code) as status_name,
+        l.code as location_code,l.name as location_name,dl.name as pending_destination_name
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      left join operations.vehicle_statuses s on s.code=v.status_code
+      left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
+      where (
+        (${visibilityScope} and (
+          ${filter}=''
+          or (${filter}='missing_financial' and a.financial_approved=false)
+          or (${filter}='missing_administrative' and a.administrative_approved=false)
+          or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true)
+        ))
+        or (${filter}='completed' and ${archivedCompletedScope})
+      )
+        and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}
+          or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern}
+          or coalesce(l.name,'') ilike ${pattern} or coalesce(a.financial_note,'') ilike ${pattern}
+          or coalesce(a.administrative_note,'') ilike ${pattern}
+          or coalesce(a.financial_approved_by_name,'') ilike ${pattern}
+          or coalesce(a.administrative_approved_by_name,'') ilike ${pattern})
+      order by a.updated_at desc
+    `,
+    sql<any[]>`
+      select count(*)::int as all_count,
+        count(*) filter(where a.financial_approved=false)::int as missing_financial,
+        count(*) filter(where a.administrative_approved=false)::int as missing_administrative,
+        count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      where ${visibilityScope}
+    `,
+    sql<any[]>`
+      select count(*)::int as completed
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      where ${archivedCompletedScope}
+    `,
+  ]);
+  return {
+    ok: true, rows,
+    counts: {
+      all: Number(activeCounts[0]?.all_count || 0),
+      missingFinancial: Number(activeCounts[0]?.missing_financial || 0),
+      missingAdministrative: Number(activeCounts[0]?.missing_administrative || 0),
+      completed: Number(activeCounts[0]?.completed || 0) + Number(archivedCounts[0]?.completed || 0),
+    },
+  };
 }
 
 async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1822,6 +1860,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
       where v.id=${vehicleId}::uuid and v.is_deleted=false for update of v
     `;
     if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
+    if (v.archived_at) throw new OperationError(409, "VEHICLE_ARCHIVED", "هذه السيارة مؤرشفة؛ الموافقات التاريخية للعرض فقط");
     assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية تنفيذ موافقة على سيارة في هذا الفرع");
     assertVehicleStatusAccess(user, v.status_code, "لا تملك صلاحية تنفيذ موافقة على سيارة بهذه الحالة");
     let a = await ensureActiveVehicleApprovalCycle(tx, vehicleId);

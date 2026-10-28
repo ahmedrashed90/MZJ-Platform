@@ -77,3 +77,25 @@ export function operationsApprovalVisibilityScope(sql: Sql, user: SessionUser) {
     and (${access.unrestrictedStatuses}=true or v.status_code in ${sql(access.statusCodes)})
   `;
 }
+
+
+/** Historic, read-only approvals after an Operations vehicle archive.
+ * Only the newest approval cycle is shown; older cycles remain in the audit.
+ * The dashboard continues to use operationsApprovalVisibilityScope (active only).
+ */
+export function operationsArchivedCompletedApprovalVisibilityScope(sql: Sql, user: SessionUser) {
+  const access = operationsAccess(user);
+  return sql`
+    v.is_deleted=false
+    and v.archived_at is not null
+    and a.financial_approved=true and a.administrative_approved=true
+    and a.id=(
+      select historical.id from operations.vehicle_approvals historical
+      where historical.vehicle_id=v.id
+      order by historical.cycle_no desc,historical.updated_at desc
+      limit 1
+    )
+    and (${access.unrestrictedBranches}=true or l.code in ${sql(access.branches)} or l.branch_code in ${sql(access.branches)})
+    and (${access.unrestrictedStatuses}=true or v.status_code in ${sql(access.statusCodes)})
+  `;
+}

@@ -7,6 +7,7 @@ import { getTrackingCountSummary } from "../_tracking-counts.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
+import { archiveTrackingOrderInventory, TrackingOrderArchiveError } from "../_tracking-order-archive.js";
 import { clean, ensureVehicleStageRows, recalculateTrackingOrder } from "../_tracking-utils.js";
 import { emitTrackingNotification } from "../_notifications.js";
 import { isApprovalControlledTrackingStage } from "../_tracking-approval-sync.js";
@@ -52,7 +53,7 @@ async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<t
         cu.full_name as completed_by_name,ru.full_name as reverted_by_name,
         exists(
           select 1 from tracking.sms_messages sm
-          where sm.order_id=${id}::uuid and sm.stage_id=s.id and sm.status not in ('failed','cancelled')
+          where sm.order_id=${id}::uuid and sm.vehicle_id=${vehicle.id}::uuid and sm.stage_id=s.id and sm.status not in ('failed','cancelled')
         ) as sms_sent
       from tracking.stages s
       left join tracking.vehicle_stages vs on vs.stage_id=s.id and vs.vehicle_id=${vehicle.id}::uuid
@@ -177,57 +178,127 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
     const action = clean(body.action);
 
-    if (action === "archive_order") {
-      const orderId = clean(body.orderId);
-      if (!orderId) return response.status(400).json({ ok: false, error: "رقم الطلب الداخلي مطلوب" });
+    if (action === "archive_order" || action === "reconcile_archived_orders") {
+      if (!hasPermission(user, "tracking.order.archive")) {
+        return response.status(403).json({ ok: false, error: "لا توجد صلاحية لأرشفة طلبات التتبع" });
+      }
 
-      const [archiveState] = await sql<any[]>`
-        select o.id::text,o.is_archived,o.is_cancelled,
-          count(vs.id) filter (where s.is_active=true)::int as total_stages,
-          count(vs.id) filter (where s.is_active=true and vs.status='completed')::int as completed_stages
-        from tracking.orders o
-        left join tracking.order_vehicles v on v.order_id=o.id
-        left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
-        left join tracking.stages s on s.id=vs.stage_id
-        where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
-          and (
-            ${scope.unrestricted}=true
-            or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
-            or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
-            or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
-          )
-        group by o.id
-      `;
-      if (!archiveState) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
-      if (archiveState.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن أرشفته" });
-      if (archiveState.is_archived) {
-        const detail = await getOrderDetail(orderId, user);
-        return response.status(200).json({ ok: true, order: detail, message: "الطلب موجود في الأرشيف بالفعل" });
+      // This explicitly requested recovery action is for previously archived
+      // orders only. It uses the exact same transactional gate as new orders,
+      // and never changes an approval or replays a Tracking stage.
+      if (action === "reconcile_archived_orders") {
+        const candidates = await sql<any[]>`
+          select distinct o.id::text as id,o.sales_order_no
+          from tracking.orders o
+          join tracking.order_vehicles tv on tv.order_id=o.id
+          join operations.vehicles v on v.is_deleted=false and v.archived_at is null
+            and (v.id=tv.vehicle_id or (tv.vehicle_id is null and nullif(trim(tv.vin),'') is not null
+              and upper(trim(v.vin))=upper(trim(tv.vin))))
+          where o.is_archived=true and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+            and (
+              ${scope.unrestricted}=true
+              or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+              or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+              or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
+            )
+          order by o.sales_order_no
+          limit 20
+        `;
+        let archivedVehicles = 0;
+        let reconciledOrders = 0;
+        const failures: Array<{ salesOrderNo: string; error: string }> = [];
+        for (const candidate of candidates) {
+          try {
+            const outcome = await sql.begin(async (tx) => {
+              const [locked] = await tx<any[]>`
+                select id::text,is_archived,is_cancelled from tracking.orders
+                where id=${candidate.id}::uuid and coalesce(is_deleted,false)=false
+                for update
+              `;
+              if (!locked?.is_archived || locked.is_cancelled) {
+                throw new TrackingOrderArchiveError("الطلب لم يعد مؤرشفًا أو أصبح ملغيًا", "invalid_order");
+              }
+              return archiveTrackingOrderInventory(tx, candidate.id, { id: user.id, name: user.fullName });
+            });
+            archivedVehicles += outcome.archivedVehicles;
+            reconciledOrders++;
+          } catch (failure) {
+            failures.push({
+              salesOrderNo: candidate.sales_order_no,
+              error: failure instanceof Error ? failure.message : "تعذر تسوية الأرشفة",
+            });
+          }
+        }
+        return response.status(200).json({
+          ok: true, reviewedOrders: candidates.length, reconciledOrders, archivedVehicles, failures,
+          message: candidates.length
+            ? `تمت مراجعة ${candidates.length} طلب مؤرشف واستكمال أرشفة ${archivedVehicles} سيارة في العمليات${failures.length ? `، وتعذرت تسوية ${failures.length} طلب` : ""}`
+            : "لا توجد طلبات مؤرشفة تحتاج إلى استكمال أرشفة سيارات العمليات",
+        });
       }
-      const totalStages = Number(archiveState.total_stages || 0);
-      const completedStages = Number(archiveState.completed_stages || 0);
-      if (totalStages <= 0 || completedStages < totalStages) {
-        return response.status(400).json({ ok: false, error: "زر الأرشفة يتاح بعد اكتمال المراحل العشر لجميع سيارات الطلب" });
+
+      const orderId = clean(body.orderId);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)) {
+        return response.status(400).json({ ok: false, error: "رقم الطلب الداخلي غير صحيح" });
       }
-      await sql`
-        update tracking.orders
-        set is_archived=true,archived_at=now(),archived_by=${user.id}::uuid,archived_by_name=${user.fullName},
-            archive_reason='اكتملت جميع مراحل التتبع',updated_at=now()
-        where id=${orderId}::uuid
-      `;
+      let inventory;
+      let wasArchived = false;
+      try {
+        // Both sides commit or roll back together. A concurrent stage action
+        // also locks this order before changing any individual VIN's stages.
+        const archived = await sql.begin(async (tx) => {
+          const [order] = await tx<any[]>`
+            select o.id::text,o.is_archived,o.is_cancelled
+            from tracking.orders o
+            where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
+              and (
+                ${scope.unrestricted}=true
+                or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+                or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+                or (${scope.branchScoped}=true and o.branch in ${tx(branches)})
+              )
+            for update of o
+          `;
+          if (!order) throw new TrackingOrderArchiveError("طلب التتبع غير موجود أو خارج نطاق صلاحياتك", "order_not_found");
+          if (order.is_cancelled) throw new TrackingOrderArchiveError("طلب البيع ملغي من NEXT ERP ولا يمكن أرشفته", "cancelled");
+          const result = await archiveTrackingOrderInventory(tx, orderId, { id: user.id, name: user.fullName });
+          if (!order.is_archived) {
+            await tx`
+              update tracking.orders
+              set is_archived=true,archived_at=now(),archived_by=${user.id}::uuid,archived_by_name=${user.fullName},
+                  archive_reason='اكتملت جميع مراحل التتبع',status='completed',updated_at=now()
+              where id=${orderId}::uuid
+            `;
+          }
+          return { inventory: result, wasArchived: Boolean(order.is_archived) };
+        });
+        inventory = archived.inventory;
+        wasArchived = archived.wasArchived;
+      } catch (failure) {
+        if (failure instanceof TrackingOrderArchiveError) {
+          return response.status(failure.reason === "order_not_found" ? 404 : 409).json({ ok: false, error: failure.message, reason: failure.reason });
+        }
+        throw failure;
+      }
       const detail = await getOrderDetail(orderId, user);
-      const result = { ok: true, order: detail, orderId, message: "تم نقل الطلب إلى الأرشيف" };
-      await emitTrackingNotification(user, action, { ...body, archived: true }, result).catch((error) => console.error("Tracking archive notification failed", error));
+      const message = wasArchived
+        ? `الطلب مؤرشف بالفعل؛ تمت مراجعة وربط أرشفة سيارات العمليات (${inventory.archivedVehicles} جديدة)`
+        : `تم نقل الطلب إلى الأرشيف واستكمال أرشفة ${inventory.archivedVehicles} سيارة في العمليات`;
+      const result = { ok: true, order: detail, orderId, inventory, message };
+      if (!wasArchived) {
+        await emitTrackingNotification(user, action, { ...body, archived: true }, result)
+          .catch((error) => console.error("Tracking archive notification failed", error));
+      }
       return response.status(200).json(result);
     }
 
     // A single-vehicle action affects that VIN only. A bulk completion uses
     // exactly the selected vehicles, never all siblings of the sales order.
-    const bulk = action === "complete_stage_bulk";
+    const bulk = action === "complete_stage_bulk" || action === "revert_stage_bulk";
     const requestedIds = bulk ? body.vehicleIds : [body.vehicleId];
     const vehicleIds = Array.isArray(requestedIds) ? [...new Set(requestedIds.map(clean))] : [];
     const stageId = clean(body.stageId);
-    if (!["complete_stage", "complete_stage_bulk", "revert_stage"].includes(action)) {
+    if (!["complete_stage", "complete_stage_bulk", "revert_stage", "revert_stage_bulk"].includes(action)) {
       return response.status(400).json({ ok: false, error: "الإجراء غير مدعوم" });
     }
     if (!stageId || !vehicleIds.length || vehicleIds.length > 100 ||
@@ -257,9 +328,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         error: "المرحلتان 6 و7 مرتبطتان بالموافقة المالية والإدارية من تبويب الموافقات، ولا يمكن تعديلهما يدويًا من التراكينج" });
     }
     const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
-    const permissionCode = action === "revert_stage" ? `tracking.stage.${stageNo}.rollback` : `tracking.stage.${stageNo}.complete`;
+    const reverting = action === "revert_stage" || action === "revert_stage_bulk";
+    const permissionCode = reverting ? `tracking.stage.${stageNo}.rollback` : `tracking.stage.${stageNo}.complete`;
     if (!hasPermission(user, permissionCode)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه المرحلة", permission: permissionCode });
-    if (action === "revert_stage" && !clean(body.note)) return response.status(400).json({ ok: false, error: "سبب التراجع مطلوب" });
+    if (reverting && !clean(body.note)) return response.status(400).json({ ok: false, error: "سبب التراجع مطلوب" });
     if (row.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن تعديل مراحله" });
     if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن تعديل مراحله" });
 
@@ -270,34 +342,61 @@ export default async function handler(request: VercelRequest, response: VercelRe
     for (const vehicleId of vehicleIds) await ensureVehicleStageRows(vehicleId);
 
     let affectedCount = 0;
-    await sql.begin(async (tx) => {
-      // Hold row locks during the entire selected-vehicles operation. A second
-      // concurrent request cannot double-complete or double-log these VINs.
-      const selectedStages = await tx<any[]>`
-        select vs.id from tracking.vehicle_stages vs
-        join tracking.order_vehicles v on v.id=vs.vehicle_id
-        where v.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid
-          and vs.vehicle_id=any(${vehicleIds}::uuid[]) for update of vs
-      `;
-      if (selectedStages.length !== vehicleIds.length) throw new Error("مرحلة غير متاحة لإحدى السيارات المختارة");
-      const targets = action === "revert_stage"
-        ? await tx<any[]>`update tracking.vehicle_stages set
-            status='pending',reverted_by=${user.id}::uuid,reverted_at=now(),completed_by=null,completed_at=null,updated_at=now()
-            where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status='completed'
-            returning vehicle_id::text`
-        : await tx<any[]>`update tracking.vehicle_stages set
-            status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
-            where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status<>'completed'
-            returning vehicle_id::text`;
-      affectedCount = targets.length;
-      for (const target of targets) {
-        await tx`
-          insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
-          values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,${action === "revert_stage" ? "reverted" : "completed"},${user.id}::uuid,${user.fullName},${clean(body.note)||null})
+    try {
+      await sql.begin(async (tx) => {
+        const [currentOrder] = await tx<any[]>`
+          select is_archived,is_cancelled from tracking.orders
+          where id=${row.order_id}::uuid and coalesce(is_deleted,false)=false
+          for update
         `;
-        if (action !== "revert_stage") await tryArchiveVehicleForTrackingRecord(tx, target.vehicle_id, { id: user.id, name: user.fullName });
+        if (!currentOrder || currentOrder.is_archived || currentOrder.is_cancelled) {
+          throw new TrackingOrderArchiveError("الطلب مؤرشف أو ملغي ولا يمكن تعديل مراحله", "closed_order");
+        }
+        // Operations approvals lock inventory before updating Tracking stages.
+        // Acquire the same locks in the same order to avoid cross-system
+        // deadlocks when a bulk completion overlaps a financial approval.
+        await tx`
+          select v.id
+          from tracking.order_vehicles tv
+          join operations.vehicles v on v.is_deleted=false and
+            (v.id=tv.vehicle_id or (tv.vehicle_id is null and upper(trim(v.vin))=upper(trim(tv.vin))))
+          where tv.order_id=${row.order_id}::uuid and tv.id=any(${vehicleIds}::uuid[])
+          order by v.id
+          for update of v
+        `;
+        // Hold row locks during the entire selected-vehicles operation. A second
+        // concurrent request cannot double-complete or double-log these VINs.
+        const selectedStages = await tx<any[]>`
+          select vs.id from tracking.vehicle_stages vs
+          join tracking.order_vehicles v on v.id=vs.vehicle_id
+          where v.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid
+            and vs.vehicle_id=any(${vehicleIds}::uuid[]) for update of vs
+        `;
+        if (selectedStages.length !== vehicleIds.length) throw new Error("مرحلة غير متاحة لإحدى السيارات المختارة");
+        const targets = reverting
+          ? await tx<any[]>`update tracking.vehicle_stages set
+              status='pending',reverted_by=${user.id}::uuid,reverted_at=now(),completed_by=null,completed_at=null,updated_at=now()
+              where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status='completed'
+              returning vehicle_id::text`
+          : await tx<any[]>`update tracking.vehicle_stages set
+              status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
+              where vehicle_id=any(${vehicleIds}::uuid[]) and stage_id=${stageId}::uuid and status<>'completed'
+              returning vehicle_id::text`;
+        affectedCount = targets.length;
+        for (const target of targets) {
+          await tx`
+            insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
+            values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,${reverting ? "reverted" : "completed"},${user.id}::uuid,${user.fullName},${clean(body.note)||null})
+          `;
+          if (!reverting) await tryArchiveVehicleForTrackingRecord(tx, target.vehicle_id, { id: user.id, name: user.fullName });
+        }
+      });
+    } catch (failure) {
+      if (failure instanceof TrackingOrderArchiveError) {
+        return response.status(409).json({ ok: false, error: failure.message, reason: failure.reason });
       }
-    });
+      throw failure;
+    }
 
     await recalculateTrackingOrder(row.order_id);
     const detail = await getOrderDetail(row.order_id, user);
@@ -309,9 +408,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       affectedVehicles: affectedCount,
       selectedVehicles: vehicleIds.length,
       skippedVehicles: vehicleIds.length - affectedCount,
-      message: action === "revert_stage" ? `تم التراجع عن المرحلة${vehicleWord}` : `تم إنهاء المرحلة${vehicleWord}`,
+      message: reverting ? `تم التراجع عن المرحلة${vehicleWord}` : `تم إنهاء المرحلة${vehicleWord}`,
     };
-    if (affectedCount > 0) await emitTrackingNotification(user, bulk ? "complete_stage" : action, { ...body, orderId: row.order_id, stageNo, vehicleIds }, result).catch((error) => console.error("Tracking stage notification failed", error));
+    if (affectedCount > 0) await emitTrackingNotification(user, reverting ? "revert_stage" : "complete_stage", { ...body, orderId: row.order_id, stageNo, vehicleIds }, result).catch((error) => console.error("Tracking stage notification failed", error));
     return response.status(200).json(result);
   }
 

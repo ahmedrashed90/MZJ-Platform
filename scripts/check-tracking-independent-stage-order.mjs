@@ -17,17 +17,20 @@ expect(
   !orders.includes("لا يمكن تنفيذ المرحلة قبل استكمال المراحل السابقة"),
 );
 expect(
-  "Each stage still requires its own completion permission",
-  orders.includes('const permissionCode = action === "complete_stage" ? `tracking.stage.${stageNo}.complete`'),
+  "Each stage still requires its own completion or rollback permission",
+  orders.includes('const permissionCode = reverting ? `tracking.stage.${stageNo}.rollback` : `tracking.stage.${stageNo}.complete`'),
 );
 expect(
-  "Cancelled and archived tracking orders remain protected",
+  "Cancelled and archived Tracking orders remain protected",
   orders.includes("طلب البيع ملغي من NEXT ERP ولا يمكن تعديل مراحله")
-    && orders.includes("الطلب مؤرشف ولا يمكن تعديل مراحله"),
+    && orders.includes("الطلب مؤرشف ولا يمكن تعديل مراحله")
+    && orders.includes("currentOrder.is_archived || currentOrder.is_cancelled"),
 );
 expect(
-  "Completing a selected stage still updates that exact stage for all order vehicles",
-  orders.includes("ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status<>'completed'"),
+  "Bulk actions change selected vehicles only; no silent sibling completion",
+  orders.includes("vs.vehicle_id=any(${vehicleIds}::uuid[])")
+    && orders.includes("revert_stage_bulk")
+    && !orders.includes("ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status<>'completed'"),
 );
 expect(
   "Order status is still recalculated after every stage action",
@@ -35,8 +38,8 @@ expect(
 );
 expect(
   "UI exposes completion independently for every unfinished permitted stage",
-  page.includes("!done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, \"0\")}.complete`)")
+  page.includes("selectedPending > 0 && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, \"0\")}.complete`)")
     && !page.includes("previousPending"),
 );
 
-console.log("Tracking stages can now be completed independently without changing permissions, archive rules, or status recalculation.");
+console.log("Tracking stages remain independent, permission-checked, and restricted to selected VINs.");
