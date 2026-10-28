@@ -174,6 +174,19 @@ commit;`;
 
 // Keep rejected requirements in the same task, independently from approved products.
 // This short, additive schema-9 migration is safe after schema-8 and retains all data.
+/** One-time read-performance indexes for existing Marketing databases.
+ * The normal GET path never creates indexes or performs schema mutations. */
+export const MARKETING_WORKFLOW_PERFORMANCE_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '45s';
+create index if not exists work_history_task_recent on marketing.work_history(task_id,created_at desc,id desc);
+create index if not exists work_history_item_action_recent on marketing.work_history(item_id,action,created_at desc,id desc);
+create index if not exists work_item_files_item_format on marketing.work_item_files(item_id,category,format_id);
+create index if not exists work_uploads_item_pending on marketing.work_uploads(item_id) where cancelled_at is null and committed_at is null;
+create index if not exists work_item_review_notes_item_recent on marketing.work_item_review_notes(item_id,created_at desc,id desc) where deleted_at is null;
+insert into marketing.workflow_migrations(code) values('schema-11') on conflict do nothing;
+commit;`;
+
 export const MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL = `begin;
 set local lock_timeout = '3s';
 set local statement_timeout = '12s';
@@ -464,12 +477,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -485,6 +498,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasRevisionPolicy || !(await marketingWorkflowStructureStatus(sql)).revisionReady) await runSqlScript(MARKETING_WORKFLOW_REVISION_POLICY_SQL);
       if (!(await flags()).hasTerminalRejection || !(await marketingWorkflowStructureStatus(sql)).terminalReady) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
       if (!(await flags()).hasDeadlineExceptions || !(await marketingWorkflowStructureStatus(sql)).deadlineExceptionsReady) await runSqlScript(MARKETING_WORKFLOW_DEADLINE_EXCEPTION_SQL);
+      if (!(await flags()).hasPerformanceIndexes) await runSqlScript(MARKETING_WORKFLOW_PERFORMANCE_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

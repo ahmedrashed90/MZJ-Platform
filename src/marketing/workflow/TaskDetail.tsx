@@ -47,7 +47,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const [ratingError, setRatingError] = useState('');
   const [openedRequirementId, setOpenedRequirementId] = useState('');
   const task = query.data?.task;
-  const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter)) || [];
+  const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved'))) || [];
   const rejectedItems = !deliveryFilter ? (query.data?.rejectedItems || []).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
   async function refresh() { await query.reload(); onChanged?.(); }
   const selectedRatingItem = task?.items.find(item => item.id === ratingItemId)
@@ -310,6 +310,13 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     const saved = await run(() => workPost('add_item_formats', { itemId: item.id, version: version.current, formatIds: newFormatIds }));
     if (saved) { setNewFormatIds([]); setShowFormatPicker(false); }
   }
+  async function removeFormat(format: WorkFormat) {
+    if (!capabilities.manageFormats || item.formats.length <= 1) return;
+    const title = `${format.platform_name} · ${format.name}`;
+    const attached = finals.filter(file => file.format_id === format.id).length;
+    if (!window.confirm(`حذف المقاس «${title}» من المطلوب؟${attached ? `\nسيتم فصل ${attached} ملف/ملفات من المطلوب مع حفظ بياناتها في سجل التغييرات.` : ''}\nستظل كل المقاسات المتبقية إلزامية.`)) return;
+    await run(() => workPost('remove_item_format', { itemId: item.id, formatId: format.id, version: version.current }));
+  }
   async function requestDeadlineException() {
     const note = window.prompt('سبب طلب استثناء التأخير (اختياري)؟', '') ?? '';
     await run(() => workPost('request_deadline_exception', { itemId: item.id, note }));
@@ -418,7 +425,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
             const locked = state === 'submitted' || state === 'approved';
             const formatFiles = finals.filter(file => file.format_id === format.id);
             return <div className={`mkw-upload-format ${state === 'approved' && item.status !== 'rejected' ? 'mkw-format-approved' : ''}`} key={format.id}>
-              <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><span className="mkw-format-state">{item.status === 'rejected' ? 'مرفوض' : state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? item.status === 'editing' ? 'قيد التعديل' : 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {item.status === 'rejected' ? <X size={19} weight="bold"/> : state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div>
+              <div className="mkw-section-title"><strong>{format.platform_name} · {format.name}{format.width && format.height ? ` (${format.width} × ${format.height})` : ''}</strong><div className="mkw-actions">{capabilities.manageFormats && <button type="button" className="icon-button danger" aria-label={`حذف مقاس ${format.name}`} title={item.formats.length <= 1 ? 'لا يمكن حذف آخر مقاس' : locked ? state === 'approved' ? 'تراجع عن اعتماد المقاس أولًا' : 'المقاس قيد المراجعة؛ أعده للتعديل أولًا' : 'حذف المقاس'} disabled={busy || item.formats.length <= 1 || locked || item.status === 'rejected'} onClick={() => void removeFormat(format)}><Trash size={17}/></button>}<span className="mkw-format-state">{item.status === 'rejected' ? 'مرفوض' : state === 'approved' ? 'معتمد' : state === 'submitted' ? 'قيد المراجعة' : state === 'revision' ? item.status === 'editing' ? 'قيد التعديل' : 'مطلوب تعديل' : formatFiles.length ? 'تم الرفع' : 'لم يُرفع'} {item.status === 'rejected' ? <X size={19} weight="bold"/> : state === 'approved' ? <CheckCircle size={19} weight="fill"/> : <UploadSimple size={19}/>}</span></div></div>
               {formatFiles.map(file => <FileLink key={`${format.id}:${file.id}`} file={file} onRemove={canUpload && !locked && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
               {canUpload && !locked && <label className="mkw-upload-action"><UploadSimple size={17}/><span>{W.upload} {W.finalFiles}</span><input type="file" accept={item.media_kind === 'image' ? '.jpg,.jpeg,.png,.webp,.gif,.heic,.heif' : '.mp4,.mov,.m4v,.webm'} multiple={item.media_kind === 'image'} disabled={busy} onChange={event => { void upload(event.target.files, 'final', [format.id]); event.target.value = ''; }} /></label>}
               {capabilities.review && item.status !== 'rejected' && item.status !== 'revision' && reviewableFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="primary" disabled={busy || !approvableFormatIds.has(format.id)} onClick={() => void review('approve', format.id)}>اعتماد المقاس</button>{canAddRevision && <button type="button" className="secondary" disabled={busy} onClick={() => beginRevision(format.id)}><Plus size={15}/> إضافة تعديل</button>}</div>}

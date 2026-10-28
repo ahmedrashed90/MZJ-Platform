@@ -52,7 +52,7 @@ export type WorkPlanLine = {
   product_id: string; idea_name: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
 };
-export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };
+export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; manageFormats: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };
 
 /** Whether the selected platform has an implemented automatic-publishing adapter.
  * Work plans created before platform selection may not contain platform_code.

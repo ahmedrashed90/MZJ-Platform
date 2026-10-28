@@ -40,6 +40,14 @@ function departmentScope(user: SessionUser) {
   return ['department', 'departments', 'branch_and_department'].includes(access.dataScope) &&
     (hasPermission(user, 'marketing.task.view_all') || hasPermission(user, 'marketing.task.review')) ? access.departmentCodes : [];
 }
+/** Only the Marketing administrator or platform system administrator may remove
+ * a configured output size. Review permission by itself is insufficient. */
+function canManageItemFormats(user: SessionUser) {
+  const marketingRole = getSystemAccess(user, 'marketing').roleCode;
+  return hasPermission(user, 'platform.superadmin') ||
+    ((marketingRole === 'marketing_admin' || (user.roleCodes || []).includes('marketing_admin')) &&
+      hasPermission(user, 'marketing.task.review'));
+}
 function productManager(user: SessionUser) {
   return getSystemAccess(user, 'marketing').dataScope === 'all' &&
     (hasPermission(user, 'marketing.products.view') || hasPermission(user, 'marketing.publish_prep.view'));
@@ -47,7 +55,7 @@ function productManager(user: SessionUser) {
 export function workflowCapabilities(user: SessionUser): WorkCapabilities {
   return {
     createTask: hasPermission(user, 'marketing.task.create'), editTask: hasPermission(user, 'marketing.task.edit'),
-    review: hasPermission(user, 'marketing.task.review'), createAgenda: hasPermission(user, 'marketing.agenda.create'),
+    review: hasPermission(user, 'marketing.task.review'), manageFormats: canManageItemFormats(user), createAgenda: hasPermission(user, 'marketing.agenda.create'),
     createCampaign: hasPermission(user, 'marketing.campaign.create'), products: hasPermission(user, 'marketing.products.view'),
     prepare: hasPermission(user, 'marketing.publish_prep.manage'), publish: hasPermission(user, 'marketing.publish.now'), viewAll: isManager(user),
   };
@@ -210,7 +218,8 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and ((i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on or exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved')))::int as submitted_on_time_count,
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
-      and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as submitted_late_count,
+      and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on
+      and not exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved'))::int as submitted_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
     left join marketing.work_items i on i.task_id=t.id and (
@@ -393,6 +402,74 @@ async function addItemFormats(sql: Sql, body: Row, user: SessionUser) {
       version: updated.version, added: added.length, message: W.saved };
   });
   await notify(user, 'formats_added', result.taskId, W.addFormats, [result.assigneeId], W.finalFiles);
+  return result;
+}
+/** Remove one configured format without deleting any physical media or
+ * rewriting historical approvals. All other formats remain mandatory. */
+async function removeItemFormat(sql: Sql, body: Row, user: SessionUser) {
+  if (!canManageItemFormats(user)) throw new Error('حذف المقاس متاح للأدمن أو مدير النظام فقط');
+  const itemId = id(body.itemId), formatId = id(body.formatId);
+  const result = await sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const visible = await visibleItem(tx, user, itemId);
+    await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
+    const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if (!locked || Number(locked.version) !== Number(body.version)) throw new Error(W.conflict);
+    if (locked.status === 'rejected') throw new Error(W.immutable);
+    if (locked.status === 'approved') throw new Error('تراجع عن اعتماد المنتج أولًا قبل حذف المقاس');
+    const original: WorkFormat[] = Array.isArray(locked.formats) ? locked.formats : [];
+    const removed = original.find(format => format.id === formatId);
+    if (!removed) throw new Error(W.selectFormats);
+    if (original.length <= 1) throw new Error('لا يمكن حذف آخر مقاس؛ يجب أن يبقى مقاس واحد على الأقل');
+    const [review] = await tx<any[]>`select status from marketing.work_format_reviews
+      where item_id=${itemId}::uuid and format_id=${formatId} for update`;
+    if (review?.status === 'approved') throw new Error('تراجع عن اعتماد المقاس أولًا قبل حذفه');
+    if (review?.status === 'submitted') throw new Error('المقاس قيد المراجعة؛ أعده للتعديل أولًا قبل حذفه');
+    const [pending] = await tx<any[]>`select 1 from marketing.work_uploads
+      where item_id=${itemId}::uuid and cancelled_at is null and committed_at is null
+        and format_ids @> ${tx.json([formatId])}::jsonb limit 1`;
+    if (pending) throw new Error('انتظر اكتمال رفع الملفات أو ألغِ الرفع قبل حذف المقاس');
+    const files = await tx<any[]>`select j.file_id::text as id,f.original_name as name
+      from marketing.work_item_files j join marketing.files f on f.id=j.file_id
+      where j.item_id=${itemId}::uuid and j.format_id=${formatId}`;
+    // Detach links from this requirement only. Physical files, immutable
+    // review notes and history are preserved for auditing.
+    await tx`delete from marketing.work_item_files where item_id=${itemId}::uuid and format_id=${formatId}`;
+    await tx`delete from marketing.work_format_reviews where item_id=${itemId}::uuid and format_id=${formatId}`;
+    const remaining = original.filter(format => format.id !== formatId);
+    const reviews = await tx<any[]>`select format_id,status from marketing.work_format_reviews where item_id=${itemId}::uuid`;
+    const statuses = new Map<string,string>(reviews.map(row => [row.format_id, row.status]));
+    const allApproved = remaining.every(format => statuses.get(format.id) === 'approved');
+    const hasRevision = reviews.some(row => row.status === 'revision');
+    const hasSubmitted = reviews.some(row => row.status === 'submitted');
+    const nextStatus = allApproved ? 'approved' : hasRevision
+      ? locked.status === 'editing' ? 'editing' : 'revision'
+      : hasSubmitted ? 'submitted' : 'in_progress';
+    const [updated] = await tx<any[]>`update marketing.work_items
+      set formats=${tx.json(json(remaining))},status=${nextStatus},
+        approved_at=case when ${allApproved} then coalesce(approved_at,now()) else null end,
+        approved_by=case when ${allApproved} then ${user.id}::uuid else null end,
+        submitted_at=case when ${allApproved} then coalesce(submitted_at,
+          (select max(coalesce(up.committed_at,j.created_at)) from marketing.work_item_files j
+            left join marketing.work_uploads up on up.file_id=j.file_id and up.item_id=j.item_id
+            where j.item_id=${itemId}::uuid and j.category='final'
+              and j.format_id=any(${remaining.map(format => format.id)}::text[]))) else submitted_at end,
+        version=version+1,updated_at=now()
+      where id=${itemId}::uuid returning version`;
+    if (allApproved) {
+      await tx`insert into marketing.work_action_progress(item_id,action_id,completed,completed_by)
+        select ${itemId}::uuid,id,true,${user.id}::uuid from marketing.assignment_actions
+        where department_id=${locked.department_id}::uuid and is_active=true and is_final_approval=true
+        on conflict(item_id,action_id) do update set completed=true,completed_by=excluded.completed_by,updated_at=now()`;
+    }
+    await history(tx,user,visible.task_id,itemId,'format_removed',`${removed.platform_name} - ${removed.name}`,
+      { formatId, format: removed, detachedFiles: files, remainingFormatIds: remaining.map(format => format.id) });
+    await recalculateTask(tx,visible.task_id);
+    return { ok: true, taskId: String(visible.task_id), assigneeId: String(locked.assigned_to),
+      version: updated.version, message: 'تم حذف المقاس من المطلوب وتحديث الجاهزية' };
+  });
+  await notify(user,'format_removed',result.taskId,'تم حذف مقاس من المطلوب',[result.assigneeId]);
   return result;
 }
 async function submitItem(sql: Sql, body: Row, user: SessionUser) {
@@ -1634,7 +1711,11 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       reviewSchemaReady = Boolean(review?.revision_policy && review.terminal_rejection && review.reviewers &&
         review.revision_numbers && review.editing_state && review.rejected_state);
     }
+    const [performance] = status.baseReady
+      ? await sql<{ ready: boolean }[]>`select exists(select 1 from marketing.workflow_migrations where code='schema-11') as ready`
+      : [{ ready: false }];
     response.status(200).json({ ok: true, ...status,
+      performanceReady: Boolean(performance?.ready),
       ready: Boolean(status.ready && structure.ready && reviewSchemaReady),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
@@ -1648,7 +1729,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     await assertMarketingWorkflowReady(sql);
     const upgraded = await marketingPlanScheduleSchemaStatus(sql);
     const structure = await marketingWorkflowStructureStatus(sql);
-    response.status(200).json({ ok: true, ready: upgraded.ready && structure.ready,
+    response.status(200).json({ ok: true, ready: upgraded.ready && structure.ready, performanceReady: true,
       baseReady: upgraded.baseReady, missing: [...upgraded.missing, ...structure.missing],
       message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
     return true;
@@ -1702,6 +1783,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_create_task') result = await createTask(sql, body, user);
     else if (action === 'work_save_item') result = await saveItem(sql, body, user);
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
+    else if (action === 'work_remove_item_format') result = await removeItemFormat(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
     else if (action === 'work_request_deadline_exception') result = await requestDeadlineException(sql, body, user);
     else if (action === 'work_approve_deadline_exception') result = await decideDeadlineException(sql, body, user, 'approved');

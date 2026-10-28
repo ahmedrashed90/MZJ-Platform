@@ -130,7 +130,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
     save_subscription: "marketing.subscriptions.manage", delete_subscription: "marketing.subscriptions.manage", renew_subscription: "marketing.subscriptions.renew",
-    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin", work_upgrade_schema: "platform.superadmin",
+    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin", work_upgrade_schema: "platform.superadmin", work_remove_item_format: "marketing.task.review",
   };
   if (action === "prepare_upload" || action === "mark_file_ready") {
     const category = clean(payload.category);

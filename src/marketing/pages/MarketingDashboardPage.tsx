@@ -18,7 +18,7 @@ export function MarketingDashboardPage() {
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities }>('dashboard');
-  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; canUpgrade: boolean }>('schema_status');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; canUpgrade: boolean }>('schema_status');
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
   async function upgradeSchema() {
     if (schemaUpgrading || !schema.data?.canUpgrade) return;
@@ -53,6 +53,10 @@ export function MarketingDashboardPage() {
       <span>{schema.data.baseReady ? 'تحتاج قاعدة بيانات التسويق إلى تحديث الجداول حتى تظهر بيانات التنفيذ والنشر الحالية.' : 'قاعدة بيانات التسويق تحتاج إلى التهيئة الأساسية.'}</span>
       {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
+    </div>}
+    {schema.data?.ready && !schema.data.performanceReady && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status">
+      <span>يتوفر تحسين لفهارس قاعدة بيانات التسويق لتسريع تحميل تفاصيل التاسكات والمراجعات.</span>
+      <button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحسين قاعدة البيانات...' : 'تحسين سرعة تحميل التسويق'}</button>
     </div>}
     <div className="mkw-toolbar mkw-dashboard-search"><Search value={search} onChange={setSearch}/></div>
     <div className="mkw-board mkw-dashboard-board">
