@@ -22,14 +22,16 @@ assert.match(detail,/mkw-requirement-review-toggle/);
 assert.match(detail,/workPost\('review', \{ itemId: item\.id, version: version\.current, decision,\s*\.\.\.\(formatId \? \{ formatId \} : \{\}\), note:/);
 // Reviewers may reject a requirement without files; approval/revision depend on
 // ready FINAL files, not whether the executor clicked Submit for review.
-assert.match(detail,/const reviewableFormats = workReviewableFormats\(item, 'revise'\)/);
-assert.match(detail,/const approvableFormats = workReviewableFormats\(item, 'approve'\)/);
-assert.match(detail,/\{capabilities\.review && \(item\.status !== 'approved' \|\| approvedFormatIds\.size > 0\) && <section/);
+// Terminally rejected requirements remain visible for history and rating, but
+// must never re-enter approval, revision or final-file review actions.
+assert.match(detail,/const reviewableFormats = item\.status === 'rejected' \? \[\] : workReviewableFormats\(item, 'revise'\)/);
+assert.match(detail,/const approvableFormats = item\.status === 'rejected' \? \[\] : workReviewableFormats\(item, 'approve'\)/);
+assert.match(detail,/\{capabilities\.review && item\.status !== 'rejected' && \(item\.status !== 'approved' \|\| approvedFormatIds\.size > 0\) && <section/);
 assert.match(detail,/onClick=\{\(\) => void review\('reject'\)\}/);
 assert.doesNotMatch(detail,/const hasSubmitted =/);
 assert.match(workflow,/const reviewable = decision === 'reject' \? \[\] : workReviewableFormats\(item, decision === 'approve' \? 'approve' : 'revise'\)/);
 assert.match(workflow,/const targets = requestedFormat \? reviewable\.filter\(format => format\.id === requestedFormat\) : reviewable/);
-assert.match(workflow,/if \(decision !== 'reject' && !targets\.length\)/);
+assert.match(workflow,/if \(decision !== 'reject' && !targets\.length && !pendingRevision\)/);
 assert.match(workflow,/const completelyApproved = item\.formats\.every\(format => statuses\.get\(format\.id\) === 'approved'\)/);
 assert.match(workflow,/where id=\$\{itemId\}::uuid/);
 assert.match(workflow,/const readiness = await recalculateTask\(tx, locked\.task_id\)/);
