@@ -207,6 +207,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
+  const [caption, setCaption] = useState(item.caption || ''), [hashtags, setHashtags] = useState(item.hashtags || '');
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
@@ -262,6 +263,9 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     if (saved) { setDeclineEditor(false); setDeclineReason(''); }
   }
 
+  async function saveCopy() {
+    await run(() => workPost('save_item_copy', { itemId:item.id, caption, hashtags }));
+  }
   async function persist() {
     if (!editable) return version.current;
     if (idea === item.idea && ideaName === item.idea_name && dueOn === item.due_on) return version.current;
@@ -327,6 +331,11 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   }
   return <article className="mkw-execution-item"><header className="mkw-execution-header"><div className="mkw-execution-title"><span className="mkw-item-number">{number}</span><div><h3>{W.required} {number}</h3><div className="mkw-muted"><UserCircle size={16} />{W.assignee}: {item.assignee_name} · {W.department}: {item.department_name}</div></div></div><div className="mkw-actions"><MediaLabel kind={item.media_kind} /><Status value={item.status} />{item.delivery_status && <span className={`mkw-delivery-badge ${item.delivery_status === 'on_time' || item.delivery_status === 'exception_approved' ? 'is-on-time' : 'is-late'}`}>{item.delivery_status === 'on_time' ? W.deliveryOnTime : item.delivery_status === 'exception_approved' ? W.deliveryExceptionApproved : W.deliveryLate}</span>}</div></header>
     <div className="mkw-item"><WorkAlert>{error}</WorkAlert>
+      <section className="mkw-executor-copy"><div className="mkw-section-title"><h4>نص المنشور — الكابشن والهاشتاج</h4><small>يحفظهما المنفذ لاستخدامهما في الأجندة أو الحملة</small></div>
+        <div className="mkw-publish-copy"><label>الكابشن<textarea maxLength={10000} value={caption} readOnly={!own && !capabilities.manageFormats} disabled={busy} onChange={event=>setCaption(event.target.value)} placeholder="اكتب كابشن المنشور"/></label>
+        <label>الهاشتاج<textarea maxLength={3000} value={hashtags} readOnly={!own && !capabilities.manageFormats} disabled={busy} onChange={event=>setHashtags(event.target.value)} placeholder="#هاشتاج"/></label></div>
+        {(own || capabilities.manageFormats) && <button type="button" className="secondary" disabled={busy || (caption === (item.caption || '') && hashtags === (item.hashtags || ''))} onClick={()=>void saveCopy()}>حفظ الكابشن والهاشتاج</button>}
+      </section>
       {item.status === 'rejected' && <div className="mkw-rejected-final-message" role="status">
         <strong>✕ مرفوض — تم حسم المطلوب</strong>
         <p>المطلوب محفوظ داخل التاسك ويحتسب 100% في جاهزيته، لكنه ليس منتجًا معتمدًا ولا يظهر في المنتجات.</p>

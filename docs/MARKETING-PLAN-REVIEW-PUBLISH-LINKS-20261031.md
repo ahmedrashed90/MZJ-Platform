@@ -1,22 +1,30 @@
-# MZJ Marketing — Publishing workflow (integrated clean release, 2026-10-31)
+# Marketing campaign/agenda review and publication links (2026-10-31)
 
-## Included in the source
-- Publishing section on the dashboard is closed initially and opens/closes via its title. Individual agenda/campaign cards also start collapsed. The publishing column has no forced minimum height: while closed, only its header occupies space; when opened, the cards are visible immediately without blank space.
-- In a plan card, **one row per scheduled calendar day** summarizes all matching products/platforms/post types. Multiple platforms or post types on the same date are not repeated on the dashboard. Their original individual publication lines are preserved in the database.
-- The old dashboard **جدول النشر** control is **التقرير**. **تجهيز النشر** comes before **التقرير**. Dashboard **التقرير** opens as a full-viewport, strictly read-only report, with one line per product/platform/post type, showing plan creation date, scheduled date, product, platform, post type, prepared caption, prepared hashtags, publication-timing badge, state, and an opening link if available. Campaign reports also show the budget per line. The report contains no editable controls, no save buttons, and no **تاريخ النشر الفعلي** column.
-- Plan creation date is shown in the collapsed card and inside the report. Editing the plan does not change its original creation date.
-- Executor task detail no longer displays caption and hashtags editing. Existing stored copy is retained, and copy is edited during **تجهيز النشر** for each line separately. Preparation's selection action reads **فتح**.
-- **تجهيز النشر** is the primary editor for actual post URLs and publication dates (after plan approval and with existing authorized roles). Links and dates are stored on the individual plan publication line. The dashboard report does not edit these values; entering a URL does not itself publish a post. The separate **قاعدة البيانات** detail screen retains its existing protected management/review capabilities without presenting itself as the dashboard report.
-- An actual publication date on/before the scheduled day produces green **نشر في الموعد**. A later date produces red **تأخر في النشر**. Pending items are not labelled as published; legacy URLs without a confirmed actual date show **تاريخ النشر غير مسجل**, never an invented result. Provider-published posts use their confirmed publish timestamp converted to the Riyadh calendar date.
-- Editing an agenda/campaign's product or schedule rows and pressing **حفظ التعديلات وإرسالها للمراجعة** now makes one atomic database transaction: validate/edit rows, mark the plan as **submitted / قيد المراجعة**, and append a review event. There is no separate required second review submission step after an edit. Initial plans with no edits retain their existing initial submission control.
-- All earlier agenda/campaign review notes remain in the append-only review history and are displayed when editing or reviewing. Current note is not erased by submitting or approving. Task review workflows and other modules are unchanged.
+## Scope
+Only Marketing workflow files were changed. The existing publishing adapters, campaigns, agendas, task review/rating, attendance, CRM, operations and platform authentication are preserved.
 
-## Database and operational steps
-- Existing additive schema-12/13 migrations remain. **New schema-14** adds `marketing.work_plan_items.manual_published_on date` without dropping rows or overwriting existing publication links.
-- Deploy the **complete ZIP source**. After deployment, a platform superadmin must use the existing **تحديث قاعدة بيانات التسويق** control once, before using manual actual publication dates. The upgrade is an explicit administrator POST; dashboard GET operations do not perform database DDL.
-- Existing automatic publication adapters, access control, campaign budgets, agenda selection, tasks, CRM and other work modules are retained. Publication dates are stored separately from the date a link was entered or edited.
-- Where an old manually recorded URL has no verifiable publication date, the UI deliberately requests a real date instead of classifying it as on-time or late.
+## Plan lifecycle
+- Saving a campaign or agenda creates a plan with `review_status=in_progress` (قيد التنفيذ).
+- The creator can edit the plan's product rows, dates, compatible post types and campaign budget before submitting. An administrator/marketing manager can approve or request a revision with a permanent note.
+- Revision moves to `revision` (مطلوب تعديل); the creator edits and sends to `submitted` (قيد المراجعة).
+- Approval moves to `publishing` (جاري النشر). No automatic publishing is activated by this approval alone: the existing explicit activation flow still requires the original publish permissions and prepared targets.
+- Each plan line represents a product + platform + post type publication. It has a manual post URL; a confirmed provider URL may also satisfy the same requirement. The plan reaches `published` (تم النشر) and 100% readiness only when **every active line** has a saved post URL. This is calculated, not a manually set status.
+- Review notes are append-only in `marketing.work_plan_reviews`; task review notes are unaffected.
 
-## Validation and boundaries
-- Regression tests cover compact closed publishing layout, separate full-screen read-only report, all report columns, no report write controls or actual-date field, daily grouping, link/date validation and approval requirements, accurate timing classification, historical notes, atomic edit-and-submit, schema status/migration, and existing marketing dashboard workflow.
-- Source TypeScript files passed syntax/transpilation diagnostics in the working environment. A full dependency-based Vite/TypeScript production build and a live database/provider deployment were **not** performed: the project dependencies were not installed and registry access was unavailable.
+## Multi-format platform selection
+Each selected platform can have several compatible post types (for example Instagram Photo and Story). A separate publication line is created per selected type, and the platform's campaign budget is recorded **once** on the first line; additional types carry a zero budget. The preview displays this distribution.
+
+## Task captions
+Executors can save caption and hashtags on each task requirement. When a campaign/agenda is created, these are used if the product publishing draft has no non-empty caption or hashtags. Existing non-empty publishing drafts retain precedence. Captions do not change task approval/readiness.
+
+## Database upgrade
+The new **additive** migration `schema-12` adds `work_plans.review_status`, review note/category metadata, a `work_plan_reviews` audit table, `work_plan_items.manual_post_url`, and `work_items.caption` / `hashtags`. It does not delete or rewrite task or post records. Previously activated plans are marked `publishing` to preserve the existing activation state. The migration runs only from the administrator's **تحديث قاعدة بيانات التسويق** action; normal GET requests do not run DDL. After deploying, a platform superadmin must click this button once, then refresh.
+
+## Safeguards
+- A publication URL is accepted only with an HTTP(S) scheme and a hostname; links cannot be saved before plan approval.
+- Plan product edits are blocked if publish targets have already been prepared, to avoid leaving old scheduled assets attached to a different product. The creator must request administrator intervention for such a plan.
+- Automatic publication remains gated by the existing preparation checks and now also requires plan approval.
+- No actual post is created by saving a manual link; it is a record of a post published elsewhere.
+
+## Validation
+The existing marketing workflow, plan backend and rendered UI tests and new plan-review tests pass using mocked database/provider services. No live Postgres migration or Vercel build was run in this environment.
