@@ -1127,7 +1127,7 @@ async function reportData(request: VercelRequest) {
           checkOut: record?.check_out || null,
           checkInText: reportClock(record?.check_in),
           checkOutText: reportClock(record?.check_out),
-          checkoutSource: record?.check_out ? (record.checkout_source === "authorized" ? "authorized" : "auto") : null,
+          checkoutSource: record?.check_out ? (record.checkout_source || null) : null,
           earlyDepartureFrom: record?.early_departure_from_at || null,
           earlyDepartureTo: record?.early_departure_to_at || null,
           earlyDepartureFromText: reportClock(record?.early_departure_from_at),
@@ -1280,6 +1280,10 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
         && timeMinutes(item.fromTime) >= timeMinutes(selectedShift.startTime)
         && timeMinutes(item.toTime) <= timeMinutes(selectedShift.endTime);
       if (!permissionFitsShift) throw new AttendanceError("EARLY_DEPARTURE_OUTSIDE_SHIFT", `وقت إذن ${userMap.get(item.userId)} خارج ${selectedShift.name} (${selectedShift.startTime} - ${selectedShift.endTime})`);
+      // Vacation always covers the exact assigned shift, never editable hours.
+      if (item.permissionType === 'vacation' && (item.fromTime !== selectedShift.startTime || item.toTime !== selectedShift.endTime)) {
+        throw new AttendanceError('VACATION_SHIFT_TIMES_REQUIRED', `الإجازة يجب أن تغطي ${selectedShift.name} كاملة من ${selectedShift.startTime} إلى ${selectedShift.endTime}`);
+      }
       const [permissionClock] = await tx<any[]>`
         select
           ((${workDate}::date + ${item.fromTime}::time) at time zone ${ATTENDANCE_TIME_ZONE}) as from_at,

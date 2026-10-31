@@ -347,42 +347,8 @@ async function syncCurrentAttendanceSchedules(userId: string | null = null) {
 
 async function closeExpiredAttendanceRecords(userId: string | null = null) {
   const sql = getSql();
-  const authorized = await sql<{ id: string; user_id: string }[]>`
-    with due as (
-      select
-        r.id,
-        greatest(p.from_at,r.check_in) as checkout_at,
-        p.authorized_at,
-        p.authorized_by,
-        p.from_at,
-        p.to_at
-      from core.attendance_records r
-      join core.attendance_early_departure_permissions p
-        on p.user_id=r.user_id and p.work_date=r.work_date
-      where r.check_in is not null
-        and r.check_out is null
-        and r.scheduled_start_at is not null
-        and r.scheduled_end_at is not null
-        and p.from_at >= r.scheduled_start_at
-        and p.from_at < r.scheduled_end_at
-        and greatest(p.from_at,r.check_in) <= now()
-        and (${userId}::uuid is null or r.user_id=${userId}::uuid)
-    )
-    update core.attendance_records r
-    set
-      check_out=due.checkout_at,
-      checkout_source='authorized',
-      early_departure_authorized_at=due.authorized_at,
-      early_departure_authorized_by=due.authorized_by,
-      early_departure_from_at=due.from_at,
-      early_departure_to_at=due.to_at,
-      work_minutes=greatest(0,floor(extract(epoch from (due.checkout_at-r.check_in))/60))::int,
-      updated_at=now()
-    from due
-    where r.id=due.id
-    returning r.id::text,r.user_id::text
-  `;
-
+  // Permissions are accounting intervals, never physical punches.
+  // Only the normal scheduled end can automatically close a real check-in.
   const automatic = await sql<{ id: string; user_id: string }[]>`
     update core.attendance_records r
     set
@@ -396,7 +362,7 @@ async function closeExpiredAttendanceRecords(userId: string | null = null) {
       and (${userId}::uuid is null or r.user_id=${userId}::uuid)
     returning r.id::text,r.user_id::text
   `;
-  return [...authorized, ...automatic];
+  return automatic;
 }
 
 export async function getLoginAttendanceState(userId: string) {

@@ -50,6 +50,8 @@ export function PublishPage() {
             const open = expandedProduct === product.id;
             const draft = query.data?.drafts.find(row => row.product_id === product.id);
             const plans = (query.data?.lines || []).filter(line => line.product_id === product.id);
+            const hasCaption = Boolean(draft?.caption?.trim() || product.caption?.trim());
+            const hasHashtags = Boolean(draft?.hashtags?.trim() || product.hashtags?.trim());
             return <Fragment key={product.id}><tr className={open ? 'mkw-publish-expanded-row' : ''}>
               <td className="mkw-publish-numeric">{index + 1}</td>
               <td className="mkw-publish-product-title"><strong>{product.idea_name || product.statement}</strong></td>
@@ -57,8 +59,8 @@ export function PublishPage() {
               <td><span className="mkw-muted">{product.formats.length} {W.sizes}</span></td>
               <td className="mkw-publish-assignee">{product.assignee_name || '—'}</td>
               <td><span className="mkw-publish-count">{plans.length}</span></td>
-              <td><span className={`mkw-publish-draft-state ${(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? 'is-ready' : ''}`}>
-                {(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? <><CheckCircle size={16} weight="fill"/>تم حفظ الكابشن والهاشتاج</> : !(draft?.caption || product.caption)?.trim() ? 'الكابشن لم يُحفظ' : 'الهاشتاج لم يُحفظ'}
+              <td><span className={`mkw-publish-draft-state ${hasCaption && hasHashtags ? 'is-ready' : ''}`}>
+                {hasCaption && hasHashtags ? <><CheckCircle size={16} weight="fill"/>تم حفظ الكابشن والهاشتاج</> : !hasCaption ? 'الكابشن لم يُحفظ' : 'الهاشتاج لم يُحفظ'}
               </span></td>
               <td><div className="mkw-publish-row-actions"><ProductViewButton id={product.id} /><button type="button" className="secondary" aria-expanded={open} onClick={() => setExpandedProduct(open ? '' : product.id)}>{open ? 'إغلاق' : W.open}<CaretDown size={15} className={open ? 'mkw-publish-up' : ''}/></button></div></td>
             </tr>{open && <tr className="mkw-publish-detail-row"><td colSpan={8}><div className="mkw-publish-product-body">

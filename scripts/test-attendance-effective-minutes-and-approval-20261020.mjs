@@ -131,16 +131,20 @@ check('Friday-shift and legacy day-wide permission handling stay compatible', ()
   assert.equal(permissionForShift([olderPermission], 'evening', false), olderPermission);
   assert.equal(permissionForShift([olderPermission, exactPermission], 'morning', false), exactPermission);
 });
-check('All permission types require admin-selected start and end times', () => {
-  assert.match(attendanceScreen, /fromTime: "",\s*toTime: ""/);
-  assert.doesNotMatch(attendanceScreen, /entry\.permissionType === 'vacation'/);
-  assert.doesNotMatch(attendanceScreen, /field === 'permissionType' && value === 'vacation'/);
+check('Vacation selects scheduled shifts while departure and exceptional keep manually chosen intervals', () => {
+  assert.match(attendanceScreen, /entry\.permissionType === 'vacation'/);
+  assert.match(attendanceScreen, /entry\.vacationPeriodIds\.includes\(shift\.periodId\)/);
+  assert.match(attendanceScreen, /type="checkbox" checked=\{entry\.vacationPeriodIds/);
+  assert.match(attendanceScreen, /value=\{shift\.startTime\} readOnly/);
+  assert.match(attendanceScreen, /value=\{shift\.endTime\} readOnly/);
+  assert.match(attendanceScreen, /return entry\.vacationPeriodIds\.map\(\(periodId\) =>/);
   assert.match(attendanceScreen, /!item\.fromTime \|\| !item\.toTime/);
+  assert.match(attendanceServer, /item\.permissionType === 'vacation' && \(item\.fromTime !== selectedShift\.startTime \|\| item\.toTime !== selectedShift\.endTime\)/);
 });
-check('Partial vacation credits only the explicitly selected interval', () => {
+check('Historical partial vacation permissions retain their recorded credit intervals', () => {
   assert.equal(credit(null, day, '09:00', '12:00', 0, { permission_type: 'vacation', from_at: at('10:00'), to_at: at('11:00') }), 60);
 });
-check('Backdated or future permission credits its chosen duration, not time of entry', () => {
+check('Backdated or future permission credits its saved interval, not time of entry', () => {
   const futureDate = '2099-10-18';
   const futureAt = time => `${futureDate}T${time}:00+03:00`;
   for (const permission_type of ['departure', 'vacation', 'exceptional']) {
@@ -148,7 +152,7 @@ check('Backdated or future permission credits its chosen duration, not time of e
     assert.equal(credit(null, futureDate, '15:00', '21:00', 0, permission), 150);
   }
 });
-check('Vacation overlapping real attendance is not double-counted', () => {
+check('Legacy vacation overlapping real attendance is not double-counted', () => {
   const attendance = { check_in: at('09:00'), check_out: at('10:30'), checkout_source: 'manual' };
   const permission = { permission_type: 'vacation', from_at: at('10:00'), to_at: at('12:00') };
   assert.equal(credit(attendance, day, '09:00', '12:00', 0, permission), 180);
@@ -180,6 +184,22 @@ check('Only the weekly rest day stays outside monthly expected and credited hour
   assert.deepEqual(JSON.parse(JSON.stringify(uiExports.totals([off]))), {expected:0,actual:0});
 });
 
+check('Authorizations do not create or alter physical check-in/check-out records in attendance tick', () => {
+  const tick = fs.readFileSync('server/_attendance.ts', 'utf8');
+  const close = tick.slice(tick.indexOf('async function closeExpiredAttendanceRecords('), tick.indexOf('export async function getLoginAttendanceState('));
+  assert.doesNotMatch(close, /join core\.attendance_early_departure_permissions/);
+  assert.doesNotMatch(close, /checkout_source='authorized'/);
+  assert.match(close, /checkout_source='auto'/);
+  assert.match(close, /return automatic;/);
+  const save = attendanceServer.slice(attendanceServer.indexOf('async function authorizeEarlyDeparture('), attendanceServer.indexOf('async function deleteEarlyDeparturePermission('));
+  assert.doesNotMatch(save, /update core\.attendance_records/);
+});
+check('Vacation can select morning and evening independently without editing timestamps', () => {
+  assert.match(attendanceScreen, /function toggleVacationPeriod\(/);
+  assert.match(attendanceScreen, /entry\.vacationPeriodIds\.map\(\(periodId\) =>/);
+  assert.match(attendanceScreen, /periodId, fromTime: shift\?\.startTime \|\| '', toTime: shift\?\.endTime \|\| ''/);
+  assert.match(attendanceServer, /on conflict\(user_id,work_date,period_id\) do update set/);
+});
 check('Marketing item badges require final approval, not merely submitted files', () => {
   assert.match(workflow, /case when i\.status='approved' and i\.approved_at is not null and i\.submitted_at is not null/);
 });

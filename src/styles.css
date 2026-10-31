@@ -9262,3 +9262,13 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-permission-details dd { margin:0; font-weight:800; overflow-wrap:anywhere; }
 .attendance-permission-details .attendance-permission-details-reason { grid-column:1/-1; white-space:pre-wrap; }
 @media(max-width:480px) { .attendance-permission-details dl { grid-template-columns:1fr; } }
+
+/* Fixed scheduled vacation periods: admin selects shifts, not arbitrary clock times. */
+.attendance-vacation-periods { display: grid; gap: 10px; grid-column: 1 / -1; }
+.attendance-vacation-checklist { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 8px; }
+.attendance-vacation-shift { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line, #e6d5cb); border-radius: 9px; cursor: pointer; }
+.attendance-vacation-shift input { width: auto; flex: none; }
+.attendance-vacation-fixed-time { margin-inline-start: auto; direction: ltr; white-space: nowrap; }
+.attendance-vacation-fixed-range { display: grid; grid-template-columns: minmax(110px,1fr) repeat(2,minmax(120px,1fr)); gap: 8px; align-items: end; }
+.attendance-vacation-fixed-range input[readonly] { background: var(--surface-soft, #f7f1ed); cursor: not-allowed; }
+@media (max-width: 650px) { .attendance-vacation-fixed-range { grid-template-columns: 1fr; } }
