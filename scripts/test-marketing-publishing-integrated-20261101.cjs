@@ -50,7 +50,7 @@ assert.equal(days[1].undatedCount,1,'old links without dates may not be marked o
 assert.equal(samples.length,4,'report source rows remain untouched');
 console.log('PASS daily aggregation: 3 platforms + post types on same date yield one summary row; separate detailed lines preserved');
 
-assert.match(dashboard,/\[publishingOpen, setPublishingOpen\] = useState\(false\)/);
+assert.match(dashboard,/\[publishingOpen, setPublishingOpen\] = useState\(true\)/);
 assert.match(dashboard,/\{publishingOpen && <div id="mkw-publishing-body"/);
 assert.match(dashboard,/summarizePublishingDays\(group\)/);
 assert.match(dashboard,/expandedPlanIds\.has\(id\)/);
@@ -60,7 +60,7 @@ assert.doesNotMatch(dashboard,/<PlanDetail id=\{tableId\}/);
 assert.match(dashboard,/تاريخ الإنشاء: \{showDate\(group\[0\]\.plan_created_at\)\}/);
 assert.match(dashboard,/const distinctProducts = new Set\(group.map\(line => line.product_id\)\)\.size/);
 assert.match(dashboard,/>فتح<\/button>/);
-console.log('PASS dashboard: section closed by default, plan names reveal one row per date, report not manager editor');
+console.log('PASS dashboard: publishing section open by default, product rows open only by title click, report not manager editor');
 
 for(const field of ['plan.created_at','line.idea_name','line.platform_name','line.post_type_name','line.caption','line.hashtags','line.effective_post_url','line.scheduled_on']) {
   assert.ok(report.includes(field), `report must display ${field}`);

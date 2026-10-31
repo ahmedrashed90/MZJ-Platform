@@ -36,7 +36,7 @@ export function MarketingDashboardPage() {
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
   const [tableId, setTableId] = useState(''), [budgetId, setBudgetId] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
-  const [publishingOpen, setPublishingOpen] = useState(false);
+  const [publishingOpen, setPublishingOpen] = useState(true);
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
   function togglePlanProducts(id: string) {
     setExpandedPlanIds(current => {
