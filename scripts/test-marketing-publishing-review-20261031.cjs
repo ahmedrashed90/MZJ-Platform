@@ -45,11 +45,12 @@ function fakeSql(status='in_progress') {
   sql=fakeSql('submitted');await wf.changePlanReview(sql,user,{planId,decision:'approved'});
   assert.ok(sql.statements.some(x=>x.q.includes('update marketing.work_plans')&&x.values.includes('publishing')));
   console.log('PASS: approval transitions plan to publishing');
-  await assert.rejects(()=>wf.savePlanPostUrl(fakeSql('in_progress'),user,{lineId,url:'https://example.com/post'}));
+  await assert.rejects(()=>wf.savePlanPostUrl(fakeSql('in_progress'),user,{lineId,url:'https://example.com/post',publishedOn:'2026-10-31'}));
   await assert.rejects(()=>wf.savePlanPostUrl(fakeSql('publishing'),user,{lineId,url:'javascript:alert(1)'}));
-  sql=fakeSql('publishing');await wf.savePlanPostUrl(sql,user,{lineId,url:'https://example.com/post'});
+  sql=fakeSql('publishing');await wf.savePlanPostUrl(sql,user,{lineId,url:'https://example.com/post',publishedOn:'2026-10-31'});
   assert.ok(sql.statements.some(x=>x.q.includes('update marketing.work_plan_items')&&x.values.includes('https://example.com/post')));
-  console.log('PASS: link only after approval; valid HTTPS required; saved per publication line');
+  assert.ok(sql.statements.some(x=>x.q.includes('manual_published_on')&&x.values.includes('2026-10-31')));
+  console.log('PASS: link only after approval; valid HTTPS required; actual publication date saved per line');
   const schema=fs.readFileSync('server/_marketing-workflow-schema.ts','utf8');
   assert.ok(schema.includes("values('schema-12')")&&schema.includes('manual_post_url')&&schema.includes('work_plan_reviews'));
   assert.ok(fs.readFileSync('server/marketing/workflow.ts','utf8').includes("if (plan.review_status !== 'publishing')"));

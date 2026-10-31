@@ -7,7 +7,7 @@ import { availablePlanPostTypes } from './planComposer';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 
 type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
-type Plan = { id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string;
+type Plan = { id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
   readiness: number; canReview: boolean; canEdit: boolean; canSaveLinks: boolean; activated_at?: string | null };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
@@ -16,11 +16,13 @@ const statusNames: Record<PlanState,string> = {
   in_progress:'قيد التنفيذ', revision:'مطلوب تعديل', submitted:'قيد المراجعة', publishing:'جاري النشر', published:'تم النشر',
 };
 export function planStatusName(status: string) { return statusNames[status as PlanState] || status; }
-function LinkEditor({ line, save, disabled }: { line: WorkPlanLine; save: (lineId:string,url:string)=>Promise<void>; disabled:boolean }) {
+function LinkEditor({ line, save, disabled }: { line: WorkPlanLine; save: (lineId:string,url:string,publishedOn:string)=>Promise<void>; disabled:boolean }) {
   const [url, setUrl] = useState(line.manual_post_url || line.effective_post_url || '');
-  useEffect(() => setUrl(line.manual_post_url || line.effective_post_url || ''), [line.id, line.manual_post_url, line.effective_post_url]);
+  const [publishedOn, setPublishedOn] = useState(line.manual_published_on?.slice(0,10) || line.published_on?.slice(0,10) || '');
+  useEffect(() => { setUrl(line.manual_post_url || line.effective_post_url || ''); setPublishedOn(line.manual_published_on?.slice(0,10) || line.published_on?.slice(0,10) || ''); }, [line.id, line.manual_post_url, line.effective_post_url, line.published_on]);
   return <div className="mkw-post-url-field"><input aria-label={`رابط نشر ${line.idea_name} — ${line.platform_name}`} type="url" placeholder="https://... رابط البوست" value={url} disabled={disabled} onChange={event=>setUrl(event.target.value)} />
-    <button className="secondary" type="button" disabled={disabled || url === (line.manual_post_url || '')} onClick={()=>void save(line.id,url)}>حفظ الرابط</button>
+    <label>تاريخ النشر الفعلي<input type="date" value={publishedOn} disabled={disabled} onChange={event=>setPublishedOn(event.target.value)}/></label>
+    <button className="secondary" type="button" disabled={disabled || (!!url && !publishedOn) || (url === (line.manual_post_url || '') && publishedOn === (line.manual_published_on?.slice(0,10) || ''))} onClick={()=>void save(line.id,url,publishedOn)}>حفظ الرابط</button>
     {!!line.effective_post_url && <a href={line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور</a>}
   </div>;
 }
@@ -43,7 +45,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); return false; }
     finally { setBusy(false); }
   }
-  async function saveLink(lineId: string, url: string) { await run('save_plan_post_url', { lineId, url }); }
+  async function saveLink(lineId: string, url: string, publishedOn: string) { await run('save_plan_post_url', { lineId, url, publishedOn }); }
   async function review(decision: 'revision' | 'submitted' | 'approved') {
     if (decision === 'revision' && !note.trim()) { setError('اكتب ملاحظة التعديل أولًا'); return; }
     const ok = await run('plan_review', { planId:id, decision, note:decision === 'revision' ? note.trim() : '', categoryId:decision === 'revision' ? noteType || undefined : undefined });
@@ -55,7 +57,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   return <Modal open title={plan?.name || W.view} onClose={onClose} className="mkw-modal"><div className="mkw mkw-plan-review">
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
-      <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><span className="mkw-plan-state">{planStatusName(plan!.status)}</span></div>
+      <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><span className="mkw-plan-state">{planStatusName(plan!.status)}</span></div><div className="mkw-plan-created-at">تاريخ إنشاء الحملة أو الأجندة: <strong>{showDate(plan!.created_at,true)}</strong></div>
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line=>line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress','submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة<select value={noteType} onChange={e=>setNoteType(e.target.value)}><option value="">اختر نوع الملاحظة (اختياري)</option>{(settings.data?.categories || []).filter(category=>category.is_active).map(category=><option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
@@ -76,10 +78,10 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
           <td><button type="button" className="secondary" disabled={rows.length===1} onClick={()=>setRows(old=>old.filter((_,i)=>i!==index))}>حذف</button></td></tr>;
         })}</tbody></table></div><div className="mkw-actions"><button type="button" className="secondary" disabled={rows.length>=500} onClick={addRow}>إضافة منتج</button><button type="button" className="primary" disabled={busy || !rows.length || rows.some(row=>!row.date || !row.productId || !row.postTypeId)} onClick={()=>void run('update_plan',{planId:id,entries:rows.map(row=>({...row,budget:Number(row.budget)}))}).then(ok=>{if(ok)setEditing(false);})}>حفظ التعديلات</button></div></section> : null}
       <div className="mkw-table-wrap"><table><thead><tr><th>{plan!.kind==='agenda' ? W.publishDate : W.fundingDate}</th><th>المنتج</th><th>المنصة</th><th>نوع النشر</th><th>الحالة</th><th>رابط المنشور</th></tr></thead><tbody>{query.data.lines.map(line=><tr key={line.id}>
-        <td>{showDate(line.scheduled_on)}</td><td>{line.idea_name}<small className="mkw-muted">{line.task_no}</small></td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td><td>{line.published_ready ? 'تم النشر' : planStatusName(plan!.status)}</td>
+        <td>{showDate(line.scheduled_on)}</td><td>{line.idea_name}<small className="mkw-muted">{line.task_no}</small></td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td><td>{line.published_ready ? 'تم النشر' : planStatusName(plan!.status)}{line.published_ready && line.published_on && <div className={`mkw-publication-timing ${line.published_on.slice(0,10) <= line.scheduled_on.slice(0,10) ? 'is-on-time' : 'is-late'}`}>{line.published_on.slice(0,10) <= line.scheduled_on.slice(0,10) ? 'نشر في الموعد' : 'تأخر في النشر'}</div>}</td>
         <td>{plan!.canSaveLinks ? <LinkEditor line={line} save={saveLink} disabled={busy}/> : line.effective_post_url ? <a href={line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : 'بانتظار الاعتماد والنشر'}</td>
       </tr>)}</tbody></table></div>
-      {!!query.data.history.length && <details className="mkw-plan-history"><summary>سجل المراجعات والملاحظات ({query.data.history.length})</summary>{query.data.history.map((entry,index)=><article key={index}><strong>{planStatusName(entry.action === 'approved' ? 'publishing' : entry.action === 'revision' ? 'revision' : 'submitted')} — {entry.actor_name}</strong><small>{showDate(entry.created_at,true)}</small>{entry.category_name && <small>نوع الملاحظة: {entry.category_name}</small>}{entry.note && <div className="mkw-review-document">{parseReviewNote(entry.note).map((block,i)=><p key={i}>{block.text}</p>)}</div>}</article>)}</details>}
+      {!!query.data.history.length && <details className="mkw-plan-history" open={plan!.review_status === 'revision' || plan!.review_status === 'in_progress' || plan!.review_status === 'submitted'}><summary>سجل المراجعات والملاحظات ({query.data.history.length})</summary>{query.data.history.map((entry,index)=><article key={index}><strong>{planStatusName(entry.action === 'approved' ? 'publishing' : entry.action === 'revision' ? 'revision' : 'submitted')} — {entry.actor_name}</strong><small>{showDate(entry.created_at,true)}</small>{entry.category_name && <small>نوع الملاحظة: {entry.category_name}</small>}{entry.note && <div className="mkw-review-document">{parseReviewNote(entry.note).map((block,i)=><p key={i}>{block.text}</p>)}</div>}</article>)}</details>}
     </>}
   </div></Modal>;
 }

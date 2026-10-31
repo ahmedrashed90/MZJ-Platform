@@ -114,6 +114,12 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
     <p className="mkw-muted">كل مطلوب له كابشن وهاشتاج مستقلان. اكتب النصين واضغط حفظ؛ بعدها تظهر علامة صح للمطلوب في الجدول.</p>
     <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{(draft?.caption || product.caption)?.trim() && caption === (draft?.caption || product.caption) ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{caption.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field></div>
       <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{(draft?.hashtags || product.hashtags)?.trim() && hashtags === (draft?.hashtags || product.hashtags) ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{hashtags.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div></div>
+    <section className="mkw-manual-post-link"><strong>رابط المنشور بعد النشر اليدوي</strong><p className="mkw-muted">سجل تاريخ النشر الفعلي وليس تاريخ إدخال الرابط. يظهر الالتزام بالموعد في التقرير وقسم النشر.</p>
+      <div className="mkw-manual-post-link-fields"><label>رابط المنشور<input type="url" placeholder="https://..." value={postUrl} disabled={busy || !['publishing','published'].includes(data.line.review_status || '') || !data.capabilities.prepare} onChange={event=>setPostUrl(event.target.value)}/></label>
+      <label>تاريخ النشر الفعلي<input type="date" value={publishedOn} disabled={busy || !['publishing','published'].includes(data.line.review_status || '') || !data.capabilities.prepare} onChange={event=>setPublishedOn(event.target.value)}/></label>
+      <button type="button" className="secondary" disabled={busy || !['publishing','published'].includes(data.line.review_status || '') || !data.capabilities.prepare || (!!postUrl.trim() && !publishedOn)} onClick={()=>void saveManualPostLink()}>حفظ الرابط</button></div>
+      {!['publishing','published'].includes(data.line.review_status || '') && <small className="mkw-muted">يتاح تسجيل الرابط بعد اعتماد الحملة أو الأجندة.</small>}
+    </section>
     <details className="mkw-publish-format-details"><summary><strong>المنصات والمقاسات الخاصة بالمطلوب</strong><span>{selected.length} / {product.formats.length} ▾</span></summary>
     <header className="mkw-publish-draft-head"><h4>{W.platforms}</h4><div className="mkw-actions"><span className="mkw-muted">{selected.length} / {product.formats.length}</span>
       <label className="mkw-checkbox"><input type="checkbox" disabled={!canSave || busy || !product.formats.length} checked={!!product.formats.length && product.formats.every(f => selected.includes(f.id))} onChange={event => setSelected(event.target.checked ? product.formats.map(f => f.id) : [])}/>{W.selectAll}</label>
@@ -143,6 +149,8 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     ? [...data.product.formats, data.plannedFormat] : data.product.formats;
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
+  const [postUrl, setPostUrl] = useState(data.line.manual_post_url || '');
+  const [publishedOn, setPublishedOn] = useState(data.line.manual_published_on?.slice(0,10) || '');
   const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
   const [rescheduleTime, setRescheduleTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
@@ -166,6 +174,16 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     setBusy(true); setError(''); setMessage('');
     try { await workPost('save_prep', { lineId: data.line.id, version: data.line.version, formatIds, caption, hashtags, youtubeOptions: youtube, publishTime }); await refresh(); setMessage(W.saved); }
     catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function saveManualPostLink() {
+    if (busy) return;
+    if (postUrl.trim() && !publishedOn) { setError('حدد تاريخ النشر الفعلي قبل حفظ الرابط'); return; }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim(), publishedOn });
+      await refresh(); setMessage('تم حفظ رابط المنشور وتاريخ نشره الفعلي');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
   async function activateTikTok() {

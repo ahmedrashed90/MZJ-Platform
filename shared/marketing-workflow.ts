@@ -49,7 +49,7 @@ export type WorkProduct = WorkItem & { task_no: string; task_name: string; relea
 export type WorkPlanLine = {
   id: string; plan_id: string; plan_no: string; kind: WorkPlanKind; name: string; scheduled_on: string;
   review_status?: 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published'; review_note?: string; review_revision?: number;
-  manual_post_url?: string; effective_post_url?: string; published_ready?: boolean; created_by?: string;
+  manual_post_url?: string; effective_post_url?: string; published_ready?: boolean; published_on?: string | null; manual_published_on?: string | null; created_at?: string; created_by?: string;
   post_type_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
   product_id: string; idea_name: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];

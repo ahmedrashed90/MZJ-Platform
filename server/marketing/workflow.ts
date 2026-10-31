@@ -1127,7 +1127,7 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
     }
     for (const row of rows) {
       if (row.id) await tx`update marketing.work_plan_items set product_id=${row.productId}::uuid,post_type_id=${row.postTypeId}::uuid,
-        scheduled_on=${row.date}::date,budget_amount=${row.budget},manual_post_url='',
+        scheduled_on=${row.date}::date,budget_amount=${row.budget},manual_post_url='',manual_published_on=null,
         caption=coalesce((select nullif(d.caption,'') from marketing.work_product_drafts d where d.product_id=${row.productId}::uuid),
           (select caption from marketing.work_items where id=${row.productId}::uuid),''),
         hashtags=coalesce((select nullif(d.hashtags,'') from marketing.work_product_drafts d where d.product_id=${row.productId}::uuid),
@@ -1150,6 +1150,8 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
 }
 async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   const lineId = id(body.lineId), url = publishedLink(body.url);
+  const publishedOn = text(body.publishedOn, 10);
+  if (url && !isWorkDate(publishedOn)) throw new Error('حدد تاريخ النشر الفعلي قبل حفظ الرابط');
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [line] = await tx<any[]>`select l.id,l.plan_id,p.review_status,p.created_by,p.activated_at from marketing.work_plan_items l
@@ -1157,7 +1159,7 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
     if (!line || !['publishing','published'].includes(line.review_status)) throw new Error('لا يمكن تسجيل رابط النشر قبل اعتماد الحملة أو الأجندة');
     if (!(await planLines(tx as unknown as Sql,user,String(line.plan_id))).some(visible => visible.id === lineId)) throw new Error(W.denied);
     if (line.created_by !== user.id && !canReviewPlan(user) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
-    await tx`update marketing.work_plan_items set manual_post_url=${url},updated_at=now(),version=version+1 where id=${lineId}::uuid`;
+    await tx`update marketing.work_plan_items set manual_post_url=${url},manual_published_on=${url ? publishedOn : null}::date,updated_at=now(),version=version+1 where id=${lineId}::uuid`;
     return { ok:true, message:W.saved };
   });
 }
@@ -1266,6 +1268,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='scheduled') as scheduled_count,
+    (select s.published_at from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id
+      where target.line_id=l.id and s.status='published' and nullif(s.publish_result->>'url','') is not null order by s.published_at desc nulls last limit 1) as provider_published_at,
     (select s.publish_result->>'url' from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id
       where target.line_id=l.id and s.status='published' and nullif(s.publish_result->>'url','') is not null order by s.published_at desc nulls last limit 1) as provider_post_url,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status in('failed','verification_required')) as failed_count
@@ -1285,6 +1289,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     const effective_post_url = String(row.manual_post_url || row.provider_post_url || '');
     const published_ready = !!effective_post_url;
     return { ...row, effective_post_url, published_ready,
+      published_on: row.manual_post_url ? row.manual_published_on : row.provider_published_at ? new Date(row.provider_published_at).toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}) : null,
       status: row.review_status === 'publishing' && published_ready ? 'published' :
         row.review_status !== 'publishing' ? row.review_status :
         row.failed_count ? 'failed' : row.scheduled_count ? 'scheduled' : 'publishing' };
@@ -1886,13 +1891,16 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     const [planReview] = status.baseReady
       ? await sql<{ ready:boolean }[]>`select exists(select 1 from marketing.workflow_migrations where code='schema-12') as ready`
       : [{ ready:false }];
+    const [manualDate] = status.baseReady
+      ? await sql<{ ready: boolean }[]>`select exists(select 1 from marketing.workflow_migrations where code='schema-14') as ready`
+      : [{ ready: false }];
     const [performance] = status.baseReady
       ? await sql<{ ready: boolean }[]>`select exists(select 1 from marketing.workflow_migrations where code='schema-11') as ready`
       : [{ ready: false }];
     response.status(200).json({ ok: true, ...status,
-      performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready),
+      performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready), manualPublishedDateReady: Boolean(manualDate?.ready),
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
-      ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready),
+      ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready && manualDate?.ready),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
     return true;
