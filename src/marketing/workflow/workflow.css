@@ -144,7 +144,8 @@
 .mkw-dashboard-board { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:18px; }
 .mkw-dashboard .mkw-toolbar { padding:8px 16px; min-height:59px; border-color:var(--line-strong); }
 .mkw-dashboard .mkw-search { min-height:42px; }
-.mkw-dashboard .mkw-column { background:var(--surface); border-color:var(--line-strong); min-height:370px; box-shadow:0 8px 24px rgba(81,44,34,.035); }
+.mkw-dashboard .mkw-column { background:var(--surface); border-color:var(--line-strong); box-shadow:0 8px 24px rgba(81,44,34,.035); }
+.mkw-dashboard .mkw-column:not(.mkw-publishing-column) { min-height:370px; }
 .mkw-dashboard .mkw-column>header { min-height:67px; border-top:3px solid var(--brand); padding:14px 19px; background:var(--surface-soft); }
 .mkw-column-title { display:inline-flex; align-items:center; gap:10px; color:var(--brand); }
 .mkw-column-title h2 { color:var(--ink); font-size:19px; font-weight:800; }
@@ -753,3 +754,35 @@
 .mkw-post-link-fields input { width:100%; min-width:0; }
 .mkw-post-link-entry>button { justify-self:start; }
 @media (max-width:600px) { .mkw-post-link-fields { grid-template-columns:1fr; } }
+
+/* Read-only publishing report occupies the viewport; editing stays in its
+   dedicated workflow screen. Large reports scroll without clipping on mobile. */
+.mkw-plan-report { align-content:start; max-width:100%; }
+.mkw-plan-report-heading { align-items:center; }
+.mkw-plan-report-heading>div:first-child { display:grid; gap:6px; min-width:0; }
+.mkw-plan-report-heading strong { font-size:17px; overflow-wrap:anywhere; }
+.mkw-plan-report-badges { display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
+.mkw-plan-report-readonly { display:inline-flex; align-items:center; border:1px solid var(--line-strong); border-radius:9px; background:var(--surface-soft); color:var(--brand); padding:5px 11px; font-size:12px; font-weight:800; }
+.mkw-plan-report-summary { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.mkw-plan-report-list { min-width:0; display:grid; gap:12px; }
+.mkw-plan-report-list>h3 { font-size:16px; color:var(--brand); }
+.mkw-plan-report-table { width:100%; max-width:100%; }
+.mkw-plan-report-table table { width:100%; min-width:1320px; }
+.mkw-plan-report-table th { color:var(--brand); font-weight:800; }
+.mkw-plan-report-table td { vertical-align:top; font-weight:600; line-height:1.75; }
+.mkw-plan-report-table tbody tr:hover { background:var(--surface-soft); }
+.mkw-plan-report-product { min-width:170px; max-width:260px; }
+.mkw-plan-report-product strong { display:block; }
+.mkw-plan-report-product small { display:block; color:var(--muted); margin-top:5px; font-size:11px; }
+.mkw-plan-report-copy { min-width:160px; max-width:300px; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; font-size:12px; font-weight:500; }
+.mkw-plan-report-link { display:inline-block; white-space:nowrap; color:var(--brand); text-decoration:underline; text-underline-offset:3px; }
+.mkw-plan-report .mkw-plan-history { min-width:0; }
+@media(max-width:850px) {
+  .mkw-plan-report-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mkw-plan-report-heading { align-items:flex-start; }
+}
+@media(max-width:480px) {
+  .mkw-plan-report-summary { grid-template-columns:1fr 1fr; gap:8px; }
+  .mkw-plan-report-summary>div { padding:4px; }
+  .mkw-plan-report-heading>div:first-child { width:100%; }
+}

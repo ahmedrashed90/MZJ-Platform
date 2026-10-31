@@ -82,7 +82,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   function changeRow(index: number, patch: Partial<EditableLine>) { setRows(old => old.map((row, i) => i === index ? { ...row, ...patch } : row)); }
   function addRow() { setRows(old => [...old, { id: '', date: '', productId: '', postTypeId: '', budget: '0' }]); }
 
-  return <Modal open title={`التقرير${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-modal"><div className="mkw mkw-plan-review">
+  return <Modal open title={`تفاصيل ومراجعة${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-modal"><div className="mkw mkw-plan-review">
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
       <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><span className="mkw-plan-state">{planStatusName(plan!.status)}</span></div>

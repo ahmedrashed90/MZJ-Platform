@@ -49,6 +49,7 @@ export type WorkProduct = WorkItem & { task_no: string; task_name: string; relea
 export type WorkPlanLine = {
   id: string; plan_id: string; plan_no: string; kind: WorkPlanKind; name: string; scheduled_on: string;
   review_status?: 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published'; review_note?: string; review_revision?: number;
+  caption?: string; hashtags?: string;
   manual_post_url?: string; manual_published_on?: string | null; effective_post_url?: string;
   published_on?: string | null; publication_timing?: 'on_time' | 'late' | null;
   published_ready?: boolean; created_by?: string; plan_created_at?: string;
