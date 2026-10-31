@@ -78,7 +78,12 @@ const schema = load('server/_marketing-workflow-schema.ts');
   assert(workflow.includes("requirePermission(user, 'platform.superadmin')"));
   assert(perms.includes('work_upgrade_schema: "platform.superadmin"'));
   const dashboard = fs.readFileSync(path.join(root,'src/marketing/pages/MarketingDashboardPage.tsx'),'utf8');
-  assert(dashboard.includes("useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; canUpgrade: boolean }>('schema_status')"));
+  const schemaStatusQuery = dashboard.match(/useWorkQuery<\{([^}]+)\}>\(\'schema_status\'\)/);
+  assert(schemaStatusQuery, 'dashboard must query schema_status with a typed response');
+  for (const field of ['ready', 'baseReady', 'performanceReady', 'canUpgrade']) {
+    assert(new RegExp(`\\b${field}\\s*:`).test(schemaStatusQuery[1]), `schema_status response must include ${field}`);
+  }
+  assert(/publishSettingsReady\??\s*:\s*boolean/.test(schemaStatusQuery[1]), 'schema status must expose optional publish settings readiness');
   assert(/workPost(?:<[^>]+>)?\('upgrade_schema', \{\}\)/.test(dashboard));
   assert(dashboard.includes('await query.reload()'));
   console.log('PASS: missing post_type_id detected before list queries');
@@ -124,7 +129,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
             : script.includes("values('schema-9')") ? 'schema-9'
             : script.includes("values('schema-10')") ? 'schema-10'
             : script.includes("values('schema-11')") ? 'schema-11'
-            : script.includes("values('schema-12')") ? 'schema-12' : 'unexpected';
+            : script.includes("values('schema-12')") ? 'schema-12'
+            : script.includes("values('schema-13')") ? 'schema-13' : 'unexpected';
           assert.notEqual(code,'unexpected','Only additive workflow migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
@@ -143,8 +149,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12']);
-  console.log('PASS: schema-7 to schema-12 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13']);
+  console.log('PASS: schema-7 to schema-13 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });
