@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Wallet, Gear, CheckCircle } from '@phosphor-icons/react';
+import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Wallet, Gear, CheckCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { W, Empty, MediaLabel, Readiness, Search, WorkAlert, WorkHeader } from '../workflow/components';
 import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
@@ -34,6 +34,15 @@ export function MarketingDashboardPage() {
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
   const [tableId, setTableId] = useState(''), [budgetId, setBudgetId] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
+  const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
+  function togglePlanProducts(id: string) {
+    setExpandedPlanIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities }>('dashboard');
   const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; canUpgrade: boolean }>('schema_status');
@@ -123,13 +132,19 @@ export function MarketingDashboardPage() {
             const preparedLines = group.filter(line => line.prepared_count === 1 && !line.failed_count).length;
             const platforms = uniqueValues(group.map(line => line.platform_name));
             const kinds = uniqueValues(group.map(line => line.post_type_name));
-            const previewLines = group.slice(0, 3);
-            const remainingLines = Math.max(0, group.length - previewLines.length);
+            const productsOpen = expandedPlanIds.has(id);
             return <article className={`mkw-dashboard-publish-card mkw-plan-${visualStatus}`} key={id}>
               <div className="mkw-dashboard-publish-card-head">
                 <div className="mkw-dashboard-publish-head-main">
                   <span className="mkw-code">{group[0].plan_no}</span>
-                  <h3>{group[0].name}</h3>
+                  <h3><button
+                    type="button"
+                    className="mkw-dashboard-publish-title-button"
+                    aria-expanded={productsOpen}
+                    aria-controls={`mkw-publish-products-${id}`}
+                    aria-label={`${productsOpen ? 'إخفاء' : 'عرض'} منتجات ${group[0].name}`}
+                    onClick={() => togglePlanProducts(id)}
+                  >{group[0].name}<CaretDown size={18} aria-hidden="true"/></button></h3>
                   <div className="mkw-dashboard-publish-meta-line">
                     <span className="mkw-kind-label">{group[0].kind === 'agenda' ? W.agenda : W.campaign}</span>
                     <span className="mkw-muted">{platforms.join(' • ') || '—'}</span>
@@ -154,17 +169,16 @@ export function MarketingDashboardPage() {
                 </div>
               </div>
 
-              <div className="mkw-dashboard-publish-preview">
+              <div id={`mkw-publish-products-${id}`} className="mkw-dashboard-publish-preview" hidden={!productsOpen}>
                 <div className="mkw-dashboard-publish-preview-head"><strong>المنتجات</strong><span>{group.length} منتج</span></div>
                 <div className="mkw-dashboard-publish-preview-list">
-                  {previewLines.map(line => <article key={line.id} className="mkw-dashboard-preview-item">
+                  {group.map(line => <article key={line.id} className="mkw-dashboard-preview-item">
                     <div className="mkw-dashboard-preview-title"><strong>{line.idea_name}</strong><MediaLabel kind={line.media_kind}/></div>
                     <div className="mkw-dashboard-preview-subline">
                       <span>{showDate(line.scheduled_on)}</span>
                       <span>{[line.platform_name, line.post_type_name].filter(Boolean).join(' · ') || '—'}</span>
                     </div>
                   </article>)}
-                  {remainingLines > 0 && <div className="mkw-dashboard-preview-more">+ {remainingLines} عناصر أخرى</div>}
                 </div>
               </div>
 

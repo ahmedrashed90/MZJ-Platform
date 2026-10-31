@@ -726,6 +726,32 @@
 .marketing-publish-control-toggle input { width:20px;height:20px;accent-color:var(--brand); }
 .marketing-publish-control>button { justify-self:start; }
 
+/* Publishing card details open only when its agenda/campaign name is clicked. */
+.mkw-dashboard-publish-title-button {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--ink);
+  font:inherit;
+  font-size:inherit;
+  font-weight:inherit;
+  line-height:inherit;
+  text-align:start;
+  cursor:pointer;
+}
+.mkw-dashboard-publish-title-button:hover { color:var(--brand); }
+.mkw-dashboard-publish-title-button:focus-visible {
+  outline:2px solid var(--brand);
+  outline-offset:4px;
+  border-radius:3px;
+}
+.mkw-dashboard-publish-title-button svg { color:var(--brand); transition:transform .18s ease; }
+.mkw-dashboard-publish-title-button[aria-expanded="true"] svg { transform:rotate(180deg); }
+.mkw-dashboard-publish-preview[hidden] { display:none; }
+
 /* Publishing section redesign: summary cards visible immediately without expanding. */
 .mkw-publish-column-body { gap:14px; }
 .mkw-dashboard-publish-card {
@@ -830,18 +856,6 @@
 .mkw-dashboard-preview-item strong {
   font-size:13px;
   font-weight:800;
-}
-.mkw-dashboard-preview-more {
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  min-height:40px;
-  border:1px dashed var(--line-strong);
-  border-radius:12px;
-  color:var(--brand);
-  font-size:12px;
-  font-weight:800;
-  background:var(--surface-soft);
 }
 .mkw-dashboard-note-tag {
   display:inline-flex;
