@@ -1289,27 +1289,6 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
       const toAt = permissionClock?.to_at;
       if (!fromAt || !toAt) throw new AttendanceError("EARLY_DEPARTURE_TIME_INVALID", "تعذر تحديد مدة إذن الانصراف");
 
-      const [previousPermission] = await tx<any[]>`
-        select from_at,to_at,permission_type from core.attendance_early_departure_permissions
-        where user_id=${item.userId}::uuid and work_date=${workDate}::date
-          and period_id=${item.periodId} for update
-      `;
-      if (previousPermission?.permission_type === 'departure' && (
-        item.permissionType !== 'departure' ||
-        new Date(previousPermission.from_at).getTime() !== new Date(fromAt).getTime() ||
-        new Date(previousPermission.to_at).getTime() !== new Date(toAt).getTime()
-      )) {
-        await tx`
-          update core.attendance_records set
-            check_out=null, checkout_source=null, work_minutes=0,
-            early_departure_authorized_at=null, early_departure_authorized_by=null,
-            early_departure_from_at=null, early_departure_to_at=null,updated_at=now()
-          where user_id=${item.userId}::uuid and work_date=${workDate}::date
-            and checkout_source='authorized'
-            and early_departure_from_at=${previousPermission.from_at}::timestamptz
-            and early_departure_to_at=${previousPermission.to_at}::timestamptz
-        `;
-      }
       await tx`
         insert into core.attendance_early_departure_permissions(
           user_id,work_date,from_at,to_at,authorized_by,permission_type,reason,period_id,authorized_at,created_at,updated_at
@@ -1325,27 +1304,6 @@ async function authorizeEarlyDeparture(body: Record<string, any>, adminId: strin
           period_id=excluded.period_id,
           authorized_at=now(),
           updated_at=now()
-      `;
-
-      if (item.permissionType === 'departure') await tx`
-        update core.attendance_records r
-        set check_out=greatest(${fromAt}::timestamptz,r.check_in),
-            checkout_source='authorized',
-            early_departure_authorized_at=now(),
-            early_departure_authorized_by=${adminId}::uuid,
-            early_departure_from_at=${fromAt}::timestamptz,
-            early_departure_to_at=${toAt}::timestamptz,
-            work_minutes=greatest(0,floor(extract(epoch from (greatest(${fromAt}::timestamptz,r.check_in)-r.check_in))/60)::int),
-            updated_at=now()
-        where r.user_id=${item.userId}::uuid
-          and r.work_date=${workDate}::date
-          and r.check_in is not null
-          and r.check_out is null
-          and r.scheduled_start_at is not null
-          and r.scheduled_end_at is not null
-          and ${fromAt}::timestamptz >= r.scheduled_start_at
-          and ${fromAt}::timestamptz < r.scheduled_end_at
-          and greatest(${fromAt}::timestamptz,r.check_in) <= now()
       `;
 
       saved.push({ userId: item.userId, name: userMap.get(item.userId) || "المستخدم", periodName: selectedShift.name, fromTime: item.fromTime, toTime: item.toTime });
@@ -1368,26 +1326,13 @@ async function deleteEarlyDeparturePermission(body: Record<string, any>) {
   const sql = getSql();
   return sql.begin(async (tx) => {
     const [permission] = await tx<any[]>`
-      select id::text,user_id::text,work_date::text,from_at,to_at
+      select id::text
       from core.attendance_early_departure_permissions
       where id=${permissionId}::uuid for update
     `;
     if (!permission) throw new AttendanceError('PERMISSION_NOT_FOUND','الإذن غير موجود أو سبق حذفه',404);
-    // Revert only departures created by this exact authorization. Existing
-    // manual or automatic check-outs never satisfy checkout_source='authorized'.
-    await tx`
-      update core.attendance_records set
-        check_out=null,checkout_source=null,work_minutes=0,
-        early_departure_authorized_at=null,early_departure_authorized_by=null,
-        early_departure_from_at=null,early_departure_to_at=null,updated_at=now()
-      where user_id=${permission.user_id}::uuid
-        and work_date=${permission.work_date}::date
-        and checkout_source='authorized'
-        and early_departure_from_at=${permission.from_at}::timestamptz
-        and early_departure_to_at=${permission.to_at}::timestamptz
-    `;
     await tx`delete from core.attendance_early_departure_permissions where id=${permissionId}::uuid`;
-    return { ok:true, message:'تم حذف الإذن وإلغاء أثره على الانصراف المسجل بواسطته فقط' };
+    return { ok:true, message:'تم حذف الإذن من الساعات المحتسبة دون تغيير بصمات الحضور والانصراف' };
   });
 }
 

@@ -20,7 +20,7 @@ check("admin snapshot exposes primary marker", device.includes("isPrimary: Boole
 check("approved secondary device can complete device challenge", device.includes("d.status='approved'") && device.includes("d.is_primary"));
 check("secondary login skips attendance check-in", login.includes("verifiedDeviceIsPrimary !== false"));
 check("session keeps verified device id", auth.includes("verified_device_id") && auth.includes("user.verifiedDeviceId"));
-check("secondary session is not blocked by attendance enforcement", attendance.includes('deviceState.status !== "approved"') && attendance.includes("deviceState.is_primary === false") && attendance.includes("return true"));
+check("secondary device can enter only inside its assigned shift", attendance.includes("if (!activePeriod) return false;") && attendance.includes("if (device.is_primary === false) return true;"));
 check("secondary cannot manually check in", api.includes("تسجيل الحضور متاح من الجهاز الأساسي فقط"));
 check("manual checkout is disabled for every device", api.includes('action === "self_check_out"') && api.includes("AUTO_CHECKOUT_ONLY"));
 check("secondary sidebar explains attendance source", sidebar.includes("جهاز ثانوي • الحضور من الجهاز الأساسي"));

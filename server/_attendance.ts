@@ -494,11 +494,26 @@ export async function checkInCurrentAttendance(userId: string) {
   return registerAttendanceCheckIn(userId, state.activePeriod);
 }
 
+// Device-verified accounts may access the platform only during their own
+// configured work period (including Friday and per-user overrides). Users
+// exempt from device verification are intentionally not subject to this gate.
+export async function requireVerifiedDeviceWorkPeriod(userId: string) {
+  const period = await getActiveAttendancePeriod(userId);
+  if (!period) {
+    throw new AttendanceError(
+      "OUTSIDE_WORK_PERIOD",
+      "الدخول متاح خلال مواعيد العمل المحددة لك فقط. تواصل مع مدير النظام إذا كان جدولك غير محدد.",
+      403,
+    );
+  }
+  return period;
+}
+
 export async function requireAttendanceForLogin(
   userId: string,
-  options: { confirmCheckIn?: boolean } = {},
+  options: { confirmCheckIn?: boolean; forceEnforcement?: boolean } = {},
 ) {
-  const enforcementEnabled = await isAttendanceEnforcementEnabled();
+  const enforcementEnabled = options.forceEnforcement === true || await isAttendanceEnforcementEnabled();
   const state = await getLoginAttendanceState(userId);
 
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
@@ -596,130 +611,38 @@ export async function registerAttendanceCheckIn(
 export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceId?: string | null) {
   await ensureAttendanceSchema();
   const sql = getSql();
-
-  const normalizedDeviceId = String(verifiedDeviceId || "").trim();
-  const [deviceState] = await sql<{ verification_required: boolean; status: string | null; is_primary: boolean | null }[]>`
+  const deviceId = String(verifiedDeviceId || "").trim();
+  // No policy row (or an explicit exemption) means unrestricted access hours.
+  // Do not swallow database errors and accidentally treat a required user as exempt.
+  const [device] = await sql<{ verification_required: boolean; status: string | null; is_primary: boolean | null }[]>`
     select coalesce(p.verification_required,false) as verification_required,d.status,d.is_primary
     from core.users u
     left join core.user_device_policies p on p.user_id=u.id
-    left join core.user_devices d on d.user_id=u.id and d.device_id=${normalizedDeviceId || "__NO_DEVICE__"}
+    left join core.user_devices d on d.user_id=u.id and d.device_id=${deviceId || "__NO_DEVICE__"}
     where u.id=${userId}::uuid
     limit 1
-  `.catch(() => [] as any);
-  if (deviceState?.verification_required) {
-    if (!normalizedDeviceId || deviceState.status !== "approved") return false;
-    if (deviceState.is_primary === false) return true;
-  }
-
-  if (!(await isAttendanceEnforcementEnabled())) return true;
-  const [row] = await sql<{ allowed: boolean }[]>`
-    with clock as (
-      select now() as current_at,
-        (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
-        (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
-    ),
-    period_candidates_base as (
-      select
-        a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,
-        row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
-        case
-          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
-            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
-            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
-            p.start_time::text
-          )::time
-          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
-          else coalesce(
-            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
-            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
-            p.start_time::text
-          )::time
-        end as regular_start_time,
-        case
-          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
-            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
-            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
-            p.end_time::text
-          )::time
-          when p.end_time::time='12:00'::time then '12:00'::time
-          when p.end_time::time='21:00'::time then '21:00'::time
-          when p.end_time::time='22:00'::time then case
-            when coalesce(
-              nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
-              nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
-              p.end_time::text
-            )::time='21:00'::time then '21:00'::time
-            else '22:00'::time
-          end
-          else coalesce(
-            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
-            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
-            p.end_time::text
-          )::time
-        end as regular_end_time,
-        st.friday_start_time,st.friday_end_time,
-        c.local_date,c.local_time,c.current_at
-      from clock c
-      join core.attendance_user_schedules a
-        on a.user_id=${userId}::uuid
-       and a.effective_from <= c.local_date
-       and (a.effective_to is null or a.effective_to >= c.local_date - 1)
-      join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
-      join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
-       and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
-      join core.attendance_settings st on st.id=1
-    ),
-    period_candidates_with_date as (
-      select *,
-        case
-          when friday_start_time is not null and friday_end_time is not null
-            and extract(dow from local_date)::int=6
-            and friday_end_time <= friday_start_time and local_time < friday_end_time then local_date - 1
-          when regular_end_time <= regular_start_time and local_time < regular_end_time then local_date - 1
-          else local_date
-        end as work_date
-      from period_candidates_base
-    ),
-    period_candidates as (
-      select *,
-        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
-          then friday_start_time else regular_start_time end as start_time,
-        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
-          then friday_end_time else regular_end_time end as end_time
-      from period_candidates_with_date
-      where not (extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null and assigned_period_rank <> 1)
-    ),
-    active_period as (
-      select pc.*
-      from period_candidates pc
-      where pc.assignment_id in (
-        select a.id
-        from core.attendance_user_schedules a
-        where a.id=pc.assignment_id
-          and a.effective_from <= pc.work_date
-          and (a.effective_to is null or a.effective_to >= pc.work_date)
-      )
-        and (pc.weekly_off_day is null or extract(dow from pc.work_date)::int <> pc.weekly_off_day)
-        and pc.current_at >= ((pc.work_date + pc.start_time) at time zone ${ATTENDANCE_TIME_ZONE})
-        and pc.current_at < (((pc.work_date + case when pc.end_time <= pc.start_time then 1 else 0 end) + pc.end_time) at time zone ${ATTENDANCE_TIME_ZONE})
-      order by pc.period_id
-      limit 1
-    )
-    select case
-      when not exists(select 1 from active_period) then true
-      else exists(
-        select 1
-        from active_period ap
-        join core.attendance_records r
-          on r.user_id=${userId}::uuid
-         and r.period_id=ap.period_id
-         and r.work_date=ap.work_date
-         and r.check_in is not null
-         and (r.check_out is null or r.checkout_source='authorized')
-      )
-    end as allowed
   `;
-  return Boolean(row?.allowed);
+  if (!device) return false;
+  if (!device.verification_required) return true;
+  if (!deviceId || device.status !== "approved") return false;
+
+  // Apply the time gate to both primary and secondary approved devices.
+  const activePeriod = await getActiveAttendancePeriod(userId);
+  if (!activePeriod) return false;
+  // Secondary devices can access during the shift but cannot create attendance.
+  if (device.is_primary === false) return true;
+
+  // Primary devices must have a real check-in for the active shift. An older
+  // authorized checkout is accepted for historical compatibility only.
+  const [record] = await sql<{ check_in: string | null; check_out: string | null; checkout_source: string | null }[]>`
+    select check_in,check_out,checkout_source
+    from core.attendance_records
+    where user_id=${userId}::uuid
+      and period_id=${activePeriod.period_id}::uuid
+      and work_date=${activePeriod.work_date}::date
+    limit 1
+  `;
+  return Boolean(record?.check_in && (!record.check_out || record.checkout_source === "authorized"));
 }
 
 export async function runAttendanceTick() {

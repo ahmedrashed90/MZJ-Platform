@@ -9248,3 +9248,17 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 /* Contact-only chat opening: keep the existing conversation drawer above the contact profile. */
 .crm-contacts-page-v2 > .crm-customer-workspace-backdrop { z-index: 210; }
 .crm-contact-open-conversation-button { margin-inline-start: auto; }
+
+/* Attendance permission details: read-only, with original punch times intact. */
+.attendance-early-departure-cell .attendance-permission-view { border:0; background:transparent; color:#2f7540; padding:4px; font-weight:900; text-align:right; cursor:pointer; }
+.attendance-early-departure-cell .attendance-permission-view:hover { background:#f0f6f0; text-decoration:underline; }
+.attendance-permission-view small { color:#806055; font-weight:700; }
+.attendance-permission-details { width:min(540px,calc(100vw - 32px)); max-height:90vh; overflow-y:auto; border-radius:16px; background:#fffdfb; padding:22px; box-shadow:0 20px 60px #35190f33; color:#4A211C; }
+.attendance-permission-details-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:18px; }
+.attendance-permission-details-header h2 { margin:0; font-size:19px; }
+.attendance-permission-details dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:0; }
+.attendance-permission-details dl > div { padding:12px; background:#F3E8DC; border-radius:10px; min-width:0; }
+.attendance-permission-details dt { font-size:11px; color:#806055; font-weight:800; margin-bottom:6px; }
+.attendance-permission-details dd { margin:0; font-weight:800; overflow-wrap:anywhere; }
+.attendance-permission-details .attendance-permission-details-reason { grid-column:1/-1; white-space:pre-wrap; }
+@media(max-width:480px) { .attendance-permission-details dl { grid-template-columns:1fr; } }

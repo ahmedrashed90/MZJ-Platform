@@ -18,10 +18,10 @@ check("active attendance ends at assigned period end", core.includes("as schedul
 check("expired records close exactly at scheduled period end", core.includes("check_out=r.scheduled_end_at") && core.includes("r.scheduled_end_at <= now()"));
 check("manual checkout is disabled and checkout is automatic only", !core.includes("export async function checkoutCurrentAttendance") && api.includes("AUTO_CHECKOUT_ONLY") && !read("src/components/Sidebar.tsx").includes("handleCheckOut"));
 check("automatic checkout does not terminate user sessions", core.includes("forcedLogoutUsers: 0") && !core.slice(core.indexOf("export async function runAttendanceTick"), core.length).includes("delete from core.sessions"));
-check("login outside assigned work periods remains available", core.includes("if (!state.activePeriod) {") && core.includes("return { enforced: false, checkedIn: false, state }"));
-check("existing sessions remain allowed outside an active period", core.includes("when not exists(select 1 from active_period) then true"));
+check("device-exempt users can log in outside assigned work periods", core.includes("if (!state.activePeriod) {") && core.includes("return { enforced: false, checkedIn: false, state }") && core.includes("if (!device.verification_required) return true;"));
+check("device-verified sessions are blocked outside an active period", core.includes("if (!activePeriod) return false;") && core.includes("if (!device.verification_required) return true;"));
 check("active periods still require an open attendance record", core.includes("r.check_in is not null") && core.includes("r.check_out is null"));
-check("morning and evening periods can close independently", core.includes("period_id=ap.period_id") && core.includes("scheduled_end_at"));
+check("morning and evening periods are checked independently", core.includes("period_id=${activePeriod.period_id}") && core.includes("work_date=${activePeriod.work_date}") && core.includes("scheduled_end_at"));
 check("report uses assignment period overrides", api.includes("const assignmentOverrides = normalizePeriodOverrides(assignment?.period_overrides)") && api.includes("override?.startTime") && api.includes("override?.endTime"));
 check("attendance assignments store per-user daily hours and custom attendance branch", schema.includes("daily_work_hours numeric(5,2)") && schema.includes("attendance_branch_name text") && api.includes("dailyWorkHours") && api.includes("requestedBranchName"));
 check("attendance settings expose flexible attendance-only branches", settings.includes("إجمالي ساعات العمل في اليوم") && settings.includes("الإدارة") && settings.includes("الأرشيف") && settings.includes("فرع حضور آخر"));

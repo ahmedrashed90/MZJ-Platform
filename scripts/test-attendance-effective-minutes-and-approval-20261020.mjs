@@ -118,10 +118,10 @@ check('Report collects every saved authorization instead of overwriting morning 
   assert.match(attendanceServer, /earlyDeparturePermissions: mappedPermissions/);
   assert.match(attendanceScreen, /permissions\.map\(permission =>/);
 });
-check('Saving a second period never resets a different existing permission', () => {
-  assert.match(attendanceServer, /and period_id=\$\{item\.periodId\} for update/);
-  assert.match(attendanceServer, /if \(previousPermission\?\.permission_type === 'departure'/);
-  assert.match(attendanceServer, /if \(item\.permissionType === 'departure'\) await tx/);
+check('Saving a second period preserves other permissions and original attendance timestamps', () => {
+  const save = attendanceServer.slice(attendanceServer.indexOf('async function authorizeEarlyDeparture'), attendanceServer.indexOf('async function deleteEarlyDeparturePermission'));
+  assert.match(save, /on conflict\(user_id,work_date,period_id\) do update set/);
+  assert.doesNotMatch(save, /update core\.attendance_records/);
 });
 check('Friday-shift and legacy day-wide permission handling stay compatible', () => {
   const fridayPermission = { period_id: 'friday', permission_type: 'exceptional' };

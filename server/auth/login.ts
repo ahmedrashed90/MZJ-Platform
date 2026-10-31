@@ -3,7 +3,7 @@ import { createSession, loadUserProfile, requestIp } from "../_auth.js";
 import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
-import { AttendanceError, requireAttendanceForLogin } from "../_attendance.js";
+import { AttendanceError, requireAttendanceForLogin, requireVerifiedDeviceWorkPeriod } from "../_attendance.js";
 import {
   consumeApprovedDeviceChallenge,
   createDeviceLoginChallenge,
@@ -31,8 +31,12 @@ async function finishAttendanceLogin(
   verifiedDeviceIsPrimary?: boolean | null,
 ) {
   try {
-    if (!verifiedDeviceId || verifiedDeviceIsPrimary !== false) {
-      await requireAttendanceForLogin(userId, { confirmCheckIn });
+    const verificationRequired = await isDeviceVerificationRequired(userId);
+    if (verificationRequired) {
+      await requireVerifiedDeviceWorkPeriod(userId);
+      if (verifiedDeviceIsPrimary !== false) {
+        await requireAttendanceForLogin(userId, { confirmCheckIn, forceEnforcement: true });
+      }
     }
   } catch (attendanceError) {
     if (attendanceError instanceof AttendanceError) {
@@ -147,6 +151,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     if (await isDeviceVerificationRequired(user.id)) {
+      try {
+        await requireVerifiedDeviceWorkPeriod(user.id);
+      } catch (attendanceError) {
+        if (attendanceError instanceof AttendanceError) {
+          return response.status(attendanceError.status).json({ ok: false, code: attendanceError.code, error: attendanceError.message });
+        }
+        throw attendanceError;
+      }
       const challenge = await createDeviceLoginChallenge({
         userId: user.id,
         attendanceCheckIn: body.attendanceCheckIn === true,

@@ -125,14 +125,14 @@ function reportPermissions(row: ReportRow): ReportPermission[] {
     : row.earlyDeparturePermission ? [row.earlyDeparturePermission] : [];
 }
 
-function EarlyPermissionCell({ row, saving, onDelete }: {
-  row: ReportRow; saving: boolean; onDelete: (id: string) => void;
+function EarlyPermissionCell({ row, saving, onDelete, onView }: {
+  row: ReportRow; saving: boolean; onDelete: (id: string) => void; onView: (permission: ReportPermission, row: ReportRow) => void;
 }) {
   const permissions = reportPermissions(row);
   if (!permissions.length) return <td className="attendance-early-departure-cell"><span className="attendance-early-departure-empty">{row.periods.some(period => period?.checkoutSource === 'authorized') ? 'إذن انصراف' : '—'}</span></td>;
   return <td className="attendance-early-departure-cell"><div className="attendance-permission-items">
     {permissions.map(permission => <div className="attendance-permission-item" key={permission.id}>
-      <span className="attendance-early-departure-done" title={permission.reason}>{permissionTypeLabel(permission.permissionType)} <small>({permission.periodName || 'الدوام'})</small></span>
+      <button type="button" className="attendance-permission-view" title="عرض تفاصيل الإذن" onClick={() => onView(permission, row)}>{permissionTypeLabel(permission.permissionType)} <small>({permission.periodName || 'الدوام'})</small></button>
       <button type="button" className="attendance-permission-delete" title={`حذف ${permissionTypeLabel(permission.permissionType)} - ${permission.periodName || 'الدوام'}`} disabled={saving} onClick={() => onDelete(permission.id)}>حذف</button>
     </div>)}
   </div></td>;
@@ -434,6 +434,7 @@ export function AttendancePage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
   const [earlyDepartureSaving, setEarlyDepartureSaving] = useState(false);
+  const [viewedPermission, setViewedPermission] = useState<{ permission: ReportPermission; row: ReportRow } | null>(null);
   const [permissionShifts, setPermissionShifts] = useState<Record<string, PermissionShift[]>>({});
   const [permissionShiftsLoading, setPermissionShiftsLoading] = useState(false);
   const [permissionShiftsError, setPermissionShiftsError] = useState("");
@@ -625,7 +626,7 @@ export function AttendancePage() {
   }
 
   async function deletePermission(permissionId: string) {
-    if (!isAdmin || earlyDepartureSaving || !window.confirm('حذف الإذن المسجل؟ سيتم إلغاء أي انصراف تلقائي مرتبط بهذا الإذن فقط.')) return;
+    if (!isAdmin || earlyDepartureSaving || !window.confirm('حذف الإذن المسجل؟ سيتم إلغاء ساعات الإذن المحتسبة فقط دون تعديل أوقات البصمة.')) return;
     setEarlyDepartureSaving(true); setError(''); setMessage('');
     try {
       const result = await attendanceFetch<{ ok: true; message: string }>('/api/attendance', {
@@ -724,6 +725,28 @@ export function AttendancePage() {
           <h1>تقارير الحضور والانصراف</h1>
         </div>
       </div>
+
+      {viewedPermission ? (
+        <div className="attendance-permission-backdrop" role="presentation" onMouseDown={() => setViewedPermission(null)}>
+          <div className="attendance-permission-details" role="dialog" aria-modal="true" aria-label="تفاصيل الإذن" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="attendance-permission-details-header">
+              <h2>تفاصيل {permissionTypeLabel(viewedPermission.permission.permissionType)}</h2>
+              <button type="button" className="secondary-button" onClick={() => setViewedPermission(null)} aria-label="إغلاق تفاصيل الإذن">إغلاق</button>
+            </div>
+            <dl>
+              <div><dt>الموظف</dt><dd>{viewedPermission.row.name}</dd></div>
+              <div><dt>التاريخ</dt><dd>{formatAttendanceDate(viewedPermission.row.date)}</dd></div>
+              <div><dt>الفترة</dt><dd>{viewedPermission.permission.periodName || 'الدوام'}</dd></div>
+              <div><dt>نوع الإذن</dt><dd>{permissionTypeLabel(viewedPermission.permission.permissionType)}</dd></div>
+              <div><dt>من الساعة</dt><dd>{viewedPermission.permission.fromText || formatAttendanceTime(viewedPermission.permission.fromAt)}</dd></div>
+              <div><dt>إلى الساعة</dt><dd>{viewedPermission.permission.toText || formatAttendanceTime(viewedPermission.permission.toAt)}</dd></div>
+              <div><dt>مدة الإذن</dt><dd>{formatDurationMinutes(Math.max(0, Math.round((new Date(viewedPermission.permission.toAt).getTime() - new Date(viewedPermission.permission.fromAt).getTime()) / 60000)))}</dd></div>
+              <div><dt>وقت تسجيل الإذن</dt><dd>{viewedPermission.permission.authorizedAt ? new Date(viewedPermission.permission.authorizedAt).toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' }) : '—'}</dd></div>
+              <div className="attendance-permission-details-reason"><dt>سبب الإذن</dt><dd>{viewedPermission.permission.reason || '—'}</dd></div>
+            </dl>
+          </div>
+        </div>
+      ) : null}
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
       {message ? <div className="attendance-alert success"><span>{message}</span></div> : null}
@@ -842,7 +865,7 @@ export function AttendancePage() {
                         <td>{index + 1}</td>
                         <td>{formatAttendanceDay(row.date)}</td>
                         <td>{formatAttendanceDate(row.date)}</td>
-                        <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} />
+                        <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} onView={(permission, selectedRow) => setViewedPermission({ permission, row: selectedRow })} />
                         {periodHeaders.flatMap((_, periodIndex) => {
                           const period = row.periods[periodIndex];
                           const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -923,7 +946,7 @@ export function AttendancePage() {
                             <td>{index + 1}</td>
                             <td>{row.branch}</td>
                             <td className="attendance-name-cell"><strong>{row.name}</strong></td>
-                            <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} />
+                            <EarlyPermissionCell row={row} saving={earlyDepartureSaving} onDelete={(id) => void deletePermission(id)} onView={(permission, selectedRow) => setViewedPermission({ permission, row: selectedRow })} />
                             {periodHeaders.flatMap((_, periodIndex) => {
                               const period = row.periods[periodIndex];
                               const delay = Math.max(0, Number(period?.delayMinutes || 0));
@@ -1007,7 +1030,7 @@ export function AttendancePage() {
               })}
               {!Object.keys(earlyDepartureDialog.entries).length ? <p className="attendance-permission-empty">اختر يوزر واحدًا أو أكثر من القائمة بالأعلى.</p> : null}
             </div>
-            <p className="attendance-permission-note">كل إذن يُحفظ للفترة والتاريخ المختارين دون استبدال إذن فترة أخرى. جميع الأنواع تحتسب المدة من «من الساعة» إلى «إلى الساعة» ضمن ساعات اليوم، دون تكرار وقت الحضور المتداخل. إذن الانصراف فقط ينهي البصمة المفتوحة عند بدايته.</p>
+            <p className="attendance-permission-note">كل إذن يُحفظ للفترة والتاريخ المختارين دون استبدال إذن فترة أخرى. جميع الأنواع تحتسب المدة من «من الساعة» إلى «إلى الساعة» ضمن ساعات اليوم، دون تكرار وقت الحضور المتداخل. لا يغيّر أي إذن وقت الحضور أو الانصراف المسجل في البصمة.</p>
             <footer>
               <button type="button" className="secondary-button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>إلغاء</button>
               <button type="button" className="attendance-view-button" onClick={() => void authorizeEarlyDeparture()} disabled={earlyDepartureSaving || permissionShiftsLoading || Boolean(permissionShiftsError) || !Object.keys(earlyDepartureDialog.entries).length || Object.entries(earlyDepartureDialog.entries).some(([userId, entry]) => !(permissionShifts[userId] || []).some((shift) => shift.periodId === entry.periodId))}>
