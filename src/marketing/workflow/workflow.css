@@ -726,13 +726,30 @@
 .marketing-publish-control-toggle input { width:20px;height:20px;accent-color:var(--brand); }
 .marketing-publish-control>button { justify-self:start; }
 
-/* Manual publication records and punctuality (marketing workflow only). */
-.mkw-publication-timing{display:inline-flex;align-items:center;border-radius:8px;padding:4px 9px;font-weight:800;font-size:12px;border:1px solid transparent;white-space:nowrap}
-.mkw-publication-timing.is-on-time{color:#167a43;background:#edf9f0;border-color:#9ddbb4}
-.mkw-publication-timing.is-late{color:#b42318;background:#fff1ef;border-color:#f6aaa4}
-.mkw-plan-created-at{padding:9px 12px;border-radius:9px;background:var(--surface-soft,var(--surface));font-size:13px}
-.mkw-manual-post-link{padding:14px;border:1px solid var(--line);border-radius:12px;display:grid;gap:9px}
-.mkw-manual-post-link-fields{display:grid;grid-template-columns:minmax(190px,2fr) minmax(150px,1fr) auto;align-items:end;gap:10px}
-.mkw-manual-post-link-fields label,.mkw-post-url-field label{display:grid;gap:5px;font-size:12px;font-weight:700}
-.mkw-manual-post-link-fields input,.mkw-post-url-field input{min-width:0;width:100%}
-@media(max-width:720px){.mkw-manual-post-link-fields{grid-template-columns:1fr}}
+/* Publishing is closed by default; date rows are intentionally compact. */
+.mkw-dashboard .mkw-publishing-column>header { padding:0; }
+.mkw-dashboard .mkw-column-toggle { width:100%; min-height:64px; display:flex; align-items:center;
+  justify-content:space-between; gap:12px; padding:14px 19px; background:transparent;
+  color:var(--ink); border:0; cursor:pointer; font:inherit; text-align:start; }
+.mkw-dashboard .mkw-column-toggle:hover { background:var(--surface); }
+.mkw-dashboard .mkw-column-toggle .mkw-column-title svg:last-child { transition:transform .16s; }
+.mkw-dashboard .mkw-column-toggle .mkw-column-title svg.mkw-section-open { transform:rotate(180deg); }
+.mkw-dashboard .mkw-column-count { background:var(--brand); color:var(--surface); min-width:35px;
+  height:35px; border-radius:100px; display:grid; place-items:center; font-size:13px; font-weight:700; }
+.mkw-dashboard-day { gap:8px; }
+.mkw-dashboard-day-heading,.mkw-dashboard-day-status { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:space-between; }
+.mkw-dashboard-day-heading strong { color:var(--ink); }
+.mkw-dashboard-day-status { justify-content:flex-start; }
+.mkw-publish-timing { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line);
+  border-radius:999px; padding:4px 9px; font-size:11px; font-weight:800; }
+.mkw-publish-timing.is-on-time { background:#f0fdf4; border-color:#86efac; color:#15803d; }
+.mkw-publish-timing.is-late { background:#fef2f2; border-color:#fca5a5; color:#b91c1c; }
+.mkw-publish-timing.is-pending,.mkw-publish-timing.is-undated { color:var(--muted); background:var(--surface-soft); }
+.mkw-post-link-entry { margin-top:12px; display:grid; gap:10px; padding:14px; border:1px solid var(--line); border-radius:12px; }
+.mkw-post-link-entry h3 { margin:0; font-size:14px; }
+.mkw-post-link-entry small { color:var(--muted); }
+.mkw-post-link-fields { display:grid; grid-template-columns:minmax(0,2fr) minmax(140px,1fr); gap:10px; }
+.mkw-post-link-fields label { display:grid; gap:5px; font-size:12px; font-weight:700; }
+.mkw-post-link-fields input { width:100%; min-width:0; }
+.mkw-post-link-entry>button { justify-self:start; }
+@media (max-width:600px) { .mkw-post-link-fields { grid-template-columns:1fr; } }

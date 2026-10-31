@@ -31,10 +31,18 @@ async function probe(newSchemaReady){
       return [{revision_policy:newSchemaReady,terminal_rejection:newSchemaReady,reviewers:newSchemaReady,
         revision_numbers:newSchemaReady,editing_state:newSchemaReady,rejected_state:newSchemaReady}];
     }
+    if(query.includes("where code='schema-12'")) return [{ready:true}];
+    if(query.includes("where code='schema-14'")) {
+      assert(query.includes("column_name='manual_published_on'"));
+      return [{ready:true}];
+    }
+    if(query.includes("where code='schema-11'")) return [{ready:true}];
+    if(query.includes("to_regclass('marketing.work_publish_controls')")) return [{ready:true}];
+    if(query.includes('select dashboard_publish_enabled from marketing.work_publish_controls')) return [{dashboard_publish_enabled:false}];
     throw new Error('Unexpected SQL: '+query);
   };
   assert.equal(await handleMarketingWorkflow(request,response,sql,user,{}),true);
-  assert.equal(queries,1);
+  assert.equal(queries,6);
   return sent;
 }
 (async()=>{
