@@ -100,12 +100,6 @@ function formatDurationMinutes(value: unknown) {
   return remainder ? `${hours} ساعة و ${remainder} دقيقة` : `${hours} ساعة`;
 }
 
-function riyadhTimeNow() {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Riyadh", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(new Date());
-}
-
 function riyadhDateToday() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit",
@@ -564,11 +558,6 @@ export function AttendancePage() {
 
   function selectEarlyDeparturePeriod(userId: string, periodId: string) {
     const shift = (permissionShifts[userId] || []).find((item) => item.periodId === periodId);
-    const now = riyadhTimeNow();
-    const today = riyadhDateToday();
-    const fromTime = shift && today === permissionDate
-      && clockMinutes(now) >= clockMinutes(shift.startTime)
-      && clockMinutes(now) < clockMinutes(shift.endTime) ? now : shift?.startTime || "";
     setEarlyDepartureDialog((current) => {
       if (!current?.entries[userId]) return current;
       return {
@@ -578,8 +567,8 @@ export function AttendancePage() {
           [userId]: {
             ...current.entries[userId],
             periodId,
-            fromTime: current.entries[userId].permissionType === 'vacation' ? shift?.startTime || '' : fromTime,
-            toTime: shift?.endTime || "",
+            fromTime: "",
+            toTime: "",
           },
         },
       };
@@ -590,10 +579,6 @@ export function AttendancePage() {
     setEarlyDepartureDialog((current) => {
       if (!current?.entries[userId]) return current;
       const entry = { ...current.entries[userId], [field]: value };
-      if (field === 'permissionType' && value === 'vacation') {
-        const shift = (permissionShifts[userId] || []).find(item => item.periodId === entry.periodId);
-        if (shift) { entry.fromTime = shift.startTime; entry.toTime = shift.endTime; }
-      }
       return { ...current, entries: { ...current.entries, [userId]: entry } };
     });
   }
@@ -976,7 +961,7 @@ export function AttendancePage() {
         <div className="attendance-permission-backdrop" onMouseDown={() => !earlyDepartureSaving && setEarlyDepartureDialog(null)}>
           <div className="attendance-permission-dialog attendance-permission-dialog-wide" onMouseDown={(event) => event.stopPropagation()}>
             <header>
-              <div><h2>أذونات الحضور والانصراف والإجازات</h2><p>حدد نوع الإذن والسبب وفترة دوام الموظف. الإجازة تحتسب كامل الفترة، والإذن الاستثنائي يحتسب الوقت المحدد.</p></div>
+              <div><h2>أذونات الحضور والانصراف والإجازات</h2><p>حدد فترة الدوام ونوع الإذن ووقت البداية والنهاية لكل موظف. تُضاف المدة المحددة إلى ساعات اليوم، وليس وقت إنشاء الإذن.</p></div>
               <button type="button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>×</button>
             </header>
             <div className="attendance-permission-date-row">
@@ -1011,8 +996,8 @@ export function AttendancePage() {
                         <option value="">{permissionShiftsLoading ? "جاري تحميل الفترات..." : "اختر الفترة"}</option>
                         {shifts.map((shift) => <option key={shift.periodId} value={shift.periodId}>{shift.name} ({shift.startTime} - {shift.endTime})</option>)}
                       </select></label>
-                      <label><span>من الساعة</span><input type="time" value={entry.fromTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving || entry.permissionType === 'vacation'} onChange={(event) => updateEarlyDepartureEntry(userId, "fromTime", event.target.value)} /></label>
-                      <label><span>إلى الساعة</span><input type="time" value={entry.toTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving || entry.permissionType === 'vacation'} onChange={(event) => updateEarlyDepartureEntry(userId, "toTime", event.target.value)} /></label>
+                      <label><span>من الساعة</span><input type="time" value={entry.fromTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "fromTime", event.target.value)} /></label>
+                      <label><span>إلى الساعة</span><input type="time" value={entry.toTime} min={chosen?.startTime} max={chosen?.endTime} disabled={!chosen || earlyDepartureSaving} onChange={(event) => updateEarlyDepartureEntry(userId, "toTime", event.target.value)} /></label>
                     </div>
                     <label className="attendance-permission-reason"><span>سبب الإذن</span><textarea rows={2} maxLength={1000} required value={entry.reason} disabled={earlyDepartureSaving} placeholder="اكتب سبب الإذن أو الإجازة" onChange={(event) => updateEarlyDepartureEntry(userId, 'reason', event.target.value)} /></label>
                     {chosen ? <small className="attendance-permission-shift-description">الفترة المحددة: {chosen.name} — من {chosen.startTime} إلى {chosen.endTime}</small>
@@ -1022,7 +1007,7 @@ export function AttendancePage() {
               })}
               {!Object.keys(earlyDepartureDialog.entries).length ? <p className="attendance-permission-empty">اختر يوزر واحدًا أو أكثر من القائمة بالأعلى.</p> : null}
             </div>
-            <p className="attendance-permission-note">كل إذن يُحفظ على فترة الدوام المختارة دون استبدال إذن فترة أخرى. إذن الانصراف فقط ينهي البصمة المفتوحة عند بدايته؛ الإجازة تحتسب كامل الفترة، والإذن الاستثنائي يحتسب مدته المحددة دون إنشاء حضور وهمي.</p>
+            <p className="attendance-permission-note">كل إذن يُحفظ للفترة والتاريخ المختارين دون استبدال إذن فترة أخرى. جميع الأنواع تحتسب المدة من «من الساعة» إلى «إلى الساعة» ضمن ساعات اليوم، دون تكرار وقت الحضور المتداخل. إذن الانصراف فقط ينهي البصمة المفتوحة عند بدايته.</p>
             <footer>
               <button type="button" className="secondary-button" onClick={() => setEarlyDepartureDialog(null)} disabled={earlyDepartureSaving}>إلغاء</button>
               <button type="button" className="attendance-view-button" onClick={() => void authorizeEarlyDeparture()} disabled={earlyDepartureSaving || permissionShiftsLoading || Boolean(permissionShiftsError) || !Object.keys(earlyDepartureDialog.entries).length || Object.entries(earlyDepartureDialog.entries).some(([userId, entry]) => !(permissionShifts[userId] || []).some((shift) => shift.periodId === entry.periodId))}>

@@ -40,7 +40,7 @@ check('Attendance UI retrieves date-specific shift assignments before enabling t
   assert.match(attendUi,/view: "report", from: permissionDate, to: permissionDate, employeeIds: permissionSelectedIds/);
   assert.match(attendUi,/selectEarlyDeparturePeriod/);
   assert.match(attendUi,/فترة الدوام/);
-  assert.match(attendUi,/disabled=\{!chosen \|\| earlyDepartureSaving \|\| entry\.permissionType === 'vacation'\}/);
+  assert.match(attendUi,/disabled=\{!chosen \|\| earlyDepartureSaving\}/);
 });
 check('Attendance shift selection retains permission type and reason',()=>{
   const start = attendUi.indexOf('function selectEarlyDeparturePeriod(');
@@ -48,7 +48,7 @@ check('Attendance shift selection retains permission type and reason',()=>{
   assert(start > 0 && end > start, 'Could not locate the period selection handler');
   const handler = attendUi.slice(start, end);
   assert.match(handler,/\.\.\.current\.entries\[userId\]/, 'Changing period must preserve existing permissionType and reason');
-  assert.match(handler,/periodId,\s*fromTime: current\.entries\[userId\]\.permissionType === 'vacation' \? shift\?\.startTime/, 'Selected shift must preserve vacation full-shift permission while updating times');
+  assert.match(handler,/periodId,\s*fromTime: "",\s*toTime: ""/, 'Changing shift requires explicit permission start/end for every type');
   assert.match(attendUi,/permissionType: "departure" \| "vacation" \| "exceptional" \| ""; reason: string/, 'Permission fields must remain required');
 });
 check('Attendance saves the chosen period and validates it server-side',()=>{

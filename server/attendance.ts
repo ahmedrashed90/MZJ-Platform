@@ -361,18 +361,18 @@ function attendanceReportCreditedMinutes(
   const attendedStart = Math.min(recordedEnd, start + delay);
   const worked = Math.max(0, elapsed - Math.min(elapsed, delay));
 
-  // A granted vacation substitutes for the entire scheduled shift; an
-  // exceptional permission or early departure credits only its approved time.
-  // No check-in is invented, and overlapping recorded work is never counted twice.
+  // All three authorization types credit precisely the admin-selected
+  // [from_at, to_at] interval within this shift. The authorization is effective
+  // on its selected work date, independently of when the admin created it;
+  // only live clocked attendance is limited to the current time.
+  // Subtract overlap with real attendance to avoid crediting a minute twice.
   let permitted = 0;
-  if (permission?.permission_type === 'vacation') {
-    permitted = Math.max(0, availableEnd - start) - worked;
-  } else if (permission?.permission_type === 'departure' || permission?.permission_type === 'exceptional') {
+  if (permission && ['departure', 'vacation', 'exceptional'].includes(permission.permission_type)) {
     const from = attendanceReportTimelineMinute(permission.from_at, workDate);
     const to = attendanceReportTimelineMinute(permission.to_at, workDate);
     if (from !== null && to !== null && to > from) {
       const permissionStart = Math.max(start, from);
-      const permissionEnd = Math.min(availableEnd, to);
+      const permissionEnd = Math.min(end, to);
       const interval = Math.max(0, permissionEnd - permissionStart);
       const overlap = Math.max(0, Math.min(permissionEnd, recordedEnd) - Math.max(permissionStart, attendedStart));
       permitted = Math.max(0, interval - overlap);

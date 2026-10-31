@@ -131,10 +131,27 @@ check('Friday-shift and legacy day-wide permission handling stay compatible', ()
   assert.equal(permissionForShift([olderPermission], 'evening', false), olderPermission);
   assert.equal(permissionForShift([olderPermission, exactPermission], 'morning', false), exactPermission);
 });
-check('Vacation auto-selects complete scheduled shift and makes it read-only', () => {
-  assert.match(attendanceScreen, /if \(field === 'permissionType' && value === 'vacation'\)/);
-  assert.match(attendanceScreen, /entry\.fromTime = shift\.startTime/);
-  assert.match(attendanceScreen, /entry\.permissionType === 'vacation'/);
+check('All permission types require admin-selected start and end times', () => {
+  assert.match(attendanceScreen, /fromTime: "",\s*toTime: ""/);
+  assert.doesNotMatch(attendanceScreen, /entry\.permissionType === 'vacation'/);
+  assert.doesNotMatch(attendanceScreen, /field === 'permissionType' && value === 'vacation'/);
+  assert.match(attendanceScreen, /!item\.fromTime \|\| !item\.toTime/);
+});
+check('Partial vacation credits only the explicitly selected interval', () => {
+  assert.equal(credit(null, day, '09:00', '12:00', 0, { permission_type: 'vacation', from_at: at('10:00'), to_at: at('11:00') }), 60);
+});
+check('Backdated or future permission credits its chosen duration, not time of entry', () => {
+  const futureDate = '2099-10-18';
+  const futureAt = time => `${futureDate}T${time}:00+03:00`;
+  for (const permission_type of ['departure', 'vacation', 'exceptional']) {
+    const permission = { permission_type, from_at: futureAt('16:00'), to_at: futureAt('18:30') };
+    assert.equal(credit(null, futureDate, '15:00', '21:00', 0, permission), 150);
+  }
+});
+check('Vacation overlapping real attendance is not double-counted', () => {
+  const attendance = { check_in: at('09:00'), check_out: at('10:30'), checkout_source: 'manual' };
+  const permission = { permission_type: 'vacation', from_at: at('10:00'), to_at: at('12:00') };
+  assert.equal(credit(attendance, day, '09:00', '12:00', 0, permission), 180);
 });
 check('Exceptional option and independent permission deletion are exposed to admin', () => {
   assert.match(attendanceScreen, /<option value="exceptional">إذن استثنائي<\/option>/);
