@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Wallet, Gear, CheckCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
-import { W, Empty, MediaLabel, Readiness, Search, WorkAlert, WorkHeader } from '../workflow/components';
+import { W, Empty, Readiness, Search, WorkAlert, WorkHeader } from '../workflow/components';
 import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
 import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
-import { PlanDetail, planStatusName } from '../workflow/PlanDetail';
+import { planStatusName } from '../workflow/PlanDetail';
+import { PlanReport } from '../workflow/PlanReport';
+import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -34,6 +36,7 @@ export function MarketingDashboardPage() {
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
   const [tableId, setTableId] = useState(''), [budgetId, setBudgetId] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
+  const [publishingOpen, setPublishingOpen] = useState(false);
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
   function togglePlanProducts(id: string) {
     setExpandedPlanIds(current => {
@@ -119,8 +122,12 @@ export function MarketingDashboardPage() {
         </div>
       </section>
 
-      <section className="mkw-column"><header><div className="mkw-column-title"><PaperPlaneTilt size={21}/><h2>{W.publishingSection}</h2></div><span>{groups.size}</span></header>
-        <div className="mkw-column-body mkw-publish-column-body">{!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
+      <section className="mkw-column mkw-publishing-column">
+        <header><button type="button" className="mkw-column-toggle" aria-expanded={publishingOpen} aria-controls="mkw-publishing-body" onClick={() => setPublishingOpen(open => !open)}>
+          <div className="mkw-column-title"><PaperPlaneTilt size={21}/><h2>{W.publishingSection}</h2><CaretDown className={publishingOpen ? 'mkw-section-open' : ''} size={18}/></div>
+          <span className="mkw-column-count">{groups.size}</span>
+        </button></header>
+        {publishingOpen && <div id="mkw-publishing-body" className="mkw-column-body mkw-publish-column-body">{!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
           {[...groups.entries()].map(([id, group]) => {
             const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
             const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
@@ -132,6 +139,8 @@ export function MarketingDashboardPage() {
             const preparedLines = group.filter(line => line.prepared_count === 1 && !line.failed_count).length;
             const platforms = uniqueValues(group.map(line => line.platform_name));
             const kinds = uniqueValues(group.map(line => line.post_type_name));
+            const distinctProducts = new Set(group.map(line => line.product_id)).size;
+            const days = summarizePublishingDays(group);
             const productsOpen = expandedPlanIds.has(id);
             return <article className={`mkw-dashboard-publish-card mkw-plan-${visualStatus}`} key={id}>
               <div className="mkw-dashboard-publish-card-head">
@@ -149,19 +158,19 @@ export function MarketingDashboardPage() {
                     <span className="mkw-kind-label">{group[0].kind === 'agenda' ? W.agenda : W.campaign}</span>
                     <span className="mkw-muted">{platforms.join(' • ') || '—'}</span>
                   </div>
+                  <span className="mkw-muted">تاريخ الإنشاء: {showDate(group[0].plan_created_at)}</span>
                 </div>
                 <strong className={`mkw-plan-state mkw-plan-state-${visualStatus}`}>{planStatusName(visualStatus)}</strong>
               </div>
 
               <div className="mkw-dashboard-publish-stats">
                 <div><small>{group[0].kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{scheduleRange(group)}</strong></div>
-                <div><small>{W.productCount}</small><strong>{group.length}</strong></div>
+                <div><small>{W.productCount}</small><strong>{distinctProducts}</strong></div>
                 <div><small>عدد المنصات</small><strong>{platforms.length}</strong></div>
                 <div><small>أنواع النشر</small><strong>{kinds.length}</strong></div>
               </div>
 
               <div className="mkw-dashboard-publish-progress-wrap">
-                <div className="mkw-dashboard-publish-progress-head"><span>جاهزية النشر</span><strong>{readiness}%</strong></div>
                 <Readiness value={readiness} label="جاهزية النشر"/>
                 <div className="mkw-dashboard-publish-quick-stats">
                   <span>تم التجهيز: <strong>{preparedLines}</strong> / {group.length}</span>
@@ -170,16 +179,21 @@ export function MarketingDashboardPage() {
               </div>
 
               <div id={`mkw-publish-products-${id}`} className="mkw-dashboard-publish-preview" hidden={!productsOpen}>
-                <div className="mkw-dashboard-publish-preview-head"><strong>المنتجات</strong><span>{group.length} منتج</span></div>
+                <div className="mkw-dashboard-publish-preview-head"><strong>مواعيد النشر</strong><span>{days.length} يوم · {distinctProducts} منتج · {group.length} منشور</span></div>
                 <div className="mkw-dashboard-publish-preview-list">
-                  {group.map(line => <article key={line.id} className="mkw-dashboard-preview-item">
-                    <div className="mkw-dashboard-preview-title"><strong>{line.idea_name}</strong><MediaLabel kind={line.media_kind}/></div>
-                    <div className="mkw-dashboard-preview-subline">
-                      <span>{showDate(line.scheduled_on)}</span>
-                      <span>{[line.platform_name, line.post_type_name].filter(Boolean).join(' · ') || '—'}</span>
+                  {days.map(day => <article key={day.date} className="mkw-dashboard-preview-item mkw-dashboard-publish-day">
+                    <div className="mkw-dashboard-preview-title"><strong><CalendarBlank size={17}/> {showDate(day.date)}</strong><span>{day.publicationCount} {day.publicationCount === 1 ? 'منشور' : 'منشورات'}</span></div>
+                    <div className="mkw-dashboard-preview-subline"><span title={day.productNames.join('، ')}>{day.productNames.join('، ')}</span><span>{day.platformNames.join(' · ') || '—'}</span></div>
+                    <div className="mkw-dashboard-publish-day-footer"><span>أنواع النشر: {day.postTypeNames.join('، ') || '—'}</span><strong>{day.publishedCount} / {day.publicationCount} تم النشر</strong></div>
+                    <div className="mkw-dashboard-day-status">
+                      {day.onTimeCount > 0 && <span className="mkw-publish-timing is-on-time">نشر في الموعد: {day.onTimeCount}</span>}
+                      {day.lateCount > 0 && <span className="mkw-publish-timing is-late">تأخر في النشر: {day.lateCount}</span>}
+                      {day.pendingCount > 0 && <span className="mkw-publish-timing is-pending">بانتظار النشر: {day.pendingCount}</span>}
+                      {day.undatedCount > 0 && <span className="mkw-publish-timing is-undated">تاريخ النشر غير مسجل: {day.undatedCount}</span>}
                     </div>
                   </article>)}
                 </div>
+                <small className="mkw-dashboard-publish-detail-hint">تفاصيل كل منصة ونوع نشر متاحة داخل التقرير.</small>
               </div>
 
               <div className="mkw-dashboard-publish-tags">
@@ -198,13 +212,13 @@ export function MarketingDashboardPage() {
               {publishSettings.data?.enabled && !supported && <div className="mkw-publishing-support-note" role="status">يمكن حفظ تجهيز النشر، لكن النشر التلقائي غير متاح للمنصة المحددة عبر الربط الحالي. استخدم منصة متصلة ومدعومة للنشر التلقائي.</div>}
             </article>;
           })}
-        </div>
+        </div>}
       </section>
     </div>
     {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} onClose={() => { setParams({}); setDeliveryFilter(''); }} onChanged={() => void query.reload()}/>}    
-    {tableId && <PlanDetail id={tableId} onClose={() => setTableId('')} onChanged={() => void query.reload()}/>}    
+    {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
     {budgetId && budgetLines.length > 0 && <Modal open title="جدول الميزانية" onClose={() => setBudgetId('')} className="mkw-modal"><div className="mkw"><div className="mkw-table-wrap"><table><thead><tr><th>{W.fundingDate}</th><th>{W.selectProduct}</th><th>المنصة</th><th>نوع النشر</th><th>الميزانية (ر.س)</th></tr></thead><tbody>{budgetLines.map(line => <tr key={line.id}><td>{showDate(line.scheduled_on)}</td><td>{line.idea_name}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td><td>{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td></tr>)}</tbody></table></div><strong>إجمالي الميزانية: {budgetLines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })} ر.س</strong></div></Modal>}
-    {selectPlan && <Modal open title={W.prepare} onClose={() => setSelectPlan('')} className="mkw-modal"><div className="mkw"><div className="mkw-table-wrap"><table><thead><tr><th>{W.selectProduct}</th><th>{W.publishDate}</th><th>المنصة</th><th>نوع النشر</th><th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map(line => <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td><td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح المطلوب</button></td></tr>)}</tbody></table></div></div></Modal>}
+    {selectPlan && <Modal open title={W.prepare} onClose={() => setSelectPlan('')} className="mkw-modal"><div className="mkw"><div className="mkw-table-wrap"><table><thead><tr><th>{W.selectProduct}</th><th>{W.publishDate}</th><th>المنصة</th><th>نوع النشر</th><th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map(line => <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td><td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr>)}</tbody></table></div></div></Modal>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
   </div>;
 }

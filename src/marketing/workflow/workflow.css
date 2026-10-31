@@ -144,7 +144,8 @@
 .mkw-dashboard-board { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:18px; }
 .mkw-dashboard .mkw-toolbar { padding:8px 16px; min-height:59px; border-color:var(--line-strong); }
 .mkw-dashboard .mkw-search { min-height:42px; }
-.mkw-dashboard .mkw-column { background:var(--surface); border-color:var(--line-strong); min-height:370px; box-shadow:0 8px 24px rgba(81,44,34,.035); }
+.mkw-dashboard .mkw-column { background:var(--surface); border-color:var(--line-strong); box-shadow:0 8px 24px rgba(81,44,34,.035); }
+.mkw-dashboard .mkw-column:not(.mkw-publishing-column) { min-height:370px; }
 .mkw-dashboard .mkw-column>header { min-height:67px; border-top:3px solid var(--brand); padding:14px 19px; background:var(--surface-soft); }
 .mkw-column-title { display:inline-flex; align-items:center; gap:10px; color:var(--brand); }
 .mkw-column-title h2 { color:var(--ink); font-size:19px; font-weight:800; }
@@ -699,12 +700,11 @@
 .mkw-plan-progress{display:grid;gap:.45rem}.mkw-plan-progress progress{width:100%;height:10px;accent-color:#4a211c}
 .mkw-plan-review-note{padding:1rem;border:1px solid #d8aa77;background:#fff7e8;border-radius:12px}.mkw-plan-review-note p{white-space:pre-wrap}
 .mkw-plan-review-actions{display:grid;gap:.6rem;padding:1rem;border:1px solid #ead9cd;border-radius:12px}.mkw-plan-review-actions label{display:grid;gap:.4rem}
-.mkw-plan-review-actions textarea,.mkw-executor-copy textarea{width:100%;min-height:80px;resize:vertical}
+.mkw-plan-review-actions textarea{width:100%;min-height:80px;resize:vertical}
 .mkw-plan-edit-lines{display:grid;gap:1rem}.mkw-plan-edit-lines input,.mkw-plan-edit-lines select{min-width:125px;max-width:240px}
 .mkw-post-url-field{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}.mkw-post-url-field input{min-width:190px;max-width:320px;flex:1}
 .mkw-plan-history article{padding:.75rem 0;border-bottom:1px solid #ead9cd;display:grid;gap:.35rem}.mkw-plan-history p{white-space:pre-wrap}
 .mkw-post-type-multi{display:flex;flex-wrap:wrap;gap:.35rem}.mkw-post-type-multi label{display:inline-flex;gap:.4rem;align-items:center;border:1px solid #ead9cd;border-radius:8px;padding:.3rem .55rem;cursor:pointer}.mkw-post-type-multi label.is-checked{border-color:#4a211c;background:#f3e8dc}
-.mkw-executor-copy{display:grid;gap:.7rem;padding:1rem;border:1px solid #ead9cd;border-radius:12px}.mkw-executor-copy .mkw-publish-copy{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem}.mkw-executor-copy label{display:grid;gap:.4rem}
 
 /* Dashboard publishing readiness and review-state visual consistency. */
 .mkw-dashboard-plan .mkw-publish-readiness { width:min(350px,100%); margin-block:3px 5px; }
@@ -923,3 +923,80 @@
   .mkw-dashboard-publish-stats { grid-template-columns:1fr; }
   .mkw-dashboard-publish-card .mkw-dashboard-publish-actions button { flex-basis:100%; }
 }
+
+/* Native publishing: read-only report, publication timing and preparation form */
+.mkw-publish-timing { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line);
+  border-radius:999px; padding:4px 9px; font-size:11px; font-weight:800; }
+.mkw-publish-timing.is-on-time { background:#f0fdf4; border-color:#86efac; color:#15803d; }
+.mkw-publish-timing.is-late { background:#fef2f2; border-color:#fca5a5; color:#b91c1c; }
+.mkw-publish-timing.is-pending,.mkw-publish-timing.is-undated { color:var(--muted); background:var(--surface-soft); }
+.mkw-post-link-entry { margin-top:12px; display:grid; gap:10px; padding:14px; border:1px solid var(--line); border-radius:12px; }
+.mkw-post-link-entry h3 { margin:0; font-size:14px; }
+.mkw-post-link-entry small { color:var(--muted); }
+.mkw-post-link-fields { display:grid; grid-template-columns:minmax(0,2fr) minmax(140px,1fr); gap:10px; }
+.mkw-post-link-fields label { display:grid; gap:5px; font-size:12px; font-weight:700; }
+.mkw-post-link-fields input { width:100%; min-width:0; }
+.mkw-post-link-entry>button { justify-self:start; }
+@media (max-width:600px) { .mkw-post-link-fields { grid-template-columns:1fr; } }
+
+/* Read-only publishing report occupies the viewport; editing stays in its
+   dedicated workflow screen. Large reports scroll without clipping on mobile. */
+.mkw-plan-report { align-content:start; max-width:100%; }
+.mkw-plan-report-heading { align-items:center; }
+.mkw-plan-report-heading>div:first-child { display:grid; gap:6px; min-width:0; }
+.mkw-plan-report-heading strong { font-size:17px; overflow-wrap:anywhere; }
+.mkw-plan-report-badges { display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
+.mkw-plan-report-readonly { display:inline-flex; align-items:center; border:1px solid var(--line-strong); border-radius:9px; background:var(--surface-soft); color:var(--brand); padding:5px 11px; font-size:12px; font-weight:800; }
+.mkw-plan-report-summary { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.mkw-plan-report-list { min-width:0; display:grid; gap:12px; }
+.mkw-plan-report-list>h3 { font-size:16px; color:var(--brand); }
+.mkw-plan-report-table { width:100%; max-width:100%; }
+.mkw-plan-report-table table { width:100%; min-width:1320px; }
+.mkw-plan-report-table th { color:var(--brand); font-weight:800; }
+.mkw-plan-report-table td { vertical-align:top; font-weight:600; line-height:1.75; }
+.mkw-plan-report-table tbody tr:hover { background:var(--surface-soft); }
+.mkw-plan-report-product { min-width:170px; max-width:260px; }
+.mkw-plan-report-product strong { display:block; }
+.mkw-plan-report-product small { display:block; color:var(--muted); margin-top:5px; font-size:11px; }
+.mkw-plan-report-copy { min-width:160px; max-width:300px; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; font-size:12px; font-weight:500; }
+.mkw-plan-report-link { display:inline-block; white-space:nowrap; color:var(--brand); text-decoration:underline; text-underline-offset:3px; }
+.mkw-plan-report .mkw-plan-history { min-width:0; }
+@media(max-width:850px) {
+  .mkw-plan-report-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mkw-plan-report-heading { align-items:flex-start; }
+}
+@media(max-width:480px) {
+  .mkw-plan-report-summary { grid-template-columns:1fr 1fr; gap:8px; }
+  .mkw-plan-report-summary>div { padding:4px; }
+  .mkw-plan-report-heading>div:first-child { width:100%; }
+}
+
+/* Dashboard section and agenda day-summary interactions (original component styles). */
+.mkw-dashboard .mkw-publishing-column>header { padding:0; }
+.mkw-dashboard .mkw-column-toggle {
+  width:100%; min-height:64px; display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:14px 19px; background:transparent; color:var(--ink);
+  border:0; cursor:pointer; font:inherit; text-align:start;
+}
+.mkw-dashboard .mkw-column-toggle:hover { background:var(--surface); }
+.mkw-dashboard .mkw-column-toggle .mkw-column-title svg:last-child { transition:transform .16s; }
+.mkw-dashboard .mkw-column-toggle .mkw-column-title svg.mkw-section-open { transform:rotate(180deg); }
+.mkw-dashboard .mkw-column-count {
+  background:var(--brand); color:var(--surface); min-width:35px; height:35px;
+  border-radius:100px; display:grid; place-items:center; font-size:13px; font-weight:800;
+}
+.mkw-dashboard-publish-day .mkw-dashboard-preview-title strong {
+  display:inline-flex; align-items:center; gap:7px;
+}
+.mkw-dashboard-publish-day-footer {
+  display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  padding-top:8px; border-top:1px solid var(--line); color:var(--muted); font-size:12px;
+}
+.mkw-dashboard-publish-day-footer strong { color:var(--brand); }
+.mkw-dashboard-publish-detail-hint { color:var(--muted); font-size:11px; }
+.mkw-dashboard-publish-day .mkw-dashboard-day-status { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-start; }
+.mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap .mkw-readiness {
+  gap:9px; margin:0; width:100%;
+}
+.mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap .mkw-readiness>span { font-weight:800; }
+.mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap progress { height:9px; width:100%; accent-color:var(--brand); }
