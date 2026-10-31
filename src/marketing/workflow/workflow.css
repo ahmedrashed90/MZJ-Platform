@@ -705,3 +705,23 @@
 .mkw-plan-history article{padding:.75rem 0;border-bottom:1px solid #ead9cd;display:grid;gap:.35rem}.mkw-plan-history p{white-space:pre-wrap}
 .mkw-post-type-multi{display:flex;flex-wrap:wrap;gap:.35rem}.mkw-post-type-multi label{display:inline-flex;gap:.4rem;align-items:center;border:1px solid #ead9cd;border-radius:8px;padding:.3rem .55rem;cursor:pointer}.mkw-post-type-multi label.is-checked{border-color:#4a211c;background:#f3e8dc}
 .mkw-executor-copy{display:grid;gap:.7rem;padding:1rem;border:1px solid #ead9cd;border-radius:12px}.mkw-executor-copy .mkw-publish-copy{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem}.mkw-executor-copy label{display:grid;gap:.4rem}
+
+/* Dashboard publishing readiness and review-state visual consistency. */
+.mkw-dashboard-plan .mkw-publish-readiness { width:min(350px,100%); margin-block:3px 5px; }
+.mkw-dashboard-plan .mkw-publish-readiness .mkw-readiness { gap:7px; }
+.mkw-dashboard-plan .mkw-publish-readiness .mkw-readiness>span { font-weight:800; }
+.mkw-dashboard-plan .mkw-publish-readiness progress { width:100%; height:9px; accent-color:var(--brand); }
+.mkw-plan-state-revision,.mkw-plan-revision>summary .mkw-plan-state { border-color:#dc2626!important; color:#b91c1c!important; background:#fff5f4!important; }
+.mkw-plan-state-submitted,.mkw-plan-submitted>summary .mkw-plan-state { border-color:#b7791f!important; color:#92400e!important; background:#fffbeb!important; }
+.mkw-plan-state-in_progress,.mkw-plan-in_progress>summary .mkw-plan-state { border-color:#a78bfa!important; color:#6b21a8!important; background:#faf5ff!important; }
+.mkw-plan-state-publishing,.mkw-plan-publishing>summary .mkw-plan-state { border-color:#2563eb!important; color:#1d4ed8!important; background:#eff6ff!important; }
+.mkw-plan-state-published,.mkw-plan-published>summary .mkw-plan-state { border-color:#16a34a!important; color:#15803d!important; background:#f0fdf4!important; }
+.mkw-dashboard-plan.mkw-plan-revision { border-color:#fca5a5; }
+.mkw-dashboard-plan.mkw-plan-submitted { border-color:#fcd34d; }
+.mkw-dashboard-plan.mkw-plan-publishing { border-color:#93c5fd; }
+.mkw-dashboard-plan.mkw-plan-published { border-color:#86efac; }
+.marketing-publish-control { display:grid;gap:16px; }
+.marketing-publish-control>p { color:var(--muted);line-height:1.8; }
+.marketing-publish-control-toggle { display:flex;align-items:center;gap:12px;border:1px solid var(--line-strong);padding:15px;border-radius:12px; }
+.marketing-publish-control-toggle input { width:20px;height:20px;accent-color:var(--brand); }
+.marketing-publish-control>button { justify-self:start; }

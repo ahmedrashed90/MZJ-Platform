@@ -48,6 +48,34 @@ function canManageItemFormats(user: SessionUser) {
     ((marketingRole === 'marketing_admin' || (user.roleCodes || []).includes('marketing_admin')) &&
       hasPermission(user, 'marketing.task.review'));
 }
+function canManagePublishControls(user: SessionUser) {
+  return hasPermission(user, 'platform.superadmin') ||
+    (getSystemAccess(user, 'marketing').roleCode === 'marketing_admin' &&
+      hasPermission(user, 'settings.marketing.manage'));
+}
+function canDeletePlan(user: SessionUser, kind: 'agenda' | 'campaign') {
+  return canManagePublishControls(user) &&
+    hasPermission(user, kind === 'agenda' ? 'marketing.agenda.delete' : 'marketing.campaign.delete');
+}
+/** The absent-table fallback keeps existing dashboards readable before schema-13. */
+async function publishControlSettings(sql: Sql) {
+  const [table] = await sql<{ ready: boolean }[]>`select to_regclass('marketing.work_publish_controls') is not null as ready`;
+  if (!table?.ready) return { enabled: false, migrationRequired: true };
+  const [row] = await sql<{ dashboard_publish_enabled: boolean }[]>`
+    select dashboard_publish_enabled from marketing.work_publish_controls where singleton=true`;
+  return { enabled: Boolean(row?.dashboard_publish_enabled), migrationRequired: false };
+}
+async function savePublishControlSettings(sql: Sql, user: SessionUser, body: Row) {
+  if (!canManagePublishControls(user)) throw new Error(W.denied);
+  if (typeof body.enabled !== 'boolean') throw new Error(W.invalid);
+  const settings = await publishControlSettings(sql);
+  if (settings.migrationRequired) throw new Error('حدّث قاعدة بيانات التسويق من الداش بورد أولًا لتفعيل إعدادات النشر');
+  await sql`insert into marketing.work_publish_controls(singleton,dashboard_publish_enabled,updated_by,updated_at)
+    values(true,${body.enabled},${user.id}::uuid,now())
+    on conflict(singleton) do update set dashboard_publish_enabled=excluded.dashboard_publish_enabled,
+      updated_by=excluded.updated_by,updated_at=now()`;
+  return { ok: true, enabled: body.enabled, message: 'تم حفظ إعداد زر النشر' };
+}
 function productManager(user: SessionUser) {
   return getSystemAccess(user, 'marketing').dataScope === 'all' &&
     (hasPermission(user, 'marketing.products.view') || hasPermission(user, 'marketing.publish_prep.view'));
@@ -1263,34 +1291,51 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   });
 }
 
-/** Native campaigns share their ID with the existing marketing.campaigns adapter.
- * Soft-delete that adapter, so historical files, published posts and engagement
- * references are preserved. Never remove work_plan_items by cascading delete.
- */
-async function deleteWorkflowCampaign(sql: Sql, user: SessionUser, planId: string) {
-  requirePermission(user, 'marketing.campaign.delete');
+/** Remove a single agenda/campaign, never its source products or task. When
+ * a provider publication exists, retain the audit/FK graph and soft-delete
+ * only the plan; for a draft with no provider targets remove plan rows fully. */
+async function deleteWorkflowPlan(sql: Sql, user: SessionUser, planId: string) {
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
-    const [campaign] = await tx<any[]>`select p.id,p.name,p.created_by
-      from marketing.work_plans p join marketing.campaigns c on c.id=p.id
-      where p.id=${planId}::uuid and p.kind='campaign' and c.is_deleted=false
-      for update of p`;
-    if (!campaign) throw new Error(W.notFound);
-    if (!isManager(user) && campaign.created_by !== user.id) throw new Error(W.denied);
-    // A publication being sent to a provider cannot be safely cancelled.
-    const [sending] = await tx<any[]>`select 1 from marketing.work_plan_items line
-      join marketing.work_publish_targets target on target.line_id=line.id
+    const [plan] = await tx<any[]>`select id,kind,name,created_by from marketing.work_plans
+      where id=${planId}::uuid and is_deleted=false for update`;
+    if (!plan || !['campaign','agenda'].includes(plan.kind)) throw new Error(W.notFound);
+    if (!canDeletePlan(user,plan.kind)) throw new Error(W.denied);
+    const [inFlight] = await tx<any[]>`select 1 from marketing.work_plan_items l
+      join marketing.work_publish_targets target on target.line_id=l.id
       join marketing.publish_schedule s on s.id=target.schedule_id
-      where line.plan_id=${planId}::uuid and s.status in ('processing','verification_required') limit 1`;
-    if (sending) throw new Error(W.unpublishedOnly);
-    await tx`update marketing.campaigns set is_deleted=true,updated_at=now()
-      where id=${planId}::uuid and is_deleted=false`;
-    await tx`update marketing.publish_schedule s set status='cancelled',updated_at=now()
-      where s.id in (select target.schedule_id from marketing.work_publish_targets target
-        join marketing.work_plan_items line on line.id=target.line_id where line.plan_id=${planId}::uuid)
-      and s.status in ('waiting','failed')`;
-    return { ok:true, id:planId, message:W.remove };
+      where l.plan_id=${planId}::uuid and s.status in ('processing','verification_required') limit 1`;
+    if (inFlight) throw new Error('هناك نشر جارٍ أو يحتاج للتحقق؛ انتظر انتهاء العملية قبل حذف الجدول');
+    const [hasTargets] = await tx<any[]>`select 1 from marketing.work_publish_targets target
+      join marketing.work_plan_items l on l.id=target.line_id where l.plan_id=${planId}::uuid limit 1`;
+    const [hasAdapterReferences] = await tx<any[]>`select 1 where
+      exists(select 1 from marketing.tasks where (campaign_id=${planId}::uuid or agenda_id=${planId}::uuid))
+      or exists(select 1 from marketing.creatives where (campaign_id=${planId}::uuid or agenda_id=${planId}::uuid))
+      or exists(select 1 from marketing.publish_schedule where source_id=${planId}::uuid) limit 1`;
+    if (hasTargets || hasAdapterReferences) {
+      // Provider-linked records are immutable evidence for reporting and CRM.
+      await tx`update marketing.publish_schedule s set status='cancelled',updated_at=now()
+        where s.id in (select target.schedule_id from marketing.work_publish_targets target
+          join marketing.work_plan_items l on l.id=target.line_id where l.plan_id=${planId}::uuid)
+          and s.status in ('waiting','failed')`;
+      await tx`update marketing.work_plan_items set is_deleted=true,updated_at=now()
+        where plan_id=${planId}::uuid and is_deleted=false`;
+      await tx`update marketing.work_plans set is_deleted=true,deleted_at=now(),
+        deleted_by=${user.id}::uuid,activated_at=null,updated_at=now() where id=${planId}::uuid`;
+      if (plan.kind === 'campaign') await tx`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${planId}::uuid`;
+      else await tx`update marketing.agendas set status='archived',archived_at=coalesce(archived_at,now()),
+        archived_by=${user.id}::uuid,updated_at=now() where id=${planId}::uuid`;
+      return { ok:true,id:planId,message:'تم حذف الجدول من النظام، مع الاحتفاظ بسجل النشر المرتبط بالمنصات' };
+    }
+    // Trial plans with no provider targets can be deleted completely, including
+    // review notes and manually entered post URLs. Source products remain.
+    await tx`delete from marketing.work_plan_reviews where plan_id=${planId}::uuid`;
+    await tx`delete from marketing.work_plan_items where plan_id=${planId}::uuid`;
+    if (plan.kind === 'campaign') await tx`delete from marketing.campaigns where id=${planId}::uuid`;
+    else await tx`delete from marketing.agendas where id=${planId}::uuid`;
+    await tx`delete from marketing.work_plans where id=${planId}::uuid`;
+    return { ok:true,id:planId,message:'تم حذف الحملة أو الأجندة التجريبية نهائيًا دون حذف المنتجات والتاسكات' };
   });
 }
 async function planDetails(sql: Sql, user: SessionUser, planId: string) {
@@ -1846,6 +1891,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       : [{ ready: false }];
     response.status(200).json({ ok: true, ...status,
       performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready),
+      publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
       ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
@@ -1881,6 +1927,9 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       const meta = await services.meta(sql, user, false);
       const enabled = new Set((await sql<any[]>`select user_id::text from core.user_systems where system_code='marketing' and is_enabled=true`).map(row => row.user_id));
       result = { ...meta, users: [], departments: meta.departments.map((department: any) => ({ ...department, users: department.users.filter((member: any) => enabled.has(member.id)) })), capabilities: workflowCapabilities(user), userId: user.id };
+    } else if (resource === 'work_publish_button_settings') {
+      if (!hasPermission(user, 'settings.marketing.view') && !hasPermission(user, 'settings.marketing.manage') && !hasPermission(user, 'marketing.dashboard.view')) throw new Error(W.denied);
+      result = { ok: true, ...(await publishControlSettings(sql)), canManage: canManagePublishControls(user) };
     } else if (resource === 'work_dashboard') {
       requirePermission(user, 'marketing.dashboard.view');
       result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user) };
@@ -1951,8 +2000,13 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
     else if (action === 'work_update_plan') result = await updatePlanRows(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
-    else if (action === 'work_activate_plan') result = await activateWorkflowPlan(sql, user, body, services);
-    else if (action === 'work_delete_campaign') result = await deleteWorkflowCampaign(sql, user, id(body.id));
+    else if (action === 'work_activate_plan') {
+      const settings = await publishControlSettings(sql);
+      if (!settings.enabled) throw new Error('زر النشر التلقائي متوقف من إعدادات التسويق');
+      result = await activateWorkflowPlan(sql, user, body, services);
+    }
+    else if (action === 'work_save_publish_button_settings') result = await savePublishControlSettings(sql, user, body);
+    else if (action === 'work_delete_campaign' || action === 'work_delete_plan') result = await deleteWorkflowPlan(sql, user, id(body.id));
     else if (action === 'work_delete_task') result = await deleteWorkflowTask(sql, user, id(body.id));
     else if (action === 'work_save_product_draft') result = await saveProductDraft(sql, user, body);
     else if (action === 'work_save_prep') result = await savePreparation(sql, user, body, services);

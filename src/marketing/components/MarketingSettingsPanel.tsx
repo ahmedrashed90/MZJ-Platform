@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CreditCard, FloppyDisk, LinkSimple, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { CreditCard, FloppyDisk, LinkSimple, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle, PaperPlaneTilt } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
@@ -7,10 +7,11 @@ import { marketingFetch } from "../api";
 import { DepartmentsPage } from "../pages/DepartmentsPage";
 import { PlatformConnectionsPage } from "../pages/PlatformConnectionsPage";
 import { SubscriptionSettings } from "./SubscriptionSettings";
+import { useWorkQuery, workPost } from "../workflow/api";
 import { WorkflowEvaluationSettings } from "./WorkflowEvaluationSettings";
 import "../marketing.css";
 
-type MarketingSettingsTab = "departments" | "colors" | "packages" | "evaluations" | "platforms" | "subscriptions";
+type MarketingSettingsTab = "departments" | "colors" | "packages" | "evaluations" | "platforms" | "subscriptions" | "publishing";
 type UserColorRow = { id: string; full_name: string; email?: string | null; color: string };
 type LookupRow = { id: string; name: string; sort_order: number };
 
@@ -20,7 +21,7 @@ type PackageSettingsPayload = {
 };
 
 function resolveMarketingSettingsTab(value: string | null, canViewSettings: boolean, canViewConnections: boolean, canManageSubscriptions: boolean): MarketingSettingsTab {
-  if (canViewSettings && (value === "departments" || value === "colors" || value === "packages" || value === "evaluations")) return value;
+  if (canViewSettings && (value === "departments" || value === "colors" || value === "packages" || value === "evaluations" || value === "publishing")) return value;
   if (value === "platforms" && canViewConnections) return "platforms";
   if (value === "subscriptions" && canManageSubscriptions) return "subscriptions";
   if (canViewSettings) return "departments";
@@ -129,6 +130,9 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const publishSettings = useWorkQuery<{ enabled: boolean; migrationRequired: boolean }>("publish_button_settings", {}, tab === "publishing");
+  const [publishEnabled, setPublishEnabled] = useState(false);
+  useEffect(() => { if (publishSettings.data) setPublishEnabled(publishSettings.data.enabled); }, [publishSettings.data]);
 
   useEffect(() => {
     setTab(resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections, canManageSubscriptions));
@@ -166,6 +170,16 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
     setSearchParams({ section: "marketing", tab: next }, { replace: true });
   }
 
+  async function savePublishing() {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = await workPost<{ message: string }>("save_publish_button_settings", { enabled: publishEnabled });
+      setMessage(result.message);
+      await publishSettings.reload();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر حفظ إعداد النشر"); }
+    finally { setBusy(false); }
+  }
+
   async function saveColors() {
     setBusy(true);
     setError("");
@@ -191,6 +205,7 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
           {canViewMarketingSettings ? <button type="button" className={tab === "departments" ? "active" : ""} onClick={() => chooseTab("departments")}><UsersThree size={18} weight="duotone" />الأقسام</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "colors" ? "active" : ""} onClick={() => chooseTab("colors")}><Palette size={18} weight="duotone" />تعيين لون لكل مسؤول</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "packages" ? "active" : ""} onClick={() => chooseTab("packages")}><Package size={18} weight="duotone" />إعدادات الباقات</button> : null}
+          {canViewMarketingSettings ? <button type="button" className={tab === "publishing" ? "active" : ""} onClick={() => chooseTab("publishing")}><PaperPlaneTilt size={18} weight="duotone" />النشر</button> : null}
           {canViewMarketingSettings ? <button type="button" className={tab === "evaluations" ? "active" : ""} onClick={() => chooseTab("evaluations")}><UsersThree size={18} weight="duotone" />الملاحظات والتقييم</button> : null}
           {canViewConnections ? <button type="button" className={tab === "platforms" ? "active" : ""} onClick={() => chooseTab("platforms")}><LinkSimple size={18} weight="duotone" />ربط المنصات</button> : null}
           {canManageSubscriptions ? <button type="button" className={tab === "subscriptions" ? "active" : ""} onClick={() => chooseTab("subscriptions")}><CreditCard size={18} weight="duotone" />الاشتراكات</button> : null}
@@ -208,6 +223,14 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
         {tab === "departments" ? <DepartmentsPage embedded /> : null}
 
         {tab === "evaluations" ? <WorkflowEvaluationSettings readOnly={readOnly}/> : null}
+        {tab === "publishing" ? <section className="panel marketing-settings-panel marketing-publish-control">
+          <h3>التحكم في زر النشر التلقائي</h3>
+          <p>النشر اليدوي وروابط المنشورات وتجهيز النشر تظل متاحة دائمًا. هذا الخيار يُظهر أو يُخفي زر «النشر» في قسم النشر بالداش بورد فقط، دون تغيير آلية النشر الحالية.</p>
+          {publishSettings.error ? <div className="connection-banner">{publishSettings.error}</div> : null}
+          {publishSettings.data?.migrationRequired ? <div className="connection-banner">حدّث قاعدة بيانات التسويق من الداش بورد أولًا لحفظ هذا الإعداد.</div> : null}
+          <label className="marketing-publish-control-toggle"><input type="checkbox" checked={publishEnabled} disabled={readOnly || busy || publishSettings.loading || publishSettings.data?.migrationRequired} onChange={event => setPublishEnabled(event.target.checked)} /><strong>{publishEnabled ? "زر النشر مفعل" : "زر النشر متوقف (النشر يدوي)"}</strong></label>
+          <button type="button" className="primary" disabled={readOnly || busy || publishSettings.loading || publishSettings.data?.migrationRequired || !publishSettings.data || publishEnabled === publishSettings.data.enabled} onClick={() => void savePublishing()}><FloppyDisk size={18}/>حفظ إعداد النشر</button>
+        </section> : null}
 
         {tab === "colors" ? (
           <section className="panel marketing-settings-panel">

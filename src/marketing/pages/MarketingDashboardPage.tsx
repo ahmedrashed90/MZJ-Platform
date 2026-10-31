@@ -18,7 +18,8 @@ export function MarketingDashboardPage() {
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities }>('dashboard');
-  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; canUpgrade: boolean }>('schema_status');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; canUpgrade: boolean }>('schema_status');
+  const publishSettings = useWorkQuery<{ enabled: boolean }>('publish_button_settings');
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
   async function upgradeSchema() {
     if (schemaUpgrading || !schema.data?.canUpgrade) return;
@@ -27,6 +28,7 @@ export function MarketingDashboardPage() {
       const upgraded = await workPost<{ ready: boolean }>('upgrade_schema', {});
       if (!upgraded.ready) throw new Error('لم تكتمل تهيئة قاعدة بيانات التسويق');
       await schema.reload();
+      await publishSettings.reload();
       await query.reload();
     } catch (error) { setSchemaError(error instanceof Error ? error.message : W.invalid); }
     finally { setSchemaUpgrading(false); }
@@ -54,6 +56,7 @@ export function MarketingDashboardPage() {
       {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
     </div>}
+    {schema.data?.ready && schema.data.publishSettingsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يتوفر تحديث إعدادات التحكم في زر النشر التلقائي.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث إعدادات النشر</button></div>}
     {schema.data?.ready && !schema.data.performanceReady && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status">
       <span>يتوفر تحسين لفهارس قاعدة بيانات التسويق لتسريع تحميل تفاصيل التاسكات والمراجعات.</span>
       <button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحسين قاعدة البيانات...' : 'تحسين سرعة تحميل التسويق'}</button>
@@ -83,12 +86,12 @@ export function MarketingDashboardPage() {
             const published = group.every(line => line.published_ready);
             const reviewStatus = group[0].review_status || 'in_progress';
             const readiness = Math.round(group.filter(line => line.published_ready).length * 100 / group.length);
-            return <details className="mkw-plan-group mkw-dashboard-plan" key={id} open={lines.length < 18}><summary><div><span className="mkw-code">{group[0].plan_no}</span><h3>{group[0].name}</h3><span className="mkw-muted">{group[0].kind === 'agenda' ? W.agenda : W.campaign} · {W.productCount}: {group.length}</span><strong className="mkw-plan-state">{published && reviewStatus === 'publishing' ? 'تم النشر' : planStatusName(reviewStatus)}</strong><span className="mkw-muted">جاهزية النشر: {readiness}%</span></div><CaretDown size={18}/></summary>
-              <div className="mkw-plan-lines">{group.map(line => <article key={line.id} className="mkw-plan-line mkw-dashboard-line"><div className="mkw-plan-row"><div><strong>{line.idea_name}</strong><span className="mkw-muted">{line.task_name}</span></div><MediaLabel kind={line.media_kind}/></div><div className="mkw-plan-row"><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span><span>{[line.platform_name,line.post_type_name].filter(Boolean).join(' · ')}</span><span className="mkw-plan-state">{line.published_ready ? 'تم النشر' : planStatusName(line.review_status || line.status)}</span></div></article>)}</div>
+            return <details className={`mkw-plan-group mkw-dashboard-plan mkw-plan-${published && reviewStatus === 'publishing' ? 'published' : reviewStatus}`} key={id} open={lines.length < 18}><summary><div><span className="mkw-code">{group[0].plan_no}</span><h3>{group[0].name}</h3><span className="mkw-muted">{group[0].kind === 'agenda' ? W.agenda : W.campaign} · {W.productCount}: {group.length}</span><strong className={`mkw-plan-state mkw-plan-state-${published && reviewStatus === 'publishing' ? 'published' : reviewStatus}`}>{published && reviewStatus === 'publishing' ? 'تم النشر' : planStatusName(reviewStatus)}</strong><div className="mkw-publish-readiness"><Readiness value={readiness} label="جاهزية النشر"/></div></div><CaretDown size={18}/></summary>
+              <div className="mkw-plan-lines">{group.map(line => <article key={line.id} className="mkw-plan-line mkw-dashboard-line"><div className="mkw-plan-row"><div><strong>{line.idea_name}</strong><span className="mkw-muted">{line.task_name}</span></div><MediaLabel kind={line.media_kind}/></div><div className="mkw-plan-row"><span className="mkw-muted">{line.kind === 'agenda' ? W.publishDate : W.fundingDate}: {showDate(line.scheduled_on)}</span><span>{[line.platform_name,line.post_type_name].filter(Boolean).join(' · ')}</span><span className={`mkw-plan-state mkw-plan-state-${line.published_ready ? 'published' : (line.review_status || line.status)}`}>{line.published_ready ? 'تم النشر' : planStatusName(line.review_status || line.status)}</span></div></article>)}</div>
               <div className="mkw-dashboard-publish-actions"><button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>جدول النشر</button>{group[0].kind === 'campaign' && <button type="button" className="secondary" onClick={() => setBudgetId(id)}><Wallet size={17}/>جدول الميزانية</button>}
                 <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
-                <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>
-              </div>{!supported && <div className="mkw-publishing-support-note" role="status">يمكن حفظ تجهيز النشر، لكن النشر التلقائي غير متاح للمنصة المحددة عبر الربط الحالي. استخدم منصة متصلة ومدعومة للنشر التلقائي.</div>}{activated && <div className="mkw-publishing-activated"><CheckCircle size={17}/>تم تفعيل النشر حسب الجدول</div>}
+                {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
+              </div>{publishSettings.data?.enabled && !supported && <div className="mkw-publishing-support-note" role="status">يمكن حفظ تجهيز النشر، لكن النشر التلقائي غير متاح للمنصة المحددة عبر الربط الحالي. استخدم منصة متصلة ومدعومة للنشر التلقائي.</div>}{activated && <div className="mkw-publishing-activated"><CheckCircle size={17}/>تم تفعيل النشر حسب الجدول</div>}
             </details>;
           })}
         </div>

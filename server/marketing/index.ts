@@ -2093,11 +2093,11 @@ async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
       (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false and t.task_kind in ('task_template','execution')),
       a.result_file_id::text,coalesce(jsonb_array_length(a.links),0)::int
     from marketing.agendas a
-    where ${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
+    where a.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
       or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and (
         t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
         or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}))
-      ))
+      )))
     order by created_at desc
   `;
   return { ok:true,rows };
@@ -3816,7 +3816,32 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
 async function saveResultFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع ملف النتائج");const sourceType=clean(body.sourceType),id=clean(body.id),fileId=clean(body.fileId);await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ ملف النتائج"};}
 async function saveLinks(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),permission=sourceType==='agenda'?"marketing.agenda.edit":"marketing.campaign.edit";if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لتعديل الروابط");const id=clean(body.id),links=arrayValue(body.links).filter((item:any)=>clean(item.platform)&&clean(item.url));await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ روابط الحملة"};}
 async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.campaign.archive"))throw new Error("لا توجد صلاحية لأرشفة الحملة");const sourceType=clean(body.sourceType),id=clean(body.id);await assertMarketingEntityAccess(sql,user,sourceType,id);const[entity]=sourceType==='agenda'?await sql<any[]>`select result_file_id::text,links from marketing.agendas where id=${id}::uuid`:await sql<any[]>`select result_file_id::text,links from marketing.campaigns where id=${id}::uuid`;if(!entity)throw new Error("السجل غير موجود");const missing=[];if(!entity.result_file_id)missing.push("ملف نتائج الحملة");if(!arrayValue(entity.links).length)missing.push("روابط الحملة");if(missing.length)throw new Error(`لا يمكن أرشفة الحملة. الناقص: ${missing.join(" + ")}`);if(sourceType==='agenda')await sql`update marketing.agendas set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تمت الأرشفة"};}
-async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),id=clean(body.id);const permission=sourceType==='agenda'?'marketing.agenda.delete':'marketing.campaign.delete';if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لمسح السجل");await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
+async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const sourceType=clean(body.sourceType),id=clean(body.id);
+  if(!['agenda','campaign'].includes(sourceType))throw new Error('نوع الجدول غير صحيح');
+  const permission=sourceType==='agenda'?'marketing.agenda.delete':'marketing.campaign.delete';
+  const marketingAdmin=marketingAccess(user).roleCode==='marketing_admin';
+  if(!(hasPermission(user,'platform.superadmin')||(marketingAdmin&&hasPermission(user,'settings.marketing.manage'))) || !hasPermission(user,permission))throw new Error('لا توجد صلاحية لمسح السجل');
+  await assertMarketingEntityAccess(sql,user,sourceType,id);
+  return sql.begin(async tx=>{
+    if(sourceType==='agenda'){
+      const [linked]=await tx<any[]>`select 1 where exists(select 1 from marketing.creatives where agenda_id=${id}::uuid)
+        or exists(select 1 from marketing.tasks where agenda_id=${id}::uuid)
+        or exists(select 1 from marketing.task_templates where source_type='agenda' and source_id=${id}::uuid)
+        or exists(select 1 from marketing.publish_schedule where source_type='agenda' and source_id=${id}::uuid) limit 1`;
+      if(linked){
+        // Hard deleting a legacy agenda cascades into its creatives and tasks.
+        // Preserve those records for historical reports, but remove the agenda
+        // from the active marketing lists.
+        await tx`update marketing.agendas set status='archived',archived_at=coalesce(archived_at,now()),
+          archived_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+        return{ok:true,message:'تم حذف الأجندة من القوائم مع الاحتفاظ بالسجلات التاريخية المرتبطة'};
+      }
+      await tx`delete from marketing.agendas where id=${id}::uuid`;
+    }else await tx`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;
+    return{ok:true,message:'تم المسح'};
+  });
+}
 
 async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
