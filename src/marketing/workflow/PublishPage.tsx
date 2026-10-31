@@ -27,7 +27,7 @@ export function PublishPage() {
   const groups = new Map<string, WorkProduct[]>();
   for (const product of products) groups.set(product.task_id, [...(groups.get(product.task_id) || []), product]);
   const plannedCount = (query.data?.lines || []).length;
-  const draftCount = (query.data?.drafts || []).filter(d => String(d.caption || '').trim() && String(d.hashtags || '').trim()).length;
+  const draftCount = (query.data?.products || []).filter(product => { const draft = query.data?.drafts.find(row=>row.product_id===product.id); return String(draft?.caption || product.caption || '').trim() && String(draft?.hashtags || product.hashtags || '').trim(); }).length;
 
   return <div className="mkw mkw-publishing-page">
     <WorkHeader title={W.publishing} onRefresh={() => void query.reload()} loading={query.loading}>
@@ -57,8 +57,8 @@ export function PublishPage() {
               <td><span className="mkw-muted">{product.formats.length} {W.sizes}</span></td>
               <td className="mkw-publish-assignee">{product.assignee_name || '—'}</td>
               <td><span className="mkw-publish-count">{plans.length}</span></td>
-              <td><span className={`mkw-publish-draft-state ${draft?.caption?.trim() && draft?.hashtags?.trim() ? 'is-ready' : ''}`}>
-                {draft?.caption?.trim() && draft?.hashtags?.trim() ? <><CheckCircle size={16} weight="fill"/>تم حفظ الكابشن والهاشتاج</> : !draft?.caption?.trim() ? 'الكابشن لم يُحفظ' : 'الهاشتاج لم يُحفظ'}
+              <td><span className={`mkw-publish-draft-state ${(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? 'is-ready' : ''}`}>
+                {(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? <><CheckCircle size={16} weight="fill"/>تم حفظ الكابشن والهاشتاج</> : !(draft?.caption || product.caption)?.trim() ? 'الكابشن لم يُحفظ' : 'الهاشتاج لم يُحفظ'}
               </span></td>
               <td><div className="mkw-publish-row-actions"><ProductViewButton id={product.id} /><button type="button" className="secondary" aria-expanded={open} onClick={() => setExpandedProduct(open ? '' : product.id)}>{open ? 'إغلاق' : W.open}<CaretDown size={15} className={open ? 'mkw-publish-up' : ''}/></button></div></td>
             </tr>{open && <tr className="mkw-publish-detail-row"><td colSpan={8}><div className="mkw-publish-product-body">
@@ -82,11 +82,11 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
   product: WorkProduct; draft?: ProductDraft; canSave: boolean; onSaved: () => void;
 }) {
   const [selected, setSelected] = useState<string[]>(() => draft?.format_ids?.length ? draft.format_ids : product.formats.map(f => f.id));
-  const [caption, setCaption] = useState(draft?.caption || ''), [hashtags, setHashtags] = useState(draft?.hashtags || '');
+  const [caption, setCaption] = useState(draft?.caption || product.caption || ''), [hashtags, setHashtags] = useState(draft?.hashtags || product.hashtags || '');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   useEffect(() => {
     setSelected(draft?.format_ids?.length ? draft.format_ids : product.formats.map(f => f.id));
-    setCaption(draft?.caption || ''); setHashtags(draft?.hashtags || '');
+    setCaption(draft?.caption || product.caption || ''); setHashtags(draft?.hashtags || product.hashtags || '');
   }, [draft?.updated_at, product.id]);
   const groups = new Map<string, typeof product.formats>();
   for (const format of product.formats) {
@@ -105,13 +105,13 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
   }
   return <form className="mkw-publish-draft" onSubmit={save}>
     <div className="mkw-publish-copy-title"><div><h4>{W.required}: {product.idea_name || product.statement}</h4><small>{product.task_no} · {product.task_name} · {product.assignee_name}</small></div>
-      <span className={`mkw-publish-draft-state ${draft?.caption?.trim() && draft?.hashtags?.trim() ? 'is-ready' : ''}`}>
-        {draft?.caption?.trim() && draft?.hashtags?.trim() ? <><CheckCircle size={17} weight="fill"/>تم حفظ النصوص</> : 'أكمل النصوص واحفظها'}
+      <span className={`mkw-publish-draft-state ${(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? 'is-ready' : ''}`}>
+        {(draft?.caption || product.caption)?.trim() && (draft?.hashtags || product.hashtags)?.trim() ? <><CheckCircle size={17} weight="fill"/>تم حفظ النصوص</> : 'أكمل النصوص واحفظها'}
       </span>
     </div>
     <p className="mkw-muted">كل مطلوب له كابشن وهاشتاج مستقلان. اكتب النصين واضغط حفظ؛ بعدها تظهر علامة صح للمطلوب في الجدول.</p>
-    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{draft?.caption?.trim() && caption === draft.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{caption.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field></div>
-      <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{draft?.hashtags?.trim() && hashtags === draft.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{hashtags.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div></div>
+    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{(draft?.caption || product.caption)?.trim() && caption === (draft?.caption || product.caption) ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{caption.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.caption}><textarea rows={4} value={caption} maxLength={10000} disabled={busy} readOnly={!canSave} placeholder={W.caption} onChange={event => setCaption(event.target.value)} /></Field></div>
+      <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{(draft?.hashtags || product.hashtags)?.trim() && hashtags === (draft?.hashtags || product.hashtags) ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>{hashtags.trim() ? 'غير محفوظ' : 'لم يُكتب'}</span>}</div><Field label={W.hashtags}><textarea rows={4} value={hashtags} maxLength={3000} disabled={busy} readOnly={!canSave} placeholder="#" onChange={event => setHashtags(event.target.value)} /></Field></div></div>
     <details className="mkw-publish-format-details"><summary><strong>المنصات والمقاسات الخاصة بالمطلوب</strong><span>{selected.length} / {product.formats.length} ▾</span></summary>
     <header className="mkw-publish-draft-head"><h4>{W.platforms}</h4><div className="mkw-actions"><span className="mkw-muted">{selected.length} / {product.formats.length}</span>
       <label className="mkw-checkbox"><input type="checkbox" disabled={!canSave || busy || !product.formats.length} checked={!!product.formats.length && product.formats.every(f => selected.includes(f.id))} onChange={event => setSelected(event.target.checked ? product.formats.map(f => f.id) : [])}/>{W.selectAll}</label>

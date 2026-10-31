@@ -1,7 +1,7 @@
 import { isWorkDate, supportsWorkMedia, type WorkMediaKind } from '../../../shared/marketing-workflow';
 import type { PlatformPostType } from '../types';
 
-export type PlanPlatformDraft = { platformId: string; postTypeId: string; budget: string };
+export type PlanPlatformDraft = { platformId: string; postTypeId: string; postTypeIds?: string[]; budget: string };
 export type PlanEntryDraft = { key: string; date: string; productId: string; platforms: PlanPlatformDraft[] };
 export type PlanProductMedia = { id: string; media_kind: WorkMediaKind };
 
@@ -19,7 +19,7 @@ export function availablePlanPostTypes(postTypes: PlatformPostType[], mediaKind:
 
 export function addPlanPlatform(platformId: string, postTypes: PlatformPostType[], mediaKind: WorkMediaKind): PlanPlatformDraft {
   const compatible = availablePlanPostTypes(postTypes, mediaKind, platformId);
-  return { platformId, postTypeId: compatible.length === 1 ? compatible[0].id : '', budget: '' };
+  return { platformId, postTypeId: compatible.length === 1 ? compatible[0].id : '', postTypeIds: compatible.length === 1 ? [compatible[0].id] : [], budget: '' };
 }
 
 export function planEntryValid(entry: PlanEntryDraft, products: PlanProductMedia[], postTypes: PlatformPostType[], kind: 'agenda' | 'campaign'): boolean {
@@ -29,7 +29,9 @@ export function planEntryValid(entry: PlanEntryDraft, products: PlanProductMedia
   for (const platform of entry.platforms) {
     if (!platform.platformId || seen.has(platform.platformId)) return false;
     seen.add(platform.platformId);
-    if (!availablePlanPostTypes(postTypes, product.media_kind, platform.platformId).some(type => type.id === platform.postTypeId)) return false;
+    const selected = platform.postTypeIds || (platform.postTypeId ? [platform.postTypeId] : []);
+    const available = new Set(availablePlanPostTypes(postTypes, product.media_kind, platform.platformId).map(type => type.id));
+    if (!selected.length || new Set(selected).size !== selected.length || selected.some(id => !available.has(id))) return false;
     if (kind === 'campaign' && (platform.budget.trim() === '' || !Number.isFinite(Number(platform.budget)) || Number(platform.budget) < 0 || Number(platform.budget) > 100000000 || Math.abs(Number(platform.budget) * 100 - Math.round(Number(platform.budget) * 100)) > 0.000001)) return false;
   }
   return true;
@@ -43,7 +45,7 @@ export function validatePlanComposer(entries: PlanEntryDraft[], products: PlanPr
     if (entry.productId && selected.has(entry.productId)) return 'المطلوب / المنتج مكرر داخل نفس الحملة أو الأجندة. اختر مطلوبًا مختلفًا لكل يوم.';
     if (entry.productId) selected.add(entry.productId);
     if (!planEntryValid(entry, products, postTypes, kind)) return 'أكمل التاريخ والمطلوب والمنصات وأنواع النشر المتوافقة، والميزانية الخاصة بكل منصة عند إنشاء حملة.';
-    lineCount += entry.platforms.length;
+    lineCount += entry.platforms.reduce((sum, platform) => sum + (platform.postTypeIds?.length || (platform.postTypeId ? 1 : 0)), 0);
     if (lineCount > 500) return 'الحد الأقصى 500 موعد نشر داخل الحملة أو الأجندة.';
   }
   return '';
@@ -56,7 +58,8 @@ export function planEntriesPayload(entries: PlanEntryDraft[], kind: 'agenda' | '
     date: entry.date, productId: entry.productId,
     platforms: entry.platforms.map(platform => ({
       platformId: platform.platformId,
-      postTypeId: platform.postTypeId,
+      postTypeId: platform.postTypeIds?.[0] || platform.postTypeId,
+      postTypeIds: platform.postTypeIds || (platform.postTypeId ? [platform.postTypeId] : []),
       budget: kind === 'campaign' ? Number(platform.budget) : 0,
     })),
   }));

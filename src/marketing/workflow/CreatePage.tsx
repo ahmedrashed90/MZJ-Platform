@@ -192,18 +192,19 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
     return Array.from(groups.values());
   }, [products]);
   const selectedProductIds = useMemo(() => new Set(entries.map(entry => entry.productId).filter(Boolean)), [entries]);
-  const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.length, 0);
+  const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.reduce((count, platform) => count + (platform.postTypeIds?.length || (platform.postTypeId ? 1 : 0)), 0), 0);
   const noMoreProducts = Boolean(productsQuery.data?.rows?.length) && products.every(product => selectedProductIds.has(product.id));
   const previewRows = entries.flatMap((entry, entryIndex) => {
     const product = products.find(item => item.id === entry.productId);
     const rowValid = planEntryValid(entry, products, meta.postTypes, kind) &&
       entries.filter(other => other.productId && other.productId === entry.productId).length === 1;
-    return (entry.platforms.length ? entry.platforms : [null]).map(platform => ({
-      key: `${entry.key}:${platform?.platformId || 'empty'}`, index: entryIndex + 1, entry, product,
-      platform: meta.platforms.find(item => item.id === platform?.platformId),
-      postType: meta.postTypes.find(item => item.id === platform?.postTypeId),
-      budget: platform?.budget || '', valid: rowValid,
-    }));
+    return (entry.platforms.length ? entry.platforms : [null]).flatMap(platform =>
+      (platform ? (platform.postTypeIds?.length ? platform.postTypeIds : [platform.postTypeId]) : ['']).map((postTypeId, typeIndex) => ({
+        key: `${entry.key}:${platform?.platformId || 'empty'}:${postTypeId}`, index: entryIndex + 1, entry, product,
+        platform: meta.platforms.find(item => item.id === platform?.platformId),
+        postType: meta.postTypes.find(item => item.id === postTypeId),
+        budget: typeIndex === 0 ? platform?.budget || '' : '0', valid: rowValid,
+      })));
   });
 
   function updateEntry(key: string, patch: Partial<PlanEntryDraft>) {
@@ -286,9 +287,17 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
                   const formats = availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId);
                   return <label className="mkw-plan-platform-field" key={platform.platformId}>
                     <small>{meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}</small>
-                    <select aria-label={`نوع النشر — ${meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}`} required value={platform.postTypeId} disabled={busy} onChange={event => changePlatform(entry.key, platform.platformId, { postTypeId: event.target.value })}>
-                      <option value="">{W.choose}</option>{formats.map(format => <option key={format.id} value={format.id}>{format.name}</option>)}
-                    </select>
+                    <div className="mkw-post-type-multi" role="group" aria-label={`أنواع النشر — ${meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}`}>
+                      {formats.map(format => {
+                        const selected = platform.postTypeIds || (platform.postTypeId ? [platform.postTypeId] : []);
+                        return <label key={format.id} className={selected.includes(format.id) ? 'is-checked' : ''}>
+                          <input type="checkbox" disabled={busy} checked={selected.includes(format.id)} onChange={() => {
+                            const ids = selected.includes(format.id) ? selected.filter(value => value !== format.id) : [...selected, format.id];
+                            changePlatform(entry.key, platform.platformId, { postTypeIds: ids, postTypeId: ids[0] || '' });
+                          }}/><span>{format.name}</span>
+                        </label>;
+                      })}
+                    </div>
                   </label>;
                 })}
               </div>
@@ -313,7 +322,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
           <td>{platform?.name || '—'}</td><td>{postType?.name || '—'}</td>{kind === 'campaign' && <td>{budget !== '' ? `${budget} ر.س` : '—'}</td>}
           <td className={valid ? 'mkw-preview-ok' : 'mkw-preview-missing'}>{valid ? 'مكتمل' : `اليوم ${index}: بيانات ناقصة`}</td>
         </tr>)}
-      </tbody></table></div><p className="mkw-muted">كل منصة محددة لها موعد نشر مستقل لنفس المطلوب، والمبلغ الموضح يخص تلك المنصة فقط. المعاينة لا تنشئ حملة ولا أجندة ولا تنشر محتوى.</p>
+      </tbody></table></div><p className="mkw-muted">كل نوع نشر مختار له موعد مستقل. عند اختيار أكثر من نوع للمنصة نفسها تُسجل الميزانية مرة واحدة فقط، ولا تُكرر على الأنواع الإضافية. المعاينة لا تنشئ حملة ولا أجندة ولا تنشر محتوى.</p>
     </section>}
     <footer className="mkw-form-footer"><button type="button" className="secondary" disabled={busy} onClick={() => navigate('/marketing')}>{W.cancel}</button>
       <button type="button" className="secondary" disabled={busy} onClick={() => setPreviewOpen(current => !current)}>{previewOpen ? 'إغلاق المعاينة' : 'معاينة'}</button>

@@ -123,8 +123,9 @@ const schema = load('server/_marketing-workflow-schema.ts');
           const code = script.includes("values('schema-8')") ? 'schema-8'
             : script.includes("values('schema-9')") ? 'schema-9'
             : script.includes("values('schema-10')") ? 'schema-10'
-            : script.includes("values('schema-11')") ? 'schema-11' : 'unexpected';
-          assert.notEqual(code,'unexpected','Only review migrations are needed');
+            : script.includes("values('schema-11')") ? 'schema-11'
+            : script.includes("values('schema-12')") ? 'schema-12' : 'unexpected';
+          assert.notEqual(code,'unexpected','Only additive workflow migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
           if(code==='schema-9') terminalReady=true;
@@ -142,8 +143,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11']);
-  console.log('PASS: schema-7 to schema-11 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12']);
+  console.log('PASS: schema-7 to schema-12 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });

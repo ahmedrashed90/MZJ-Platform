@@ -187,6 +187,31 @@ create index if not exists work_item_review_notes_item_recent on marketing.work_
 insert into marketing.workflow_migrations(code) values('schema-11') on conflict do nothing;
 commit;`;
 
+/** Review-first publishing workflow and executor copy. Existing publication adapters remain unchanged. */
+export const MARKETING_WORKFLOW_PLAN_REVIEW_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '15s';
+alter table marketing.work_plans add column if not exists review_status text not null default 'in_progress';
+alter table marketing.work_plans add column if not exists review_note text not null default '';
+alter table marketing.work_plans add column if not exists review_note_category_id uuid references marketing.work_review_categories(id);
+alter table marketing.work_plans add column if not exists review_revision integer not null default 0;
+alter table marketing.work_plans add column if not exists reviewed_at timestamptz;
+alter table marketing.work_plans add column if not exists reviewed_by uuid references core.users(id);
+alter table marketing.work_plan_items add column if not exists manual_post_url text not null default '';
+alter table marketing.work_items add column if not exists caption text not null default '';
+alter table marketing.work_items add column if not exists hashtags text not null default '';
+create table if not exists marketing.work_plan_reviews (
+ id uuid primary key default gen_random_uuid(), plan_id uuid not null references marketing.work_plans(id) on delete cascade,
+ action text not null check(action in ('revision','submitted','approved')),
+ note text not null default '', category_id uuid references marketing.work_review_categories(id), actor_id uuid not null references core.users(id),
+ actor_name text not null default '', created_at timestamptz not null default now()
+);
+create index if not exists work_plan_reviews_recent on marketing.work_plan_reviews(plan_id,created_at desc);
+-- Plans already activated before this upgrade remain eligible for existing publishing jobs.
+update marketing.work_plans set review_status='publishing' where activated_at is not null and review_status='in_progress';
+insert into marketing.workflow_migrations(code) values('schema-12') on conflict do nothing;
+commit;`;
+
 export const MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL = `begin;
 set local lock_timeout = '3s';
 set local statement_timeout = '12s';
@@ -477,12 +502,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -499,6 +524,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasTerminalRejection || !(await marketingWorkflowStructureStatus(sql)).terminalReady) await runSqlScript(MARKETING_WORKFLOW_TERMINAL_REJECTION_SQL);
       if (!(await flags()).hasDeadlineExceptions || !(await marketingWorkflowStructureStatus(sql)).deadlineExceptionsReady) await runSqlScript(MARKETING_WORKFLOW_DEADLINE_EXCEPTION_SQL);
       if (!(await flags()).hasPerformanceIndexes) await runSqlScript(MARKETING_WORKFLOW_PERFORMANCE_SQL);
+      if (!(await flags()).hasPlanReview) await runSqlScript(MARKETING_WORKFLOW_PLAN_REVIEW_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

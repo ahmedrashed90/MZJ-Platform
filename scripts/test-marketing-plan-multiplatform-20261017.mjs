@@ -95,6 +95,15 @@ let result = await backend.createPlan(db.sql, makeRequest(payload), admin);
 check(result.ok && db.inserts.length === 2 && db.inserts[0].budget === 100.5 && db.inserts[1].budget === 250, 'Backend persists two real plan lines with independent platform budgets');
 check(db.inserts[0].postTypeId === uid(21) && db.inserts[1].postTypeId === uid(24), 'Backend keeps the original post type and platform mapping');
 check(db.inserts.every(item => item.date === '2026-10-17' && item.productId === products[0].id), 'Selected product/date remain identical for every selected platform');
+const multiType = { ...complete, platforms: [
+  { platformId: ig, postTypeId: uid(21), postTypeIds: [uid(21),uid(22)], budget: '150' },
+] };
+check(composer.validatePlanComposer([multiType], products, types, 'campaign') === '', 'Two compatible types can be selected on one platform');
+db = makeSql();
+await backend.createPlan(db.sql, makeRequest(composer.planEntriesPayload([multiType], 'campaign')), admin);
+check(db.inserts.length === 2 && db.inserts[0].budget === 150 && db.inserts[1].budget === 0,
+  'One platform with two publish types creates two rows and charges budget only once');
+
 db = makeSql();
 await backend.createPlan(db.sql, { ...makeRequest(composer.planEntriesPayload([complete], 'agenda')), kind: 'agenda' }, admin);
 check(db.inserts.length === 2 && db.inserts.every(line => line.budget === 0), 'Agenda persists a separate no-budget publish line for each selected platform');

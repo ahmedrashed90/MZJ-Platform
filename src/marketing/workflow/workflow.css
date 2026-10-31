@@ -693,3 +693,15 @@
 .mkw-requirement-review-entry.is-rejected .mkw-requirement-review-toggle{background:#fff0ec}
 .mkw-rejected-final-message{display:grid;gap:5px;padding:13px 16px;margin:12px 0;border:1px solid #e4b7af;border-radius:12px;background:#fff5f2;color:#8e322e}
 .mkw-rejected-final-message p{margin:0;line-height:1.7}
+
+/* Marketing plan review, per-platform multi-type selection and publication URLs. */
+.mkw-plan-review{display:grid;gap:1rem}.mkw-plan-state{display:inline-block;border:1px solid #d6b8a8;border-radius:9px;padding:.25rem .65rem;color:#4a211c;font-size:.85rem}
+.mkw-plan-progress{display:grid;gap:.45rem}.mkw-plan-progress progress{width:100%;height:10px;accent-color:#4a211c}
+.mkw-plan-review-note{padding:1rem;border:1px solid #d8aa77;background:#fff7e8;border-radius:12px}.mkw-plan-review-note p{white-space:pre-wrap}
+.mkw-plan-review-actions{display:grid;gap:.6rem;padding:1rem;border:1px solid #ead9cd;border-radius:12px}.mkw-plan-review-actions label{display:grid;gap:.4rem}
+.mkw-plan-review-actions textarea,.mkw-executor-copy textarea{width:100%;min-height:80px;resize:vertical}
+.mkw-plan-edit-lines{display:grid;gap:1rem}.mkw-plan-edit-lines input,.mkw-plan-edit-lines select{min-width:125px;max-width:240px}
+.mkw-post-url-field{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}.mkw-post-url-field input{min-width:190px;max-width:320px;flex:1}
+.mkw-plan-history article{padding:.75rem 0;border-bottom:1px solid #ead9cd;display:grid;gap:.35rem}.mkw-plan-history p{white-space:pre-wrap}
+.mkw-post-type-multi{display:flex;flex-wrap:wrap;gap:.35rem}.mkw-post-type-multi label{display:inline-flex;gap:.4rem;align-items:center;border:1px solid #ead9cd;border-radius:8px;padding:.3rem .55rem;cursor:pointer}.mkw-post-type-multi label.is-checked{border-color:#4a211c;background:#f3e8dc}
+.mkw-executor-copy{display:grid;gap:.7rem;padding:1rem;border:1px solid #ead9cd;border-radius:12px}.mkw-executor-copy .mkw-publish-copy{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem}.mkw-executor-copy label{display:grid;gap:.4rem}
