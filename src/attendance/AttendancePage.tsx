@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { CaretDown, Export, FilePdf, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, Export, FilePdf, PencilSimple, WarningCircle } from "@phosphor-icons/react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { Modal } from "../components/Modal";
 import { hasPermission } from "../systemAccess";
 import {
   attendanceFetch,
@@ -80,7 +81,33 @@ type ReportPayload = {
   officialDayEnd: string;
   rows: ReportRow[];
   periodHeaders: string[];
+  canCorrectAttendance?: boolean;
 };
+
+type AttendanceCorrectionDraft = {
+  userId: string;
+  employeeName: string;
+  workDate: string;
+  periodId: string;
+  periodName: string;
+  originalIn: string | null;
+  originalOut: string | null;
+  checkInTime: string;
+  checkOutTime: string;
+  reason: string;
+};
+
+function riyadhClockValue(value: string | null | undefined) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Riyadh', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(date);
+  const hour = parts.find(part => part.type === 'hour')?.value || '00';
+  const minute = parts.find(part => part.type === 'minute')?.value || '00';
+  return `${hour === '24' ? '00' : hour}:${minute}`;
+}
 
 function missingResultLabel(result: string | null | undefined) {
   const value = String(result || "");
@@ -433,6 +460,9 @@ export function AttendancePage() {
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [reportLoading, setReportLoading] = useState(false);
   const [reportExporting, setReportExporting] = useState(false);
+  const [correctionDraft, setCorrectionDraft] = useState<AttendanceCorrectionDraft | null>(null);
+  const [correctionSaving, setCorrectionSaving] = useState(false);
+  const [correctionError, setCorrectionError] = useState('');
   const [earlyDepartureSaving, setEarlyDepartureSaving] = useState(false);
   const [viewedPermission, setViewedPermission] = useState<{ permission: ReportPermission; row: ReportRow } | null>(null);
   const [permissionShifts, setPermissionShifts] = useState<Record<string, PermissionShift[]>>({});
@@ -719,6 +749,48 @@ export function AttendancePage() {
     }
   }
 
+  function openAttendanceCorrection(row: ReportRow, period: ReportPeriod) {
+    if (!report?.canCorrectAttendance || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(period.id)) return;
+    setCorrectionError('');
+    setCorrectionDraft({
+      userId: row.userId, employeeName: row.name, workDate: row.date,
+      periodId: period.id, periodName: period.name,
+      originalIn: period.checkIn, originalOut: period.checkOut,
+      checkInTime: riyadhClockValue(period.checkIn),
+      checkOutTime: riyadhClockValue(period.checkOut), reason: '',
+    });
+  }
+
+  async function saveAttendanceCorrection() {
+    if (!correctionDraft || correctionSaving || !report?.canCorrectAttendance) return;
+    if (!correctionDraft.checkInTime || correctionDraft.reason.trim().length < 5) {
+      setCorrectionError('اكتب وقت الحضور وسبب التصحيح (5 أحرف على الأقل)');
+      return;
+    }
+    setCorrectionSaving(true); setCorrectionError(''); setError(''); setMessage('');
+    try {
+      const result = await attendanceFetch<{ ok: true; message: string }>('/api/attendance', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'correct_attendance_record',
+          userId: correctionDraft.userId, workDate: correctionDraft.workDate,
+          periodId: correctionDraft.periodId, checkInTime: correctionDraft.checkInTime,
+          checkOutTime: correctionDraft.checkOutTime, reason: correctionDraft.reason.trim() }),
+      });
+      setCorrectionDraft(null);
+      setMessage(result.message || 'تم حفظ التصحيح');
+      try {
+        const refreshed = await fetchReportPayload();
+        setReport(refreshed);
+      } catch {
+        setError('تم حفظ التصحيح، لكن لم يتم تحديث التقرير تلقائيًا. اضغط «عرض» لإعادة تحميله.');
+      }
+    } catch (failure) {
+      setCorrectionError(failure instanceof Error ? failure.message : 'تعذر تصحيح وقت الحضور');
+    } finally {
+      setCorrectionSaving(false);
+    }
+  }
+
   function toggleEmployee(employeeId: string) {
     setEmployeeIds((current) => current.includes(employeeId)
       ? current.filter((id) => id !== employeeId)
@@ -750,6 +822,34 @@ export function AttendancePage() {
           <h1>تقارير الحضور والانصراف</h1>
         </div>
       </div>
+
+      <Modal
+        open={Boolean(correctionDraft)}
+        title="تصحيح وقت الحضور والانصراف"
+        subtitle={correctionDraft ? `${correctionDraft.employeeName} • ${formatAttendanceDate(correctionDraft.workDate)} • ${correctionDraft.periodName}` : undefined}
+        onClose={() => { if (!correctionSaving) setCorrectionDraft(null); }}
+        className="attendance-correction-modal"
+        footer={<>
+          <button type="button" className="secondary-button" disabled={correctionSaving} onClick={() => setCorrectionDraft(null)}>إلغاء</button>
+          <button type="button" className="attendance-save-button" disabled={correctionSaving || !correctionDraft?.checkInTime || (correctionDraft?.reason.trim().length || 0) < 5} onClick={() => void saveAttendanceCorrection()}>
+            {correctionSaving ? 'جاري حفظ التصحيح...' : 'حفظ التصحيح'}
+          </button>
+        </>}
+      >
+        {correctionDraft ? <div className="attendance-correction-form">
+          <p className="attendance-correction-hint">يتم تعديل البصمة الأصلية وإعادة حساب التأخير والساعات في التقرير تلقائيًا. يُحفظ الوقت السابق والجديد وسبب التعديل في سجل التدقيق.</p>
+          <div className="attendance-correction-original">
+            <div><small>الحضور السابق</small><strong>{formatAttendanceTime(correctionDraft.originalIn)}</strong></div>
+            <div><small>الانصراف السابق</small><strong>{formatAttendanceTime(correctionDraft.originalOut)}</strong></div>
+          </div>
+          <div className="attendance-correction-times">
+            <label><span>وقت الحضور الصحيح</span><input type="time" required value={correctionDraft.checkInTime} onChange={event => setCorrectionDraft(old => old ? { ...old, checkInTime: event.target.value } : old)}/></label>
+            <label><span>وقت الانصراف الصحيح (إن وُجد)</span><input type="time" value={correctionDraft.checkOutTime} onChange={event => setCorrectionDraft(old => old ? { ...old, checkOutTime: event.target.value } : old)}/></label>
+          </div>
+          <label><span>سبب التصحيح (إلزامي)</span><textarea rows={3} maxLength={1000} required placeholder="مثال: وقت الحضور اتسجل بشكل غير صحيح بسبب مشكلة في تسجيل الدخول" value={correctionDraft.reason} onChange={event => setCorrectionDraft(old => old ? { ...old, reason: event.target.value } : old)}/></label>
+          {correctionError ? <div className="attendance-alert error" role="alert"><WarningCircle size={18}/>{correctionError}</div> : null}
+        </div> : null}
+      </Modal>
 
       {viewedPermission ? (
         <div className="attendance-permission-backdrop" role="presentation" onMouseDown={() => setViewedPermission(null)}>
@@ -898,6 +998,9 @@ export function AttendancePage() {
                           return [
                             <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell-plain">
                               {period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}
+                              {report?.canCorrectAttendance && period && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(period.id) ? <button
+                                type="button" className="attendance-correct-time-button" title="تصحيح وقت الحضور والانصراف" aria-label={`تصحيح حضور ${row.name} - ${row.date} - ${period.name}`}
+                                onClick={() => openAttendanceCorrection(row, period)}><PencilSimple size={13}/><span>تصحيح</span></button> : null}
                             </td>,
                             <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
                               {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}
@@ -979,6 +1082,9 @@ export function AttendancePage() {
                               return [
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell-plain">
                                   {period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}
+                              {report?.canCorrectAttendance && period && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(period.id) ? <button
+                                type="button" className="attendance-correct-time-button" title="تصحيح وقت الحضور والانصراف" aria-label={`تصحيح حضور ${row.name} - ${row.date} - ${period.name}`}
+                                onClick={() => openAttendanceCorrection(row, period)}><PencilSimple size={13}/><span>تصحيح</span></button> : null}
                                 </td>,
                                 <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
                                   {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}

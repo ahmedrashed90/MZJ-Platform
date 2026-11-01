@@ -9272,3 +9272,23 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-vacation-fixed-range { display: grid; grid-template-columns: minmax(110px,1fr) repeat(2,minmax(120px,1fr)); gap: 8px; align-items: end; }
 .attendance-vacation-fixed-range input[readonly] { background: var(--surface-soft, #f7f1ed); cursor: not-allowed; }
 @media (max-width: 650px) { .attendance-vacation-fixed-range { grid-template-columns: 1fr; } }
+
+
+/* Attendance correction: only offered to the verified, specifically authorized system administrator. */
+.attendance-time-cell-plain .attendance-correct-time-button {
+  margin-inline-start:5px; padding:3px 6px; display:inline-flex; align-items:center; gap:3px;
+  border:1px solid #dcc4b8; border-radius:7px; background:#fff9f5; color:#4A211C;
+  cursor:pointer; font-size:10px; font-weight:800; white-space:nowrap;
+}
+.attendance-time-cell-plain .attendance-correct-time-button:hover { background:#F3E8DC; }
+.attendance-correction-modal { width:min(620px,calc(100vw - 24px)); }
+.attendance-correction-form { display:grid; gap:16px; padding:2px; direction:rtl; }
+.attendance-correction-hint { background:#F3E8DC; color:#4A211C; padding:12px; border-radius:11px; line-height:1.8; margin:0; font-size:13px; }
+.attendance-correction-original,.attendance-correction-times { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.attendance-correction-original>div { display:grid; gap:7px; padding:13px; border:1px solid #e5d7d0; border-radius:10px; }
+.attendance-correction-original small { color:#87716a; }
+.attendance-correction-form label { display:grid; gap:7px; min-width:0; }
+.attendance-correction-form label>span { font-size:13px; font-weight:800; color:#4A211C; }
+.attendance-correction-form input,.attendance-correction-form textarea { width:100%; min-width:0; border:1px solid #e5d7d0; border-radius:9px; padding:10px; background:#fff; color:#4A211C; }
+.attendance-correction-form textarea { resize:vertical; }
+@media(max-width:560px){.attendance-correction-original,.attendance-correction-times{grid-template-columns:1fr}}

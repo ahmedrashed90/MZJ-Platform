@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ChartBar, Crown, Database, Gear, Globe, House, MapPin, Megaphone, Pulse, Question, SignIn, SignOut, SuitcaseSimple, UserSwitch, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
@@ -82,6 +82,7 @@ export function Sidebar() {
   const [attendanceState, setAttendanceState] = useState<SelfAttendanceState | null>(null);
   const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "logout">("");
   const [attendanceError, setAttendanceError] = useState("");
+  const autoCheckInAttempts = useRef(new Set<string>());
 
   const systemAllowed: Record<string, boolean> = {
     crm: canAccessCrm(user),
@@ -99,6 +100,7 @@ export function Sidebar() {
   useEffect(() => {
     if (!user?.id) {
       setAttendanceState(null);
+      autoCheckInAttempts.current.clear();
       return;
     }
     let stopped = false;
@@ -136,6 +138,20 @@ export function Sidebar() {
       setAttendanceBusy("");
     }
   }
+
+  // A restored session may span the start of a later shift. Register its
+  // first check-in as soon as that shift becomes active, without an extra tap.
+  // Only primary and exempt sessions may punch; never bypass device policy.
+  useEffect(() => {
+    if (!user?.id || !attendanceState?.canCheckIn || !attendanceState.activePeriod || attendanceBusy) return;
+    if (!['primary', 'exempt'].includes(attendanceState.deviceAttendanceRole || '')) return;
+    const period = attendanceState.activePeriod;
+    const key = `${user.id}:${period.id}:${period.workDate}`;
+    if (autoCheckInAttempts.current.has(key)) return;
+    autoCheckInAttempts.current.add(key);
+    void handleCheckIn();
+  }, [user?.id, attendanceState?.canCheckIn, attendanceState?.activePeriod?.id,
+    attendanceState?.activePeriod?.workDate, attendanceState?.deviceAttendanceRole, attendanceBusy]);
 
   async function handleLogout() {
     if (attendanceBusy) return;

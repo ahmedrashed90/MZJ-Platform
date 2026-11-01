@@ -35,12 +35,12 @@ async function finishAttendanceLogin(
     if (verificationRequired) {
       await requireVerifiedDeviceWorkPeriod(userId);
       if (verifiedDeviceIsPrimary !== false) {
-        await requireAttendanceForLogin(userId, { confirmCheckIn, forceEnforcement: true });
+        await requireAttendanceForLogin(userId, { confirmCheckIn: true, forceEnforcement: true });
       }
     } else {
-      // A device-exempt employee can enter at any hour, but their explicit
-      // login check-in must still create an ordinary attendance record.
-      await registerExemptLoginAttendance(userId, confirmCheckIn);
+      // Device exemption affects access to the platform, not attendance.
+      // Check in automatically only during an assigned, currently active shift.
+      await registerExemptLoginAttendance(userId, true);
     }
   } catch (attendanceError) {
     if (attendanceError instanceof AttendanceError) {

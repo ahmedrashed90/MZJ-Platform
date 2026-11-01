@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20261020-global-attendance-v14-independent-period-permissions";
+export const ATTENDANCE_SCHEMA_VERSION = "20261101-global-attendance-v15-correction-audit";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -143,7 +143,7 @@ begin
     select 1 from pg_constraint
     where conname='attendance_records_checkout_source_check'
       and conrelid='core.attendance_records'::regclass
-      and position('authorized' in pg_get_constraintdef(oid))=0
+      and (position('authorized' in pg_get_constraintdef(oid))=0 or position('corrected' in pg_get_constraintdef(oid))=0)
   ) then
     alter table core.attendance_records drop constraint attendance_records_checkout_source_check;
   end if;
@@ -154,7 +154,7 @@ begin
   ) then
     alter table core.attendance_records
       add constraint attendance_records_checkout_source_check
-      check (checkout_source in ('manual','auto','legacy','authorized'));
+      check (checkout_source in ('manual','auto','legacy','authorized','corrected'));
   end if;
 end $$;
 
@@ -164,6 +164,28 @@ create index if not exists attendance_records_open_end_idx
   on core.attendance_records(scheduled_end_at) where check_in is not null and check_out is null;
 create index if not exists attendance_records_date_idx
   on core.attendance_records(work_date desc);
+
+-- Append-only corrections preserve original punches and administrative reasons.
+create table if not exists core.attendance_record_corrections (
+  id uuid primary key default gen_random_uuid(),
+  record_id uuid not null references core.attendance_records(id) on delete cascade,
+  user_id uuid not null references core.users(id) on delete cascade,
+  period_id uuid references core.attendance_periods(id) on delete set null,
+  work_date date not null,
+  old_check_in timestamptz,
+  old_check_out timestamptz,
+  new_check_in timestamptz not null,
+  new_check_out timestamptz,
+  old_delay_minutes integer,
+  new_delay_minutes integer not null,
+  old_work_minutes integer,
+  new_work_minutes integer not null,
+  reason text not null check (length(btrim(reason)) >= 5),
+  corrected_by uuid references core.users(id) on delete set null,
+  corrected_at timestamptz not null default now()
+);
+create index if not exists attendance_record_corrections_employee_date_idx
+  on core.attendance_record_corrections(user_id,work_date desc,corrected_at desc);
 
 create table if not exists core.attendance_early_departure_permissions (
   id uuid primary key default gen_random_uuid(),
@@ -233,6 +255,7 @@ async function attendanceSchemaReady() {
       and to_regclass('core.attendance_user_schedules') is not null
       and to_regclass('core.attendance_records') is not null
       and to_regclass('core.attendance_early_departure_permissions') is not null
+      and to_regclass('core.attendance_record_corrections') is not null
       and exists (
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_user_schedules' and column_name='weekly_off_day'
@@ -293,6 +316,7 @@ async function attendanceSchemaReady() {
         where conname='attendance_records_checkout_source_check'
           and conrelid='core.attendance_records'::regclass
           and position('authorized' in pg_get_constraintdef(oid))>0
+          and position('corrected' in pg_get_constraintdef(oid))>0
       )
       and exists (
         select 1 from information_schema.columns

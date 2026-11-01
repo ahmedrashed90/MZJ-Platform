@@ -59,7 +59,7 @@ function harness({ required = false, activePeriod = true, existingCheckIn = fals
     requireAttendanceForLogin: async (_userId, opts) => {
       calls.requiredAttendance++;
       assert.equal(opts.forceEnforcement, true);
-      assert.equal(opts.confirmCheckIn, requestCheckIn);
+      assert.equal(opts.confirmCheckIn, true);
     },
     getSql: () => async (_strings) => [],
     createSession: async () => { calls.session++; },
@@ -111,11 +111,11 @@ await check('Closed attendance period is not re-opened for exempt employee', asy
   assert.equal(h.calls.write, 0);
   assert.equal(h.calls.session, 1);
 });
-await check('Explicitly declined check-in does not create a punch and still permits access', async () => {
+await check('Login automatically checks in exempt employee even without the legacy attendance flag', async () => {
   const h = harness({ requestCheckIn: false });
   await h.login();
-  assert.equal(h.calls.read, 0);
-  assert.equal(h.calls.write, 0);
+  assert.equal(h.calls.read, 1);
+  assert.equal(h.calls.write, 1);
   assert.equal(h.calls.session, 1);
 });
 await check('Required primary verified device retains original work-period and attendance gates', async () => {
@@ -134,9 +134,11 @@ await check('Required secondary device retains access gate without creating atte
   assert.equal(h.calls.write, 0);
   assert.equal(h.calls.session, 1);
 });
-await check('UI login explicitly requests attendance and sidebar allows exempt users to manually check in', () => {
+await check('UI login automatically requests attendance and sidebar supports restored sessions', () => {
   assert.match(loginScreen, /attendanceCheckIn:\s*true/);
   assert.match(sidebar, /action:\s*"self_check_in"/);
+  assert.match(sidebar, /autoCheckInAttempts/);
+  assert.match(sidebar, /void handleCheckIn\(\)/);
   assert.match(api, /if \(deviceRole === "secondary" \|\| deviceRole === "unverified"\)/);
   assert.match(device, /if \(!policy\?\.verification_required\) return "exempt"/);
 });

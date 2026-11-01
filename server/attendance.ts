@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAdmin, requireUser } from "./_auth.js";
+import { requireAdmin, requireUser, type SessionUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
@@ -1200,6 +1200,173 @@ async function reportData(request: VercelRequest) {
   };
 }
 
+// Permission is intentionally NOT granted to every superadmin: only the
+// particular verified superadmin account can alter real attendance punches.
+const ATTENDANCE_CORRECTION_ADMIN_EMAIL = 'mr.ahmed_rashed@outlook.sa';
+function attendanceCorrectionAccount(user: Pick<SessionUser, 'email' | 'permissions'>) {
+  return clean(user.email).toLowerCase() === ATTENDANCE_CORRECTION_ADMIN_EMAIL
+    && user.permissions.includes('platform.superadmin');
+}
+
+function riyadhClockInstant(workDate: string, clock: string): Date {
+  // Saudi Arabia has a fixed UTC+03:00 offset; never use the browser's zone.
+  return new Date(`${workDate}T${clock}:00+03:00`);
+}
+
+async function correctAttendanceRecord(body: Record<string, any>, actor: SessionUser) {
+  if (!attendanceCorrectionAccount(actor)) throw new AttendanceError('CORRECTION_FORBIDDEN', 'لا توجد صلاحية لتصحيح بيانات الحضور', 403);
+  const userId = clean(body.userId), periodId = clean(body.periodId), workDate = clean(body.workDate);
+  const checkInTime = clean(body.checkInTime), checkOutTime = clean(body.checkOutTime);
+  const reason = clean(body.reason);
+  if (!validUuid(userId) || !validUuid(periodId) || !validDate(workDate) ||
+      !Number.isFinite(Date.parse(`${workDate}T00:00:00Z`)) ||
+      new Date(`${workDate}T00:00:00Z`).toISOString().slice(0, 10) !== workDate) {
+    throw new AttendanceError('CORRECTION_INVALID_TARGET', 'حدد الموظف واليوم وفترة الدوام بشكل صحيح');
+  }
+  if (workDate > currentRiyadhDate() ||
+      (Date.parse(`${currentRiyadhDate()}T00:00:00Z`) - Date.parse(`${workDate}T00:00:00Z`)) > 366 * 86400000) {
+    throw new AttendanceError('CORRECTION_DATE_RANGE', 'التصحيح متاح للأيام الحالية والسابقة خلال سنة فقط');
+  }
+  if (!validTime(checkInTime) || (checkOutTime && !validTime(checkOutTime))) {
+    throw new AttendanceError('CORRECTION_INVALID_TIME', 'حدد وقت الحضور والانصراف بصيغة صحيحة');
+  }
+  if (reason.length < 5 || reason.length > 1000) throw new AttendanceError('CORRECTION_REASON_REQUIRED', 'اكتب سبب التصحيح (5 أحرف على الأقل)');
+  const checkIn = riyadhClockInstant(workDate, checkInTime);
+  const checkOut = checkOutTime ? riyadhClockInstant(workDate, checkOutTime) : null;
+  if (!Number.isFinite(checkIn.getTime()) || (checkOut && !Number.isFinite(checkOut.getTime()))) {
+    throw new AttendanceError('CORRECTION_INVALID_TIME', 'وقت التصحيح غير صحيح');
+  }
+  if (checkIn.getTime() > Date.now() + 60000 || (checkOut && checkOut.getTime() > Date.now() + 60000)) {
+    throw new AttendanceError('CORRECTION_FUTURE_TIME', 'لا يمكن تسجيل بصمة بتاريخ أو وقت مستقبلي');
+  }
+  if (checkOut && checkOut.getTime() <= checkIn.getTime()) {
+    throw new AttendanceError('CORRECTION_CHECKOUT_BEFORE_CHECKIN', 'وقت الانصراف يجب أن يكون بعد وقت الحضور');
+  }
+
+  const sql = getSql();
+  return sql.begin(async (tx) => {
+    // Check the actual DB identity too; never trust e-mail or role sent by the client.
+    const [editor] = await tx<{ email: string | null }[]>`
+      select email from core.users where id=${actor.id}::uuid and is_active=true limit 1
+    `;
+    if (clean(editor?.email).toLowerCase() !== ATTENDANCE_CORRECTION_ADMIN_EMAIL) {
+      throw new AttendanceError('CORRECTION_FORBIDDEN', 'صلاحية تصحيح الحضور غير متاحة لهذا الحساب', 403);
+    }
+    const [employee] = await tx<{ id: string }[]>`
+      select id::text from core.users where id=${userId}::uuid and is_active=true limit 1
+    `;
+    if (!employee) throw new AttendanceError('EMPLOYEE_NOT_FOUND', 'الموظف المطلوب غير موجود', 404);
+
+    const [previous] = await tx<any[]>`
+      select id::text,user_id::text,period_id::text,assignment_id::text,schedule_id::text,
+        work_date::text,period_name,period_sort_order,scheduled_start_at,scheduled_end_at,
+        grace_minutes,check_in,check_out,checkout_source,delay_minutes,work_minutes,status
+      from core.attendance_records
+      where user_id=${userId}::uuid and period_id=${periodId}::uuid and work_date=${workDate}::date
+      for update
+    `;
+    if (previous?.check_out && !checkOutTime) {
+      throw new AttendanceError('CORRECTION_CHECKOUT_REQUIRED', 'السجل له انصراف سابق، لا يمكن حذف وقت الانصراف أثناء التصحيح');
+    }
+
+    let assignmentId = clean(previous?.assignment_id), scheduleId = clean(previous?.schedule_id);
+    let periodName = clean(previous?.period_name), sortOrder = Number(previous?.period_sort_order || 1);
+    let scheduledStart = previous?.scheduled_start_at ? new Date(previous.scheduled_start_at) : null;
+    let scheduledEnd = previous?.scheduled_end_at ? new Date(previous.scheduled_end_at) : null;
+    let grace = Math.max(0, Number(previous?.grace_minutes || 0));
+
+    if (!previous) {
+      const [assignment] = await tx<any[]>`
+        select id::text,user_id::text,schedule_id::text,period_ids,period_overrides,weekly_off_day
+        from core.attendance_user_schedules
+        where user_id=${userId}::uuid and effective_from <= ${workDate}::date
+          and (effective_to is null or effective_to >= ${workDate}::date)
+        order by effective_from desc,created_at desc limit 1
+      `;
+      const weekday = weekdayForDate(workDate);
+      if (!assignment || parseWeeklyOffDay(assignment.weekly_off_day) === weekday) {
+        throw new AttendanceError('CORRECTION_NO_SHIFT', 'الموظف ليس لديه فترة دوام لهذا اليوم');
+      }
+      const periodIds = normalizedIdList(assignment.period_ids);
+      const configured = await tx<any[]>`
+        select id::text,name,start_time::text,end_time::text,grace_minutes,sort_order
+        from core.attendance_periods
+        where schedule_id=${assignment.schedule_id}::uuid and is_active=true
+        order by sort_order,start_time,id
+      `;
+      const assignedPeriods = configured.filter((period) => !periodIds.length || periodIds.includes(clean(period.id)));
+      const period = assignedPeriods.find((item) => clean(item.id) === periodId);
+      if (!period) throw new AttendanceError('CORRECTION_NO_SHIFT', 'الفترة المختارة غير مرتبطة بدوام الموظف لهذا اليوم');
+      const [settings] = await tx<any[]>`
+        select friday_start_time::text,friday_end_time::text from core.attendance_settings where id=1
+      `;
+      const fridayStart = clean(settings?.friday_start_time).slice(0, 5), fridayEnd = clean(settings?.friday_end_time).slice(0, 5);
+      const fridayConfigured = weekday === 5 && validTime(fridayStart) && validTime(fridayEnd);
+      if (fridayConfigured && assignedPeriods.length > 1 && clean(assignedPeriods[0]?.id) !== periodId) {
+        throw new AttendanceError('CORRECTION_FRIDAY_SHIFT', 'يوم الجمعة يحتوي على الفترة المسائية المعتمدة فقط');
+      }
+      const override = normalizePeriodOverrides(assignment.period_overrides)[periodId];
+      const times = resolveAssignedPeriodTimes(period, override);
+      const fromTime = fridayConfigured ? fridayStart : times.startTime;
+      const toTime = fridayConfigured ? fridayEnd : times.endTime;
+      if (!validTime(fromTime) || !validTime(toTime)) throw new AttendanceError('CORRECTION_NO_SHIFT', 'مواعيد الفترة غير مكتملة');
+      assignmentId = clean(assignment.id); scheduleId = clean(assignment.schedule_id);
+      periodName = fridayConfigured ? 'الفترة المسائية' : clean(period.name);
+      sortOrder = fridayConfigured ? 2 : Number(period.sort_order || 1);
+      scheduledStart = riyadhClockInstant(workDate, fromTime);
+      scheduledEnd = riyadhClockInstant(workDate, toTime);
+      if (scheduledEnd.getTime() <= scheduledStart.getTime()) scheduledEnd = new Date(scheduledEnd.getTime() + 86400000);
+      grace = Math.max(0, Number(period.grace_minutes || 0));
+    }
+    if (!scheduledStart || !scheduledEnd || !Number.isFinite(scheduledStart.getTime()) || !Number.isFinite(scheduledEnd.getTime())) {
+      throw new AttendanceError('CORRECTION_INVALID_SCHEDULE', 'بيانات الفترة غير كافية لتعديل سجل الحضور');
+    }
+    const delayMinutes = Math.max(0, Math.floor((checkIn.getTime() - scheduledStart.getTime() - grace * 60000) / 60000));
+    const workMinutes = checkOut ? Math.max(0, Math.floor((checkOut.getTime() - checkIn.getTime()) / 60000)) : 0;
+    const status = delayMinutes ? 'late' : 'present';
+    let row: any;
+    if (previous) {
+      [row] = await tx<any[]>`
+        update core.attendance_records set
+          check_in=${checkIn.toISOString()}::timestamptz,
+          check_out=${checkOut?.toISOString() || null}::timestamptz,
+          checkout_source=${checkOut ? 'corrected' : null},
+          delay_minutes=${delayMinutes},work_minutes=${workMinutes},status=${status},updated_at=now()
+        where id=${previous.id}::uuid
+        returning id::text
+      `;
+    } else {
+      [row] = await tx<any[]>`
+        insert into core.attendance_records(
+          user_id,assignment_id,schedule_id,period_id,work_date,period_name,period_sort_order,
+          scheduled_start_at,scheduled_end_at,grace_minutes,check_in,check_out,checkout_source,
+          delay_minutes,work_minutes,status,created_at,updated_at
+        ) values (
+          ${userId}::uuid,${assignmentId}::uuid,${scheduleId}::uuid,${periodId}::uuid,${workDate}::date,
+          ${periodName},${sortOrder},${scheduledStart.toISOString()}::timestamptz,${scheduledEnd.toISOString()}::timestamptz,
+          ${grace},${checkIn.toISOString()}::timestamptz,${checkOut?.toISOString() || null}::timestamptz,
+          ${checkOut ? 'corrected' : null},${delayMinutes},${workMinutes},${status},now(),now()
+        ) on conflict(user_id,period_id,work_date) where period_id is not null do nothing
+        returning id::text
+      `;
+      if (!row) throw new AttendanceError('CORRECTION_CONFLICT', 'تم تسجيل حضور للفترة أثناء التصحيح؛ حدّث التقرير وحاول مجددًا', 409);
+    }
+    await tx`
+      insert into core.attendance_record_corrections (
+        record_id,user_id,period_id,work_date,old_check_in,old_check_out,new_check_in,new_check_out,
+        old_delay_minutes,new_delay_minutes,old_work_minutes,new_work_minutes,reason,corrected_by
+      ) values (
+        ${row.id}::uuid,${userId}::uuid,${periodId}::uuid,${workDate}::date,
+        ${previous?.check_in || null}::timestamptz,${previous?.check_out || null}::timestamptz,
+        ${checkIn.toISOString()}::timestamptz,${checkOut?.toISOString() || null}::timestamptz,
+        ${previous?.delay_minutes ?? null},${delayMinutes},${previous?.work_minutes ?? null},${workMinutes},
+        ${reason},${actor.id}::uuid
+      )
+    `;
+    return { ok: true, recordId: row.id, message: 'تم تصحيح الحضور والانصراف وإعادة حساب التأخير والساعات، مع حفظ سجل التعديل' };
+  });
+}
+
 async function authorizeEarlyDeparture(body: Record<string, any>, adminId: string) {
   const workDate = clean(body.workDate);
   if (!validDate(workDate)) throw new AttendanceError("WORK_DATE_REQUIRED", "تاريخ إذن الانصراف غير صحيح");
@@ -1369,7 +1536,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (view === "report") {
         const admin = await requireAdmin(request, response);
         if (!admin) return;
-        return response.status(200).json(await reportData(request));
+        const data = await reportData(request);
+        return response.status(200).json({ ...data, canCorrectAttendance: attendanceCorrectionAccount(admin) });
       }
       return response.status(404).json({ ok: false, error: "العرض المطلوب غير موجود" });
     }
@@ -1391,7 +1559,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const admin = await requireAdmin(request, response);
     if (!admin) return;
     let result: any;
-    if (action === "authorize_early_departure") result = await authorizeEarlyDeparture(body, admin.id);
+    if (action === "correct_attendance_record") result = await correctAttendanceRecord(body, admin);
+    else if (action === "authorize_early_departure") result = await authorizeEarlyDeparture(body, admin.id);
     else if (action === "delete_early_departure_permission") result = await deleteEarlyDeparturePermission(body);
     else if (action === "save_settings") result = await saveSettings(body, admin.id);
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);

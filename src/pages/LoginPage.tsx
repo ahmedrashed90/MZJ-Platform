@@ -44,7 +44,7 @@ export function LoginPage() {
           <label><span>كلمة المرور</span><input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           <button className="primary-auth-button" type="submit" disabled={loading}>
             <SignIn size={20} />
-            {loading ? "جاري التحقق والدخول..." : "تسجيل حضور ودخول المنصة"}
+            {loading ? "جاري التحقق والدخول..." : "دخول المنصة"}
           </button>
         </form>
       </section>
