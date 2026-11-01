@@ -366,28 +366,42 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
-    const current = await visibleItem(tx, user, itemId, true);
+    // Descriptive brief edits must not depend on whether the executor has
+    // submitted or the reviewer has already approved the files. Keep the
+    // approval/revision status, dates and file approvals untouched, and retain
+    // the normal immutability of rejected historical work.
+    const current = await visibleItem(tx, user, itemId);
     await tx`select id from marketing.work_tasks where id=${current.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
-    if (locked.version !== Number(body.version)) throw new Error(W.conflict);
-    if (!['in_progress', 'revision', 'submitted'].includes(locked.status)) throw new Error(W.immutable);
-    const managerEdit = hasPermission(user, 'marketing.task.edit') && (isManager(user) || current.created_by === user.id || departmentScope(user).length > 0);
-    if (current.assigned_to !== user.id && !managerEdit) throw new Error(W.denied);
+    if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
+    if (!['in_progress', 'editing', 'revision', 'submitted', 'approved'].includes(locked.status)) throw new Error(W.immutable);
+    const managerEdit = hasPermission(user, 'marketing.task.edit') &&
+      (isManager(user) || current.created_by === user.id || departmentScope(user).length > 0);
+    const executorEdit = current.assigned_to === user.id && ['in_progress', 'editing', 'submitted'].includes(locked.status);
+    if (!managerEdit && !executorEdit) throw new Error(W.denied);
+    const briefOnly = locked.status === 'approved' || locked.status === 'revision';
+    // Approved/revision work may have its *brief* corrected by an authorized
+    // task editor, not its deadline, assignment, media or approval state.
+    if (briefOnly && (!managerEdit || body.dueOn !== undefined || body.assigneeId !== undefined || body.departmentId !== undefined))
+      throw new Error(W.immutable);
     const idea = text(body.idea ?? locked.idea, 20000), ideaName = text(body.ideaName ?? locked.idea_name, 250);
     const explanation = body.explanation === undefined ? undefined : text(body.explanation, 20000);
+    if (briefOnly && ideaName !== locked.idea_name) throw new Error(W.immutable);
     let due = workDate(locked.due_on);
     let assignedTo = locked.assigned_to, departmentId = locked.department_id;
     if (managerEdit && body.dueOn !== undefined) { if (!isWorkDate(body.dueOn)) throw new Error(W.dateInvalid); due = body.dueOn; }
     if (managerEdit && body.assigneeId !== undefined) {
       assignedTo = id(body.assigneeId); departmentId = id(body.departmentId); await validateAssignee(tx, departmentId, assignedTo);
     }
+    // Description is stored in the existing work_history JSON (no DB
+    // migration). One transaction updates the idea and saves explanation.
     const [row] = await tx<any[]>`update marketing.work_items set idea=${idea},idea_name=${ideaName || idea.split('\n')[0].slice(0, 120)},
       due_on=${due}::date,assigned_to=${assignedTo}::uuid,department_id=${departmentId}::uuid,version=version+1,updated_at=now()
       where id=${itemId}::uuid returning version`;
     await history(tx, user, current.task_id, itemId, 'edited', '', { dueOn: due, assigneeId: assignedTo,
       ...(explanation === undefined ? {} : { explanation }) });
     await recalculateTask(tx, current.task_id);
-    return { ok: true, version: row.version, message: W.saved };
+    return { ok: true, version: row.version, idea, explanation, message: W.saved };
   });
 }
 /** Append configured media sizes to one existing assignment, preserving all

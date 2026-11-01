@@ -46,6 +46,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const [ratingBusy, setRatingBusy] = useState(false);
   const [ratingError, setRatingError] = useState('');
   const [openedRequirementId, setOpenedRequirementId] = useState('');
+  const [savedBriefItemId, setSavedBriefItemId] = useState('');
   const focusedRequirementRef = useRef('');
   const focusedRatingRef = useRef('');
   const task = query.data?.task;
@@ -139,7 +140,9 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
                 {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
-                  formatOptions={query.data!.formatOptions || []} canRate={query.data!.canRate} settings={settings.data} refresh={refresh} />}
+                  formatOptions={query.data!.formatOptions || []} canRate={query.data!.canRate} settings={settings.data} refresh={refresh}
+                  onBriefSaved={() => setSavedBriefItemId(item.id)} onBriefChanged={() => setSavedBriefItemId('')} />}
+                {opened && savedBriefItemId === item.id && <p className="mkw-brief-save-success" role="status">تم حفظ الفكرة والشرح بنجاح في بيانات المطلوب.</p>}
               </section>;
             })}
           </div>}
@@ -232,13 +235,15 @@ function ReviewNoteDocument({ text }: { text: string }) {
   </div>;
 }
 
-function ItemEditor({ item, number, capabilities, formatOptions, canRate, settings, refresh }: {
+function ItemEditor({ item, number, capabilities, formatOptions, canRate, settings, refresh, onBriefSaved, onBriefChanged }: {
   item: WorkItem; number: number; capabilities: WorkCapabilities; formatOptions: WorkFormat[]; canRate: boolean;
   settings: WorkEvaluationSettings | null; refresh: () => Promise<void>;
+  onBriefSaved: () => void; onBriefChanged: () => void;
 }) {
   const { user } = useAuth();
   const own = user?.id === item.assigned_to;
   const editable = !['approved','revision','rejected'].includes(item.status) && (own || capabilities.editTask);
+  const canEditBrief = item.status !== 'rejected' && (editable || capabilities.editTask);
   const canUpload = !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
@@ -302,10 +307,10 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   }
 
   async function persist() {
-    if (!editable) return version.current;
+    if (!canEditBrief) return version.current;
     if (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on) return version.current;
     const result = await workPost<{ version: number }>('save_item', { itemId: item.id, version: version.current, idea, ideaName, explanation,
-      ...(capabilities.editTask ? { dueOn } : {}) });
+      ...(editable && capabilities.editTask ? { dueOn } : {}) });
     version.current = result.version; return result.version;
   }
   async function run(operation: () => Promise<unknown>): Promise<boolean> {
@@ -448,12 +453,17 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
       <div className="mkw-item-detail-grid">
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
           <div className="mkw-execution-quick-row">
-            <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => setIdeaName(event.target.value)} /></Field>
+            <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} /></Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
-            <Field label={W.idea}>{editable ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => setIdea(event.target.value)}/> : <p className="mkw-idea-text">{idea}</p>}</Field>
-            <Field label="الشرح — شرح الفكرة أو المطلوب">{editable ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => setExplanation(event.target.value)}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
+            <Field label={W.idea}>{canEditBrief ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{idea}</p>}</Field>
+            <Field label="الشرح — شرح الفكرة أو المطلوب">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
             <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
           </div>
+          {canEditBrief && <div className="mkw-idea-save-actions">
+            <button type="button" className="primary" disabled={busy || (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on)}
+              onClick={() => void run(persist).then(saved => { if (saved) onBriefSaved(); })}>حفظ الفكرة والشرح</button>
+            <small className="mkw-muted">يتم حفظ النصين في التاسك مباشرة دون الحاجة لرفع ملف أو إرسال المطلوب للمراجعة.</small>
+          </div>}
           <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
             {editable && <input type="file" aria-label={W.ideaFile} accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { void upload(event.target.files, 'idea'); event.target.value = ''; }} />}
             {!ideaFiles.length && !editable && <span className="mkw-muted">—</span>}
@@ -485,7 +495,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           {!!finals.length && <details><summary><FileArrowDown size={17} />{item.status === 'rejected' ? 'معاينة الملفات المرفوضة' : W.viewProduct}</summary><FilesPreview files={finals} /></details>}
         </section>
       </div>
-      {(editable || canSubmit) && <footer className="mkw-actions">{editable && <button type="button" className="secondary" disabled={busy} onClick={() => void run(persist)}>{W.save}</button>}{canSubmit && <><button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>{item.status === 'submitted' && lateForSubmission && item.deadline_exception?.status !== 'approved' && item.deadline_exception?.status !== 'pending' && <button type="button" className="secondary" disabled={busy} onClick={() => void requestDeadlineException()}>{W.deadlineException}</button>}</>}</footer>}
+      {(editable || canSubmit) && <footer className="mkw-actions">{canSubmit && <><button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>{item.status === 'submitted' && lateForSubmission && item.deadline_exception?.status !== 'approved' && item.deadline_exception?.status !== 'pending' && <button type="button" className="secondary" disabled={busy} onClick={() => void requestDeadlineException()}>{W.deadlineException}</button>}</>}</footer>}
       {capabilities.review && item.status !== 'rejected' && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && item.status !== 'revision' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
     </div>
 

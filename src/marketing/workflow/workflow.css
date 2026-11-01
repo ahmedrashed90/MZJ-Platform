@@ -1115,3 +1115,12 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
   .mkw-campaign-chooser-toolbar button{width:100%}
   .mkw-preparation-full-content>.mkw-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+/* Keep the idea and explanation save action beside the editable brief. */
+.mkw-idea-save-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0 16px}
+.mkw-idea-save-actions .primary{min-width:154px}
+.mkw-idea-save-actions small{line-height:1.75}
+
+.mkw-brief-save-success{margin:8px 16px 14px;padding:10px 14px;border:1px solid #c8ded1;border-radius:10px;background:#f2faf5;color:#276448;font-weight:700;font-size:13px}
+
+.mkw-idea-creation-hint{display:block;font-size:12px;line-height:1.75;margin:4px 0}
