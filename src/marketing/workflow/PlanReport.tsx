@@ -2,12 +2,13 @@ import { Modal } from '../../components/Modal';
 import { Empty, WorkAlert } from './components';
 import { showDate, useWorkQuery } from './api';
 import { PublicationTiming, planStatusName } from './PlanDetail';
+import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 
 type ReportPlan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign';
-  created_at: string; review_status: string; status: string; review_note?: string;
+  created_at: string; creator_name?: string; review_status: string; status: string; review_note?: string;
   readiness: number;
 };
 type ReportHistory = {
@@ -30,12 +31,13 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
       {!plan ? <Empty>{query.loading ? 'جاري تحميل التقرير...' : query.error || 'لا توجد بيانات'}</Empty> : <>
         <div className="mkw-section-title mkw-plan-report-heading">
           <div><span className="mkw-code">{plan.plan_no}</span><strong>{isCampaign ? 'حملة' : 'أجندة'} · {plan.name}</strong></div>
-          <div className="mkw-plan-report-badges"><span className="mkw-plan-report-readonly">للعرض فقط</span><span className="mkw-plan-state">{planStatusName(plan.status)}</span></div>
+          <div className="mkw-plan-report-badges"><span className="mkw-plan-report-readonly">للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
         </div>
         <div className="mkw-summary mkw-plan-report-summary">
+          <div><small>منشئ {isCampaign ? 'الحملة' : 'الأجندة'}</small><strong>{plan.creator_name?.trim() || '—'}</strong></div>
           <div><small>تاريخ إنشاء الأجندة أو الحملة</small><strong>{showDate(plan.created_at)}</strong></div>
           <div><small>عدد المنشورات</small><strong>{lines.length}</strong></div>
-          <div><small>حالة المراجعة</small><strong>{planStatusName(plan.review_status)}</strong></div>
+          <div><small>حالة النشر</small><strong>{planStatusName(planDisplayState(plan.review_status, published, lines.length))}</strong></div>
           <div><small>المنشورات المنشورة</small><strong>{published} من {lines.length}</strong></div>
         </div>
         <div className="mkw-plan-progress"><span>جاهزية النشر: {plan.readiness}% · {published} من {lines.length} روابط نشر</span><progress max={100} value={plan.readiness}/></div>

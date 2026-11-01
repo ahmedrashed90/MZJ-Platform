@@ -352,30 +352,32 @@ const ATTENDANCE_DETAILS_HEADERS = [
 ] as const;
 
 function buildAttendancePdf(payload: ReportPayload) {
-  const flatRows = exportFlatRows(payload);
-  const summaryRows = flatRows.map(({ employee, row }, index) => {
-    const [first, second] = exportPeriods(row);
-    const hours = attendanceHourTotals([row]);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(wholeHoursText(hours.expected))}</td><td>${htmlEscape(wholeHoursText(hours.actual))}</td><td>${htmlEscape(hoursDifferenceText(hours.expected, hours.actual))}</td></tr>`;
-  }).join("");
-  const detailRows = flatRows.map(({ employee, row }, index) => {
-    const [first, second] = exportPeriods(row);
-    const hours = attendanceHourTotals([row]);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || "—")}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportResult(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(exportResult(second))}</td><td>${htmlEscape(wholeHoursText(hours.expected))}</td><td>${htmlEscape(wholeHoursText(hours.actual))}</td><td>${htmlEscape(hoursDifferenceText(hours.expected, hours.actual))}</td></tr>`;
-  }).join("");
+  const employees = exportRowsByEmployee(payload);
   const periodLabel = `من ${htmlEscape(formatAttendanceDate(payload.from))} إلى ${htmlEscape(formatAttendanceDate(payload.to))}`;
-  const table = (headers: readonly string[], rows: string) => `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
+  const table = (rows: string) => `<table><thead><tr>${ATTENDANCE_SUMMARY_HEADERS.map((header) => `<th>${htmlEscape(header)}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${ATTENDANCE_SUMMARY_HEADERS.length}">لا توجد بيانات</td></tr>`}</tbody></table>`;
+  const sections = employees.map(employee => {
+    const rows = employee.rows.map((row, index) => {
+      const [first, second] = exportPeriods(row);
+      const hours = attendanceHourTotals([row]);
+      return `<tr><td>${index + 1}</td><td>${htmlEscape(employee.branch || '—')}</td><td>${htmlEscape(employee.name)}</td><td>${htmlEscape(formatAttendanceDay(row.date))}</td><td>${htmlEscape(formatAttendanceDate(row.date))}</td><td>${htmlEscape(exportCheckIn(first))}</td><td>${htmlEscape(exportCheckOut(first))}</td><td>${htmlEscape(exportDelay(first))}</td><td>${htmlEscape(exportAbsence(first))}</td><td>${htmlEscape(exportCheckIn(second))}</td><td>${htmlEscape(exportCheckOut(second))}</td><td>${htmlEscape(exportDelay(second))}</td><td>${htmlEscape(exportAbsence(second))}</td><td>${htmlEscape(wholeHoursText(hours.expected))}</td><td>${htmlEscape(wholeHoursText(hours.actual))}</td><td>${htmlEscape(hoursDifferenceText(hours.expected, hours.actual))}</td></tr>`;
+    }).join('');
+    const branch = htmlEscape(employee.branch || '—');
+    const name = htmlEscape(employee.name);
+    const number = employee.employeeNo ? `<span>الرقم الوظيفي: ${htmlEscape(employee.employeeNo)}</span>` : '';
+    return `<section class="employee-report"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div><div class="employee-heading"><strong>${name}</strong><span>الفرع: ${branch}</span>${number}</div>${table(rows)}</section>`;
+  }).join('');
+  const content = sections || `<section class="employee-report"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div>${table('')}</section>`;
 
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الحضور والانصراف</title><style>
+  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الحضور والانصراف - ملخص الفترة</title><style>
 @page{size:A4 landscape;margin:9mm}
-*{box-sizing:border-box}body{margin:0;color:#38231d;background:#fff;font-family:Tajawal,Arial,sans-serif;font-size:9px;line-height:1.45}
-.report-section{page-break-after:always;break-after:page}.report-section:last-child{page-break-after:auto;break-after:auto}
-.head{padding:11px 14px;border-radius:10px;background:#6d3427;color:#fff;margin-bottom:9px}.head h1{margin:0 0 3px;font-size:17px}.head p{margin:0;opacity:.9}
-table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}th,td{border:1px solid #dfd0c8;padding:5px 4px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f4e8e1;font-weight:900}tbody tr:nth-child(even) td{background:#fdf9f7}
-@media print{.head,th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-</style></head><body>
-<section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - ملخص الفترة</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_SUMMARY_HEADERS, summaryRows)}</section>
-<section class="report-section"><div class="head"><h1>تقرير الحضور والانصراف - تقرير تفصيلي</h1><p>${periodLabel}</p></div>${table(ATTENDANCE_DETAILS_HEADERS, detailRows)}</section>
+*{box-sizing:border-box}body{margin:0;color:#4a211c;background:#fff;font-family:Tajawal,Arial,sans-serif;font-size:9px;line-height:1.5}
+.employee-report{break-inside:auto;page-break-inside:auto}.employee-report+.employee-report{break-before:page;page-break-before:always}
+.head{padding:11px 14px;border-radius:9px;background:#4a211c;color:#fff;margin-bottom:9px}.head h1{margin:0 0 3px;font-size:16px}.head p{margin:0;opacity:.9}
+.employee-heading{display:flex;justify-content:flex-start;align-items:center;gap:20px;flex-wrap:wrap;padding:9px 11px;margin:0 0 10px;border:1px solid #e5d8cc;border-radius:8px;background:#f3e8dc;font-size:12px}
+.employee-heading strong{font-size:15px}.employee-heading span{font-size:11px}
+table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th,td{border:1px solid #dfd0c8;padding:5px 4px;text-align:center;vertical-align:middle;overflow-wrap:anywhere;word-break:normal}th{background:#f3e8dc;font-weight:800}tbody tr:nth-child(even) td{background:#fcf8f5}
+@media print{.head,.employee-heading,th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>${content}
 <script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`;
 }
 

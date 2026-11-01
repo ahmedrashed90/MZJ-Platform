@@ -1075,6 +1075,11 @@ async function saveItemCopy(sql: Sql, body: Row, user: SessionUser) {
 async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId), action = text(body.decision, 24), note = text(body.note, 10000);
   const categoryId = body.categoryId ? id(body.categoryId) : null;
+  const categoryName = text(body.categoryName, 100).replace(/[\r\n\t]+/g, ' ').trim();
+  // Custom category labels are stored with the review text; existing category UUIDs keep their native storage.
+  // This preserves old records and avoids a database migration solely for a free-text note type.
+  const revisionNote = action === 'revision' && categoryName && !categoryId
+    ? `نوع الملاحظة: ${categoryName}\n${note}` : note;
   if (!['revision','submitted','approved'].includes(action)) throw new Error(W.invalid);
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
@@ -1089,11 +1094,11 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
       if (!canReviewPlan(user) || !['in_progress','submitted'].includes(plan.review_status)) throw new Error(W.denied);
     } else if (plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status)) throw new Error(W.denied);
     const status = action === 'approved' ? 'publishing' : action === 'submitted' ? 'submitted' : 'revision';
-    await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? note : plan.review_note},
+    await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? revisionNote : plan.review_note},
       review_revision=review_revision+${action === 'revision' ? 1 : 0},review_note_category_id=${action === 'revision' ? categoryId : plan.review_note_category_id}::uuid,reviewed_by=${user.id}::uuid,
       reviewed_at=now(),updated_at=now() where id=${planId}::uuid`;
     await tx`insert into marketing.work_plan_reviews(plan_id,action,note,category_id,actor_id,actor_name)
-      values(${planId}::uuid,${action},${note},${action === 'revision' ? categoryId : null}::uuid,${user.id}::uuid,${user.fullName})`;
+      values(${planId}::uuid,${action},${revisionNote},${action === 'revision' ? categoryId : null}::uuid,${user.id}::uuid,${user.fullName})`;
     return { ok:true, message:W.saved };
   });
 }
@@ -1379,7 +1384,12 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const [plan] = await sql<any[]>`select p.id::text,p.plan_no,p.name,p.kind,p.created_by::text,p.created_at,p.review_status,p.review_note,p.review_note_category_id,p.review_revision,p.activated_at,
     coalesce(creator.full_name,'') as creator_name from marketing.work_plans p
     left join core.users creator on creator.id=p.created_by where p.id=${planId}::uuid`;
-  const history = await sql<any[]>`select r.action,r.note,r.actor_name,r.created_at,coalesce(c.name,'') as category_name from marketing.work_plan_reviews r left join marketing.work_review_categories c on c.id=r.category_id where r.plan_id=${planId}::uuid order by r.created_at desc, r.id desc`;
+  const historyRecords = await sql<any[]>`select r.action,r.note,r.actor_name,r.created_at,coalesce(c.name,'') as category_name from marketing.work_plan_reviews r left join marketing.work_review_categories c on c.id=r.category_id where r.plan_id=${planId}::uuid order by r.created_at desc, r.id desc`;
+  const history = historyRecords.map(entry => {
+    // Free-text category types use the leading note line and appear as normal named categories in history.
+    const customType = /^نوع الملاحظة: ([^\n]+)\n/.exec(String(entry.note || ''));
+    return customType ? { ...entry, category_name: entry.category_name || customType[1], note: String(entry.note).slice(customType[0].length) } : entry;
+  });
   const complete = lines.every(line => line.published_ready);
   return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
     readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user), canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,

@@ -1,10 +1,10 @@
-import { CheckCircle } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import { Modal } from '../../components/Modal';
 import { W, Empty, WorkAlert } from './components';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { showDate, useWorkQuery, workPost, type WorkMeta } from './api';
 import { availablePlanPostTypes } from './planComposer';
+import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 
 type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
@@ -15,10 +15,7 @@ type Plan = {
 };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
 type EditableLine = { id: string; date: string; productId: string; postTypeId: string; budget: string };
-const statusNames: Record<PlanState, string> = {
-  in_progress: 'قيد التنفيذ', revision: 'مطلوب تعديل', submitted: 'قيد المراجعة', publishing: 'جاري النشر', published: 'تم النشر',
-};
-export function planStatusName(status: string) { return statusNames[status as PlanState] || status; }
+export function planStatusName(status: string) { return planStateLabels[status as PlanState] || status; }
 
 export function PublicationTiming({ line }: { line: WorkPlanLine }) {
   if (!line.published_ready) return <span className="mkw-publish-timing is-pending">بانتظار النشر</span>;
@@ -54,7 +51,8 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     if (decision === 'revision' && !note.trim()) { setError('اكتب ملاحظة التعديل أولًا'); return; }
     const ok = await run('plan_review', {
       planId: id, decision, note: decision === 'revision' ? note.trim() : '',
-      categoryId: decision === 'revision' ? noteType || undefined : undefined,
+      categoryId: decision === 'revision' ? settings.data?.categories.find(item => item.is_active && item.name.trim() === noteType.trim())?.id : undefined,
+      categoryName: decision === 'revision' ? noteType.trim() : undefined,
     });
     if (ok) { setNote(''); setNoteType(''); }
   }
@@ -65,12 +63,11 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   return <Modal open title={`تفاصيل ومراجعة${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-review-modal"><div className="mkw mkw-plan-review">
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
-      <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><span className="mkw-plan-state">{planStatusName(plan!.status)}</span></div>
-      {['publishing', 'published'].includes(plan!.review_status) && <div className="mkw-approved-plan-badge mkw-approved-plan-badge-detail"><CheckCircle size={24} weight="fill"/> {plan!.kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'}</div>}
+      <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><PlanStatusBadges kind={plan!.kind} reviewStatus={plan!.review_status} publishedCount={query.data.lines.filter(line => line.published_ready).length} totalCount={query.data.lines.length}/></div>
       <div className="mkw-summary"><div><small>منشئ {plan!.kind === 'agenda' ? 'الأجندة' : 'الحملة'}</small><strong>{plan!.creator_name?.trim() || '—'}</strong></div><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
-      {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة<select value={noteType} onChange={e => setNoteType(e.target.value)}><option value="">اختر نوع الملاحظة (اختياري)</option>{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+      {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>
         <label>ملاحظة التعديل<div className="mkw-actions"><button type="button" className="secondary" onClick={() => setNote(old => `${old}**نص مهم**`)}>غامق</button><button type="button" className="secondary" onClick={() => setNote(old => `${old}\n• نقطة تعديل`)}>نقطة</button></div><textarea value={note} maxLength={10000} onChange={e => setNote(e.target.value)} placeholder="اكتب المطلوب تعديله في المنتجات أو الجدول" /></label><div className="mkw-actions">
         <button type="button" className="secondary" disabled={busy || !note.trim()} onClick={() => void review('revision')}>طلب تعديل</button>
         <button type="button" className="primary" disabled={busy || editing} onClick={() => void review('approved')}>اعتماد {plan!.kind === 'campaign' ? 'الحملة' : 'الأجندة'} — جاهزة للنشر</button>

@@ -24,10 +24,11 @@ check(server.includes('if (kind === \'campaign\' && (platform.rawBudget === \'\'
   'Server rejects missing amounts for every individual campaign post type');
 check(!dashboard.includes('تفاصيل الجدول') && dashboard.includes('مراجعة واعتماد'),
   'Dashboard removes details-table button but retains preapproval review');
-check(dashboard.includes('mkw-approved-plan-badge') && dashboard.includes("group[0].kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'"),
-  'Approved campaign and agenda show a prominent differentiated badge');
-check(dashboard.includes('onClick={() => setParams({ plan: id })}') && css.includes('.mkw-approved-plan-badge'),
-  'Approved badge provides access to read-only plan details');
+const statusWidget=read('src/marketing/workflow/PlanStatus.tsx');
+check(dashboard.includes('<PlanStatusBadges') && statusWidget.includes("kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'") && statusWidget.includes('planDisplayState'),
+  'Approved campaign and agenda show consistent approval and actual publishing progress');
+check(dashboard.includes('onDetails={() => setParams({ plan: id })}') && css.includes('.mkw-plan-approval-tag') && css.includes('.mkw-plan-progress-tag'),
+  'Compact approval indicator opens details and publishing status uses restrained styling');
 check(!dashboard.includes('المنصة الحالية لا تدعم النشر التلقائي') && !dashboard.includes('mkw-publishing-support-note"'),
   'Unwanted publishing-support notices are not rendered in dashboard cards');
 check(server.includes("coalesce(creator.full_name,'') as creator_name") && review.includes('plan!.creator_name?.trim()'),

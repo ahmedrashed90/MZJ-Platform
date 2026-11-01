@@ -7,19 +7,14 @@ import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
 import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
-import { PlanDetail, planStatusName } from '../workflow/PlanDetail';
+import { PlanDetail } from '../workflow/PlanDetail';
+import { PlanStatusBadges, planDisplayState } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
 type ReviewState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
-
-function planVisualState(group: WorkPlanLine[]): ReviewState {
-  const reviewStatus = (group[0].review_status || 'in_progress') as ReviewState;
-  const published = group.every(line => line.published_ready);
-  return (published && reviewStatus === 'publishing') ? 'published' : reviewStatus;
-}
 
 function scheduleRange(group: WorkPlanLine[]) {
   const dates = group.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort();
@@ -133,10 +128,10 @@ export function MarketingDashboardPage() {
             const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
             const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
             const activated = !!group[0].activated_at;
-            const visualStatus = planVisualState(group);
             const reviewStatus = (group[0].review_status || 'in_progress') as ReviewState;
-            const readiness = Math.round(group.filter(line => line.published_ready).length * 100 / group.length);
             const readyLines = group.filter(line => line.published_ready).length;
+            const visualStatus = planDisplayState(reviewStatus, readyLines, group.length);
+            const readiness = Math.round(readyLines * 100 / group.length);
             const preparedLines = group.filter(line => line.prepared_count === 1 && !line.failed_count).length;
             const platforms = uniqueValues(group.map(line => line.platform_name));
             const kinds = uniqueValues(group.map(line => line.post_type_name));
@@ -161,8 +156,7 @@ export function MarketingDashboardPage() {
                   </div>
                   <span className="mkw-muted">تاريخ الإنشاء: {showDate(group[0].plan_created_at)}</span>
                 </div>
-                {['publishing','published'].includes(reviewStatus) ? <button type="button" className="mkw-approved-plan-badge" onClick={() => setParams({ plan: id })} aria-label={`فتح تفاصيل ${group[0].kind === 'agenda' ? 'الأجندة' : 'الحملة'} المعتمدة`}><CheckCircle size={22} weight="fill"/>{group[0].kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'}</button>
-                  : <strong className={`mkw-plan-state mkw-plan-state-${visualStatus}`}>{planStatusName(visualStatus)}</strong>}
+                <PlanStatusBadges kind={group[0].kind} reviewStatus={reviewStatus} publishedCount={readyLines} totalCount={group.length} onDetails={() => setParams({ plan: id })}/>
               </div>
 
               <div className="mkw-dashboard-publish-stats">
