@@ -106,6 +106,15 @@ test('Task creation persists both idea and explanation in one creation transacti
   assert.match(form,/حفظ وإنشاء التاسك/);
   assert.match(form,/يُحفظ نص الفكرة والشرح في بيانات المطلوب/);
 });
+test('Executors and requirements overview hides explanation but keeps it in the opened item editor',()=>{
+  const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+  const overview=ui.split('<section className="mkw-detail-items">')[1]?.split('<details className="mkw-history">')[0];
+  assert.ok(overview,'Executors and requirements section is present');
+  assert.doesNotMatch(overview,/mkw-requirement-explanation-read|الشرح: \{item\.explanation\}/);
+  assert.match(overview,/\{item\.idea\?\.trim\(\) \|\| 'لم تُحدد الفكرة'\}/);
+  assert.match(ui,/<Field label="الشرح — شرح الفكرة أو المطلوب">/);
+  assert.match(ui,/onChange=\{event => \{ setExplanation\(event\.target\.value\)/);
+});
 test('The idea and explanation fields have a visible standalone Save action',()=>{
   const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
   assert.match(ui,/className="mkw-idea-save-actions"/);
