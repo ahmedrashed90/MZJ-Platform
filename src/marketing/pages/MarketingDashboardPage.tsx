@@ -161,7 +161,8 @@ export function MarketingDashboardPage() {
                   </div>
                   <span className="mkw-muted">تاريخ الإنشاء: {showDate(group[0].plan_created_at)}</span>
                 </div>
-                <strong className={`mkw-plan-state mkw-plan-state-${visualStatus}`}>{planStatusName(visualStatus)}</strong>
+                {['publishing','published'].includes(reviewStatus) ? <button type="button" className="mkw-approved-plan-badge" onClick={() => setParams({ plan: id })} aria-label={`فتح تفاصيل ${group[0].kind === 'agenda' ? 'الأجندة' : 'الحملة'} المعتمدة`}><CheckCircle size={22} weight="fill"/>{group[0].kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'}</button>
+                  : <strong className={`mkw-plan-state mkw-plan-state-${visualStatus}`}>{planStatusName(visualStatus)}</strong>}
               </div>
 
               <div className="mkw-dashboard-publish-stats">
@@ -198,7 +199,6 @@ export function MarketingDashboardPage() {
               </div>
 
               <div className="mkw-dashboard-publish-tags">
-                {!supported && <span className="mkw-dashboard-note-tag is-warning">المنصة الحالية لا تدعم النشر التلقائي</span>}
                 {prepared && <span className="mkw-dashboard-note-tag is-ready">تم تجهيز جميع المطلوبات</span>}
                 {activated && <span className="mkw-dashboard-note-tag is-active"><CheckCircle size={14}/>تم تفعيل النشر</span>}
                 {reviewStatus === 'revision' && <span className="mkw-dashboard-note-tag is-danger">يوجد طلب تعديل</span>}
@@ -206,11 +206,10 @@ export function MarketingDashboardPage() {
 
               <div className="mkw-dashboard-publish-actions">
                 <button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>التقرير</button>
-                <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>{['in_progress','revision','submitted'].includes(reviewStatus) ? 'مراجعة واعتماد' : 'تفاصيل الجدول'}</button>
+                {['in_progress','revision','submitted'].includes(reviewStatus) && <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>مراجعة واعتماد</button>}
                 <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
                 {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
               </div>
-              {publishSettings.data?.enabled && !supported && <div className="mkw-publishing-support-note" role="status">يمكن حفظ تجهيز النشر، لكن النشر التلقائي غير متاح للمنصة المحددة عبر الربط الحالي. استخدم منصة متصلة ومدعومة للنشر التلقائي.</div>}
             </article>;
           })}
         </div>}

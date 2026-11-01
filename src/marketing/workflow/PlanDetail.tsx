@@ -1,3 +1,4 @@
+import { CheckCircle } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import { Modal } from '../../components/Modal';
 import { W, Empty, WorkAlert } from './components';
@@ -8,7 +9,7 @@ import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workfl
 
 type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
 type Plan = {
-  id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; created_at: string;
+  id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; creator_name?: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
   readiness: number; canReview: boolean; canEdit: boolean; canSaveLinks: boolean; activated_at?: string | null;
 };
@@ -65,7 +66,8 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
       <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><span className="mkw-plan-state">{planStatusName(plan!.status)}</span></div>
-      <div className="mkw-summary"><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
+      {['publishing', 'published'].includes(plan!.review_status) && <div className="mkw-approved-plan-badge mkw-approved-plan-badge-detail"><CheckCircle size={24} weight="fill"/> {plan!.kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'}</div>}
+      <div className="mkw-summary"><div><small>منشئ {plan!.kind === 'agenda' ? 'الأجندة' : 'الحملة'}</small><strong>{plan!.creator_name?.trim() || '—'}</strong></div><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة<select value={noteType} onChange={e => setNoteType(e.target.value)}><option value="">اختر نوع الملاحظة (اختياري)</option>{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>

@@ -144,6 +144,7 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
   const [postUrl, setPostUrl] = useState(data.line.manual_post_url || '');
+  const linkFinalized = Boolean(String(data.line.manual_post_url || '').trim() || data.line.manual_published_on);
   const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
   const [rescheduleTime, setRescheduleTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
@@ -170,14 +171,15 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     finally { setBusy(false); }
   }
   async function saveLink() {
-    if (busy || !data.canSaveLinks) return;
+    if (busy || !data.canSaveLinks || linkFinalized) return;
+    if (!postUrl.trim()) { setError('أدخل رابط المنشور قبل الحفظ.'); return; }
     if (caption !== data.line.caption || hashtags !== data.line.hashtags) {
       setError('احفظ الكابشن والهاشتاج أولًا، ثم احفظ رابط المنشور وتاريخه.'); return;
     }
     setBusy(true); setError(''); setMessage('');
     try {
       await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim() });
-      await refresh(); setMessage('تم حفظ رابط المنشور وتاريخ النشر الفعلي');
+      await refresh(); setMessage('تم حفظ رابط المنشور بشكل نهائي وتثبيت تاريخ نشره الفعلي');
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
@@ -235,13 +237,14 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     <section className="mkw-post-link-entry" aria-label="بيانات النشر الفعلي">
       <h3>رابط المنشور وتاريخ النشر الفعلي</h3>
       <div className="mkw-post-link-fields">
-        <label>رابط المنشور<input type="url" value={postUrl} disabled={busy || !data.canSaveLinks} placeholder="https://..." onChange={event => setPostUrl(event.target.value)} /></label>
+        <label>رابط المنشور<input type="url" value={postUrl} disabled={busy || !data.canSaveLinks || linkFinalized} readOnly={linkFinalized} placeholder="https://..." onChange={event => setPostUrl(event.target.value)} /></label>
         <label>تاريخ النشر الفعلي (ثابت)<input type="date" value={String(data.line.manual_published_on || '').slice(0, 10)} readOnly disabled aria-label="تاريخ النشر الفعلي المسجل تلقائيًا" /></label>
       </div>
-      <small>عند حفظ رابط المنشور لأول مرة يُسجل تاريخ ذلك اليوم تلقائيًا بتوقيت السعودية، ويظل ثابتًا حتى لو عدّلت الرابط لاحقًا.</small>
-      {!data.canSaveLinks && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
+      {linkFinalized ? <small className="mkw-publish-final-link-notice"><CheckCircle size={18} weight="fill"/> تم حفظ الرابط وتاريخ النشر الفعلي نهائيًا. لا يمكن إضافة رابط آخر أو تعديل الرابط أو حذفه.</small>
+        : <small>يُسجل تاريخ أول حفظ للرابط تلقائيًا بتوقيت السعودية. بعد الحفظ لا يمكن تغييره أو حذف الرابط.</small>}
+      {!data.canSaveLinks && !linkFinalized && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
       {data.line.effective_post_url && <a href={data.line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور المحفوظ</a>}
-      {data.canSaveLinks && <button type="button" className="secondary" disabled={busy || postUrl.trim() === (data.line.manual_post_url || '')} onClick={() => void saveLink()}>حفظ رابط المنشور</button>}
+      {data.canSaveLinks && !linkFinalized && <button type="button" className="secondary" disabled={busy || !postUrl.trim()} onClick={() => void saveLink()}>حفظ رابط المنشور نهائيًا</button>}
     </section>
     <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />

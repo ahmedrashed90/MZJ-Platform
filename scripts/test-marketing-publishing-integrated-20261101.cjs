@@ -121,8 +121,9 @@ const blank={id:uid(20),plan_id:uid(21),product_id:uid(22),scheduled_on:'2026-10
 
   const statusUser=user;
   const saved=fakeSql(q=>{
-    if(q.includes('select l.id,l.plan_id,p.review_status'))return [{id:lineId,plan_id:planId,review_status:'publishing',created_by:statusUser.id}];
+    if(q.includes('select l.id,l.plan_id,l.manual_post_url'))return [{id:lineId,plan_id:planId,review_status:'publishing',created_by:statusUser.id,manual_post_url:'',manual_published_on:null}];
     if(q.includes('select l.*,l.scheduled_on::text'))return [{id:lineId,plan_id:planId,review_status:'publishing',manual_post_url:'',provider_post_url:'',prepared_count:0,published_count:0,scheduled_count:0,failed_count:0}];
+    if(q.includes('update marketing.work_plan_items'))return [{published_on:'2026-11-01'}];
     return [];
   });
   await savePlanPostUrl(saved,user,{lineId,url:'https://example.org/post',publishedOn:'2026-10-31'});

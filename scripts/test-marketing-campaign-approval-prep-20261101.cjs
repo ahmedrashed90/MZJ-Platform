@@ -59,13 +59,13 @@ function check(condition, label) { assert.ok(condition,label);passed++;console.l
   let today='2026-11-01', updateSql='';
   const sql=async (parts,...values)=>{
     const q=parts.join('?').replace(/\s+/g,' ').trim();
-    if(q.includes('select l.id,l.plan_id,p.review_status')) return [{id:lineId,plan_id:planId,review_status:row.review_status,created_by:user.id}];
+    if(q.includes('select l.id,l.plan_id,l.manual_post_url')) return [{id:lineId,plan_id:planId,review_status:row.review_status,created_by:user.id,manual_post_url:row.manual_post_url,manual_published_on:row.manual_published_on}];
     if(q.includes('select l.*,l.scheduled_on::text')) return [row];
     if(q.includes('update marketing.work_plan_items')) {
       updateSql=q;
       const url=values[0];
       assert.equal(typeof url,'string');
-      assert.match(q,/manual_published_on=coalesce\(manual_published_on,/);
+      assert.match(q,/manual_published_on=\(now\(\) at time zone/);
       assert.match(q,/time zone 'Asia\/Riyadh'/);
       row.manual_post_url=url;
       row.manual_published_on=row.manual_published_on||(url?today:null);
@@ -78,12 +78,12 @@ function check(condition, label) { assert.ok(condition,label);passed++;console.l
   check(result.publishedOn==='2026-11-01' && row.manual_published_on==='2026-11-01',
     'first valid post URL timestamps on the server instead of accepting client date');
   today='2026-11-02';
-  result=await savePlanPostUrl(sql,user,{lineId,url:'https://example.com/edited',publishedOn:'2026-11-02'});
-  check(result.publishedOn==='2026-11-01' && row.manual_post_url==='https://example.com/edited',
-    'editing the URL preserves the first saved publication date');
-  await savePlanPostUrl(sql,user,{lineId,url:''});
-  check(row.manual_published_on==='2026-11-01' && row.manual_post_url==='',
-    'temporary URL deletion never erases the original first-publication date');
+  await assert.rejects(()=>savePlanPostUrl(sql,user,{lineId,url:'https://example.com/edited',publishedOn:'2026-11-02'}),/لا يمكن تعديله/);
+  check(row.manual_published_on==='2026-11-01' && row.manual_post_url==='https://example.com/first',
+    'second save cannot change the URL or publication date');
+  await assert.rejects(()=>savePlanPostUrl(sql,user,{lineId,url:''}),/لا يمكن تعديله/);
+  check(row.manual_published_on==='2026-11-01' && row.manual_post_url==='https://example.com/first',
+    'a saved URL cannot be deleted');
   await assert.rejects(()=>savePlanPostUrl(sql,user,{lineId,url:'javascript:alert(1)'}));
   check(Boolean(updateSql) && row.manual_published_on==='2026-11-01',
     'unsafe link is rejected without altering the record');

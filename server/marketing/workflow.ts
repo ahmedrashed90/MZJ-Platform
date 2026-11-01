@@ -1155,22 +1155,28 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
 }
 async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   const lineId = id(body.lineId), url = publishedLink(body.url);
-  // Publication date is the Saudi calendar day when the first manual URL is saved.
-  // Do not trust the browser clock or accept a client-supplied publication date.
-  // Once recorded, it stays immutable if the URL is edited or temporarily removed.
+  // The first saved manual publication URL and Saudi publication date are final.
+  // Never accept a browser date or allow a second save, edit or deletion.
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
-    const [line] = await tx<any[]>`select l.id,l.plan_id,p.review_status,p.created_by,p.activated_at from marketing.work_plan_items l
+    const [line] = await tx<any[]>`select l.id,l.plan_id,l.manual_post_url,l.manual_published_on,p.review_status,p.created_by,p.activated_at from marketing.work_plan_items l
       join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
     if (!line || !['publishing','published'].includes(line.review_status)) throw new Error('لا يمكن تسجيل رابط النشر قبل اعتماد الحملة أو الأجندة');
     if (!(await planLines(tx as unknown as Sql,user,String(line.plan_id))).some(visible => visible.id === lineId)) throw new Error(W.denied);
     if (line.created_by !== user.id && !canReviewPlan(user) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
+    // Locking the row above makes the first-save check atomic across devices.
+    // A previously deleted legacy link is also locked if it has a first-save date.
+    if (String(line.manual_post_url || '').trim() || line.manual_published_on) {
+      throw new Error('تم حفظ رابط المنشور مسبقًا، ولا يمكن تعديله أو حذفه أو إضافة رابط آخر.');
+    }
+    if (!url) throw new Error('أدخل رابط المنشور الصحيح قبل الحفظ.');
     const [saved] = await tx<any[]>`update marketing.work_plan_items
       set manual_post_url=${url},
-        manual_published_on=coalesce(manual_published_on,
-          case when ${url}<>'' then (now() at time zone 'Asia/Riyadh')::date else null end),
+        manual_published_on=(now() at time zone 'Asia/Riyadh')::date,
         updated_at=now(),version=version+1
-      where id=${lineId}::uuid returning manual_published_on::text as published_on`;
+      where id=${lineId}::uuid and coalesce(manual_post_url,'')='' and manual_published_on is null
+      returning manual_published_on::text as published_on`;
+    if (!saved) throw new Error('الرابط محفوظ بالفعل؛ أعد تحميل بيانات المنشور.');
     return { ok:true, publishedOn:saved?.published_on || null, message:W.saved };
   });
 }
@@ -1208,10 +1214,16 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
         const platforms = list(entry.platforms);
         if (!platforms.length || platforms.length > 50) throw new Error(W.requiredFields);
         const requested = platforms.flatMap(platform => {
-          const types = list(platform.postTypeIds).length ? list(platform.postTypeIds) : [platform.postTypeId];
-          return types.map((postTypeId: unknown, index: number) => ({
-            platformId: id(platform.platformId), postTypeId: id(postTypeId),
-            rawBudget: index === 0 ? platform.budget : 0, firstOfPlatform: index === 0,
+          // Current clients send an explicit amount per (platform, post type).
+          // Legacy grouped clients can still send their first-type-only budget.
+          const explicitPostTypes = Array.isArray(platform.postTypes) ? list(platform.postTypes) : null;
+          const types = explicitPostTypes ?? (list(platform.postTypeIds).length ? list(platform.postTypeIds) : [platform.postTypeId]);
+          if (!types.length) throw new Error(W.selectFormats);
+          return types.map((selected: any, index: number) => ({
+            platformId: id(platform.platformId),
+            postTypeId: id(explicitPostTypes ? selected.postTypeId : selected),
+            rawBudget: explicitPostTypes ? selected.budget : index === 0 ? platform.budget : 0,
+            firstOfPlatform: index === 0,
           }));
         });
         const ids = requested.map(platform => platform.postTypeId);
@@ -1222,7 +1234,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
           if (platform.firstOfPlatform && selectedPlatforms.has(platform.platformId)) throw new Error('لا يمكن تكرار نفس المنصة للمطلوب الواحد.');
           if (platform.firstOfPlatform) selectedPlatforms.add(platform.platformId);
           if (formatById.get(platform.postTypeId)?.platform_id !== platform.platformId) throw new Error(W.selectFormats);
-          if (kind === 'campaign' && platform.firstOfPlatform && (platform.rawBudget === '' || platform.rawBudget == null)) throw new Error(W.requiredFields);
+          if (kind === 'campaign' && (platform.rawBudget === '' || platform.rawBudget == null)) throw new Error('أدخل ميزانية مستقلة لكل نوع نشر داخل المنصة.');
           const budget = kind === 'campaign' ? Number(platform.rawBudget) : 0;
           if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.abs(budget * 100 - Math.round(budget * 100)) > 0.000001) throw new Error(W.invalid);
           const key = `${date}:${productId}:${platform.postTypeId}`;
@@ -1364,7 +1376,9 @@ async function deleteWorkflowPlan(sql: Sql, user: SessionUser, planId: string) {
 async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const lines = await planLines(sql, user, planId);
   if (!lines.length) throw new Error(W.notFound);
-  const [plan] = await sql<any[]>`select id::text,plan_no,name,kind,created_by::text,created_at,review_status,review_note,review_note_category_id,review_revision,activated_at from marketing.work_plans where id=${planId}::uuid`;
+  const [plan] = await sql<any[]>`select p.id::text,p.plan_no,p.name,p.kind,p.created_by::text,p.created_at,p.review_status,p.review_note,p.review_note_category_id,p.review_revision,p.activated_at,
+    coalesce(creator.full_name,'') as creator_name from marketing.work_plans p
+    left join core.users creator on creator.id=p.created_by where p.id=${planId}::uuid`;
   const history = await sql<any[]>`select r.action,r.note,r.actor_name,r.created_at,coalesce(c.name,'') as category_name from marketing.work_plan_reviews r left join marketing.work_review_categories c on c.id=r.category_id where r.plan_id=${planId}::uuid order by r.created_at desc, r.id desc`;
   const complete = lines.every(line => line.published_ready);
   return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,

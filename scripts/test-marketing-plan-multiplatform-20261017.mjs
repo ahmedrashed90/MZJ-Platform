@@ -102,7 +102,40 @@ check(composer.validatePlanComposer([multiType], products, types, 'campaign') ==
 db = makeSql();
 await backend.createPlan(db.sql, makeRequest(composer.planEntriesPayload([multiType], 'campaign')), admin);
 check(db.inserts.length === 2 && db.inserts[0].budget === 150 && db.inserts[1].budget === 0,
-  'One platform with two publish types creates two rows and charges budget only once');
+  'Legacy platform-budget drafts keep their earlier first-type allocation');
+
+// Current campaign composer: independent paid amounts for each selected type.
+const perType = { ...complete, platforms: [{
+  platformId: ig, postTypeId: uid(21), postTypeIds: [uid(21), uid(22)], budget: '',
+  postTypeBudgets: { [uid(21)]: '100.50', [uid(22)]: '75.25' },
+}] };
+check(composer.validatePlanComposer([perType], products, types, 'campaign') === '',
+  'Campaign requires and accepts independent budgets for Instagram Photo and Story');
+check(composer.planEntriesPayload([perType], 'campaign')[0].platforms[0].postTypes[1].budget === 75.25,
+  'Second selected type is sent with its own explicit budget');
+db = makeSql();
+await backend.createPlan(db.sql, makeRequest(composer.planEntriesPayload([perType], 'campaign')), admin);
+check(db.inserts.length === 2 && db.inserts[0].postTypeId === uid(21) && db.inserts[0].budget === 100.5 &&
+  db.inserts[1].postTypeId === uid(22) && db.inserts[1].budget === 75.25,
+  'Server stores distinct budget amounts in each real plan line (175.75 SAR total)');
+check(composer.validatePlanComposer([{ ...perType, platforms: [{ ...perType.platforms[0], postTypeBudgets: { [uid(21)]: '100.50' } }] }], products, types, 'campaign').length > 0,
+  'A newly selected type without a budget cannot be saved');
+check(composer.validatePlanComposer([{ ...perType, platforms: [{ ...perType.platforms[0], postTypeBudgets: { [uid(21)]: '100.50', [uid(22)]: '-1' } }] }], products, types, 'campaign').length > 0,
+  'Negative post-type budget is rejected');
+check(composer.validatePlanComposer([{ ...perType, platforms: [{ ...perType.platforms[0], postTypeBudgets: { [uid(21)]: '100.50', [uid(22)]: '0' } }] }], products, types, 'campaign') === '',
+  'Explicit zero budget is valid for organic/unpaid post types');
+for (const [caseName, override] of [
+  ['missing second type amount', { postTypes: [{ postTypeId: uid(21), budget: 100 }, { postTypeId: uid(22) }] }],
+  ['wrong platform for selected type', { postTypes: [{ postTypeId: uid(21), budget: 100 }, { postTypeId: uid(24), budget: 75 }] }],
+  ['duplicate post type', { postTypes: [{ postTypeId: uid(21), budget: 100 }, { postTypeId: uid(21), budget: 75 }] }],
+]) {
+  db = makeSql();
+  const submitted = composer.planEntriesPayload([perType], 'campaign');
+  await assert.rejects(() => backend.createPlan(db.sql, makeRequest([{ ...submitted[0], platforms: [{ ...submitted[0].platforms[0], ...override }] }]), admin),
+    undefined, caseName);
+  check(db.inserts.length === 0, `Server rejects ${caseName} without inserting plan lines`);
+}
+
 
 db = makeSql();
 await backend.createPlan(db.sql, { ...makeRequest(composer.planEntriesPayload([complete], 'agenda')), kind: 'agenda' }, admin);

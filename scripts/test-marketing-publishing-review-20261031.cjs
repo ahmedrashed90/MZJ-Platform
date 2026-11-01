@@ -30,8 +30,9 @@ function fakeSql(status='in_progress') {
     const q=parts.join('?').replace(/\s+/g,' ').trim(); statements.push({q,values});
     if (q.includes('select * from marketing.work_plans')) return [{id:planId,created_by:user.id,review_status:status,activated_at:null}];
     if (q.includes('select l.*,l.scheduled_on::text')) return [{id:lineId,plan_id:planId,product_id:productId,review_status:status,manual_post_url:'',provider_post_url:'',prepared_count:0,published_count:0,scheduled_count:0,failed_count:0}];
-    if (q.includes('select l.id,l.plan_id,p.review_status')) return [{id:lineId,plan_id:planId,review_status:status,created_by:user.id}];
+    if (q.includes('select l.id,l.plan_id,l.manual_post_url')) return [{id:lineId,plan_id:planId,review_status:status,created_by:user.id,manual_post_url:'',manual_published_on:null}];
     if (q.includes('select id from marketing.work_review_categories')) return [{id:uid(8)}];
+    if (q.includes('update marketing.work_plan_items')) return [{published_on:'2026-11-01'}];
     return [];
   };
   sql.begin=async fn=>fn(sql);sql.json=x=>x;sql.statements=statements;
