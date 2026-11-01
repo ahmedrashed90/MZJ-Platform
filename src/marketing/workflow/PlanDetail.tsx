@@ -5,13 +5,15 @@ import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { showDate, useWorkQuery, workPost, type WorkMeta } from './api';
 import { availablePlanPostTypes } from './planComposer';
 import { PlanStatusBadges, planStateLabels } from './PlanStatus';
+import { CampaignOverview } from './campaignOverview';
+import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 
 type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
 type Plan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; creator_name?: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
-  readiness: number; canReview: boolean; canEdit: boolean; canSaveLinks: boolean; activated_at?: string | null;
+  readiness: number; canReview: boolean; canEdit: boolean; canEditFunding?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; activated_at?: string | null;
 };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
 type EditableLine = { id: string; date: string; productId: string; postTypeId: string; budget: string };
@@ -31,11 +33,25 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products', {}, !!plan?.canEdit);
   const metaQuery = useWorkQuery<WorkMeta>('meta', {}, !!plan?.canEdit);
   const [editing, setEditing] = useState(false), [rows, setRows] = useState<EditableLine[]>([]);
+  const [fundingEditing, setFundingEditing] = useState(false);
+  const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   useEffect(() => {
     if (query.data && !editing) setRows(query.data.lines.map(line => ({ id: line.id, date: String(line.scheduled_on).slice(0, 10), productId: line.product_id,
       postTypeId: line.post_type_id || '', budget: String(line.budget_amount || 0) })));
   }, [query.data, editing]);
+  useEffect(() => {
+    if (!query.data || fundingEditing) return;
+    setFundingFrom(String(query.data.plan.funding_from || '').slice(0, 10));
+    setFundingTo(String(query.data.plan.funding_to || '').slice(0, 10));
+  }, [query.data, fundingEditing]);
+  async function saveFundingPeriod() {
+    if (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo) {
+      setError('حدد تاريخ التمويل من وإلى، ويجب ألا يكون تاريخ النهاية قبل البداية.'); return;
+    }
+    const ok = await run('update_plan_funding', { planId: id, fundingFrom, fundingTo });
+    if (ok) setFundingEditing(false);
+  }
   async function run(action: string, payload: Record<string, unknown>): Promise<boolean> {
     if (busy) return false;
     setBusy(true); setError(''); setMessage('');
@@ -65,6 +81,17 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
       <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><PlanStatusBadges kind={plan!.kind} reviewStatus={plan!.review_status} publishedCount={query.data.lines.filter(line => line.published_ready).length} totalCount={query.data.lines.length}/></div>
       <div className="mkw-summary"><div><small>منشئ {plan!.kind === 'agenda' ? 'الأجندة' : 'الحملة'}</small><strong>{plan!.creator_name?.trim() || '—'}</strong></div><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
+      {plan!.kind === 'campaign' && <>
+        <CampaignOverview lines={query.data.lines} fundingFrom={plan!.funding_from} fundingTo={plan!.funding_to}/>
+        {!!plan!.canEditFunding && <section className="mkw-campaign-funding-edit">
+          <div className="mkw-section-title"><strong>فترة تمويل الحملة</strong><button type="button" className="secondary" disabled={busy} onClick={() => setFundingEditing(open => !open)}>{fundingEditing ? 'إلغاء تعديل فترة التمويل' : 'تعديل فترة التمويل'}</button></div>
+          {fundingEditing && <div className="mkw-campaign-funding-fields">
+            <label>تاريخ التمويل من<input aria-label="تعديل تاريخ التمويل من" type="date" value={fundingFrom} disabled={busy} onChange={event => setFundingFrom(event.target.value)}/></label>
+            <label>تاريخ التمويل إلى<input aria-label="تعديل تاريخ التمويل إلى" type="date" min={fundingFrom || undefined} value={fundingTo} disabled={busy} onChange={event => setFundingTo(event.target.value)}/></label>
+            <button type="button" className="primary" disabled={busy} onClick={() => void saveFundingPeriod()}>حفظ فترة التمويل</button>
+          </div>}
+        </section>}
+      </>}
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>
@@ -87,7 +114,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
           <td><button type="button" className="secondary" disabled={rows.length === 1} onClick={() => setRows(old => old.filter((_, i) => i !== index))}>حذف</button></td></tr>;
         })}</tbody></table></div><div className="mkw-actions"><button type="button" className="secondary" disabled={rows.length >= 500} onClick={addRow}>إضافة منتج</button><button type="button" className="primary" disabled={busy || !rows.length || rows.some(row => !row.date || !row.productId || !row.postTypeId)} onClick={() => void run('update_plan', { planId: id, entries: rows.map(row => ({ ...row, budget: Number(row.budget) })) }).then(ok => { if (ok) setEditing(false); })}>حفظ التعديلات وإرسالها للمراجعة</button></div></section> : null}
       <section className="mkw-plan-review-table"><h3>الجدول الكامل للمراجعة — المنتجات والفكرة والمنصات والميزانية</h3>
-      <div className="mkw-table-wrap"><table><thead><tr><th>{plan!.kind === 'agenda' ? W.publishDate : W.fundingDate}</th><th>تاريخ النشر الفعلي</th><th>المنتج</th><th>الفكرة (فكرة المطلوب)</th><th>المنصة</th><th>نوع النشر</th>{plan!.kind === 'campaign' && <th>الميزانية (ر.س)</th>}<th>الالتزام بالموعد</th><th>الحالة</th><th>رابط المنشور</th></tr></thead><tbody>{query.data.lines.map(line => <tr key={line.id}>
+      <div className="mkw-table-wrap"><table><thead><tr><th>{plan!.kind === 'agenda' ? W.publishDate : 'تاريخ النشر المخطط'}</th><th>تاريخ النشر الفعلي</th><th>المنتج</th><th>الفكرة (فكرة المطلوب)</th><th>المنصة</th><th>نوع النشر</th>{plan!.kind === 'campaign' && <th>الميزانية (ر.س)</th>}<th>الالتزام بالموعد</th><th>الحالة</th><th>رابط المنشور</th></tr></thead><tbody>{query.data.lines.map(line => <tr key={line.id}>
         <td>{showDate(line.scheduled_on)}</td><td>{showDate(line.published_on)}</td><td>{line.idea_name}<small className="mkw-muted">{line.task_no}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{plan!.kind === 'campaign' && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><PublicationTiming line={line} /></td><td>{line.published_ready ? 'تم النشر' : planStatusName(plan!.status)}</td>
         <td>{line.effective_post_url ? <a href={line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : 'لم يُنشر بعد'}</td>
       </tr>)}</tbody></table></div></section>

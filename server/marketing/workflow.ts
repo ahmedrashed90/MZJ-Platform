@@ -130,6 +130,9 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
   const rows = await db`select i.*,i.due_on::text,coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
+    coalesce((select h.data->>'explanation' from marketing.work_history h where h.item_id=i.id
+      and h.action in ('created','edited') and h.data ? 'explanation'
+      order by h.created_at desc,h.id desc limit 1),'') as explanation,
     case when i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       then case when exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved') then 'exception_approved'
         when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
@@ -350,7 +353,7 @@ async function createTask(sql: Sql, body: Row, user: SessionUser) {
         for (const fileId of fileIds) await tx`insert into marketing.work_item_files(item_id,file_id,category) values(${item.id}::uuid,${fileId}::uuid,'idea')`;
       }
       audiences.push(assigneeId);
-      await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn });
+      await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn, explanation: text(input.explanation, 20000) });
     }
     await tx`update marketing.work_reservations set used_at=now() where id=${reservationId}::uuid`;
     return { ok: true, id: reservationId, taskNo, message: W.saved, existed: false };
@@ -371,6 +374,7 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
     const managerEdit = hasPermission(user, 'marketing.task.edit') && (isManager(user) || current.created_by === user.id || departmentScope(user).length > 0);
     if (current.assigned_to !== user.id && !managerEdit) throw new Error(W.denied);
     const idea = text(body.idea ?? locked.idea, 20000), ideaName = text(body.ideaName ?? locked.idea_name, 250);
+    const explanation = body.explanation === undefined ? undefined : text(body.explanation, 20000);
     let due = workDate(locked.due_on);
     let assignedTo = locked.assigned_to, departmentId = locked.department_id;
     if (managerEdit && body.dueOn !== undefined) { if (!isWorkDate(body.dueOn)) throw new Error(W.dateInvalid); due = body.dueOn; }
@@ -380,7 +384,8 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
     const [row] = await tx<any[]>`update marketing.work_items set idea=${idea},idea_name=${ideaName || idea.split('\n')[0].slice(0, 120)},
       due_on=${due}::date,assigned_to=${assignedTo}::uuid,department_id=${departmentId}::uuid,version=version+1,updated_at=now()
       where id=${itemId}::uuid returning version`;
-    await history(tx, user, current.task_id, itemId, 'edited', '', { dueOn: due, assigneeId: assignedTo });
+    await history(tx, user, current.task_id, itemId, 'edited', '', { dueOn: due, assigneeId: assignedTo,
+      ...(explanation === undefined ? {} : { explanation }) });
     await recalculateTask(tx, current.task_id);
     return { ok: true, version: row.version, message: W.saved };
   });
@@ -1038,6 +1043,9 @@ async function products(sql: Sql, user: SessionUser) {
   if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
   const scopes = departmentScope(user);
   const rows = await sql<any[]>`select i.*,i.due_on::text,t.task_no,t.name as task_name,i.approved_at as released_at,
+    coalesce((select h.data->>'explanation' from marketing.work_history h where h.item_id=i.id
+      and h.action in ('created','edited') and h.data ? 'explanation'
+      order by h.created_at desc,h.id desc limit 1),'') as explanation,
     coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
     coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,'file_size',f.file_size,
       'category',j.category,'format_id',j.format_id,'status',f.status,'order_index',j.order_index) order by j.order_index,j.id)
@@ -1225,12 +1233,41 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   });
 }
 
+/** Change only the campaign funding window; leave publication scheduling,
+ * budgets and approval state untouched. Also supports legacy plans with no end. */
+async function updatePlanFunding(sql: Sql, user: SessionUser, body: Row) {
+  const planId = id(body.planId);
+  const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
+  if (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo)
+    throw new Error('يجب تحديد تاريخ التمويل من وإلى وأن تكون النهاية بعد البداية.');
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    const [plan] = await tx<any[]>`select p.id,p.created_by,p.kind,p.is_deleted from marketing.work_plans p
+      where p.id=${planId}::uuid for update`;
+    if (!plan || plan.kind !== 'campaign' || plan.is_deleted) throw new Error(W.notFound);
+    if (plan.created_by !== user.id && !canReviewPlan(user)) throw new Error(W.denied);
+    const changed = await tx`update marketing.campaigns set
+      payload=jsonb_set(jsonb_set(coalesce(payload,'{}'::jsonb),'{fundingFrom}',to_jsonb(${fundingFrom}::text)),'{fundingTo}',to_jsonb(${fundingTo}::text)),
+      updated_at=now() where id=${planId}::uuid and is_deleted=false returning id`;
+    if (!changed.length) throw new Error(W.notFound);
+    await tx`update marketing.work_plans set updated_at=now() where id=${planId}::uuid`;
+    return { ok:true, fundingFrom, fundingTo, message:W.saved };
+  });
+}
+
 async function createPlan(sql: Sql, body: Row, user: SessionUser) {
   const kind = body.kind === 'agenda' || body.kind === 'campaign' ? body.kind : null;
   if (!kind) throw new Error(W.invalid);
   requirePermission(user, kind === 'agenda' ? 'marketing.agenda.create' : 'marketing.campaign.create');
   requirePermission(user, 'marketing.products.view');
   const requestKey = id(body.requestKey), entries = list(body.entries);
+  const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
+  // New composer always sends both dates. Historical API consumers which
+  // predate this field remain supported and produce an intentionally open-ended
+  // funding window; no artificial end date is created for old campaigns.
+  const hasFundingPeriod = body.fundingFrom !== undefined || body.fundingTo !== undefined;
+  if (kind === 'campaign' && hasFundingPeriod && (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo))
+    throw new Error('حدد تاريخ التمويل من وإلى، ويجب أن تكون النهاية بعد البداية أو مساوية لها.');
   if (!entries.length || entries.length > 500) throw new Error(W.requiredFields);
   return sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
@@ -1313,7 +1350,8 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
       values(${planId}::uuid,${requestKey}::uuid,${seq.value},${planNo},${kind},${name},${user.id}::uuid)`;
     // Native records are publication adapters, not the old creation workflow.
     // They preserve existing post -> engagement -> CRM relationships.
-    const payload = tx.json({ workflowVersion: 2, workflowPlanId: planId });
+    const payload = tx.json({ workflowVersion: 2, workflowPlanId: planId,
+      ...(kind === 'campaign' && hasFundingPeriod ? { fundingFrom, fundingTo } : {}) });
     if (kind === 'agenda') await tx`insert into marketing.agendas(id,name,month_key,publish_start,publish_end,status,payload,progress,created_by)
       values(${planId}::uuid,${name},${start.slice(0, 7)},${start}::date,${end}::date,'publishing',${payload},100,${user.id}::uuid)`;
     else await tx`insert into marketing.campaigns(id,campaign_code,name,campaign_date,publish_start,publish_end,status,payload,progress,created_by)
@@ -1332,6 +1370,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,p.activated_at,p.review_status,p.review_note,p.review_revision,
     pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
     i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
+    nullif(camp.payload->>'fundingFrom','') as funding_from,nullif(camp.payload->>'fundingTo','') as funding_to,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='scheduled') as scheduled_count,
@@ -1347,6 +1386,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     left join core.departments d on d.id=i.department_id
     left join marketing.platform_post_types pt on pt.id=l.post_type_id
     left join marketing.platforms pf on pf.id=pt.platform_id
+    left join marketing.campaigns camp on camp.id=p.id and p.kind='campaign' and camp.is_deleted=false
     where t.is_deleted=false and p.is_deleted=false and l.is_deleted=false and (${planId}='' or p.id=nullif(${planId},'')::uuid)
       and (p.kind<>'campaign' or exists (
         select 1 from marketing.campaigns campaign
@@ -1421,8 +1461,12 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const lines = await planLines(sql, user, planId);
   if (!lines.length) throw new Error(W.notFound);
   const [plan] = await sql<any[]>`select p.id::text,p.plan_no,p.name,p.kind,p.created_by::text,p.created_at,p.review_status,p.review_note,p.review_note_category_id,p.review_revision,p.activated_at,
+    nullif(camp.payload->>'fundingFrom','') as funding_from,
+    nullif(camp.payload->>'fundingTo','') as funding_to,
     coalesce(creator.full_name,'') as creator_name from marketing.work_plans p
-    left join core.users creator on creator.id=p.created_by where p.id=${planId}::uuid`;
+    left join core.users creator on creator.id=p.created_by
+    left join marketing.campaigns camp on camp.id=p.id and p.kind='campaign'
+    where p.id=${planId}::uuid`;
   const historyRecords = await sql<any[]>`select r.action,r.note,r.actor_name,r.created_at,coalesce(c.name,'') as category_name from marketing.work_plan_reviews r left join marketing.work_review_categories c on c.id=r.category_id where r.plan_id=${planId}::uuid order by r.created_at desc, r.id desc`;
   const history = historyRecords.map(entry => {
     // Free-text category types use the leading note line and appear as normal named categories in history.
@@ -1431,7 +1475,13 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   });
   const complete = lines.every(line => line.published_ready);
   return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
-    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user), canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
+    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user),
+    // Funding metadata may be corrected for legacy, already approved campaigns,
+    // without changing their publication rows or approval history.
+    canEditFunding: plan.kind === 'campaign' && (plan.created_by === user.id || canReviewPlan(user)),
+    funding_from: plan.funding_from || (plan.kind === 'campaign' ? lines.map(l => workDate(l.scheduled_on)).sort()[0] : null),
+    funding_to: plan.funding_to || null,
+    canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
     canSaveLinks: ['publishing','published'].includes(plan.review_status) && (plan.created_by === user.id || canReviewPlan(user) || hasPermission(user,'marketing.publish.now')) }, lines, history };
 }
 /** One confirmed task deletion removes every linked campaign/agenda plan and all its
@@ -1533,6 +1583,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   if (!taskIds.length) return { ok: true, rows, ratingSummaries: {} };
   const readinessItems = await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,i.status,i.media_kind,i.formats,
     i.idea_name,coalesce(u.full_name,'') as assignee_name,
+    (select rating.percentage::float8 from marketing.work_item_ratings rating where rating.item_id=i.id) as percentage,
     exists(select 1 from marketing.work_item_ratings rating where rating.item_id=i.id) as is_rated,
     coalesce((select jsonb_agg(jsonb_build_object(
       'category',j.category,'format_id',j.format_id,'status',f.status,
@@ -1552,7 +1603,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   try {
     archivedRejected = await sql<any[]>`select r.item_id::text as id,r.task_id::text as task_id,
       r.idea_name,'rejected'::text as status,coalesce(u.full_name,'') as assignee_name,
-      (r.percentage is not null) as is_rated
+      (r.percentage is not null) as is_rated,r.percentage::float8 as percentage
       from marketing.work_rejected_items r
       left join core.users u on u.id=r.assigned_to
       where r.task_id=any(${taskIds}::uuid[]) and (${seeAll} or r.assigned_to=${user.id}::uuid)`;
@@ -1560,7 +1611,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     if (String((error as {code?:string})?.code || '') !== '42P01') throw error;
   }
   const ratingSummaries: Record<string, {total: number; rated: number; missing: number; items: Array<{
-    id: string; idea_name: string; assignee_name: string; status: string; rated: boolean
+    id: string; idea_name: string; assignee_name: string; status: string; rated: boolean; percentage: number | null
   }>}> = {};
   for (const taskId of taskIds) ratingSummaries[taskId] = { total: 0, rated: 0, missing: 0, items: [] };
   const seen = new Set<string>();
@@ -1570,7 +1621,8 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     seen.add(itemId);
     const rated = item.is_rated === true;
     ratingSummaries[taskId].items.push({ id: itemId, idea_name: String(item.idea_name || ''),
-      assignee_name: String(item.assignee_name || ''), status: String(item.status || ''), rated });
+      assignee_name: String(item.assignee_name || ''), status: String(item.status || ''), rated,
+      percentage: item.percentage == null ? null : Number(item.percentage) });
     ratingSummaries[taskId].total++;
     if (rated) ratingSummaries[taskId].rated++;
     else ratingSummaries[taskId].missing++;
@@ -2129,6 +2181,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
     else if (action === 'work_update_plan') result = await updatePlanRows(sql, user, body);
+    else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
     else if (action === 'work_activate_plan') {
       const settings = await publishControlSettings(sql);

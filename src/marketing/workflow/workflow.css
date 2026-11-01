@@ -1062,3 +1062,40 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-calendar-item-rated{font-size:11px;font-weight:700;color:#9a652f}
 .mkw-calendar-item-rated.is-rated{color:#2b7652}
 @media(max-width:530px){.mkw-calendar-rating-entry{align-items:flex-start}.mkw-calendar-rating-counts>strong{flex-basis:100%}}
+
+/* Campaign funding is distinct from each post's scheduled publishing date. */
+.mkw-campaign-overview{display:grid;gap:14px;min-width:0;border:1px solid #e8d7cc;background:#fffaf6;border-radius:14px;padding:16px;direction:rtl}
+.mkw-campaign-overview h3{font-size:13px;color:#4a211c;margin:0 0 10px}
+.mkw-campaign-overview-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.mkw-campaign-overview-stats>div{display:grid;gap:6px;border:1px solid #ebdfd6;background:#fff;border-radius:10px;padding:12px}
+.mkw-campaign-overview-stats small{color:#846b62;font-size:12px}
+.mkw-campaign-overview-stats strong{color:#4a211c;font-size:14px;overflow-wrap:anywhere}
+.mkw-campaign-platform-totals{display:flex;gap:8px;flex-wrap:wrap}
+.mkw-campaign-platform-totals>div{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:190px;flex:1;border:1px solid #ebdfd6;background:#fff;border-radius:10px;padding:10px 12px}
+.mkw-campaign-platform-totals strong{white-space:nowrap;color:#4a211c}
+.mkw-campaign-platform-totals small{color:#816a62}
+.mkw-campaign-unique-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mkw-campaign-unique-grid>div{min-width:0;border:1px solid #ebdfd6;background:#fff;border-radius:10px;padding:12px}
+.mkw-campaign-unique-list{display:grid;gap:6px}
+.mkw-campaign-unique-list>div{font-size:12px;line-height:1.65;padding:7px 9px;background:#faf4ef;border-radius:7px;overflow-wrap:anywhere}
+.mkw-campaign-funding-edit{display:grid;gap:12px;padding:12px;border:1px solid #e8d7cc;border-radius:12px}
+.mkw-campaign-funding-fields{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.mkw-campaign-funding-fields label{display:grid;gap:6px;min-width:180px;flex:1;font-weight:700;font-size:12px}
+.mkw-campaign-funding-fields input{width:100%}
+.mkw-platform-row-heading th{font-size:13px;text-align:right!important;color:#4a211c!important;background:#f3e8dc!important;border-bottom:1px solid #d5bbaa!important;padding:11px 14px!important}
+.mkw-calendar-rating-inline{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;direction:rtl}
+.mkw-calendar-rating-inline strong,.mkw-calendar-rating-inline b{color:#4a211c}
+.mkw-calendar-rating-inline .mkw-rating-stars{display:inline-flex;gap:1px;white-space:nowrap}
+.mkw-requirement-explanation{display:grid;gap:5px;font-size:12px;font-weight:700;color:#4a211c}
+.mkw-requirement-explanation textarea{min-height:76px}
+.mkw-requirement-explanation-read{display:block;white-space:pre-wrap;overflow-wrap:anywhere;color:#72564b}
+@media(max-width:760px){.mkw-campaign-overview-stats{grid-template-columns:1fr}.mkw-campaign-unique-grid{grid-template-columns:1fr}.mkw-campaign-funding-fields{display:grid}}
+
+/* Keep the entire task-ratings panel collapsed until explicitly opened. */
+.mkw-calendar-ratings-panel>summary{list-style:none;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.mkw-calendar-ratings-panel>summary::-webkit-details-marker{display:none}
+.mkw-calendar-ratings-panel>summary h2{margin-inline-end:auto}
+.mkw-calendar-ratings-toggle{transition:transform .15s ease;flex-shrink:0}
+.mkw-calendar-ratings-panel[open]>.mkw-section-title .mkw-calendar-ratings-toggle{transform:rotate(180deg)}
+.mkw-calendar-ratings-panel>summary:focus-visible{outline:2px solid #4a211c;outline-offset:4px}
+.mkw-calendar-ratings-panel:not([open])>.mkw-calendar-rating-summary{display:none}

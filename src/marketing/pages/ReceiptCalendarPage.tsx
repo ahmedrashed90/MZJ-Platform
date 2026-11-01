@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
-import { ArrowSquareOut, CaretLeft, CaretRight } from '@phosphor-icons/react';
+import { ArrowSquareOut, CaretDown, CaretLeft, CaretRight } from '@phosphor-icons/react';
 import { W, Empty, MediaLabel, Readiness, Status, WorkAlert, WorkHeader } from '../workflow/components';
 import { localDay, showDate, useWorkQuery } from '../workflow/api';
-import { TaskDetail } from '../workflow/TaskDetail';
+import { TaskDetail, RatingStars } from '../workflow/TaskDetail';
 
 type Delivery = { id: string; task_id: string; task_no: string; task_name: string; due_on: string; media_kind: 'image' | 'video'; idea_name: string; status: string; assignee_name?: string; item_readiness: number };
-type RatingEntry = { id: string; idea_name: string; assignee_name: string; status: string; rated: boolean };
+type RatingEntry = { id: string; idea_name: string; assignee_name: string; status: string; rated: boolean; percentage: number | null };
 type TaskRatingSummary = { total: number; rated: number; missing: number; items: RatingEntry[] };
 
 export function ReceiptCalendarPage() {
@@ -53,8 +53,8 @@ export function ReceiptCalendarPage() {
               : <span key={`blank-${index}`} />)}
           </div>
         </section>
-        {ratedTaskGroups.length > 0 && <section className="mkw-panel mkw-calendar-ratings-panel" aria-label="تقييمات التاسكات لليوم المختار">
-          <header className="mkw-section-title"><h2>تقييمات التاسكات</h2><span className="mkw-status">{ratedTaskGroups.length}</span></header>
+        {ratedTaskGroups.length > 0 && <details className="mkw-panel mkw-calendar-ratings-panel" aria-label="تقييمات التاسكات لليوم المختار">
+          <summary className="mkw-section-title"><h2>تقييمات التاسكات</h2><span className="mkw-status">{ratedTaskGroups.length}</span><CaretDown className="mkw-calendar-ratings-toggle" size={17}/></summary>
           {ratedTaskGroups.map(group => {
             const first = group.items[0], rating = ratingSummaries[group.taskId];
             return <div className="mkw-calendar-rating-summary" key={group.taskId}>
@@ -63,7 +63,7 @@ export function ReceiptCalendarPage() {
                 <span>تم تقييم <b>{rating.rated}</b> من <b>{rating.total}</b> مطلوب</span>
                 <span className={rating.missing ? 'mkw-rating-pending-count' : 'mkw-rating-completed-count'}>المتبقي: {rating.missing}</span>
               </div>
-              <details open>
+              <details>
                 <summary>المطلوبات المُقيّمة والتي لم تُقيّم</summary>
                 <div className="mkw-calendar-rating-list">{rating.items.map(entry =>
                   <button type="button" className="mkw-calendar-rating-entry" key={entry.id}
@@ -80,7 +80,7 @@ export function ReceiptCalendarPage() {
               </details>
             </div>;
           })}
-        </section>}
+        </details>}
       </aside>
       <section className="mkw-panel mkw-calendar-deliveries">
         <header className="mkw-section-title"><h2>{W.required} - {showDate(selectedDay)}</h2><span className="mkw-status">{selected.length}</span></header>
@@ -93,7 +93,9 @@ export function ReceiptCalendarPage() {
               <h3>{item.task_name}</h3><strong>{item.idea_name}</strong>
               {item.assignee_name && <small className="mkw-muted">المنفذ: {item.assignee_name}</small>}
               {rating && <span className={`mkw-calendar-item-rated ${rating.items.find(entry => entry.id === item.id)?.rated ? 'is-rated' : ''}`}>
-                {rating.items.find(entry => entry.id === item.id)?.rated ? 'تم تقييم هذا المطلوب' : 'لم يتم تقييم هذا المطلوب'}
+                {(() => { const evaluation = rating.items.find(entry => entry.id === item.id); return evaluation?.rated && evaluation.percentage != null
+                  ? <span className="mkw-calendar-rating-inline"><strong>تقييم المنفذ</strong><b dir="ltr">{evaluation.percentage.toLocaleString('ar-SA-u-nu-latn', { maximumFractionDigits: 2 })}%</b><RatingStars percentage={evaluation.percentage}/></span>
+                  : 'لم يُقيّم بعد'; })()}
               </span>}
               <Readiness value={item.item_readiness} />
               <div className="mkw-section-title"><MediaLabel kind={item.media_kind} />

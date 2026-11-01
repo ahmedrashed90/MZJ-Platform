@@ -119,7 +119,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} <span className="mkw-requirement-review-idea">({item.idea?.trim() || 'لم تُحدد الفكرة'})</span></strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} <span className="mkw-requirement-review-idea">({item.idea?.trim() || 'لم تُحدد الفكرة'})</span></strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small>{!!item.explanation && <small className="mkw-requirement-explanation-read">الشرح: {item.explanation}</small>}</span>
                   <Status value={item.status}/>
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
                   {pending > 0 && <span className="mkw-requirement-waiting">{pending} قيد المراجعة</span>}
@@ -242,7 +242,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const canUpload = !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
-  const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [dueOn, setDueOn] = useState(item.due_on);
+  const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
@@ -303,8 +303,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
 
   async function persist() {
     if (!editable) return version.current;
-    if (idea === item.idea && ideaName === item.idea_name && dueOn === item.due_on) return version.current;
-    const result = await workPost<{ version: number }>('save_item', { itemId: item.id, version: version.current, idea, ideaName,
+    if (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on) return version.current;
+    const result = await workPost<{ version: number }>('save_item', { itemId: item.id, version: version.current, idea, ideaName, explanation,
       ...(capabilities.editTask ? { dueOn } : {}) });
     version.current = result.version; return result.version;
   }
@@ -451,6 +451,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
             <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => setIdeaName(event.target.value)} /></Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
             <Field label={W.idea}>{editable ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => setIdea(event.target.value)}/> : <p className="mkw-idea-text">{idea}</p>}</Field>
+            <Field label="الشرح — شرح الفكرة أو المطلوب">{editable ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => setExplanation(event.target.value)}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
             <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
           </div>
           <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}

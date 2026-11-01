@@ -8,10 +8,10 @@ import { splitRequiredMediaSelection } from './requiredMedia';
 import { addPlanPlatform, availablePlanPostTypes, availablePlanProducts, planEntriesPayload, planEntryValid, planPostTypeBudget, selectedPlanPostTypeIds, validatePlanComposer, type PlanEntryDraft, type PlanPlatformDraft } from './planComposer';
 
 type IdeaAttachment = { key: string; file: File; fileId?: string };
-type RequiredDraft = { key: string; mediaKinds: WorkMediaKind[]; ideaName: string; idea: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
+type RequiredDraft = { key: string; mediaKinds: WorkMediaKind[]; ideaName: string; idea: string; explanation: string; formatIds: string[]; dueOn: string; attachments: IdeaAttachment[] };
 type ExecutorDraft = { key: string; departmentId: string; assigneeId: string; items: RequiredDraft[] };
 type Reservation = { id: string; task_no: string; created_at: string };
-const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKinds: ['image'], ideaName: '', idea: '', formatIds: [], dueOn: '', attachments: [] });
+const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKinds: ['image'], ideaName: '', idea: '', explanation: '', formatIds: [], dueOn: '', attachments: [] });
 const newExecutor = (): ExecutorDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', items: [newRequired()] });
 
 const newEntry = (productId = ''): PlanEntryDraft => ({ key: crypto.randomUUID(), date: '', productId, platforms: [] });
@@ -125,7 +125,7 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
         // selection creates two real deliverables with distinct identities.
         for (const [index, medium] of splitRequiredMediaSelection(item.mediaKinds, item.formatIds, formats).entries()) {
           created.push({ clientKey: index ? crypto.randomUUID() : item.key, departmentId: executor.departmentId, assigneeId: executor.assigneeId, mediaKind: medium.mediaKind,
-            ideaName: item.ideaName.trim(), idea: item.idea, formatIds: medium.formatIds, dueOn: item.dueOn, ideaFileIds: fileIds });
+            ideaName: item.ideaName.trim(), idea: item.idea, explanation: item.explanation.trim(), formatIds: medium.formatIds, dueOn: item.dueOn, ideaFileIds: fileIds });
         }
       }
       const result = await workPost<{ id: string }>('create_task', { reservationId: reservation.id, typeId, name: name.trim(), items: created });
@@ -157,7 +157,7 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
           {executor.items.map(item => <div className="mkw-horizontal-row" key={item.key}>
             <div className="mkw-requirement-type"><input aria-label={W.required} required maxLength={250} value={item.ideaName} disabled={busy} placeholder={W.required} onChange={event => changeItem(executor.key, item.key, { ideaName: event.target.value })}/><div className="mkw-kind-toggle" role="group" aria-label="نوع المطلوب: اختر صورة أو فيديو أو الاثنين معًا">{(['image', 'video'] as const).map(kind => <button type="button" key={kind} aria-pressed={item.mediaKinds.includes(kind)} className={item.mediaKinds.includes(kind) ? 'active' : ''} disabled={busy || (!item.mediaKinds.includes(kind) && requiredCount >= 100)} onClick={() => toggleMedia(executor, item, kind)}>{kind === 'image' ? <ImageSquare size={16}/> : <FilmStrip size={16}/>} {kind === 'image' ? W.image : W.video}</button>)}</div>{item.mediaKinds.length === 2 && <small className="mkw-media-pair-note">صورة + فيديو: مطلوبان مستقلان في التنفيذ والاعتماد</small>}</div>
             <div className="mkw-requirement-formats"><FormatSelector formats={formats.filter(format => item.mediaKinds.some(kind => supportsWorkMedia(kind, format.name)))} selected={item.formatIds} disabled={busy} onChange={formatIds => changeItem(executor.key, item.key, { formatIds })} /></div>
-            <div className="mkw-requirement-idea"><textarea aria-label={W.idea} value={item.idea} maxLength={20000} disabled={busy} placeholder={W.idea} onChange={event => changeItem(executor.key, item.key, { idea: event.target.value })}/><label className="mkw-inline-file">{W.ideaFile}<input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { attachFiles(executor, item, event.target.files); event.target.value = ''; }}/></label>{item.attachments.map(file => <span className="mkw-requirement-file" key={file.key}>{file.file.name}<button type="button" className="icon-button" aria-label={W.remove} disabled={busy} onClick={() => void removeAttachment(executor, item, file.key)}><X size={13}/></button></span>)}</div>
+            <div className="mkw-requirement-idea"><textarea aria-label={W.idea} value={item.idea} maxLength={20000} disabled={busy} placeholder={W.idea} onChange={event => changeItem(executor.key, item.key, { idea: event.target.value })}/><label className="mkw-requirement-explanation">الشرح — شرح الفكرة أو المطلوب<textarea aria-label="الشرح" value={item.explanation} maxLength={20000} disabled={busy} placeholder="اكتب شرحًا توضيحيًا يساعد المنفذ على تنفيذ المطلوب" onChange={event => changeItem(executor.key, item.key, { explanation: event.target.value })}/></label><label className="mkw-inline-file">{W.ideaFile}<input type="file" accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { attachFiles(executor, item, event.target.files); event.target.value = ''; }}/></label>{item.attachments.map(file => <span className="mkw-requirement-file" key={file.key}>{file.file.name}<button type="button" className="icon-button" aria-label={W.remove} disabled={busy} onClick={() => void removeAttachment(executor, item, file.key)}><X size={13}/></button></span>)}</div>
             <div><input type="date" aria-label={W.dueOn} required value={item.dueOn} disabled={busy} onChange={event => changeItem(executor.key, item.key, { dueOn: event.target.value })}/></div>
             <div><button type="button" className="icon-button mkw-remove-requirement" aria-label={W.remove} disabled={busy || executor.items.length === 1} onClick={() => updateExecutor(executor.key, { items: executor.items.filter(row => row.key !== item.key) })}><X size={18}/></button></div>
           </div>)}</div></div>
@@ -172,10 +172,11 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const [name, setName] = useState('');
+  const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
   const [entries, setEntries] = useState<PlanEntryDraft[]>([newEntry(initialProduct)]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const dateLabel = kind === 'agenda' ? W.publishDate : W.fundingDate;
+  const dateLabel = kind === 'agenda' ? W.publishDate : 'تاريخ نشر المحتوى';
   const label = kind === 'agenda' ? W.agenda : W.campaign;
   const products = productsQuery.data?.rows || [];
   // Publishing formats come from marketing platform settings, and the selected
@@ -231,12 +232,16 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
     event.preventDefault(); if (busy) return; setError('');
     const validationError = validatePlanComposer(entries, products, meta.postTypes, kind);
     if (validationError) { setError(validationError); return; }
+    if (kind === 'campaign' && (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo)) {
+      setError('حدد تاريخ التمويل من وإلى، ويجب ألا تكون النهاية قبل البداية.'); return;
+    }
     setBusy(true);
     try {
       // One product is chosen once; each (platform, post type) becomes a publish line.
       // Campaign budgets are explicit per post type, with no implicit duplication.
       const created = await workPost<{ id: string }>('create_plan', {
         requestKey: requestKey.current, kind, name: name.trim(),
+        ...(kind === 'campaign' ? { fundingFrom, fundingTo } : {}),
         entries: planEntriesPayload(entries, kind),
       });
       // Review the actual persisted schedule (including every platform budget)
@@ -247,7 +252,10 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   }
   return <form className="mkw mkw-plan-composer" onSubmit={save}>
     <section className="mkw-panel"><header><h2>بيانات {label}</h2></header>
-      <div className="mkw-fields"><Field label={`اسم ${label}`}><input maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder={`اسم ${label}`}/></Field></div>
+      <div className="mkw-fields"><Field label={`اسم ${label}`}><input maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder={`اسم ${label}`}/></Field>{kind === 'campaign' && <>
+        <Field label="تاريخ التمويل من"><input aria-label="تاريخ التمويل من" type="date" required value={fundingFrom} disabled={busy} onChange={event => setFundingFrom(event.target.value)}/></Field>
+        <Field label="تاريخ التمويل إلى"><input aria-label="تاريخ التمويل إلى" type="date" min={fundingFrom || undefined} required value={fundingTo} disabled={busy} onChange={event => setFundingTo(event.target.value)}/></Field>
+      </>}</div>
     </section>
     <section className="mkw-panel"><header className="mkw-section-title"><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2><span>{entries.length} {W.addDate}</span></header>
       <WorkAlert>{error || productsQuery.error}</WorkAlert>

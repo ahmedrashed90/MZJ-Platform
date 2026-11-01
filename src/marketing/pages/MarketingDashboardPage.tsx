@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle } from '@phosphor-icons/react';
@@ -10,6 +11,7 @@ import { PreparationModal } from '../workflow/PublishPage';
 import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
+import { CampaignOverview, campaignLinesByPlatform } from '../workflow/campaignOverview';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
@@ -69,10 +71,19 @@ export function MarketingDashboardPage() {
   const tasks = (query.data?.tasks || []).filter(task => `${task.name} ${task.task_no} ${task.type_name}`.toLocaleLowerCase().includes(term));
   const lines = (query.data?.lines || []).filter(line => `${line.name} ${line.plan_no} ${line.idea_name} ${line.product_idea || ''} ${line.task_name}`.toLocaleLowerCase().includes(term));
   const groups = new Map<string, WorkPlanLine[]>();
-  for (const line of lines) groups.set(line.plan_id, [...(groups.get(line.plan_id) || []), line]);
+  const visiblePlanIds = new Set(lines.map(line => line.plan_id));
+  // A search matches whole plans; preparation and totals must never lose other
+  // rows of the same campaign when a product name is used as the query.
+  for (const line of (query.data?.lines || [])) if (visiblePlanIds.has(line.plan_id))
+    groups.set(line.plan_id, [...(groups.get(line.plan_id) || []), line]);
 
   function openTask(id: string, filter: '' | 'on_time' | 'late' = '') { setDeliveryFilter(filter); setParams({ task: id }); }
-  function openPreparation(group: WorkPlanLine[]) { if (group.length === 1) setPrepareId(group[0].id); else setSelectPlan(group[0].plan_id); }
+  function openPreparation(group: WorkPlanLine[]) {
+    // Campaigns always show the complete funding/creative budget overview,
+    // even if the campaign currently contains only one publish line.
+    if (group[0]?.kind === 'campaign' || group.length > 1) setSelectPlan(group[0].plan_id);
+    else if (group.length) setPrepareId(group[0].id);
+  }
   async function activatePlan(group: WorkPlanLine[]) {
     if (activationBusy || !window.confirm('تفعيل النشر حسب التواريخ والمنصات وأنواع النشر المحددة في الجدول؟')) return;
     setActivationBusy(group[0].plan_id); setActivationError(''); setActivationMessage('');
@@ -87,7 +98,8 @@ export function MarketingDashboardPage() {
     }
   }
 
-  const chooserLines = groups.get(selectPlan) || [];
+  const chooserSourceLines = groups.get(selectPlan) || [];
+  const chooserLines = campaignLinesByPlatform(chooserSourceLines);
   const chooserIsCampaign = chooserLines[0]?.kind === 'campaign';
 
   return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
@@ -160,7 +172,7 @@ export function MarketingDashboardPage() {
               </div>
 
               <div className="mkw-dashboard-publish-stats">
-                <div><small>{group[0].kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{scheduleRange(group)}</strong></div>
+                <div><small>{group[0].kind === 'agenda' ? W.publishDate : 'فترة التمويل'}</small><strong>{group[0].kind === 'campaign' ? `${group[0].funding_from ? showDate(group[0].funding_from) : scheduleRange(group)} — ${group[0].funding_to ? showDate(group[0].funding_to) : 'غير محدد'}` : scheduleRange(group)}</strong></div>
                 <div><small>{W.productCount}</small><strong>{distinctProducts}</strong></div>
                 <div><small>عدد المنصات</small><strong>{platforms.length}</strong></div>
                 <div><small>أنواع النشر</small><strong>{kinds.length}</strong></div>
@@ -212,7 +224,9 @@ export function MarketingDashboardPage() {
     {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} onClose={() => { setParams({}); setDeliveryFilter(''); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
-    {selectPlan && <Modal open title={W.prepare} onClose={() => setSelectPlan('')} className="mkw-modal"><div className="mkw"><div className="mkw-table-wrap"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? W.fundingDate : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map(line => <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr>)}</tbody></table></div></div></Modal>}
+    {selectPlan && <Modal open title={W.prepare} onClose={() => setSelectPlan('')} className="mkw-modal"><div className="mkw">{chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to}/>}<div className="mkw-table-wrap"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
+      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}`}><th colSpan={8}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
+      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr></Fragment>)}</tbody></table></div></div></Modal>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
   </div>;
 }
