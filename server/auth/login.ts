@@ -3,7 +3,7 @@ import { createSession, loadUserProfile, requestIp } from "../_auth.js";
 import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
-import { AttendanceError, requireAttendanceForLogin, requireVerifiedDeviceWorkPeriod } from "../_attendance.js";
+import { AttendanceError, registerExemptLoginAttendance, requireAttendanceForLogin, requireVerifiedDeviceWorkPeriod } from "../_attendance.js";
 import {
   consumeApprovedDeviceChallenge,
   createDeviceLoginChallenge,
@@ -37,6 +37,10 @@ async function finishAttendanceLogin(
       if (verifiedDeviceIsPrimary !== false) {
         await requireAttendanceForLogin(userId, { confirmCheckIn, forceEnforcement: true });
       }
+    } else {
+      // A device-exempt employee can enter at any hour, but their explicit
+      // login check-in must still create an ordinary attendance record.
+      await registerExemptLoginAttendance(userId, confirmCheckIn);
     }
   } catch (attendanceError) {
     if (attendanceError instanceof AttendanceError) {

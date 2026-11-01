@@ -442,6 +442,19 @@ export async function getSelfAttendanceState(userId: string) {
   };
 }
 
+// Exemption from device verification changes the login gate, not the
+// employee's attendance obligations. The login button explicitly requests
+// check-in, so record the real active shift without restricting access outside
+// that shift. Never manufacture punches on days off, outside work periods, or
+// after the same shift has already been recorded/closed.
+export async function registerExemptLoginAttendance(userId: string, confirmCheckIn: boolean) {
+  if (!confirmCheckIn) return false;
+  const state = await getLoginAttendanceState(userId);
+  if (!state.activePeriod || state.record?.check_in || state.record?.check_out) return false;
+  await registerAttendanceCheckIn(userId, state.activePeriod);
+  return true;
+}
+
 export async function checkInCurrentAttendance(userId: string) {
   const state = await getLoginAttendanceState(userId);
   if (!state.assigned) {
