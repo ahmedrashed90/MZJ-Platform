@@ -43,7 +43,7 @@ vm.runInNewContext(transpiled.outputText, { exports: frontExports, crypto,
     if (name === 'react-router-dom') return { useNavigate: () => path => navigations.push(path), useSearchParams: () => [new URLSearchParams(), () => {}] };
     if (name === '@phosphor-icons/react') return Object.fromEntries(['CalendarBlank','FilmStrip','ImageSquare','ListChecks','Megaphone','Plus','X'].map(key => [key,Stub]));
     if (name === './components') return { W: { selectProduct: 'اختر المنتج', addDate: 'إضافة يوم', remove: 'حذف', choose: 'اختر', agenda: 'أجندة', campaign: 'حملة', publishDate: 'تاريخ النشر', fundingDate: 'تاريخ التمويل', createCampaign: 'إنشاء حملة', createAgenda: 'إنشاء أجندة', cancel: 'إلغاء', loading: 'تحميل' }, Empty: Stub, Field: Stub, FormatSelector: Stub, ProductViewButton: Stub, WorkAlert: Stub, WorkHeader: Stub };
-    if (name === './api') return { useWorkQuery: () => ({ data: { rows: products }, loading: false, error: '' }), workPost: async (action, body) => { saves.push({action,body}); return {ok:true}; }, uploadWorkFile: () => {}, showDate: () => {} };
+    if (name === './api') return { useWorkQuery: () => ({ data: { rows: products }, loading: false, error: '' }), workPost: async (action, body) => { saves.push({action,body}); return {ok:true,id:uid(99)}; }, uploadWorkFile: () => {}, showDate: () => {} };
     if (name === '../../../shared/marketing-workflow') return shared;
     if (name === './requiredMedia') return { splitRequiredMediaSelection: () => [] };
     if (name === './planComposer') return plan;
@@ -116,7 +116,7 @@ await form.props.onSubmit({ preventDefault() {} });
 check(saves.length === 1 && saves[0].action === 'create_plan' && saves[0].body.entries.length === 2, 'Submitting campaign sends one product per day to the original create_plan route');
 check(saves[0].body.entries[0].platforms.length === 2 && saves[0].body.entries[0].platforms[0].budget === 120.5 && saves[0].body.entries[0].platforms[0].postTypeIds.length === 2 && saves[0].body.entries[0].platforms[1].budget === 80, 'Campaign submit persists multiple Instagram formats without duplicating platform budget');
 check(saves[0].body.entries[1].platforms.length === 1 && saves[0].body.entries[1].platforms[0].postTypeId === uid(23), 'Second video product retains its different compatible publish format');
-check(navigations.at(-1) === '/marketing', 'Successful save preserves original return navigation');
+check(navigations.at(-1) === `/marketing?plan=${uid(99)}`, 'Successful save opens the persisted campaign for review and approval');
 // Rendering the same component in agenda mode omits budget fields but keeps multi-selection.
 slots = []; cursor = 0;
 tree = render('agenda');

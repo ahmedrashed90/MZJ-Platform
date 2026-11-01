@@ -235,11 +235,13 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
     try {
       // One product is chosen once; each platform creates its own publish line.
       // Budget belongs to the platform line and is never duplicated implicitly.
-      await workPost('create_plan', {
+      const created = await workPost<{ id: string }>('create_plan', {
         requestKey: requestKey.current, kind, name: name.trim(),
         entries: planEntriesPayload(entries, kind),
       });
-      navigate('/marketing');
+      // Review the actual persisted schedule (including every platform budget)
+      // immediately after creation; do not make the author hunt in Database.
+      navigate(`/marketing?plan=${encodeURIComponent(created.id)}`);
     } catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
     finally { setBusy(false); }
   }

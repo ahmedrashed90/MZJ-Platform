@@ -54,7 +54,7 @@ export type WorkPlanLine = {
   published_on?: string | null; publication_timing?: 'on_time' | 'late' | null;
   published_ready?: boolean; created_by?: string; plan_created_at?: string;
   post_type_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
-  product_id: string; idea_name: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
+  product_id: string; idea_name: string; product_idea?: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
 };
 export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; manageFormats: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };

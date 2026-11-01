@@ -1000,3 +1000,14 @@
 }
 .mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap .mkw-readiness>span { font-weight:800; }
 .mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap progress { height:9px; width:100%; accent-color:var(--brand); }
+
+/* Approved marketing publication workflow: readable per-required-item ideas and budgets. */
+.mkw-plan-idea-cell{white-space:pre-wrap;min-width:170px;max-width:360px;line-height:1.7;overflow-wrap:anywhere;text-align:right}
+.mkw-budget-value{white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700;color:#4a211c}
+.mkw-preparation-idea{border:1px solid #e6d4c4;background:#f3e8dc;border-radius:12px;padding:14px 16px}
+.mkw-preparation-idea>strong{font-size:13px;color:#4a211c}
+.mkw-preparation-idea>p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;line-height:1.85;color:#4a211c}
+.mkw-plan-review-table{display:grid;gap:12px}
+.mkw-plan-review-table h3{font-size:16px;color:#4a211c;margin:0}
+.mkw-plan-review-modal .mkw-plan-review{max-width:none}
+.mkw-plan-review-modal .mkw-plan-edit-lines .mkw-plan-idea-cell{min-width:220px}

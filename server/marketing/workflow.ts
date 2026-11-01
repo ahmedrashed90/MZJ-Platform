@@ -1103,7 +1103,7 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [plan] = await tx<any[]>`select * from marketing.work_plans where id=${planId}::uuid and is_deleted=false for update`;
-    if (!plan || plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status) || plan.activated_at) throw new Error(W.denied);
+    if (!plan || plan.created_by !== user.id || !['in_progress','revision','submitted'].includes(plan.review_status) || plan.activated_at) throw new Error(W.denied);
     const old = await tx<any[]>`select id::text from marketing.work_plan_items where plan_id=${planId}::uuid and is_deleted=false for update`;
     const oldIds = new Set(old.map(line => String(line.id)));
     const linked = await tx<any[]>`select 1 from marketing.work_publish_targets target join marketing.work_plan_items l on l.id=target.line_id where l.plan_id=${planId}::uuid limit 1`;
@@ -1155,11 +1155,9 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
 }
 async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   const lineId = id(body.lineId), url = publishedLink(body.url);
-  const publishedOn = url ? text(body.publishedOn, 10) : '';
-  // Older clients may save a link without an actual date; keep it unclassified rather than inventing a date.
-  if (url && publishedOn && !isWorkDate(publishedOn)) throw new Error('تاريخ النشر الفعلي غير صحيح');
-  if (url && publishedOn > new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Riyadh' }))
-    throw new Error('تاريخ النشر الفعلي لا يمكن أن يكون في المستقبل');
+  // Publication date is the Saudi calendar day when the first manual URL is saved.
+  // Do not trust the browser clock or accept a client-supplied publication date.
+  // Once recorded, it stays immutable if the URL is edited or temporarily removed.
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [line] = await tx<any[]>`select l.id,l.plan_id,p.review_status,p.created_by,p.activated_at from marketing.work_plan_items l
@@ -1167,9 +1165,13 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
     if (!line || !['publishing','published'].includes(line.review_status)) throw new Error('لا يمكن تسجيل رابط النشر قبل اعتماد الحملة أو الأجندة');
     if (!(await planLines(tx as unknown as Sql,user,String(line.plan_id))).some(visible => visible.id === lineId)) throw new Error(W.denied);
     if (line.created_by !== user.id && !canReviewPlan(user) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
-    await tx`update marketing.work_plan_items set manual_post_url=${url},manual_published_on=${publishedOn || null}::date,
-      updated_at=now(),version=version+1 where id=${lineId}::uuid`;
-    return { ok:true, message:W.saved };
+    const [saved] = await tx<any[]>`update marketing.work_plan_items
+      set manual_post_url=${url},
+        manual_published_on=coalesce(manual_published_on,
+          case when ${url}<>'' then (now() at time zone 'Asia/Riyadh')::date else null end),
+        updated_at=now(),version=version+1
+      where id=${lineId}::uuid returning manual_published_on::text as published_on`;
+    return { ok:true, publishedOn:saved?.published_on || null, message:W.saved };
   });
 }
 
@@ -1273,7 +1275,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
   const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,p.activated_at,p.review_status,p.review_note,p.review_revision,
     pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
-    i.idea_name,i.media_kind,t.task_no,t.name as task_name,
+    i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='scheduled') as scheduled_count,
@@ -1299,8 +1301,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   return rows.map(row => {
     const effective_post_url = String(row.manual_post_url || row.provider_post_url || '');
     const published_ready = !!effective_post_url;
-    // A manual post link takes precedence over an automatic URL.  Its actual
-    // date MUST come from the explicitly saved date, not the save timestamp.
+    // A manual post link takes precedence over an automatic URL. Its actual
+    // date is fixed on the FIRST manual URL save, using the Saudi date.
     const published_on = row.manual_post_url ? (row.manual_published_on ? workDate(row.manual_published_on) : null) : row.provider_published_on;
     const publication_timing = published_ready && published_on
       ? (published_on <= workDate(row.scheduled_on) ? 'on_time' : 'late') : null;
@@ -1366,7 +1368,7 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const history = await sql<any[]>`select r.action,r.note,r.actor_name,r.created_at,coalesce(c.name,'') as category_name from marketing.work_plan_reviews r left join marketing.work_review_categories c on c.id=r.category_id where r.plan_id=${planId}::uuid order by r.created_at desc, r.id desc`;
   const complete = lines.every(line => line.published_ready);
   return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
-    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user), canEdit:plan.created_by === user.id && ['in_progress','revision'].includes(plan.review_status) && !plan.activated_at,
+    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user), canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
     canSaveLinks: ['publishing','published'].includes(plan.review_status) && (plan.created_by === user.id || canReviewPlan(user) || hasPermission(user,'marketing.publish.now')) }, lines, history };
 }
 /** One confirmed task deletion removes every linked campaign/agenda plan and all its

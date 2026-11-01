@@ -52,9 +52,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <h3>تفاصيل النشر حسب المنصة ونوع المنشور ({lines.length})</h3>
           <div className="mkw-table-wrap mkw-plan-report-table"><table>
             <thead><tr>
-              <th scope="col">تاريخ الإنشاء</th>
               <th scope="col">{isCampaign ? 'تاريخ التمويل' : 'تاريخ النشر'}</th>
               <th scope="col">المنتج</th>
+              <th scope="col">الفكرة (فكرة المطلوب)</th>
               <th scope="col">المنصة</th>
               <th scope="col">نوع النشر</th>
               {isCampaign && <th scope="col">الميزانية (ر.س)</th>}
@@ -65,9 +65,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
               <th scope="col">رابط المنشور</th>
             </tr></thead>
             <tbody>{lines.map(line => <tr key={line.id}>
-              <td>{showDate(plan.created_at)}</td>
               <td>{showDate(line.scheduled_on)}</td>
               <td className="mkw-plan-report-product"><strong>{line.idea_name}</strong><small>{line.task_no} · {line.task_name}</small></td>
+              <td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td>
               <td>{line.platform_name || '—'}</td>
               <td>{line.post_type_name || '—'}</td>
               {isCampaign && <td>{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}

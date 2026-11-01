@@ -144,7 +144,6 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
   const [postUrl, setPostUrl] = useState(data.line.manual_post_url || '');
-  const [publishedOn, setPublishedOn] = useState(String(data.line.manual_published_on || '').slice(0, 10));
   const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
   const [rescheduleTime, setRescheduleTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
@@ -175,10 +174,9 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     if (caption !== data.line.caption || hashtags !== data.line.hashtags) {
       setError('احفظ الكابشن والهاشتاج أولًا، ثم احفظ رابط المنشور وتاريخه.'); return;
     }
-    if (postUrl.trim() && !publishedOn) { setError('حدد تاريخ النشر الفعلي أولًا'); return; }
     setBusy(true); setError(''); setMessage('');
     try {
-      await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim(), publishedOn });
+      await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim() });
       await refresh(); setMessage('تم حفظ رابط المنشور وتاريخ النشر الفعلي');
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
@@ -229,19 +227,21 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
     finally { setBusy(false); }
   }
-  return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>{W.ideaName}</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
-    <div className="mkw-preparation-copy-status"><strong>مطلوب: {data.product.idea_name}</strong><span>{data.line.platform_name} · {data.line.post_type_name}</span></div>
+  return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>اسم المطلوب</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><section className="mkw-preparation-idea"><strong>الفكرة — فكرة المطلوب</strong><p>{data.product.idea || '—'}</p></section>
+    <div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
+    <div className="mkw-preparation-copy-status"><strong>مطلوب: {data.product.idea_name}</strong><span>{data.line.platform_name} · {data.line.post_type_name}</span>{data.line.kind === 'campaign' && <span className="mkw-budget-value">الميزانية: {Number(data.line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })} ر.س</span>}</div>
     <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{data.line.caption?.trim() && caption === data.line.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.caption}><textarea required value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field></div>
     <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{data.line.hashtags?.trim() && hashtags === data.line.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.hashtags}><textarea required value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field></div></div>
     <section className="mkw-post-link-entry" aria-label="بيانات النشر الفعلي">
       <h3>رابط المنشور وتاريخ النشر الفعلي</h3>
       <div className="mkw-post-link-fields">
         <label>رابط المنشور<input type="url" value={postUrl} disabled={busy || !data.canSaveLinks} placeholder="https://..." onChange={event => setPostUrl(event.target.value)} /></label>
-        <label>تاريخ النشر الفعلي<input type="date" value={publishedOn} disabled={busy || !data.canSaveLinks || !postUrl.trim()} onChange={event => setPublishedOn(event.target.value)} /></label>
+        <label>تاريخ النشر الفعلي (ثابت)<input type="date" value={String(data.line.manual_published_on || '').slice(0, 10)} readOnly disabled aria-label="تاريخ النشر الفعلي المسجل تلقائيًا" /></label>
       </div>
-      {!data.canSaveLinks && <small>يُتاح تسجيل الرابط وتاريخ النشر الفعلي بعد اعتماد الأجندة أو الحملة.</small>}
+      <small>عند حفظ رابط المنشور لأول مرة يُسجل تاريخ ذلك اليوم تلقائيًا بتوقيت السعودية، ويظل ثابتًا حتى لو عدّلت الرابط لاحقًا.</small>
+      {!data.canSaveLinks && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
       {data.line.effective_post_url && <a href={data.line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور المحفوظ</a>}
-      {data.canSaveLinks && <button type="button" className="secondary" disabled={busy || (postUrl === (data.line.manual_post_url || '') && publishedOn === String(data.line.manual_published_on || '').slice(0, 10)) || (!!postUrl.trim() && !publishedOn)} onClick={() => void saveLink()}>حفظ رابط المنشور</button>}
+      {data.canSaveLinks && <button type="button" className="secondary" disabled={busy || postUrl.trim() === (data.line.manual_post_url || '')} onClick={() => void saveLink()}>حفظ رابط المنشور</button>}
     </section>
     <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
