@@ -215,6 +215,9 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ name: string; percent: number } | null>(null);
   const controller = useRef<AbortController | null>(null), version = useRef(item.version);
+  // Automatic submission advances the server version when its final file is
+  // committed. Keep later review/edit requests on that canonical version.
+  useEffect(() => { version.current = item.version; }, [item.version]);
   useEffect(() => () => controller.current?.abort(), []);
   const ideaFiles = item.files.filter(file => file.category === 'idea');
   const finals = item.files.filter(file => file.category === 'final');
@@ -282,7 +285,14 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
     if (selected.some(file => category === 'idea' ? !ideaFileAllowed(file.name) : !workFileMatches(item.media_kind, file.name, file.type))) { setError(W.fileInvalid); return; }
     await run(async () => {
       await persist(); controller.current = new AbortController();
-      try { for (const file of selected) await uploadWorkFile(file, { itemId: item.id, category, formatIds }, percent => setProgress({ name: file.name, percent }), controller.current.signal); }
+      try {
+        // Notify the server only with the final file of this selection: a
+        // multi-file image upload must not submit after the first image.
+        for (const [index, file] of selected.entries())
+          await uploadWorkFile(file, { itemId: item.id, category, formatIds },
+            percent => setProgress({ name: file.name, percent }), controller.current.signal,
+            category === 'final' && index === selected.length - 1);
+      }
       finally { setProgress(null); controller.current = null; }
     });
   }
@@ -432,6 +442,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
               {capabilities.review && item.status !== 'rejected' && approvedFormatIds.has(format.id) && <div className="mkw-format-review-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval(format.id)}>تراجع عن الاعتماد</button></div>}
             </div>;
           })}</div>
+          {canUpload && <p className="mkw-auto-review-hint">عند اكتمال رفع جميع المقاسات المطلوبة، سيتم إرسال المطلوب للمراجعة تلقائيًا مع آخر ملف. المقاسات المعتمدة تظل معتمدة.</p>}
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
           {progress && <div className="mkw-upload-format"><span>{progress.name} {progress.percent}%</span><progress max={100} value={progress.percent} /><button type="button" className="secondary" onClick={() => controller.current?.abort()}>{W.cancel}</button></div>}
           {!!finals.length && <details><summary><FileArrowDown size={17} />{item.status === 'rejected' ? 'معاينة الملفات المرفوضة' : W.viewProduct}</summary><FilesPreview files={finals} /></details>}

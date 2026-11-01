@@ -109,7 +109,7 @@ export function showRange(from: string | null, to: string | null) {
   return from && to && from !== to ? `${showDate(from)} \u2190 ${showDate(to)}` : showDate(to || from);
 }
 export type WorkUploadInput = { reservationId?: string; itemId?: string; category: 'idea' | 'final'; formatIds?: string[] };
-export async function uploadWorkFile(file: File, input: WorkUploadInput, onProgress: (percent: number) => void, signal?: AbortSignal) {
+export async function uploadWorkFile(file: File, input: WorkUploadInput, onProgress: (percent: number) => void, signal?: AbortSignal, autoSubmit = false) {
   const prepared = await workPost<{ fileId: string; uploadUrl: string; storageProvider: string }>('prepare_upload', {
     ...input, fileName: file.name, mimeType: file.type || 'application/octet-stream', fileSize: file.size,
   });
@@ -138,13 +138,13 @@ export async function uploadWorkFile(file: File, input: WorkUploadInput, onProgr
     // Google may hide the successful resumable response behind CORS. Verify
     // ownership/size server-side before deciding whether the upload failed.
     if (!signal?.aborted && prepared.storageProvider === 'google-drive') {
-      try { await workPost('commit_upload', { fileId: prepared.fileId }); onProgress(100); return prepared.fileId; } catch { /* Keep original error. */ }
+      try { await workPost('commit_upload', { fileId: prepared.fileId, autoSubmit }); onProgress(100); return prepared.fileId; } catch { /* Keep original error. */ }
     }
     await workPost('remove_upload', { fileId: prepared.fileId, itemId: input.itemId }).catch(() => undefined);
     throw error;
   }
   try {
-    await workPost('commit_upload', { fileId: prepared.fileId, externalId }); onProgress(100); return prepared.fileId;
+    await workPost('commit_upload', { fileId: prepared.fileId, externalId, autoSubmit }); onProgress(100); return prepared.fileId;
   } catch (error) {
     await workPost('remove_upload', { fileId: prepared.fileId, itemId: input.itemId }).catch(() => undefined);
     throw error;

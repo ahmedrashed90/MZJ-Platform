@@ -1026,3 +1026,25 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-plan-review-table h3{font-size:16px;color:#4a211c;margin:0}
 .mkw-plan-review-modal .mkw-plan-review{max-width:none}
 .mkw-plan-review-modal .mkw-plan-edit-lines .mkw-plan-idea-cell{min-width:220px}
+
+/* Workflow: automatic review on final upload and transparent per-task ratings. */
+.mkw-auto-review-hint{font-size:12px;color:var(--muted,#8b756d);line-height:1.8;margin:10px 0 4px}
+.mkw-calendar-task-group{display:grid;gap:12px;margin-block:15px 21px}
+.mkw-calendar-rating-summary{border:1px solid #e9d9ce;border-radius:13px;background:#fcf8f4;padding:13px 15px;display:grid;gap:10px}
+.mkw-calendar-rating-counts{display:flex;gap:10px 18px;align-items:center;justify-content:flex-start;flex-wrap:wrap;color:#4a211c;font-size:13px}
+.mkw-calendar-rating-counts>strong{font-size:14px;margin-inline-end:auto}
+.mkw-calendar-rating-counts b{font-size:15px}
+.mkw-rating-pending-count{color:#995b28;font-weight:750}
+.mkw-rating-completed-count{color:#317254;font-weight:750}
+.mkw-calendar-rating-summary details{border-top:1px solid #eaded7;padding-top:8px}
+.mkw-calendar-rating-summary summary{cursor:pointer;font-weight:700;font-size:12px;color:#69423b}
+.mkw-calendar-rating-list{display:grid;gap:7px;margin-top:12px}
+.mkw-calendar-rating-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #eadfd8;border-radius:9px;background:#fff;padding:9px 11px}
+.mkw-calendar-rating-entry>span:first-child{display:grid;gap:3px;min-width:0}
+.mkw-calendar-rating-entry strong{font-size:12px;overflow-wrap:anywhere}
+.mkw-calendar-rating-entry small{color:#927a72;font-size:11px}
+.mkw-calendar-rating-status{padding:5px 10px;white-space:nowrap;border-radius:20px;background:#fff6e7;color:#956127;font-size:11px;font-weight:700}
+.mkw-calendar-rating-status.is-rated{background:#ebf5ee;color:#246244}
+.mkw-calendar-item-rated{font-size:11px;font-weight:700;color:#9a652f}
+.mkw-calendar-item-rated.is-rated{color:#2b7652}
+@media(max-width:530px){.mkw-calendar-rating-entry{align-items:flex-start}.mkw-calendar-rating-counts>strong{flex-basis:100%}}

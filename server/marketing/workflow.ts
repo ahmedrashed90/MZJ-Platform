@@ -11,7 +11,7 @@ import { createUploadUrl, headMediaObject, mediaStorageConfigured, buildMarketin
 import { createGoogleDriveResumableUpload, verifyGoogleDriveUploadedFile } from '../_google-drive-storage.js';
 import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishing.js';
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
-import { finalCoverage, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, workReviewableFormats, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
+import { finalCoverage, workFormatsReadyForReview, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, workReviewableFormats, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
@@ -500,6 +500,53 @@ async function removeItemFormat(sql: Sql, body: Row, user: SessionUser) {
   await notify(user,'format_removed',result.taskId,'تم حذف مقاس من المطلوب',[result.assigneeId]);
   return result;
 }
+/** Submit one set of ready formats within the same transaction as the upload
+ * commit. Used by both the explicit fallback and automatic final-file path. */
+async function markItemFormatsSubmitted(tx: any, user: SessionUser, itemId: string, taskId: string,
+  formats: WorkFormat[]) {
+  for (const format of formats) {
+    await tx`insert into marketing.work_format_reviews(item_id,format_id,status,submitted_at,updated_at)
+      values(${itemId}::uuid,${format.id},'submitted',now(),now())
+      on conflict(item_id,format_id) do update set status='submitted',submitted_at=now(),approved_at=null,approved_by=null,updated_at=now()`;
+  }
+  await tx`update marketing.work_items set status='submitted',submitted_at=now(),version=version+1,updated_at=now()
+    where id=${itemId}::uuid`;
+  await history(tx, user, taskId, itemId, 'submitted');
+  await recalculateTask(tx, taskId);
+}
+
+/** Called only after the last selected file has been committed.  Never send
+ * incomplete, uploading, approved, or revision-requested sizes to review. */
+async function submitCompletedUpload(tx: any, user: SessionUser, itemId: string, current: any) {
+  if (!['in_progress','editing','revision','submitted'].includes(current.status) || current.assigned_to !== user.id) return null;
+  const [pending] = await tx`select count(*)::int as count from marketing.work_uploads up
+    join marketing.files f on f.id=up.file_id where up.item_id=${itemId}::uuid
+      and up.cancelled_at is null and f.status='uploading'`;
+  if (Number(pending?.count || 0) > 0) return null;
+  const items = await loadItems(tx, current.task_id);
+  const item = items.find(row => row.id === itemId);
+  if (!item) return null;
+  const formats = workFormatsReadyForReview(item, true);
+  if (!formats.length) return null;
+  await markItemFormatsSubmitted(tx, user, itemId, current.task_id, formats);
+  return { taskId: String(current.task_id), owner: String(current.created_by), title: String(current.task_name) };
+}
+
+async function notifyItemSubmission(sql: Sql, user: SessionUser, itemId: string,
+  result: { taskId: string; owner: string; title: string }) {
+  // Keep the same reviewer scope, explicit permissions, and notification as
+  // the existing manual submission; do not notify unrelated employees.
+  const candidates = await sql<any[]>`select u.id::text from core.users u join core.user_systems us on us.user_id=u.id
+    where us.system_code='marketing' and us.is_enabled=true and u.is_active=true and coalesce(u.is_archived,false)=false`;
+  const reviewers: string[] = [];
+  for (const candidate of candidates) {
+    const reviewer = await loadUserProfile(candidate.id);
+    if (!reviewer || !hasPermission(reviewer, 'marketing.task.review')) continue;
+    try { await visibleItem(sql, reviewer, itemId); reviewers.push(candidate.id); } catch { /* Outside this reviewer's scope. */ }
+  }
+  await notify(user, 'submitted', result.taskId, `${W.submitted}: ${result.title}`, [...reviewers, result.owner]);
+}
+
 async function submitItem(sql: Sql, body: Row, user: SessionUser) {
   requirePermission(user, 'marketing.task.final_file.upload');
   const itemId = id(body.itemId);
@@ -514,36 +561,19 @@ async function submitItem(sql: Sql, body: Row, user: SessionUser) {
     if (!['in_progress','editing','revision','submitted'].includes(locked.status)) throw new Error(W.immutable);
     const items = await loadItems(tx, current.task_id), item = items.find(row => row.id === itemId);
     if (!item) throw new Error(W.notFound);
-    const pending = new Set((item.format_reviews || []).filter(r => r.status === 'submitted').map(r => r.format_id));
-    const approved = new Set((item.format_reviews || []).filter(r => r.status === 'approved').map(r => r.format_id));
     const revision = new Set((item.format_reviews || []).filter(r => r.status === 'revision').map(r => r.format_id));
-    const selectable = item.formats.filter(format => !pending.has(format.id) && !approved.has(format.id) && !revision.has(format.id) &&
-      finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
     if (['editing','revision'].includes(locked.status) && revision.size > 0)
       throw new Error('ارفع الملفات الجديدة لكل المقاسات المطلوبة تعديلها قبل الإرسال للمراجعة');
+    const selectable = workFormatsReadyForReview(item);
     if (!selectable.length) throw new Error(W.incompleteFiles);
-    const [uploads] = await tx<any[]>`select count(*)::int as count from marketing.work_uploads up join marketing.files f on f.id=up.file_id
+    const [uploads] = await tx`select count(*)::int as count from marketing.work_uploads up join marketing.files f on f.id=up.file_id
       where up.item_id=${itemId}::uuid and up.cancelled_at is null and f.status='uploading'`;
-    if (uploads.count > 0) throw new Error(W.incompleteFiles);
-    for (const format of selectable) {
-      await tx`insert into marketing.work_format_reviews(item_id,format_id,status,submitted_at,updated_at)
-        values(${itemId}::uuid,${format.id},'submitted',now(),now())
-        on conflict(item_id,format_id) do update set status='submitted',submitted_at=now(),approved_at=null,approved_by=null,updated_at=now()`;
-    }
-    await tx`update marketing.work_items set status='submitted',submitted_at=now(),version=version+1,updated_at=now() where id=${itemId}::uuid`;
-    await history(tx, user, current.task_id, itemId, 'submitted');
-    await recalculateTask(tx, current.task_id);
+    if (Number(uploads.count) > 0) throw new Error(W.incompleteFiles);
+    await markItemFormatsSubmitted(tx, user, itemId, current.task_id, selectable);
     return { ok: true, taskId: current.task_id, owner: current.created_by, title: current.task_name, message: W.saved };
   });
-  const candidates = await sql<any[]>`select u.id::text from core.users u join core.user_systems us on us.user_id=u.id
-    where us.system_code='marketing' and us.is_enabled=true and u.is_active=true and coalesce(u.is_archived,false)=false`;
-  const reviewers: string[] = [];
-  for (const candidate of candidates) {
-    const reviewer = await loadUserProfile(candidate.id);
-    if (!reviewer || !hasPermission(reviewer, 'marketing.task.review')) continue;
-    try { await visibleItem(sql, reviewer, itemId); reviewers.push(candidate.id); } catch { /* Outside this reviewer's scope. */ }
-  }
-  await notify(user, 'submitted', result.taskId, `${W.submitted}: ${result.title}`, [...reviewers, result.owner]);
+  await notifyItemSubmission(sql, user, itemId, result).catch(error =>
+    console.error('Marketing workflow submission notification failed', error));
   return result;
 }
 
@@ -886,13 +916,15 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
     const head = await headMediaObject(upload.storage_key);
     if (!head.exists || head.size !== Number(upload.file_size)) throw new Error(W.fileInvalid);
   }
-  await sql.begin(async tx => {
+  const submission = await sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
+    let currentItem: any = null;
     if (upload.item_id) {
       const item = await visibleItem(tx, user, upload.item_id, true);
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
-      const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${upload.item_id}::uuid for update`;
+      const [current] = await tx<any[]>`select * from marketing.work_items where id=${upload.item_id}::uuid for update`;
+      currentItem = { ...current, task_id: item.task_id, created_by: item.created_by, task_name: item.task_name };
       if (!current || !['in_progress','editing','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
       await visibleItem(tx, user, upload.item_id, true);
       if (upload.category === 'final') { requirePermission(user, 'marketing.task.final_file.upload'); if (current.assigned_to !== user.id) throw new Error(W.denied); }
@@ -935,9 +967,16 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
         // responded_at, never uploading or replacing files.
       }
       await tx`update marketing.work_items set version=version+1,updated_at=now() where id=${upload.item_id}::uuid`;
+      // Last file of the current selection triggers review only if *every*
+      // required format is ready. Previously approved sizes stay approved.
+      if (upload.category === 'final' && body.autoSubmit === true)
+        return submitCompletedUpload(tx, user, String(upload.item_id), currentItem);
     }
+    return null;
   });
-  return { ok: true, fileId, message: W.saved };
+  if (submission && upload.item_id) await notifyItemSubmission(sql, user, String(upload.item_id), submission)
+    .catch(error => console.error('Marketing automatic submission notification failed', error));
+  return { ok: true, fileId, autoSubmitted: Boolean(submission), message: W.saved };
 }
 async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
   const fileId = id(body.fileId), requestedItemId = body.itemId ? id(body.itemId) : null;
@@ -1487,12 +1526,14 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     where t.is_deleted=false and (${seeAll} or i.assigned_to=${user.id}::uuid)
       and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
-  // Each calendar card represents one requirement, not the whole task.
-  // Use the SAME individual readiness calculation as task details (including
-  // partial uploads and approvals); leave the task readiness unchanged.
+  // Every calendar card represents a requirement due on the chosen date.
+  // Ratings, however, are summarized for the ENTIRE visible task, even when
+  // its other requirements have different due dates (e.g. 3 of 6 graded).
   const taskIds = [...new Set(rows.map(row => String(row.task_id)))];
-  if (!taskIds.length) return { ok: true, rows };
+  if (!taskIds.length) return { ok: true, rows, ratingSummaries: {} };
   const readinessItems = await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+    i.idea_name,coalesce(u.full_name,'') as assignee_name,
+    exists(select 1 from marketing.work_item_ratings rating where rating.item_id=i.id) as is_rated,
     coalesce((select jsonb_agg(jsonb_build_object(
       'category',j.category,'format_id',j.format_id,'status',f.status,
       'name',f.original_name,'mime_type',f.mime_type))
@@ -1501,10 +1542,40 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     coalesce((select jsonb_agg(jsonb_build_object('format_id',fr.format_id,'status',fr.status))
       from marketing.work_format_reviews fr where fr.item_id=i.id),'[]'::jsonb) as format_reviews
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
+    left join core.users u on u.id=i.assigned_to
     where t.is_deleted=false and i.task_id=any(${taskIds}::uuid[])
       and (${seeAll} or i.assigned_to=${user.id}::uuid)`;
   const readinessByItem = new Map(readinessItems.map(item => [String(item.id), workItemReadiness(item as WorkItem)]));
-  return { ok: true, rows: rows.map(row => ({ ...row, item_readiness: readinessByItem.get(String(row.id)) ?? 0 })) };
+  // Legacy rejected requirements were archived in a separate table; include
+  // them in rating counts without exposing another executor's requirements.
+  let archivedRejected: any[] = [];
+  try {
+    archivedRejected = await sql<any[]>`select r.item_id::text as id,r.task_id::text as task_id,
+      r.idea_name,'rejected'::text as status,coalesce(u.full_name,'') as assignee_name,
+      (r.percentage is not null) as is_rated
+      from marketing.work_rejected_items r
+      left join core.users u on u.id=r.assigned_to
+      where r.task_id=any(${taskIds}::uuid[]) and (${seeAll} or r.assigned_to=${user.id}::uuid)`;
+  } catch (error) {
+    if (String((error as {code?:string})?.code || '') !== '42P01') throw error;
+  }
+  const ratingSummaries: Record<string, {total: number; rated: number; missing: number; items: Array<{
+    id: string; idea_name: string; assignee_name: string; status: string; rated: boolean
+  }>}> = {};
+  for (const taskId of taskIds) ratingSummaries[taskId] = { total: 0, rated: 0, missing: 0, items: [] };
+  const seen = new Set<string>();
+  for (const item of [...readinessItems, ...archivedRejected]) {
+    const taskId = String(item.task_id), itemId = String(item.id);
+    if (!ratingSummaries[taskId] || seen.has(itemId)) continue;
+    seen.add(itemId);
+    const rated = item.is_rated === true;
+    ratingSummaries[taskId].items.push({ id: itemId, idea_name: String(item.idea_name || ''),
+      assignee_name: String(item.assignee_name || ''), status: String(item.status || ''), rated });
+    ratingSummaries[taskId].total++;
+    if (rated) ratingSummaries[taskId].rated++;
+    else ratingSummaries[taskId].missing++;
+  }
+  return { ok: true, rows: rows.map(row => ({ ...row, item_readiness: readinessByItem.get(String(row.id)) ?? 0 })), ratingSummaries };
 }
 
 async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, services: WorkflowServices) {

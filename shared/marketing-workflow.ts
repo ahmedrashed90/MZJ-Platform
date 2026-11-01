@@ -86,6 +86,23 @@ export function finalCoverage(item: Pick<WorkItem, 'formats' | 'files'> & Partia
     return !item.media_kind || files.every(file => workFileMatches(item.media_kind!, file.name, file.mime_type));
   });
 }
+/** Only unfinished output formats can be sent for review.  When requireComplete
+ * is true, wait until EVERY configured format is either already approved,
+ * already awaiting review, or has a complete set of newly uploaded finals.
+ * This prevents automatic submission after just the first size of a task. */
+export function workFormatsReadyForReview(item: Pick<WorkItem, 'formats' | 'files' | 'format_reviews' | 'media_kind'>,
+  requireComplete = false): WorkFormat[] {
+  const reviewStatuses = new Map((item.format_reviews || []).map(row => [row.format_id, row.status]));
+  const reviewable = item.formats.filter(format => !['approved', 'submitted', 'revision'].includes(reviewStatuses.get(format.id) || '')
+    && finalCoverage({ formats: [format], files: item.files, media_kind: item.media_kind }));
+  if (!requireComplete) return reviewable;
+  if (!reviewable.length || item.formats.some(format => {
+    const status = reviewStatuses.get(format.id);
+    return status !== 'approved' && status !== 'submitted' && !reviewable.some(ready => ready.id === format.id);
+  })) return [];
+  return reviewable;
+}
+
 /** Reuse an approved final file for another platform only when its media
  * kind and exact configured output dimensions agree. Keep task files intact. */
 export function matchingWorkflowPublishFiles(

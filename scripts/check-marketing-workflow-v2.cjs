@@ -207,6 +207,7 @@ test('Calendar shows each requirement readiness even when the same task has anot
   const db = scriptedSql([
     step('select i.id,i.task_id,i.due_on::text',cards, v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31'])),
     step('select i.id::text as id,i.task_id::text as task_id',[earlier,later],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
+    step('from marketing.work_rejected_items r',[],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
   ]);
   const result=await api.calendar(db,admin,{query:{from:'2026-10-01',to:'2026-10-31'}});
   assert.equal(result.rows.length,2);
@@ -221,6 +222,7 @@ test('Calendar gives regular user readiness from only their visible requirement'
   const db=scriptedSql([
     step('select i.id,i.task_id,i.due_on::text',[calendarCard],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31'])),
     step('select i.id::text as id,i.task_id::text as task_id',[scopedItem],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),
+    step('from marketing.work_rejected_items r',[],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),
   ]);
   const result=await api.calendar(db,worker,{query:{from:'2026-10-01',to:'2026-10-31'}});
   assert.equal(result.rows[0].item_readiness,50);db.assertDone();
