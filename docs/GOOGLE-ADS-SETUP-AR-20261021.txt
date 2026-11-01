@@ -1,0 +1,68 @@
+دليل تفعيل تكامل Google Ads في منصة محمد ذعار العجمي للسيارات
+تاريخ الإصدار: 2026-10-21
+
+1) ما تم إضافته في السورس
+- بطاقة Google Ads في «التسويق > ربط المنصات» بجانب YouTube وMeta، بدون إلغاء أي تكامل حالي.
+- اختيار أكثر من حساب إعلاني (Customer ID) باستخدام إيميل Google واحد. توكن Google Ads منفصل ومشفر عن توكن YouTube؛ اختَر نفس إيميل YouTube عند الدخول.
+- «التسويق > تفاعل النشر > الحملات الممولة (Meta + Google)» يضم فلتر «الكل / Meta / Google Ads» ويترك لوحة Meta الحالية كما هي.
+- قراءة الحملات والمصروفات والنقرات والظهور والتحويلات وتكلفة الليد لكل حساب إعلاني، بعملة الحساب نفسه.
+- إنشاء حملات بحث Google Search كاملة (ميزانية + مجموعة إعلانات + كلمات مفتاحية + إعلان نصي متجاوب) بحالة PAUSED، وإمكانية تشغيلها لاحقًا بعد تأكيد صريح.
+- حماية تغيير حالة الحملة بالصلاحيات وإلزام تأكيد مستقل عند التشغيل والإنفاق.
+
+2) إعداد Google Cloud الحالي
+المشروع: MZJ-Google-Ads
+معرّف المشروع: black-beach-512323-f5
+Google Ads API مفعل ومستوى Explorer تمت الموافقة عليه.
+عميل OAuth الذي تم إنشاؤه: MZJ Google Ads Integration — Web application.
+
+افتح: Google Cloud Console > Google Auth Platform > Clients > MZJ Google Ads Integration.
+اضغط تعديل، ثم أضف السطر التالي داخل Authorized redirect URIs حرفيًا:
+https://mzj-platform.vercel.app/api/marketing/platform-connections/callback/google_ads
+لا حاجة إلى Authorized JavaScript origins لهذا الربط لأنه سيرفر OAuth.
+لا تعدّل إعدادات عميل YouTube القديم ولا تحذف أي من روابط إعادة التوجيه القديمة.
+
+3) إعدادات Vercel المطلوبة (Production)
+افتح مشروع mzj-platform داخل Vercel > Settings > Environment Variables.
+أضف المتغيرات التالية:
+GOOGLE_ADS_CLIENT_ID = قيمة OAuth Client ID من Google Cloud
+GOOGLE_ADS_CLIENT_SECRET = Client Secret من نفس العميل
+GOOGLE_ADS_REDIRECT_URI = https://mzj-platform.vercel.app/api/marketing/platform-connections/callback/google_ads
+
+احتفظ دون تعديل بالموجود حاليًا:
+MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY أو MZJ_TOKEN_ENCRYPTION_KEY (32 حرفًا أو أكثر)
+DATABASE_URL
+YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET / YOUTUBE_REDIRECT_URI
+جميع متغيرات Meta وTikTok وغيرها.
+لا تكتب Client Secret داخل ملفات السورس أو المحادثة أو كود المتصفح.
+بعد حفظ المتغيرات، أعد النشر Redeploy للنسخة المعدلة.
+
+4) قاعدة البيانات
+تمت إضافة ترحيل ضيق لإضافة google_ads إلى CHECK constraints الخاصة بربط المنصات فقط.
+يتم الانتقال آليًا من إصدار التسويق 2 إلى 3 في أول طلب API تسويق بعد نشر النسخة.
+يوجد ملف SQL مستقل اختياري: database/migrations/20261021_marketing_google_ads_oauth.sql
+لا تنفذ الترحيل يدويًا إذا كان الترحيل الآلي نجح بالفعل.
+لا تُمس بيانات Meta أو YouTube أو توكناتهما أو حملاتهما.
+
+5) تجربة الربط
+- افتح المنصة > التسويق > ربط المنصات > Google Ads > ربط الحساب.
+- سجّل بنفس إيميل Google الخاص بـYouTube وبالحسابين Google Ads؛ وافق على صلاحية إدارة الإعلانات.
+- تظهر الحسابات الإعلانية المباشرة والحسابات الفرعية لمدير Google Ads عند توفرها، ويمكن اختيار الحسابين ثم حفظ الاختيار.
+- افتح «تفاعل النشر» > «الحملات الممولة (Meta + Google)» واختبر العرض والفلترة.
+- طابق بيانات كل حساب مع لوحة Google Ads لنفس المدة الزمنية ونفس العملة.
+- اختبر إنشاء حملة Search متوقفة فقط أولًا. لا تشغّلها إلا بعد مراجعة الإعلانات والاستهداف والفوترة والتتبع.
+
+6) ملاحظات وحدود التنفيذ
+- تقارير «الليد» تأتي من تحويلات Google Ads المصنّفة بهذه الفئات، وليست سجلات CRM. ربط Google Lead Forms التلقائي بـCRM لم يتم تنفيذه في هذه النسخة.
+- إنشاء الحملات الجديدة عبر النظام يدعم Search فقط؛ تعرض المنصة تقارير الأنواع الأخرى عند إتاحتها عبر API.
+- قد تتطلب حالة OAuth «Testing» تجديد التفويض بعد 7 أيام؛ للنشر المستقر، راجع حالة التطبيق والتوثيق لدى Google.
+- الكود واختباراته جاهزة للتجهيز والنشر، لكن لم تُنفَّذ تجربة مع حسابات Google Ads الفعلية ولا نشر إنتاجي في هذا التسليم؛ اختباراتنا محاكاة من دون مفاتيح حقيقية.
+- لا يحدث صرف جديد بمجرد عرض الإحصائيات أو إنشاء حملة PAUSED. تشغيل حملة PAUSED يمر عبر تأكيد واضح وقد يتسبب في إنفاق حقيقي.
+
+7) نتائج الاختبارات المحلية
+Google Ads: 22/22 — محاكاة API وحفظ الحسابات وإنشاء الحملة وقيود التشغيل.
+Meta Ads: 62/62 — تراجع التقارير والرسوم والحملات.
+Marketing: 102/102 — اختبارات منطق التسويق.
+Platform connections: 25/25 — فحص تكاملات ربط المنصات.
+Schema upgrade: ناجح.
+فحص TS/TSX parsing: ناجح.
+لم يتم تشغيل Build Vite النهائي لعدم وجود node_modules في السورس المرفوع وعدم توفر تثبيت الحزم عبر الإنترنت في بيئة التحقق.
