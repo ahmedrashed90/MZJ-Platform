@@ -777,6 +777,48 @@ function dateOnlyValue(value: unknown) {
   return clean(value).slice(0, 10);
 }
 
+/**
+ * A user can have records from previous schedule assignments on the same day.
+ * Two periods with the same display name collapse to one report column; never
+ * let an older/legacy record silently replace the current assignment's punch.
+ * This also keeps credited hours aligned with the one row actually displayed.
+ */
+function attendanceReportPeriodKey(name: unknown) {
+  return clean(name)
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200F\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("ar-SA") || "فترة العمل";
+}
+
+function attendanceReportSlotPriority(slot: any, workDate: string, assignmentId: string) {
+  const record = slot.record;
+  if (!record?.check_in) return slot.isAssigned ? 1 : 0;
+  const sameDay = dateOnlyValue(record.work_date) === workDate;
+  const onAssignment = Boolean(assignmentId) && clean(record.assignment_id) === assignmentId;
+  const samePeriod = clean(record.period_id) === clean(slot.id);
+  // Exact current-assignment punches outrank historical punches and any
+  // timestamp-derived fallback that happens to share the displayed date.
+  return (onAssignment ? 32 : 0) + (sameDay ? 16 : 0)
+    + (slot.isAssigned ? 8 : 0) + (samePeriod ? 4 : 0)
+    + (record.check_in ? 2 : 0);
+}
+
+function selectAttendanceReportSlots(slots: any[], workDate: string, assignmentId: string) {
+  const selected = new Map<string, { slot: any; priority: number }>();
+  for (const slot of slots) {
+    const key = attendanceReportPeriodKey(slot.name);
+    const priority = attendanceReportSlotPriority(slot, workDate, assignmentId);
+    const existing = selected.get(key);
+    // Preserve first scheduled slot for a tie (a later legacy row must not
+    // overwrite the same displayed shift by iteration order).
+    if (!existing || priority > existing.priority) selected.set(key, { slot, priority });
+  }
+  return [...selected.values()].map(({ slot }) => slot)
+    .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+}
+
 function weekdayForDate(value: string) {
   return new Date(`${value}T00:00:00Z`).getUTCDay();
 }
@@ -1004,15 +1046,7 @@ async function reportData(request: VercelRequest) {
   const rawRows: any[] = [];
   const headerMeta = new Map<string, { key: string; label: string; sortOrder: number; firstSeen: number }>();
   let headerSequence = 0;
-  const periodKey = (name: unknown) => (
-    clean(name)
-      .normalize("NFKC")
-      .replace(/[\u200B-\u200F\uFEFF]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLocaleLowerCase("ar-SA")
-    || "فترة العمل"
-  );
+  const periodKey = attendanceReportPeriodKey;
 
   for (const day of days) {
     for (const user of users) {
@@ -1070,6 +1104,7 @@ async function reportData(request: VercelRequest) {
           graceMinutes: Number(period.grace_minutes || 0),
           sortOrder: isFriday && fridayScheduleEnabled ? 2 : Number(period.sort_order || 0),
           record,
+          isAssigned: true,
         };
       });
 
@@ -1085,16 +1120,20 @@ async function reportData(request: VercelRequest) {
           graceMinutes: Number(record.grace_minutes || 0),
           sortOrder: Number(record.period_sort_order || slots.length + 1),
           record,
+          isAssigned: false,
         });
       }
-      slots.sort((a, b) => a.sortOrder - b.sortOrder);
+      // A historical record may have the same period *name* as the current
+      // schedule, but a different period ID. The report previously counted
+      // both and let the last legacy slot overwrite the corrected punch.
+      const displaySlots = selectAttendanceReportSlots(slots, day, clean(assignment?.id));
       const expectedMinutes = attendanceReportExpectedMinutes(
-        slots, assignment?.daily_work_hours, isDayOff, isFriday && fridayScheduleEnabled,
+        displaySlots, assignment?.daily_work_hours, isDayOff, isFriday && fridayScheduleEnabled,
       );
 
       const periodsByKey = new Map<string, any>();
       const creditedShifts: Array<{ period: { creditedMinutes: number }; attendedMinutes: number }> = [];
-      for (const slot of slots) {
+      for (const slot of displaySlots) {
         const record = slot.record;
         const delayMinutes = reportDelayMinutes(record?.check_in, day, slot.startTime, slot.graceMinutes, Number(record?.delay_minutes || 0));
         const permissionForShift = permissionForReportShift(
@@ -1160,7 +1199,7 @@ async function reportData(request: VercelRequest) {
       }
       // Keep credited vacation and exceptional hours within this employee's
       // configured target; a fully authorized day cannot generate overtime.
-      const scheduledTotal = attendanceReportExpectedMinutes(slots, null, false, false);
+      const scheduledTotal = attendanceReportExpectedMinutes(displaySlots, null, false, false);
       if (assignment?.daily_work_hours != null && !isDayOff && expectedMinutes < scheduledTotal) {
         attendanceReportCapAuthorizedCredits(creditedShifts, expectedMinutes);
       }
@@ -1175,7 +1214,7 @@ async function reportData(request: VercelRequest) {
         permissionType: permission.permission_type || 'vacation',
         reason: permission.reason || '',
         periodId: permission.period_id || '',
-        periodName: slots.find((slot) => slot.id === permission.period_id ||
+        periodName: displaySlots.find((slot) => slot.id === permission.period_id ||
           (isFriday && fridayScheduleEnabled && permission.period_id === 'friday'))?.name || 'جميع الفترات',
       }));
       rawRows.push({
