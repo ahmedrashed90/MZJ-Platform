@@ -171,5 +171,15 @@ let tests=0; const pass=x=>{console.log('PASS: '+x);tests++};
  assert(calendarUi.includes('ratingSummaries[group.taskId]') && calendarUi.includes('entry.assignee_name'));
  assert(calendarUi.includes('لم يُقيّم بعد') && calendarUi.includes('بانتظار التقييم'));
  pass('Calendar shows who was graded and who still needs a rating');
+ const rightColumn = calendarUi.indexOf('<aside className="mkw-calendar-sidebar"');
+ const ratingsPanel = calendarUi.indexOf('className="mkw-panel mkw-calendar-ratings-panel"');
+ const sidebarEnd = calendarUi.indexOf('</aside>', rightColumn);
+ const deliveriesPanel = calendarUi.indexOf('className="mkw-panel mkw-calendar-deliveries"');
+ assert(rightColumn >= 0 && ratingsPanel > rightColumn && sidebarEnd > ratingsPanel && deliveriesPanel > sidebarEnd,
+  'Ratings must render beneath the calendar in the right sidebar, not among delivery cards');
+ assert(calendarUi.includes('ratedTaskGroups.map(group =>') && calendarUi.includes('selectedGroups.map(group =>'));
+ const css=fs.readFileSync('src/marketing/workflow/workflow.css','utf8');
+ assert(css.includes('.mkw-calendar-sidebar { display:grid; gap:20px;') && css.includes('.mkw-calendar-layout { display:grid;'));
+ pass('Task ratings render under the right-hand calendar; deliveries remain in the left column');
  console.log(`${tests}/${tests} automatic submission and calendar rating tests passed`);
 })().catch(error=>{console.error(error);process.exitCode=1});

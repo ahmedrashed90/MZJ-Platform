@@ -38,7 +38,7 @@ function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
   return item.status === 'approved' || item.status === 'rejected';
 }
 
-export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '' }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late' }) {
+export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
   const [ratingItemId, setRatingItemId] = useState('');
@@ -46,12 +46,16 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const [ratingBusy, setRatingBusy] = useState(false);
   const [ratingError, setRatingError] = useState('');
   const [openedRequirementId, setOpenedRequirementId] = useState('');
+  const focusedRequirementRef = useRef('');
+  const focusedRatingRef = useRef('');
   const task = query.data?.task;
   const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved'))) || [];
   const rejectedItems = !deliveryFilter ? (query.data?.rejectedItems || []).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
   async function refresh() { await query.reload(); onChanged?.(); }
   const selectedRatingItem = task?.items.find(item => item.id === ratingItemId)
     || query.data?.rejectedItems?.find(item => item.id === ratingItemId);
+  const ratingFinalFiles = selectedRatingItem && 'files' in selectedRatingItem
+    ? selectedRatingItem.files.filter(file => file.category === 'final' && file.status === 'ready') : [];
   const canRate = Boolean(query.data?.canRate);
   const ratingRows = canRate ? (settings.data?.criteria || []).map(c => ({ id: c.id, name: c.name, binary: isBinaryProductDecisionCriterion(c.name) }))
     : (selectedRatingItem?.rating?.scores || []).map(c => ({ id: c.criterionId, name: c.criterionName, binary: isBinaryProductDecisionCriterion(c.criterionName) }));
@@ -64,6 +68,26 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
       item.rating?.scores.find(s => s.criterionId === c.id)?.score ?? ''])));
     setRatingError(''); setRatingItemId(item.id);
   }
+  // Deep-link from delivery-calendar ratings: expand the exact requirement
+  // (including requirements due on other dates) and open its grading form once.
+  // The existing review and permission gates remain authoritative.
+  useEffect(() => {
+    if (!focusItemId || !query.data || focusedRequirementRef.current === focusItemId) return;
+    const found = query.data.task.items.some(item => item.id === focusItemId);
+    if (!found) return;
+    focusedRequirementRef.current = focusItemId;
+    setOpenedRequirementId(focusItemId);
+  }, [focusItemId, query.data]);
+  useEffect(() => {
+    if (!focusItemId || !openRatingOnLoad || !query.data || focusedRatingRef.current === focusItemId) return;
+    const item = query.data.task.items.find(entry => entry.id === focusItemId)
+      || query.data.rejectedItems?.find(entry => entry.id === focusItemId);
+    // Always show the requested evaluation form to permitted reviewers;
+    // save remains disabled until full approval or rejection.
+    if (!item || !query.data.canRate || !settings.data) return;
+    focusedRatingRef.current = focusItemId;
+    openItemRating(item);
+  }, [focusItemId, openRatingOnLoad, query.data, settings.data]);
   async function saveItemRating() {
     if (!selectedRatingItem || !ratingAllowed || !scored) { setRatingError('أكمل التقييم بعد اعتماد المنتج 100% أو رفض المطلوب، وبدرجة 0 أو 3 لبند القبول والرفض'); return; }
     setRatingBusy(true); setRatingError('');
@@ -148,6 +172,18 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
         onClose={() => setRatingItemId('')} className="mkw-rating-modal">
         <div className="mkw mkw-rating-form">
           <WorkAlert>{ratingError}</WorkAlert>
+          {selectedRatingItem && !canEvaluateItem(selectedRatingItem) && <WorkAlert>يمكنك معاينة المطلوب الآن، لكن حفظ التقييم متاح فقط بعد اعتماد المنتج 100% أو رفض المطلوب.</WorkAlert>}
+          {selectedRatingItem && <section className="mkw-rating-reference">
+            <div className="mkw-rating-reference-head">
+              <strong>{selectedRatingItem.idea_name || 'المطلوب'}</strong>
+              <small>المنفذ: {selectedRatingItem.assignee_name || '—'} · {selectedRatingItem.media_kind === 'video' ? 'فيديو' : 'صورة'}</small>
+            </div>
+            {'idea' in selectedRatingItem && selectedRatingItem.idea?.trim() && <p>{selectedRatingItem.idea}</p>}
+            {!!ratingFinalFiles.length && <details open={Boolean(focusItemId && openRatingOnLoad)}>
+              <summary>معاينة الملفات النهائية ({ratingFinalFiles.length})</summary>
+              <FilesPreview files={ratingFinalFiles} />
+            </details>}
+          </section>}
           <div className="mkw-rating-criteria-grid">
             {ratingRows.map(row => <label key={row.id} className="mkw-rating-criterion">
               <span>{row.name}</span>

@@ -76,7 +76,10 @@
 .mkw-file-link { display:flex; align-items:center; gap:8px; padding:9px 11px; background:var(--bg); border:1px solid var(--line); border-radius:8px; min-width:0; }.mkw-file-link a { color:var(--brand); overflow-wrap:anywhere; flex:1; text-decoration:none; font-size:13px; }.mkw-file-link small { color:var(--muted); white-space:nowrap; font-size:11px; }
 .mkw-preview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:15px; }.mkw-preview-file { display:grid; gap:9px; padding:12px; border:1px solid var(--line); border-radius:12px; }.mkw-preview-file>img,.mkw-preview-file>video { width:100%; max-height:420px; object-fit:contain; background:var(--bg); border-radius:8px; }.mkw-preview-file>a { font-size:12px; color:var(--brand); text-align:center; }
 .mkw-review-controls { border-top:1px solid var(--line); display:grid; gap:12px; padding-top:16px; }.mkw-history { font-size:13px; }.mkw-history summary { cursor:pointer; color:var(--brand); font-weight:700; }.mkw-history article { border-bottom:1px solid var(--line); padding:10px 0; display:grid; gap:6px; }.mkw-history p { white-space:pre-wrap; }
-.mkw-calendar-layout { display:grid; grid-template-columns:minmax(320px,1fr) minmax(0,1fr); gap:20px; align-items:start; }.mkw-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; }.mkw-calendar-weekday { text-align:center; font-size:11px; color:var(--muted); padding:6px 0; }.mkw-calendar-day { min-height:62px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--ink); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; }.mkw-calendar-day.selected { border:2px solid var(--brand); background:var(--surface-soft); }.mkw-calendar-day.today:not(.selected) { border-color:var(--line-strong); }.mkw-calendar-day small { color:var(--brand); background:var(--peach); border-radius:10px; padding:2px 7px; font-size:10px; }
+.mkw-calendar-layout { display:grid; grid-template-columns:minmax(320px,1fr) minmax(0,1fr); gap:20px; align-items:start; }
+.mkw-calendar-sidebar { display:grid; gap:20px; align-content:start; min-width:0; }
+.mkw-calendar-ratings-panel { align-content:start; }
+.mkw-calendar-deliveries { min-width:0; }.mkw-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; }.mkw-calendar-weekday { text-align:center; font-size:11px; color:var(--muted); padding:6px 0; }.mkw-calendar-day { min-height:62px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--ink); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; }.mkw-calendar-day.selected { border:2px solid var(--brand); background:var(--surface-soft); }.mkw-calendar-day.today:not(.selected) { border-color:var(--line-strong); }.mkw-calendar-day small { color:var(--brand); background:var(--peach); border-radius:10px; padding:2px 7px; font-size:10px; }
 @media (max-width:1100px) { .mkw-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }.mkw-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.mkw-card-data { grid-template-columns:repeat(2,minmax(0,1fr)); }.mkw-calendar-layout { grid-template-columns:1fr; } }
 @media (max-width:760px) { .mkw-board { grid-template-columns:1fr; }.mkw-panel { padding:14px; }.mkw-fields { grid-template-columns:1fr 1fr; }.mkw-item-body { grid-template-columns:1fr; }.mkw-format-platform { grid-template-columns:1fr; }.mkw-assignee>header { grid-template-columns:1fr 1fr auto; gap:8px; padding:12px; }.mkw-create-tabs button { font-size:13px; padding:12px 6px; gap:5px; }.mkw-create-tabs svg { display:none; }.mkw-plan-editor-row { grid-template-columns:1fr auto; }.mkw-plan-editor-row>.mkw-field { grid-column:1/-1; }.mkw-item { padding:13px; }.mkw-modal { width:calc(100vw - 16px)!important; }.mkw-summary { gap:10px; padding:12px; } }
 @media (max-width:430px) { .mkw-fields,.mkw-assignee>header { grid-template-columns:1fr; }.mkw-assignee>header>.icon-button { justify-self:end; }.mkw-calendar-grid { gap:3px; }.mkw-calendar-day { min-height:51px; }.mkw h1 { font-size:20px; } }
@@ -598,6 +601,15 @@
 .mkw-requirement-rating-strip .secondary{min-height:32px;padding:5px 12px;font-size:12px}
 .mkw-rating-unrated{font-size:12px;color:var(--muted,#9a9896)}
 .mzj-modal-card.mkw-rating-modal{width:min(880px,96vw)}
+/* Show the creative itself alongside the calendar-launched evaluation. */
+.mkw-rating-reference{display:grid;gap:10px;padding:12px 14px;border:1px solid #e5d6cd;border-radius:12px;background:#fcf8f4;color:#4a211c}
+.mkw-rating-reference-head{display:grid;gap:5px}
+.mkw-rating-reference-head strong{font-size:14px}
+.mkw-rating-reference-head small{color:#8b756d;font-size:12px}
+.mkw-rating-reference>p{margin:0;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.mkw-rating-reference>details{padding-block:7px;border-top:1px solid #e9dfd8}
+.mkw-rating-reference>details>summary{cursor:pointer;font-size:12px;font-weight:700}
+.mkw-rating-reference .mkw-preview-grid{max-height:38vh;overflow:auto;margin-top:10px}
 .mkw-rating-criteria-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .mkw-rating-criterion{display:grid;align-content:start;gap:12px;padding:16px;border:1px solid var(--line,#e9e2df);border-radius:12px;background:#fff;min-width:0;min-height:116px}
 .mkw-rating-criterion>span{font-size:13px;font-weight:800;color:var(--ink,#55302a);overflow-wrap:anywhere}
@@ -1039,11 +1051,13 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-calendar-rating-summary details{border-top:1px solid #eaded7;padding-top:8px}
 .mkw-calendar-rating-summary summary{cursor:pointer;font-weight:700;font-size:12px;color:#69423b}
 .mkw-calendar-rating-list{display:grid;gap:7px;margin-top:12px}
-.mkw-calendar-rating-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #eadfd8;border-radius:9px;background:#fff;padding:9px 11px}
+.mkw-calendar-rating-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;font:inherit;direction:rtl;text-align:start;color:inherit;cursor:pointer;border:1px solid #eadfd8;border-radius:9px;background:#fff;padding:9px 11px;transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
+.mkw-calendar-rating-entry:hover{background:#faf2eb;border-color:#a68174}
+.mkw-calendar-rating-entry:focus-visible{outline:2px solid #4a211c;outline-offset:2px}
 .mkw-calendar-rating-entry>span:first-child{display:grid;gap:3px;min-width:0}
 .mkw-calendar-rating-entry strong{font-size:12px;overflow-wrap:anywhere}
 .mkw-calendar-rating-entry small{color:#927a72;font-size:11px}
-.mkw-calendar-rating-status{padding:5px 10px;white-space:nowrap;border-radius:20px;background:#fff6e7;color:#956127;font-size:11px;font-weight:700}
+.mkw-calendar-rating-status{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;white-space:nowrap;border-radius:20px;background:#fff6e7;color:#956127;font-size:11px;font-weight:700}
 .mkw-calendar-rating-status.is-rated{background:#ebf5ee;color:#246244}
 .mkw-calendar-item-rated{font-size:11px;font-weight:700;color:#9a652f}
 .mkw-calendar-item-rated.is-rated{color:#2b7652}
