@@ -1333,6 +1333,11 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
     if (!scheduledStart || !scheduledEnd || !Number.isFinite(scheduledStart.getTime()) || !Number.isFinite(scheduledEnd.getTime())) {
       throw new AttendanceError('CORRECTION_INVALID_SCHEDULE', 'بيانات الفترة غير كافية لتعديل سجل الحضور');
     }
+    if (previous?.check_in && Math.abs(new Date(previous.check_in).getTime() - checkIn.getTime()) < 60000 &&
+        (!previous.check_out && !checkOut || (previous.check_out && checkOut &&
+          Math.abs(new Date(previous.check_out).getTime() - checkOut.getTime()) < 60000))) {
+      throw new AttendanceError('CORRECTION_NO_CHANGES', 'الوقت الجديد مطابق للوقت السابق؛ أدخل وقتًا مختلفًا لتصحيح البصمة');
+    }
     const delayMinutes = Math.max(0, Math.floor((checkIn.getTime() - scheduledStart.getTime() - grace * 60000) / 60000));
     const workMinutes = checkOut ? Math.max(0, Math.floor((checkOut.getTime() - checkIn.getTime()) / 60000)) : 0;
     const status = delayMinutes ? 'late' : 'present';
@@ -1345,7 +1350,7 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
           checkout_source=${checkOut ? 'corrected' : null},
           delay_minutes=${delayMinutes},work_minutes=${workMinutes},status=${status},updated_at=now()
         where id=${previous.id}::uuid
-        returning id::text
+        returning id::text,check_in,check_out,delay_minutes,work_minutes
       `;
     } else {
       [row] = await tx<any[]>`
@@ -1359,9 +1364,15 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
           ${grace},${checkIn.toISOString()}::timestamptz,${checkOut?.toISOString() || null}::timestamptz,
           ${checkOut ? 'corrected' : null},${delayMinutes},${workMinutes},${status},now(),now()
         ) on conflict(user_id,period_id,work_date) where period_id is not null do nothing
-        returning id::text
+        returning id::text,check_in,check_out,delay_minutes,work_minutes
       `;
       if (!row) throw new AttendanceError('CORRECTION_CONFLICT', 'تم تسجيل حضور للفترة أثناء التصحيح؛ حدّث التقرير وحاول مجددًا', 409);
+    }
+    // Confirm the exact persisted timestamps before recording a successful correction.
+    const actualCheckIn = row?.check_in ? new Date(row.check_in).getTime() : NaN;
+    const actualCheckOut = row?.check_out ? new Date(row.check_out).getTime() : null;
+    if (actualCheckIn !== checkIn.getTime() || actualCheckOut !== (checkOut ? checkOut.getTime() : null)) {
+      throw new AttendanceError('CORRECTION_NOT_PERSISTED', 'قاعدة البيانات لم تحفظ وقت التصحيح الجديد؛ لم يُعتمد التعديل', 409);
     }
     await tx`
       insert into core.attendance_record_corrections (
@@ -1375,7 +1386,12 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
         ${reason},${actor.id}::uuid
       )
     `;
-    return { ok: true, recordId: row.id, message: 'تم تصحيح الحضور والانصراف وإعادة حساب التأخير والساعات، مع حفظ سجل التعديل' };
+    return {
+      ok: true, recordId: row.id,
+      checkIn: new Date(row.check_in).toISOString(),
+      checkOut: row.check_out ? new Date(row.check_out).toISOString() : null,
+      message: 'تم تصحيح الحضور والانصراف وإعادة حساب التأخير والساعات، مع حفظ سجل التعديل',
+    };
   });
 }
 

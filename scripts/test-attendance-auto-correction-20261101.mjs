@@ -19,7 +19,7 @@ const compiled=ts.transpileModule(source,{fileName:'test.ts',compilerOptions:{ta
 const employeeId='123e4567-e89b-42d3-a456-426614174000',periodId='123e4567-e89b-42d3-a456-426614174001',adminId='123e4567-e89b-42d3-a456-426614174002',recordId='123e4567-e89b-42d3-a456-426614174003',assignmentId='123e4567-e89b-42d3-a456-426614174004',scheduleId='123e4567-e89b-42d3-a456-426614174005';
 const admin={id:adminId,permissions:['platform.superadmin','attendance.records.correct'],directPermissions:['attendance.records.correct'],deniedPermissions:[]};
 const body={userId:employeeId,periodId,workDate:'2026-10-31',checkInTime:'09:04',checkOutTime:'12:00',reason:'تصحيح توقيت اختبار'};
-function create({stored=true,editorAllowed=true,failAudit=false}={}) {
+function create({stored=true,editorAllowed=true,failAudit=false,badPersisted=false}={}) {
  const calls=[];
  const previous=stored?{id:recordId,assignment_id:assignmentId,schedule_id:scheduleId,period_id:periodId,
   work_date:'2026-10-31',scheduled_start_at:'2026-10-31T06:00:00.000Z',scheduled_end_at:'2026-10-31T09:00:00.000Z',grace_minutes:0,check_in:'2026-10-31T06:15:00.000Z',check_out:'2026-10-31T09:00:00.000Z',delay_minutes:15,work_minutes:165}:null;
@@ -31,8 +31,8 @@ function create({stored=true,editorAllowed=true,failAudit=false}={}) {
   if(q.includes('from core.attendance_user_schedules')) return [{id:assignmentId,schedule_id:scheduleId,period_ids:[periodId],period_overrides:{},weekly_off_day:null}];
   if(q.includes('from core.attendance_periods')) return [{id:periodId,name:'الفترة الصباحية',start_time:'09:00',end_time:'12:00',grace_minutes:0,sort_order:1}];
   if(q.includes('from core.attendance_settings')) return [{friday_start_time:null,friday_end_time:null}];
-  if(q.startsWith('update core.attendance_records')) return [{id:recordId}];
-  if(q.startsWith('insert into core.attendance_records')) return [{id:recordId}];
+  if(q.startsWith('update core.attendance_records')) return [{id:recordId,check_in:badPersisted?previous.check_in:args[0],check_out:args[1]}];
+  if(q.startsWith('insert into core.attendance_records')) return [{id:recordId,check_in:badPersisted?'2026-10-31T06:15:00.000Z':args[10],check_out:args[11]}];
   if(q.startsWith('insert into core.attendance_record_corrections')) {if(failAudit)throw new Error('Audit failure');return []}
   throw new Error(`Unexpected query: ${q.slice(0,110)}`);
  };
@@ -87,6 +87,28 @@ await check('Dedicated correction permission bootstrap exists without broad admi
  assert.match(permissionMigration,/mr\.ahmed_rashed@outlook\.sa/);
  assert.match(permissionMigration,/core\.user_permission_overrides/);
  assert.doesNotMatch(permissionMigration,/core\.role_permissions/);
+});
+await check('Correction response returns the database-confirmed timestamp', async()=>{
+ const h=create(),r=await h.correct(body,admin);
+ assert.equal(r.checkIn,'2026-10-31T06:04:00.000Z');
+ assert.equal(r.checkOut,'2026-10-31T09:00:00.000Z');
+});
+await check('Same minute is not falsely saved as a correction', async()=>{
+ const h=create();
+ await assert.rejects(()=>h.correct({...body,checkInTime:'09:15'},admin),e=>e.code==='CORRECTION_NO_CHANGES');
+ assert.equal(h.calls.filter(c=>c.q.startsWith('update core.attendance_records')).length,0);
+});
+await check('Different persisted timestamp fails before audit and success response', async()=>{
+ const h=create({badPersisted:true});
+ await assert.rejects(()=>h.correct(body,admin),e=>e.code==='CORRECTION_NOT_PERSISTED');
+ assert.equal(h.calls.filter(c=>c.q.startsWith('insert into core.attendance_record_corrections')).length,0);
+});
+await check('Correction button explains invalid input instead of silently disabling save',()=>{
+ assert.match(ui,/disabled=\{correctionSaving \|\| !correctionDraft\}/);
+ assert.match(ui,/اكتب سبب التصحيح في الخانة المخصصة/);
+ assert.match(ui,/attendanceCorrectionHasChanged\(draft\)/);
+ assert.match(ui,/riyadhClockValue\(corrected.checkIn\)/);
+ assert.match(ui,/fetchReportPayload\(draft.workDate, draft.workDate, \[draft.userId\], ''\)/);
 });
 await check('New schema keeps permanent correction log and corrected checkout source',()=>{
  assert.match(schema,/create table if not exists core\.attendance_record_corrections/);

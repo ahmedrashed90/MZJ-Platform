@@ -9291,4 +9291,6 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-correction-form label>span { font-size:13px; font-weight:800; color:#4A211C; }
 .attendance-correction-form input,.attendance-correction-form textarea { width:100%; min-width:0; border:1px solid #e5d7d0; border-radius:9px; padding:10px; background:#fff; color:#4A211C; }
 .attendance-correction-form textarea { resize:vertical; }
+.attendance-correction-guidance { color:#766059; font-size:12px; line-height:1.7; font-weight:600; }
+.attendance-correction-change-state { margin:0; color:#6D3427; font-size:12px; font-weight:800; line-height:1.75; }
 @media(max-width:560px){.attendance-correction-original,.attendance-correction-times{grid-template-columns:1fr}}

@@ -109,6 +109,11 @@ function riyadhClockValue(value: string | null | undefined) {
   return `${hour === '24' ? '00' : hour}:${minute}`;
 }
 
+function attendanceCorrectionHasChanged(draft: AttendanceCorrectionDraft): boolean {
+  return draft.checkInTime !== riyadhClockValue(draft.originalIn)
+    || draft.checkOutTime !== riyadhClockValue(draft.originalOut);
+}
+
 function missingResultLabel(result: string | null | undefined) {
   const value = String(result || "");
   if (value.includes("إجازة")) return "إجازة";
@@ -762,30 +767,62 @@ export function AttendancePage() {
   }
 
   async function saveAttendanceCorrection() {
-    if (!correctionDraft || correctionSaving || !report?.canCorrectAttendance) return;
-    if (!correctionDraft.checkInTime || correctionDraft.reason.trim().length < 5) {
-      setCorrectionError('اكتب وقت الحضور وسبب التصحيح (5 أحرف على الأقل)');
+    const draft = correctionDraft;
+    if (!draft || correctionSaving || !report?.canCorrectAttendance) return;
+    if (!draft.checkInTime) {
+      setCorrectionError('حدد وقت الحضور الصحيح أولًا.');
+      return;
+    }
+    if (!attendanceCorrectionHasChanged(draft)) {
+      setCorrectionError('وقت الحضور والانصراف لم يتغيرا. عدّل الوقت الذي تريد تصحيحه أولًا.');
+      return;
+    }
+    if (draft.reason.trim().length < 5) {
+      setCorrectionError('اكتب سبب التصحيح في الخانة المخصصة (5 أحرف على الأقل)، ثم اضغط «حفظ التصحيح».');
       return;
     }
     setCorrectionSaving(true); setCorrectionError(''); setError(''); setMessage('');
+    let persisted = false;
     try {
-      const result = await attendanceFetch<{ ok: true; message: string }>('/api/attendance', {
+      const result = await attendanceFetch<{ ok: true; message: string; checkIn: string; checkOut: string | null }>('/api/attendance', {
         method: 'POST',
         body: JSON.stringify({ action: 'correct_attendance_record',
-          userId: correctionDraft.userId, workDate: correctionDraft.workDate,
-          periodId: correctionDraft.periodId, checkInTime: correctionDraft.checkInTime,
-          checkOutTime: correctionDraft.checkOutTime, reason: correctionDraft.reason.trim() }),
+          userId: draft.userId, workDate: draft.workDate,
+          periodId: draft.periodId, checkInTime: draft.checkInTime,
+          checkOutTime: draft.checkOutTime, reason: draft.reason.trim() }),
       });
-      setCorrectionDraft(null);
-      setMessage(result.message || 'تم حفظ التصحيح');
-      try {
-        const refreshed = await fetchReportPayload();
-        setReport(refreshed);
-      } catch {
-        setError('تم حفظ التصحيح، لكن لم يتم تحديث التقرير تلقائيًا. اضغط «عرض» لإعادة تحميله.');
+      persisted = true;
+      // The server returns what PostgreSQL actually saved, not merely the submitted values.
+      if (!result.checkIn || riyadhClockValue(result.checkIn) !== draft.checkInTime ||
+          (result.checkOut ? riyadhClockValue(result.checkOut) : '') !== draft.checkOutTime) {
+        throw new Error('الخادم لم يؤكد حفظ الوقت المطلوب. راجع سجل التصحيحات قبل إعادة المحاولة.');
       }
+      // Read the same employee/date independently of the screen filters so a
+      // stale report or a historical date cannot masquerade as a successful edit.
+      const verification = await fetchReportPayload(draft.workDate, draft.workDate, [draft.userId], '');
+      const corrected = verification.rows.find(row => row.userId === draft.userId && row.date === draft.workDate)
+        ?.periods.find(period => period?.id === draft.periodId);
+      if (!corrected || riyadhClockValue(corrected.checkIn) !== draft.checkInTime ||
+          riyadhClockValue(corrected.checkOut) !== draft.checkOutTime) {
+        setCorrectionError('تم قبول التصحيح، لكن قراءة التقرير ما زالت لا تعرض الوقت الجديد. لا تعِد الحفظ الآن؛ حدّث الصفحة، وإذا استمرت المشكلة راجع سجل التصحيحات.');
+        return;
+      }
+      // Refresh the user-selected report too, so the corrected attendance,
+      // delay and credited minutes become visible immediately.
+      const refreshed = await fetchReportPayload();
+      setReport(refreshed);
+      setCorrectionDraft(null);
+      setMessage(result.message || 'تم حفظ التصحيح وتحديث التقرير بنجاح');
     } catch (failure) {
-      setCorrectionError(failure instanceof Error ? failure.message : 'تعذر تصحيح وقت الحضور');
+      if (persisted) {
+        // A read failure after a successful POST must not look like a failed save;
+        // retrying the mutation could otherwise create a misleading audit entry.
+        setCorrectionDraft(null);
+        setMessage('تم تسجيل طلب التصحيح بنجاح.');
+        setError('تعذر التحقق من التقرير بعد الحفظ. اضغط «عرض» لإعادة تحميل أوقات الحضور، ولا تكرر التصحيح قبل المراجعة.');
+      } else {
+        setCorrectionError(failure instanceof Error ? failure.message : 'تعذر تصحيح وقت الحضور');
+      }
     } finally {
       setCorrectionSaving(false);
     }
@@ -831,23 +868,26 @@ export function AttendancePage() {
         className="attendance-correction-modal"
         footer={<>
           <button type="button" className="secondary-button" disabled={correctionSaving} onClick={() => setCorrectionDraft(null)}>إلغاء</button>
-          <button type="button" className="attendance-save-button" disabled={correctionSaving || !correctionDraft?.checkInTime || (correctionDraft?.reason.trim().length || 0) < 5} onClick={() => void saveAttendanceCorrection()}>
+          <button type="button" className="attendance-save-button" disabled={correctionSaving || !correctionDraft} onClick={() => void saveAttendanceCorrection()}>
             {correctionSaving ? 'جاري حفظ التصحيح...' : 'حفظ التصحيح'}
           </button>
         </>}
       >
         {correctionDraft ? <div className="attendance-correction-form">
           <p className="attendance-correction-hint">يتم تعديل البصمة الأصلية وإعادة حساب التأخير والساعات في التقرير تلقائيًا. يُحفظ الوقت السابق والجديد وسبب التعديل في سجل التدقيق.</p>
+          {correctionError ? <div className="attendance-alert error" role="alert"><WarningCircle size={18}/>{correctionError}</div> : null}
           <div className="attendance-correction-original">
             <div><small>الحضور السابق</small><strong>{formatAttendanceTime(correctionDraft.originalIn)}</strong></div>
             <div><small>الانصراف السابق</small><strong>{formatAttendanceTime(correctionDraft.originalOut)}</strong></div>
           </div>
           <div className="attendance-correction-times">
-            <label><span>وقت الحضور الصحيح</span><input type="time" required value={correctionDraft.checkInTime} onChange={event => setCorrectionDraft(old => old ? { ...old, checkInTime: event.target.value } : old)}/></label>
-            <label><span>وقت الانصراف الصحيح (إن وُجد)</span><input type="time" value={correctionDraft.checkOutTime} onChange={event => setCorrectionDraft(old => old ? { ...old, checkOutTime: event.target.value } : old)}/></label>
+            <label><span>وقت الحضور الصحيح</span><input type="time" required value={correctionDraft.checkInTime} onChange={event => { setCorrectionDraft(old => old ? { ...old, checkInTime: event.target.value } : old); setCorrectionError(''); }}/></label>
+            <label><span>وقت الانصراف الصحيح (إن وُجد)</span><input type="time" value={correctionDraft.checkOutTime} onChange={event => { setCorrectionDraft(old => old ? { ...old, checkOutTime: event.target.value } : old); setCorrectionError(''); }}/></label>
           </div>
-          <label><span>سبب التصحيح (إلزامي)</span><textarea rows={3} maxLength={1000} required placeholder="مثال: وقت الحضور اتسجل بشكل غير صحيح بسبب مشكلة في تسجيل الدخول" value={correctionDraft.reason} onChange={event => setCorrectionDraft(old => old ? { ...old, reason: event.target.value } : old)}/></label>
-          {correctionError ? <div className="attendance-alert error" role="alert"><WarningCircle size={18}/>{correctionError}</div> : null}
+          <label><span>سبب التصحيح (إلزامي)</span><textarea rows={3} maxLength={1000} required placeholder="اكتب سببًا فعليًا للتصحيح هنا؛ النص الظاهر كمثال لا يُحفظ" value={correctionDraft.reason} onChange={event => { setCorrectionDraft(old => old ? { ...old, reason: event.target.value } : old); setCorrectionError(''); }}/><small className="attendance-correction-guidance">لن يُحفظ أي تصحيح قبل تغيير الوقت وكتابة سبب حقيقي من 5 أحرف على الأقل. إذا كان هناك نقص، اضغط «حفظ التصحيح» لعرض السبب بوضوح.</small></label>
+          <p className="attendance-correction-change-state" role="status">{attendanceCorrectionHasChanged(correctionDraft)
+            ? 'تم تغيير الوقت. تأكد من كتابة سبب التصحيح ثم اضغط «حفظ التصحيح».'
+            : 'الوقت المحدد مطابق للوقت السابق؛ غيّر وقت الحضور أو الانصراف أولًا.'}</p>
         </div> : null}
       </Modal>
 
