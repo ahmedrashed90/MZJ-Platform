@@ -34,3 +34,18 @@ export function crmVisibleCustomerCohortSql(
     )
   `;
 }
+
+
+/** Main platform dashboard: registration cohort for the selected Riyadh-local
+ * month/range. This intentionally does not replace the historical CRM status
+ * cohort used by CRM dashboard and reports. Dated sales remain independent. */
+export function crmRegisteredCustomerCohortSql(
+  sql: ReturnType<typeof getSql>,
+  from: string,
+  to: string,
+) {
+  return sql`(
+    (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date
+      between ${from}::date and ${to}::date
+  )`;
+}

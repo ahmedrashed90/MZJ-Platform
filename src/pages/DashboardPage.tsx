@@ -290,7 +290,7 @@ function KpiCard({
       <div className="kpi-copy">
         <h3>{title}</h3>
         <Value value={value} className="kpi-value" />
-        <span className="data-source">من قاعدة البيانات</span>
+        <span className="data-source">خلال الفترة المختارة</span>
       </div>
     </button>
   );
@@ -536,14 +536,14 @@ export function DashboardPage() {
 
   const open = (title: string, rows: NonNullable<DetailPayload["rows"]>, subtitle?: string) => setDetails({ title, rows, subtitle });
 
-  async function allVisibleCrmLeads() {
+  async function allVisibleCrmLeads(salesInRange = false) {
     const departments = ["cash", "finance", "service"] as const;
     const results = await Promise.all(departments.map((department) => {
-      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1" });
+      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1", ...(salesInRange ? { salesInRange: "1" } : { dateBasis: "platform_dashboard" }) });
       return crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?${params.toString()}`);
     }));
-    // Match the server's single customer cohort and canonical phone key.
-    // Do not restrict the drill-down to new registrations in the chosen month.
+    // Match the platform headline's registration-period cohort and canonical phone key.
+    // Historical sales facts remain independent of this cohort.
     const sorted = results.flatMap((result) => result.leads || []).sort((a, b) =>
       String(b.registered_at || b.created_at || '').localeCompare(String(a.registered_at || a.created_at || '')));
     const unique = new Map<string, CrmLead>();
@@ -555,11 +555,11 @@ export function DashboardPage() {
     return [...unique.values()];
   }
 
-  async function openCrmList(title: string, subtitle: string, predicate: (lead: CrmLead) => boolean) {
+  async function openCrmList(title: string, subtitle: string, predicate: (lead: CrmLead) => boolean, salesInRange = false) {
     const requestId = ++detailsRequestId.current;
     setDetails({ title, subtitle, loading: true, leads: [] });
     try {
-      const leads = (await allVisibleCrmLeads()).filter(predicate);
+      const leads = (await allVisibleCrmLeads(salesInRange)).filter(predicate);
       if (detailsRequestId.current !== requestId) return;
       setDetails({ title, subtitle, leads: leads.map((lead) => ({ lead, department: dashboardDepartment(lead) })) });
     } catch (failure) {
@@ -779,10 +779,10 @@ export function DashboardPage() {
         ) : null}
 
         <DashboardUnifiedGrid order={effectiveWidgetOrder}>
-          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("العملاء الفريدون", "جميع العملاء الفريدين في CRM ضمن نطاق الصلاحيات؛ لا تُحذف الحالات القديمة بسبب فلتر الشهر باستثناء غير مؤهل", () => true)} />)}
+          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("العملاء الفريدون", "العملاء المسجلون خلال الفترة المختارة ضمن نطاق صلاحياتك", () => true)} />)}
           {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
           {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
-          {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => leadStatus(lead) === "تم البيع")} />)}
+          {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء أصحاب معاملات بيع خلال الفترة المحددة، حتى لو تسجلوا في شهر سابق. رقم الكارت يحسب عدد السيارات المباعة.", () => true, true)} />)}
 
           {customizableMainWidget("analytics:new-customers", <article className="panel chart-panel">
             <h2>العملاء الجدد</h2>
@@ -863,16 +863,16 @@ export function DashboardPage() {
                 { label: "إجمالي العملاء", value: crm?.cashSales ?? null },
                 { label: "تم البيع", value: crm?.cashSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
-              ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
+              ]} onOpen={() => void openCrmList("مبيعات الكاش", "عملاء مبيعات الكاش المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "cash")} />
               <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
                 { label: "إجمالي العملاء", value: crm?.financeSales ?? null },
                 { label: "تم البيع", value: crm?.financeSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
-              ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
+              ]} onOpen={() => void openCrmList("مبيعات التمويل", "عملاء مبيعات التمويل المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "finance")} />
               <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
                 { label: "إجمالي العملاء", value: crm?.customerService ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
-              ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
+              ]} onOpen={() => void openCrmList("خدمة العملاء", "عملاء خدمة العملاء المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
                 { label: "الحملات", value: marketing?.campaigns ?? null },
                 { label: "الأجندات", value: marketing?.agendas ?? null },

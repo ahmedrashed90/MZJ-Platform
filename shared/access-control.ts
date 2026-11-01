@@ -142,6 +142,7 @@ function p(
 export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("platform.superadmin", "صلاحية مدير النظام العليا", "core", "settings", "superadmin", "security", "تجاوز إداري كامل عبر قالب مدير النظام فقط", true),
   p("platform.dashboard.view", "مشاهدة الداش بورد الموحد", "core", "dashboard", "view", "page"),
+  p("attendance.records.correct", "تصحيح سجلات الحضور والانصراف", "core", "attendance", "correct", "action", "تصحيح أوقات الحضور والانصراف مع سبب وسجل تدقيق؛ يتطلب منحًا مباشرًا للمستخدم", true),
   p("platform.reports.view", "مشاهدة التقارير الموحدة", "core", "reports", "view", "page"),
   p("platform.database.view", "مشاهدة قاعدة البيانات الموحدة", "core", "database", "view", "page"),
   p("platform.activity.view", "مشاهدة سجل النشاط", "core", "activity", "view", "page", "مشاهدة سجل النشاط التشغيلي", true),

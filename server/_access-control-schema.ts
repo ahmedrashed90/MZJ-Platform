@@ -312,6 +312,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('operations.movement.view','فتح صفحة الحركة','operations','movement','view','فتح صفحة الحركة','فتح صفحة الحركة','page',false,840,true),
 ('operations.transfers.view','مشاهدة طلبات العمليات','operations','transfers','view','مشاهدة طلبات العمليات','مشاهدة طلبات العمليات','page',false,850,true),
 ('operations.approvals.view','مشاهدة الموافقات','operations','approvals','view','مشاهدة الموافقات','مشاهدة الموافقات','page',false,860,true),
+('attendance.records.correct','تصحيح سجلات الحضور والانصراف','core','attendance','correct','تصحيح سجلات الحضور والانصراف','تعديل بصمات الحضور والانصراف بمنح مباشر موثق','action',true,8651,true),
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','مشاهدة صفحة متابعة طلبات البيع المرتبطة بالتراكينج والموافقات','page',false,865,true),
 ('operations.all.view','مشاهدة جميع السيارات','operations','all','view','مشاهدة جميع السيارات','مشاهدة جميع السيارات','page',false,870,true),
 ('operations.movements.view','مشاهدة سجل الحركات','operations','movements','view','مشاهدة سجل الحركات','مشاهدة سجل الحركات','page',false,880,true),
@@ -814,6 +815,7 @@ async function requiredPagePermissionCatalogReady() {
           and page_code='subscriptions'
           and is_active=true
       )
+      and exists(select 1 from core.permissions where code='attendance.records.correct' and system_code='core' and is_active=true)
       and exists(select 1 from core.permissions where code='marketing.subscriptions.renew' and system_code='marketing' and is_active=true)
       and exists(select 1 from core.permissions where code='marketing.subscriptions.manage' and system_code='marketing' and is_active=true)
       and not exists(

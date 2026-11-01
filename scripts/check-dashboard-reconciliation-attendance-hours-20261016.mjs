@@ -16,6 +16,7 @@ function check(label, test) {
 check('Customer headline counts visible lead cohort, never activity events', () => {
   assert.match(source, /count\(\*\)::int as total_customers/);
   assert.match(source, /crmVisibleCustomerCohortSql\(sql, from, to\)/);
+  assert.match(source, /crmRegisteredCustomerCohortSql\(sql, from, to\)/);
   assert.doesNotMatch(source, /sum\(total\) from department_activity\),0\)::int as total_customers/);
   for (const alias of ['no_answer_customers', 'sold', 'open_conversations'])
     assert.match(source, new RegExp(`from department_activity\\),0\\)::int as ${alias}`));

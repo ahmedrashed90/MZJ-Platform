@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
-import { crmVisibleCustomerCohortSql } from "../_crm-customer-cohort.js";
+import { crmVisibleCustomerCohortSql, crmRegisteredCustomerCohortSql } from "../_crm-customer-cohort.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
 const CRM_DASHBOARD_VISIBLE_LIMIT = 5000;
@@ -33,7 +33,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
   // All historic customer statuses are visible by default. An explicit
   // includeClosed=0 remains available only to legacy callers that need it.
   const includeClosed = !["0", "false", "no"].includes(clean(request.query.includeClosed).toLowerCase());
-  const registrationOnly = clean(request.query.dateBasis) === "registered";
+  const dateBasis = clean(request.query.dateBasis);
+  const registrationOnly = dateBasis === "registered" || dateBasis === "platform_dashboard";
+  const platformDashboard = dateBasis === "platform_dashboard";
+  // Dated sale drill-down deliberately includes existing customers who registered
+  // in earlier months; it must not inherit the registration-month cohort.
+  const salesInRange = clean(request.query.salesInRange) === "1";
 
   const customerFields = await getCustomerFieldDefinitions();
 
@@ -89,20 +94,29 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${department} = 'service' and l.department_code = 'customer_service')
       )
       and (
-        ${includeClosed || showSoldStatus || registrationOnly}::boolean
+        ${includeClosed || showSoldStatus || registrationOnly || salesInRange}::boolean
         or not (
           (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label='تم البيع')
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )
       and (
-        (${registrationOnly}::boolean and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+        (${salesInRange}::boolean or (${registrationOnly}::boolean and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
           and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date))
         or (not ${registrationOnly}::boolean and (
           -- Shared visibility rule with the platform dashboard and CRM reports.
           ${crmVisibleCustomerCohortSql(sql, from || null, to || null)}
-        ))
+        )))
       )
+      and (not ${salesInRange}::boolean or exists (
+        select 1 from crm.sales_transactions range_sale
+        where range_sale.lead_id=l.id and coalesce(range_sale.is_cancelled,false)=false
+          and (range_sale.sale_at at time zone 'Asia/Riyadh')::date
+            between ${from || null}::date and ${to || null}::date
+      ))
+      and (not ${platformDashboard}::boolean or
+        (${crmRegisteredCustomerCohortSql(sql, from || '0001-01-01', to || '9999-12-31')}
+          and ${crmVisibleCustomerCohortSql(sql, from || null, to || null)}))
       and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})

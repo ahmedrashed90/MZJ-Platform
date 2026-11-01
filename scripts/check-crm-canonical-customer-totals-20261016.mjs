@@ -79,9 +79,9 @@ check('Customer/section popup uses same grouping as dashboard-period report', ()
   assert.match(reports, /detailKind}='service' and \(case when \$\{dashboardPeriod\}/);
   assert.match(reportUi, /dashboardPeriod: 1/);
 });
-check('Main dashboard opens all period-visible customers, not only new registrations', () => {
-  assert.match(rootUi, /new URLSearchParams\(\{ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1" \}\)/);
-  assert.doesNotMatch(rootUi, /dateBasis: "registered"/);
+check('Main dashboard drilldown matches the chosen registration cohort and keeps dated-sale drilldown separate', () => {
+  assert.match(rootUi, /dateBasis: "platform_dashboard"/);
+  assert.match(rootUi, /salesInRange: "1"/);
   assert.match(rootUi, /مجموع الأقسام مطابق لإجمالي العملاء/);
   assert.doesNotMatch(rootUi, /إجمالي المؤشرات/);
 });

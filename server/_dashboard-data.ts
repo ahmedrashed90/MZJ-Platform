@@ -5,7 +5,7 @@ import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
 import { getTrackingCountSummary } from "./_tracking-counts.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
-import { crmVisibleCustomerCohortSql } from "./_crm-customer-cohort.js";
+import { crmVisibleCustomerCohortSql, crmRegisteredCustomerCohortSql } from "./_crm-customer-cohort.js";
 import { userScope, crmLeadScopeSql } from "./_crm-utils.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
@@ -59,14 +59,16 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
       await ensureCrmSchema();
       const crmScope = userScope(user);
       const visibleLeadScope = crmLeadScopeSql(sql, crmScope);
-      // The headline, department donut and representative list all count the
-      // same unique customer cohort as the CRM dashboard/report period mode.
-      // Conversation, no-answer and dated-sales facts stay separate KPIs;
-      // adding those three activity counts is NOT a customer total.
+      // The platform month filter scopes the unique customer headline, open
+      // conversations, unanswered status, representatives and department pie
+      // to customers REGISTERED in the selected period. CRM's own historical
+      // status views deliberately retain their separate canonical cohort.
+      // Sales are independent dated transactions, including older customers.
       const [row] = await sql<any[]>`
         with scoped_input as (
           select l.* from crm.leads l
           where l.is_deleted=false
+            and ${crmRegisteredCustomerCohortSql(sql, from, to)}
             and ${crmVisibleCustomerCohortSql(sql, from, to)}
             and ${visibleLeadScope}
         ), scoped_leads as (

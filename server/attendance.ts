@@ -1200,12 +1200,13 @@ async function reportData(request: VercelRequest) {
   };
 }
 
-// Permission is intentionally NOT granted to every superadmin: only the
-// particular verified superadmin account can alter real attendance punches.
-const ATTENDANCE_CORRECTION_ADMIN_EMAIL = 'mr.ahmed_rashed@outlook.sa';
-function attendanceCorrectionAccount(user: Pick<SessionUser, 'email' | 'permissions'>) {
-  return clean(user.email).toLowerCase() === ATTENDANCE_CORRECTION_ADMIN_EMAIL
-    && user.permissions.includes('platform.superadmin');
+// Attendance correction is an explicitly assigned sensitive CORE permission.
+// Superadmin alone does NOT grant it; a direct per-user allow is required.
+const ATTENDANCE_CORRECTION_PERMISSION = 'attendance.records.correct';
+function attendanceCorrectionAccount(user: Pick<SessionUser, 'permissions' | 'directPermissions' | 'deniedPermissions'>) {
+  return user.permissions.includes('platform.superadmin')
+    && user.directPermissions.includes(ATTENDANCE_CORRECTION_PERMISSION)
+    && !user.deniedPermissions.includes(ATTENDANCE_CORRECTION_PERMISSION);
 }
 
 function riyadhClockInstant(workDate: string, clock: string): Date {
@@ -1245,11 +1246,22 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
 
   const sql = getSql();
   return sql.begin(async (tx) => {
-    // Check the actual DB identity too; never trust e-mail or role sent by the client.
-    const [editor] = await tx<{ email: string | null }[]>`
-      select email from core.users where id=${actor.id}::uuid and is_active=true limit 1
+    // Re-check the LIVE central permission override in this transaction.
+    // A revoked grant cannot be bypassed by a stale browser/session flag.
+    const [editor] = await tx<{ allowed: boolean }[]>`
+      select exists(
+        select 1 from core.users u
+        join core.user_permission_overrides o on o.user_id=u.id and o.effect='allow'
+        join core.permissions p on p.id=o.permission_id and p.is_active=true
+        where u.id=${actor.id}::uuid and u.is_active=true
+          and p.code=${ATTENDANCE_CORRECTION_PERMISSION}
+          and not exists(
+            select 1 from core.user_permission_overrides denied
+            where denied.user_id=u.id and denied.permission_id=p.id and denied.effect='deny'
+          )
+      ) as allowed
     `;
-    if (clean(editor?.email).toLowerCase() !== ATTENDANCE_CORRECTION_ADMIN_EMAIL) {
+    if (editor?.allowed !== true) {
       throw new AttendanceError('CORRECTION_FORBIDDEN', 'صلاحية تصحيح الحضور غير متاحة لهذا الحساب', 403);
     }
     const [employee] = await tx<{ id: string }[]>`
