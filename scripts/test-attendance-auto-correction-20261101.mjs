@@ -6,6 +6,7 @@ const require=createRequire(import.meta.url), ts=require('typescript');
 const root=process.cwd();
 const backend=readFileSync('server/attendance.ts','utf8');
 const ui=readFileSync('src/attendance/AttendancePage.tsx','utf8');
+const attendanceApi=readFileSync('src/attendance/api.ts','utf8');
 const schema=readFileSync('server/_attendance-schema.ts','utf8');
 const permissionMigration=readFileSync('database/migrations/20261101_attendance_correction_direct_grant.sql','utf8');
 const login=readFileSync('server/auth/login.ts','utf8');
@@ -41,7 +42,7 @@ function create({stored=true,editorAllowed=true,failAudit=false,badPersisted=fal
   validDate:v=>/^\d{4}-\d{2}-\d{2}$/.test(v),validTime:v=>/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(v),
   currentRiyadhDate:()=> '2026-11-01',weekdayForDate:()=>6,parseWeeklyOffDay:v=>v==null?null:Number(v),
   normalizedIdList: arr=>(arr||[]).slice(),normalizePeriodOverrides:v=>v||{},resolveAssignedPeriodTimes:p=>({startTime:p.start_time,endTime:p.end_time}),
-  AttendanceError:class AttendanceError extends Error{constructor(code,msg,status=400){super(msg);this.code=code;this.status=status}},
+  AttendanceError:class AttendanceError extends Error{constructor(code,msg,status=400,details){super(msg);this.code=code;this.status=status;this.details=details}},
   Date,Number,Boolean,Math,String,RegExp,Array,Promise,Set,console};
  vm.runInNewContext(compiled,context,{timeout:2000});
  return {correct:context.exports.correct,account:context.exports.account,calls};
@@ -129,4 +130,40 @@ await check('Automatic login and restored sessions do not punch secondary device
  assert.match(sidebar,/\['primary', 'exempt'\]/);
  assert.match(sidebar,/autoCheckInAttempts/);
 });
+
+await check('Exact record identity is checked to prevent editing a different punch', async()=>{
+ const h=create();
+ await assert.rejects(()=>h.correct({...body,recordId:employeeId},admin),e=>e.code==='CORRECTION_STALE_RECORD' && e.status===409);
+ const valid=create();
+ const result=await valid.correct({...body,recordId},admin);
+ assert.equal(result.recordId,recordId);
+});
+await check('No-change conflict returns the actual database time for reconciliation', async()=>{
+ const h=create();
+ await assert.rejects(()=>h.correct({...body,recordId,checkInTime:'09:15'},admin),e=>{
+  assert.equal(e.code,'CORRECTION_NO_CHANGES');
+  assert.equal(e.status,409);
+  assert.equal(e.details.currentRecordId,recordId);
+  assert.equal(e.details.currentCheckIn,'2026-10-31T06:15:00.000Z');
+  return true;
+ });
+});
+await check('Report prefers a punch whose work_date is the displayed date and carries recordId',()=>{
+ assert.match(backend,/matchingRecords\.find\(\(item\) => dateOnlyValue\(item\.work_date\) === day\)/);
+ assert.match(backend,/recordId: clean\(record\?\.id\) \|\| null/);
+});
+await check('Explicit 24-hour hour/minute selector is used instead of browser AM PM input',()=>{
+ assert.match(ui,/function AttendanceCorrectionClock\(/);
+ assert.match(ui,/const correctionHours = Array\.from\(\{ length: 24 \}/);
+ assert.match(ui,/const correctionMinutes = Array\.from\(\{ length: 60 \}/);
+ assert.doesNotMatch(ui,/وقت الحضور الصحيح<\/span><input type="time"/);
+ assert.match(ui,/recordId: draft\.recordId/);
+});
+await check('Correction conflicts reload the report and expose the canonical DB value',()=>{
+ assert.match(ui,/conflict\.code === 'CORRECTION_NO_CHANGES'/);
+ assert.match(ui,/await fetchReportPayload\(draft\.workDate, draft\.workDate, \[draft\.userId\], ''\)/);
+ assert.match(ui,/currentCheckIn !== undefined/);
+ assert.match(attendanceApi,/error\.currentCheckIn = payload\.currentCheckIn/);
+});
+
 console.log(`Attendance automatic checkin and admin correction: ${done}/${done} passed`);

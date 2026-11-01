@@ -1043,8 +1043,15 @@ async function reportData(request: VercelRequest) {
         && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
 
       const slots: any[] = schedulePeriods.map((period) => {
-        const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id))
-          || (isFriday && fridayScheduleEnabled ? visibleDayRecords[0] : null);
+        // Always prefer the punch belonging to the actual work date. Legacy
+        // timestamp-derived rows may share a display date; they must not hide
+        // the exact record that the administrator edits.
+        const matchingRecords = visibleDayRecords.filter((item) => clean(item.period_id) === clean(period.id));
+        const record = matchingRecords.find((item) => dateOnlyValue(item.work_date) === day)
+          || matchingRecords[0]
+          || (isFriday && fridayScheduleEnabled
+            ? visibleDayRecords.find((item) => dateOnlyValue(item.work_date) === day) || visibleDayRecords[0]
+            : null);
         const override = assignmentOverrides[clean(period.id)];
         const resolvedTimes = resolveAssignedPeriodTimes(period, override);
         const recordStartTime = report24HourTime(record?.scheduled_start_at);
@@ -1120,6 +1127,7 @@ async function reportData(request: VercelRequest) {
         }
         const periodForReport = {
           id: clean(slot.id),
+          recordId: clean(record?.id) || null,
           name: slot.name,
           startTime: slot.startTime,
           endTime: slot.endTime,
@@ -1217,6 +1225,7 @@ function riyadhClockInstant(workDate: string, clock: string): Date {
 async function correctAttendanceRecord(body: Record<string, any>, actor: SessionUser) {
   if (!attendanceCorrectionAccount(actor)) throw new AttendanceError('CORRECTION_FORBIDDEN', 'لا توجد صلاحية لتصحيح بيانات الحضور', 403);
   const userId = clean(body.userId), periodId = clean(body.periodId), workDate = clean(body.workDate);
+  const recordId = clean(body.recordId);
   const checkInTime = clean(body.checkInTime), checkOutTime = clean(body.checkOutTime);
   const reason = clean(body.reason);
   if (!validUuid(userId) || !validUuid(periodId) || !validDate(workDate) ||
@@ -1227,6 +1236,9 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
   if (workDate > currentRiyadhDate() ||
       (Date.parse(`${currentRiyadhDate()}T00:00:00Z`) - Date.parse(`${workDate}T00:00:00Z`)) > 366 * 86400000) {
     throw new AttendanceError('CORRECTION_DATE_RANGE', 'التصحيح متاح للأيام الحالية والسابقة خلال سنة فقط');
+  }
+  if (recordId && !validUuid(recordId)) {
+    throw new AttendanceError('CORRECTION_INVALID_RECORD', 'السجل المطلوب تصحيحه غير صحيح؛ حدّث التقرير وأعد فتح التصحيح');
   }
   if (!validTime(checkInTime) || (checkOutTime && !validTime(checkOutTime))) {
     throw new AttendanceError('CORRECTION_INVALID_TIME', 'حدد وقت الحضور والانصراف بصيغة صحيحة');
@@ -1277,6 +1289,13 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
       where user_id=${userId}::uuid and period_id=${periodId}::uuid and work_date=${workDate}::date
       for update
     `;
+    if (recordId && (!previous || clean(previous.id) !== recordId)) {
+      // Never silently correct a different punch than the one shown in the UI.
+      throw new AttendanceError('CORRECTION_STALE_RECORD', 'تغيّر سجل البصمة منذ فتح التقرير. أعد تحميل التقرير وافتح التصحيح مرة أخرى.', 409,
+        { currentRecordId: clean(previous?.id) || null,
+          currentCheckIn: previous?.check_in ? new Date(previous.check_in).toISOString() : null,
+          currentCheckOut: previous?.check_out ? new Date(previous.check_out).toISOString() : null });
+    }
     if (previous?.check_out && !checkOutTime) {
       throw new AttendanceError('CORRECTION_CHECKOUT_REQUIRED', 'السجل له انصراف سابق، لا يمكن حذف وقت الانصراف أثناء التصحيح');
     }
@@ -1336,7 +1355,10 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
     if (previous?.check_in && Math.abs(new Date(previous.check_in).getTime() - checkIn.getTime()) < 60000 &&
         (!previous.check_out && !checkOut || (previous.check_out && checkOut &&
           Math.abs(new Date(previous.check_out).getTime() - checkOut.getTime()) < 60000))) {
-      throw new AttendanceError('CORRECTION_NO_CHANGES', 'الوقت الجديد مطابق للوقت السابق؛ أدخل وقتًا مختلفًا لتصحيح البصمة');
+      throw new AttendanceError('CORRECTION_NO_CHANGES', 'الوقت المطلوب مسجل بالفعل في قاعدة البيانات؛ راجع وقت الحضور الحالي في التقرير.', 409,
+        { currentRecordId: clean(previous.id),
+          currentCheckIn: new Date(previous.check_in).toISOString(),
+          currentCheckOut: previous.check_out ? new Date(previous.check_out).toISOString() : null });
     }
     const delayMinutes = Math.max(0, Math.floor((checkIn.getTime() - scheduledStart.getTime() - grace * 60000) / 60000));
     const workMinutes = checkOut ? Math.max(0, Math.floor((checkOut.getTime() - checkIn.getTime()) / 60000)) : 0;
@@ -1387,7 +1409,7 @@ async function correctAttendanceRecord(body: Record<string, any>, actor: Session
       )
     `;
     return {
-      ok: true, recordId: row.id,
+      ok: true, recordId: row.id, periodId, workDate,
       checkIn: new Date(row.check_in).toISOString(),
       checkOut: row.check_out ? new Date(row.check_out).toISOString() : null,
       message: 'تم تصحيح الحضور والانصراف وإعادة حساب التأخير والساعات، مع حفظ سجل التعديل',

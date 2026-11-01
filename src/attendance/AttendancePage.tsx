@@ -37,6 +37,7 @@ type ReportPermission = {
 
 type ReportPeriod = {
   id: string;
+  recordId?: string | null;
   name: string;
   startTime: string;
   endTime: string;
@@ -85,6 +86,7 @@ type ReportPayload = {
 };
 
 type AttendanceCorrectionDraft = {
+  recordId: string | null;
   userId: string;
   employeeName: string;
   workDate: string;
@@ -452,6 +454,36 @@ function buildExcelDocument(payload: ReportPayload) {
 </Workbook>`;
 }
 
+
+const correctionHours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+const correctionMinutes = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
+
+/** Unambiguous 24-hour controls; native time inputs may display AM/PM differently across browsers. */
+function AttendanceCorrectionClock({ label, value, onChange, optional = false }: {
+  label: string; value: string; onChange: (value: string) => void; optional?: boolean;
+}) {
+  const [hour, minute] = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)?.slice(1) || ['', ''];
+  return <div className="attendance-correction-clock-field">
+    <span>{label}</span>
+    <div className="attendance-correction-clock-choices" dir="ltr">
+      <select aria-label={`${label} - الساعة`} value={hour} onChange={event => {
+        const nextHour = event.target.value;
+        onChange(nextHour ? `${nextHour}:${minute || '00'}` : '');
+      }}>
+        <option value="">{optional ? 'بدون انصراف' : 'الساعة'}</option>
+        {correctionHours.map(item => <option key={item} value={item}>{item}</option>)}
+      </select>
+      <span className="attendance-correction-clock-colon">:</span>
+      <select aria-label={`${label} - الدقيقة`} value={minute} disabled={!hour}
+        onChange={event => onChange(`${hour}:${event.target.value}`)}>
+        <option value="" disabled>الدقيقة</option>
+        {correctionMinutes.map(item => <option key={item} value={item}>{item}</option>)}
+      </select>
+    </div>
+    <small>توقيت 24 ساعة (مثال: 15:30 = ٣:٣٠ مساءً)</small>
+  </div>;
+}
+
 export function AttendancePage() {
   const { user } = useAuth();
   const isAdmin = hasPermission(user, "platform.superadmin");
@@ -759,7 +791,7 @@ export function AttendancePage() {
     setCorrectionError('');
     setCorrectionDraft({
       userId: row.userId, employeeName: row.name, workDate: row.date,
-      periodId: period.id, periodName: period.name,
+      periodId: period.id, periodName: period.name, recordId: period.recordId || null,
       originalIn: period.checkIn, originalOut: period.checkOut,
       checkInTime: riyadhClockValue(period.checkIn),
       checkOutTime: riyadhClockValue(period.checkOut), reason: '',
@@ -784,11 +816,11 @@ export function AttendancePage() {
     setCorrectionSaving(true); setCorrectionError(''); setError(''); setMessage('');
     let persisted = false;
     try {
-      const result = await attendanceFetch<{ ok: true; message: string; checkIn: string; checkOut: string | null }>('/api/attendance', {
+      const result = await attendanceFetch<{ ok: true; message: string; recordId: string; checkIn: string; checkOut: string | null }>('/api/attendance', {
         method: 'POST',
         body: JSON.stringify({ action: 'correct_attendance_record',
           userId: draft.userId, workDate: draft.workDate,
-          periodId: draft.periodId, checkInTime: draft.checkInTime,
+          periodId: draft.periodId, recordId: draft.recordId, checkInTime: draft.checkInTime,
           checkOutTime: draft.checkOutTime, reason: draft.reason.trim() }),
       });
       persisted = true;
@@ -802,7 +834,8 @@ export function AttendancePage() {
       const verification = await fetchReportPayload(draft.workDate, draft.workDate, [draft.userId], '');
       const corrected = verification.rows.find(row => row.userId === draft.userId && row.date === draft.workDate)
         ?.periods.find(period => period?.id === draft.periodId);
-      if (!corrected || riyadhClockValue(corrected.checkIn) !== draft.checkInTime ||
+      if (!corrected || (result.recordId && corrected.recordId !== result.recordId) ||
+          riyadhClockValue(corrected.checkIn) !== draft.checkInTime ||
           riyadhClockValue(corrected.checkOut) !== draft.checkOutTime) {
         setCorrectionError('تم قبول التصحيح، لكن قراءة التقرير ما زالت لا تعرض الوقت الجديد. لا تعِد الحفظ الآن؛ حدّث الصفحة، وإذا استمرت المشكلة راجع سجل التصحيحات.');
         return;
@@ -821,7 +854,34 @@ export function AttendancePage() {
         setMessage('تم تسجيل طلب التصحيح بنجاح.');
         setError('تعذر التحقق من التقرير بعد الحفظ. اضغط «عرض» لإعادة تحميل أوقات الحضور، ولا تكرر التصحيح قبل المراجعة.');
       } else {
-        setCorrectionError(failure instanceof Error ? failure.message : 'تعذر تصحيح وقت الحضور');
+        const conflict = failure as Error & { code?: string; currentCheckIn?: string | null; currentCheckOut?: string | null; currentRecordId?: string | null };
+        if (conflict.code === 'CORRECTION_NO_CHANGES' || conflict.code === 'CORRECTION_STALE_RECORD') {
+          // A different value in the displayed report and the locked DB row
+          // must never be mistaken for a failed UPDATE. Re-read the canonical
+          // employee/day and show exactly what the server currently holds.
+          try {
+            const latest = await fetchReportPayload(draft.workDate, draft.workDate, [draft.userId], '');
+            const latestPeriod = latest.rows.find(row => row.userId === draft.userId && row.date === draft.workDate)
+              ?.periods.find(period => period?.id === draft.periodId);
+            if (latestPeriod) {
+              setReport(await fetchReportPayload());
+              if (riyadhClockValue(latestPeriod.checkIn) === draft.checkInTime &&
+                  riyadhClockValue(latestPeriod.checkOut) === draft.checkOutTime) {
+                setCorrectionDraft(null);
+                setMessage('الوقت المطلوب مسجل بالفعل في قاعدة البيانات، وتم تحديث التقرير بالقيمة الصحيحة.');
+                return;
+              }
+              setCorrectionDraft(old => old ? { ...old,
+                originalIn: conflict.currentCheckIn !== undefined ? conflict.currentCheckIn : latestPeriod.checkIn,
+                originalOut: conflict.currentCheckOut !== undefined ? conflict.currentCheckOut : latestPeriod.checkOut,
+                recordId: conflict.currentRecordId !== undefined ? conflict.currentRecordId : latestPeriod.recordId || null } : old);
+            }
+          } catch { /* Show the server's authoritative conflict below. */ }
+          const serverTime = conflict.currentCheckIn ? formatAttendanceTime(conflict.currentCheckIn) : '—';
+          setCorrectionError(`لم يتم تغيير البصمة. الوقت المحفوظ فعليًا في السيرفر: ${serverTime}. ${conflict.message} راجع الساعة والدقيقة المحددتين ثم أعد المحاولة.`);
+        } else {
+          setCorrectionError(failure instanceof Error ? failure.message : 'تعذر تصحيح وقت الحضور');
+        }
       }
     } finally {
       setCorrectionSaving(false);
@@ -881,12 +941,14 @@ export function AttendancePage() {
             <div><small>الانصراف السابق</small><strong>{formatAttendanceTime(correctionDraft.originalOut)}</strong></div>
           </div>
           <div className="attendance-correction-times">
-            <label><span>وقت الحضور الصحيح</span><input type="time" required value={correctionDraft.checkInTime} onChange={event => { setCorrectionDraft(old => old ? { ...old, checkInTime: event.target.value } : old); setCorrectionError(''); }}/></label>
-            <label><span>وقت الانصراف الصحيح (إن وُجد)</span><input type="time" value={correctionDraft.checkOutTime} onChange={event => { setCorrectionDraft(old => old ? { ...old, checkOutTime: event.target.value } : old); setCorrectionError(''); }}/></label>
+            <AttendanceCorrectionClock label="وقت الحضور الصحيح" value={correctionDraft.checkInTime}
+              onChange={value => { setCorrectionDraft(old => old ? { ...old, checkInTime: value } : old); setCorrectionError(''); }}/>
+            <AttendanceCorrectionClock label="وقت الانصراف الصحيح (إن وُجد)" value={correctionDraft.checkOutTime} optional
+              onChange={value => { setCorrectionDraft(old => old ? { ...old, checkOutTime: value } : old); setCorrectionError(''); }}/>
           </div>
           <label><span>سبب التصحيح (إلزامي)</span><textarea rows={3} maxLength={1000} required placeholder="اكتب سببًا فعليًا للتصحيح هنا؛ النص الظاهر كمثال لا يُحفظ" value={correctionDraft.reason} onChange={event => { setCorrectionDraft(old => old ? { ...old, reason: event.target.value } : old); setCorrectionError(''); }}/><small className="attendance-correction-guidance">لن يُحفظ أي تصحيح قبل تغيير الوقت وكتابة سبب حقيقي من 5 أحرف على الأقل. إذا كان هناك نقص، اضغط «حفظ التصحيح» لعرض السبب بوضوح.</small></label>
           <p className="attendance-correction-change-state" role="status">{attendanceCorrectionHasChanged(correctionDraft)
-            ? 'تم تغيير الوقت. تأكد من كتابة سبب التصحيح ثم اضغط «حفظ التصحيح».'
+            ? `الوقت المطلوب حفظه: حضور ${correctionDraft.checkInTime || '—'}، انصراف ${correctionDraft.checkOutTime || '—'} (بنظام 24 ساعة).`
             : 'الوقت المحدد مطابق للوقت السابق؛ غيّر وقت الحضور أو الانصراف أولًا.'}</p>
         </div> : null}
       </Modal>

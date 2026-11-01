@@ -10,9 +10,17 @@ export async function attendanceFetch<T>(url: string, init?: RequestInit): Promi
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
-    const error = new Error(payload?.error || "تعذر تنفيذ العملية") as Error & { status?: number; code?: string };
+    const error = new Error(payload?.error || "تعذر تنفيذ العملية") as Error & {
+      status?: number; code?: string; currentRecordId?: string | null;
+      currentCheckIn?: string | null; currentCheckOut?: string | null;
+    };
     error.status = response.status;
     error.code = payload?.code;
+    // The correction endpoint can return the authoritative value on a stale
+    // report/no-change conflict. Keep it on the error for a safe UI refresh.
+    if (typeof payload?.currentRecordId === 'string' || payload?.currentRecordId === null) error.currentRecordId = payload.currentRecordId;
+    if (typeof payload?.currentCheckIn === 'string' || payload?.currentCheckIn === null) error.currentCheckIn = payload.currentCheckIn;
+    if (typeof payload?.currentCheckOut === 'string' || payload?.currentCheckOut === null) error.currentCheckOut = payload.currentCheckOut;
     throw error;
   }
   return payload as T;
