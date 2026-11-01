@@ -1099,3 +1099,19 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-calendar-ratings-panel[open]>.mkw-section-title .mkw-calendar-ratings-toggle{transform:rotate(180deg)}
 .mkw-calendar-ratings-panel>summary:focus-visible{outline:2px solid #4a211c;outline-offset:4px}
 .mkw-calendar-ratings-panel:not([open])>.mkw-calendar-rating-summary{display:none}
+
+
+/* Full-screen campaign preparation (both selector and individual post editor). */
+.mkw-publishing-chooser-content,.mkw-preparation-full-content{max-width:1660px;width:100%;margin-inline:auto;gap:18px;align-content:start}
+.mkw-campaign-chooser-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:4px 0;direction:rtl}
+.mkw-campaign-chooser-toolbar strong{color:#4a211c;font-size:17px}
+.mkw-campaign-export-pdf{white-space:nowrap;display:inline-flex!important;align-items:center;justify-content:center;gap:7px}
+.mkw-publishing-chooser-table{min-width:0;max-width:100%;overflow:auto;border-radius:12px}
+.mkw-publishing-chooser-table table{min-width:1050px;width:100%}
+.mkw-preparation-full-content>.mkw-summary{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:760px){
+  .mkw-publishing-chooser-content,.mkw-preparation-full-content{gap:12px}
+  .mkw-campaign-chooser-toolbar{align-items:stretch}
+  .mkw-campaign-chooser-toolbar button{width:100%}
+  .mkw-preparation-full-content>.mkw-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

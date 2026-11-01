@@ -4,8 +4,16 @@ import { showDate } from './api';
 export type CampaignPeriod = { funding_from?: string | null; funding_to?: string | null };
 export type CampaignRequired = { id: string; name: string; idea: string };
 
+/** Collapse display duplicates across scheduled post rows and repeated
+ * content requirements. The underlying plan rows, post counts, budgets and
+ * individual product IDs remain unchanged. */
+export function campaignSummaryNameKey(value: string): string {
+  return value.normalize('NFKC').replace(/[–—−]/g, '-').replace(/\s+/g, ' ').trim().toLocaleLowerCase('ar');
+}
+
 /** Keep each content requirement and distinct idea only once even when
- * the same creative is scheduled across several platforms/post formats. */
+ * the same creative is scheduled across several platforms/post formats,
+ * or multiple requirements share the same displayed name. */
 export function campaignContentSummary(lines: WorkPlanLine[]) {
   const products = new Map<string, CampaignRequired>();
   const ideas = new Map<string, string>();
@@ -14,10 +22,12 @@ export function campaignContentSummary(lines: WorkPlanLine[]) {
     const productId = String(line.product_id || line.id);
     const name = (line.idea_name || '').trim() || 'مطلوب بدون اسم';
     const idea = (line.product_idea || '').trim();
-    if (!products.has(productId)) products.set(productId, { id: productId, name, idea });
-    // Normalize whitespace but preserve original Arabic text for display.
-    if (idea && !ideas.has(idea.replace(/\s+/g, ' ').toLocaleLowerCase()))
-      ideas.set(idea.replace(/\s+/g, ' ').toLocaleLowerCase(), idea);
+    const nameKey = campaignSummaryNameKey(name);
+    if (!products.has(nameKey)) products.set(nameKey, { id: productId, name, idea });
+    // Keep every distinct deliverable idea exactly once, even when several
+    // products share the same visible requirement name.
+    const ideaKey = campaignSummaryNameKey(idea);
+    if (ideaKey && !ideas.has(ideaKey)) ideas.set(ideaKey, idea);
     const platform = (line.platform_name || 'منصة غير محددة').trim();
     const platformKey = (line.platform_code || platform).trim().toLocaleLowerCase();
     const previous = budgets.get(platformKey) || { platform, budget: 0, count: 0 };

@@ -134,7 +134,7 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
 export function PreparationModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const query = useWorkQuery<PrepData>('prep', { id });
   async function refresh() { await query.reload(); onChanged(); }
-  return <Modal open title={W.prepare} onClose={onClose} className="mkw-modal"><div className="mkw"><WorkAlert>{query.error}</WorkAlert>{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} />}</div></Modal>;
+  return <Modal open title={W.prepare} onClose={onClose} className="mkw-fullscreen mkw-preparation-fullscreen"><div className="mkw mkw-preparation-full-content"><WorkAlert>{query.error}</WorkAlert>{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} />}</div></Modal>;
 }
 function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => Promise<void> }) {
   const plannedIds = data.line.post_type_id ? [data.line.post_type_id] : [];

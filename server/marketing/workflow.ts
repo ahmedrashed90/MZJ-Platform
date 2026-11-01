@@ -1367,7 +1367,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
 }
 async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
-  const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,p.activated_at,p.review_status,p.review_note,p.review_revision,
+  const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,coalesce(creator.full_name,'') as creator_name,p.activated_at,p.review_status,p.review_note,p.review_revision,
     pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
     i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
     nullif(camp.payload->>'fundingFrom','') as funding_from,nullif(camp.payload->>'fundingTo','') as funding_to,
@@ -1382,6 +1382,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
         and nullif(s.publish_result->>'url','') is not null order by s.published_at desc limit 1) as provider_published_on,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status in('failed','verification_required')) as failed_count
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+    left join core.users creator on creator.id=p.created_by
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id
     left join marketing.platform_post_types pt on pt.id=l.post_type_id

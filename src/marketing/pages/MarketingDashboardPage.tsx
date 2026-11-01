@@ -12,6 +12,7 @@ import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, campaignLinesByPlatform } from '../workflow/campaignOverview';
+import { exportCampaignSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
@@ -32,6 +33,7 @@ export function MarketingDashboardPage() {
   const [params, setParams] = useSearchParams(), [search, setSearch] = useState('');
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
   const [tableId, setTableId] = useState('');
+  const [pdfError, setPdfError] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
   const [publishingOpen, setPublishingOpen] = useState(true);
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
@@ -79,6 +81,7 @@ export function MarketingDashboardPage() {
 
   function openTask(id: string, filter: '' | 'on_time' | 'late' = '') { setDeliveryFilter(filter); setParams({ task: id }); }
   function openPreparation(group: WorkPlanLine[]) {
+    setPdfError('');
     // Campaigns always show the complete funding/creative budget overview,
     // even if the campaign currently contains only one publish line.
     if (group[0]?.kind === 'campaign' || group.length > 1) setSelectPlan(group[0].plan_id);
@@ -224,7 +227,23 @@ export function MarketingDashboardPage() {
     {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} onClose={() => { setParams({}); setDeliveryFilter(''); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
-    {selectPlan && <Modal open title={W.prepare} onClose={() => setSelectPlan('')} className="mkw-modal"><div className="mkw">{chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to}/>}<div className="mkw-table-wrap"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
+    {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
+      {chooserIsCampaign && <div className="mkw-campaign-chooser-toolbar">
+        <strong>ملخص الحملة وجدول تجهيز المنشورات</strong>
+        <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
+          const first = chooserSourceLines[0];
+          if (!first) return;
+          try {
+            setPdfError('');
+            exportCampaignSummaryPdf({ planName: first.name, planNo: first.plan_no,
+              creatorName: first.creator_name, createdAt: first.plan_created_at,
+              fundingFrom: first.funding_from, fundingTo: first.funding_to,
+              lines: chooserSourceLines });
+          } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
+        }}>تصدير PDF — ملخص الحملة</button>
+      </div>}
+      <WorkAlert>{pdfError}</WorkAlert>
+      {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to}/>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
       <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}`}><th colSpan={8}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
       <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr></Fragment>)}</tbody></table></div></div></Modal>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  

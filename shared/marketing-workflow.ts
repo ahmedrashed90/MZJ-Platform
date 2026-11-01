@@ -52,7 +52,7 @@ export type WorkPlanLine = {
   caption?: string; hashtags?: string;
   manual_post_url?: string; manual_published_on?: string | null; effective_post_url?: string;
   published_on?: string | null; publication_timing?: 'on_time' | 'late' | null;
-  published_ready?: boolean; created_by?: string; plan_created_at?: string;
+  published_ready?: boolean; created_by?: string; creator_name?: string; plan_created_at?: string;
   funding_from?: string | null; funding_to?: string | null;
   post_type_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
   product_id: string; idea_name: string; product_idea?: string; task_no: string; task_name: string; media_kind: WorkMediaKind;

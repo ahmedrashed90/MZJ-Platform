@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Modal } from '../../components/Modal';
 import { Empty, WorkAlert } from './components';
 import { showDate, useWorkQuery } from './api';
@@ -6,6 +6,7 @@ import { PublicationTiming, planStatusName } from './PlanDetail';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { CampaignOverview, campaignLinesByPlatform } from './campaignOverview';
+import { exportCampaignSummaryPdf } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 
 type ReportPlan = {
@@ -22,6 +23,7 @@ type ReportData = { plan: ReportPlan; lines: WorkPlanLine[]; history: ReportHist
  * (database management); post copy and URLs are entered in PreparationModal. */
 export function PlanReport({ id, onClose }: { id: string; onClose: () => void }) {
   const query = useWorkQuery<ReportData>('plan', { id });
+  const [pdfError, setPdfError] = useState('');
   const plan = query.data?.plan;
   const lines = query.data?.lines || [];
   const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : lines;
@@ -30,11 +32,19 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
 
   return <Modal open title={`التقرير${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-report-modal">
     <div className="mkw mkw-plan-report">
-      <WorkAlert>{query.error}</WorkAlert>
+      <WorkAlert>{query.error || pdfError}</WorkAlert>
       {!plan ? <Empty>{query.loading ? 'جاري تحميل التقرير...' : query.error || 'لا توجد بيانات'}</Empty> : <>
         <div className="mkw-section-title mkw-plan-report-heading">
           <div><span className="mkw-code">{plan.plan_no}</span><strong>{isCampaign ? 'حملة' : 'أجندة'} · {plan.name}</strong></div>
-          <div className="mkw-plan-report-badges"><span className="mkw-plan-report-readonly">للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
+          <div className="mkw-plan-report-badges">
+            {isCampaign && <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
+              try {
+                setPdfError('');
+                exportCampaignSummaryPdf({ planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
+                  createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to, lines });
+              } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
+            }}>تصدير PDF — ملخص الحملة</button>}
+            <span className="mkw-plan-report-readonly">للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
         </div>
         <div className="mkw-summary mkw-plan-report-summary">
           <div><small>منشئ {isCampaign ? 'الحملة' : 'الأجندة'}</small><strong>{plan.creator_name?.trim() || '—'}</strong></div>
