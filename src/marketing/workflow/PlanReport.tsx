@@ -12,7 +12,7 @@ import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 type ReportPlan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign';
   created_at: string; creator_name?: string; review_status: string; status: string; review_note?: string;
-  readiness: number; funding_from?: string | null; funding_to?: string | null;
+  readiness: number; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
 };
 type ReportHistory = {
   action: string; note: string; actor_name: string; created_at: string; category_name: string;
@@ -54,6 +54,10 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <div><small>المنشورات المنشورة</small><strong>{published} من {lines.length}</strong></div>
         </div>
         {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to}/>}
+        {!isCampaign && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
+          <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(plan.agenda_from)}</strong></div>
+          <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(plan.agenda_to)}</strong></div>
+        </section>}
         <div className="mkw-plan-progress"><span>جاهزية النشر: {plan.readiness}% · {published} من {lines.length} روابط نشر</span><progress max={100} value={plan.readiness}/></div>
         {plan.review_status === 'revision' && !!plan.review_note && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan.review_note}</p></section>}
         {!!query.data?.history.length && <details className="mkw-plan-history"><summary>سجل المراجعات والملاحظات السابقة ({query.data.history.length})</summary>

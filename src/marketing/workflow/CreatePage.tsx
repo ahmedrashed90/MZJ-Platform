@@ -14,7 +14,7 @@ type Reservation = { id: string; task_no: string; created_at: string };
 const newRequired = (): RequiredDraft => ({ key: crypto.randomUUID(), mediaKinds: ['image'], ideaName: '', idea: '', explanation: '', formatIds: [], dueOn: '', attachments: [] });
 const newExecutor = (): ExecutorDraft => ({ key: crypto.randomUUID(), departmentId: '', assigneeId: '', items: [newRequired()] });
 
-const newEntry = (productId = ''): PlanEntryDraft => ({ key: crypto.randomUUID(), date: '', productId, platforms: [] });
+const newEntry = (productId = '', date = ''): PlanEntryDraft => ({ key: crypto.randomUUID(), date, productId, platforms: [] });
 
 export function MarketingCreatePage() {
   const [params, setParams] = useSearchParams();
@@ -173,6 +173,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const [name, setName] = useState('');
   const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
+  const [agendaFrom, setAgendaFrom] = useState(''), [agendaTo, setAgendaTo] = useState('');
   const [entries, setEntries] = useState<PlanEntryDraft[]>([newEntry(initialProduct)]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -235,13 +236,19 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
     if (kind === 'campaign' && (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo)) {
       setError('حدد تاريخ التمويل من وإلى، ويجب ألا تكون النهاية قبل البداية.'); return;
     }
+    if (kind === 'agenda' && (!isWorkDate(agendaFrom) || !isWorkDate(agendaTo) || agendaFrom > agendaTo)) {
+      setError('حدد تاريخ نشر الأجندة من وإلى، ويجب ألا تكون النهاية قبل البداية.'); return;
+    }
+    if (kind === 'agenda' && entries.some(entry => entry.date < agendaFrom || entry.date > agendaTo)) {
+      setError('موعد كل منشور في الأجندة لازم يكون داخل فترة النشر المحددة.'); return;
+    }
     setBusy(true);
     try {
       // One product is chosen once; each (platform, post type) becomes a publish line.
       // Campaign budgets are explicit per post type, with no implicit duplication.
       const created = await workPost<{ id: string }>('create_plan', {
         requestKey: requestKey.current, kind, name: name.trim(),
-        ...(kind === 'campaign' ? { fundingFrom, fundingTo } : {}),
+        ...(kind === 'campaign' ? { fundingFrom, fundingTo } : { agendaFrom, agendaTo }),
         entries: planEntriesPayload(entries, kind),
       });
       // Review the actual persisted schedule (including every platform budget)
@@ -255,6 +262,9 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
       <div className="mkw-fields"><Field label={`اسم ${label}`}><input maxLength={250} value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder={`اسم ${label}`}/></Field>{kind === 'campaign' && <>
         <Field label="تاريخ التمويل من"><input aria-label="تاريخ التمويل من" type="date" required value={fundingFrom} disabled={busy} onChange={event => setFundingFrom(event.target.value)}/></Field>
         <Field label="تاريخ التمويل إلى"><input aria-label="تاريخ التمويل إلى" type="date" min={fundingFrom || undefined} required value={fundingTo} disabled={busy} onChange={event => setFundingTo(event.target.value)}/></Field>
+      </>}{kind === 'agenda' && <>
+        <Field label="تاريخ نشر الأجندة من"><input aria-label="تاريخ نشر الأجندة من" type="date" required value={agendaFrom} disabled={busy} onChange={event => { const day = event.target.value; setAgendaFrom(day); setEntries(current => current.map(row => row.date ? row : { ...row, date: day })); }}/></Field>
+        <Field label="تاريخ نشر الأجندة إلى"><input aria-label="تاريخ نشر الأجندة إلى" type="date" min={agendaFrom || undefined} required value={agendaTo} disabled={busy} onChange={event => setAgendaTo(event.target.value)}/></Field>
       </>}</div>
     </section>
     <section className="mkw-panel"><header className="mkw-section-title"><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2><span>{entries.length} {W.addDate}</span></header>
@@ -270,7 +280,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
             const platforms = product ? activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id).length) : [];
             const selected = new Map(entry.platforms.map(platform => [platform.platformId, platform]));
             return <div className="mkw-plan-table-row" key={entry.key}>
-              <input aria-label={dateLabel} type="date" required value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
+              <input aria-label={dateLabel} type="date" required min={kind === 'agenda' ? agendaFrom || undefined : undefined} max={kind === 'agenda' ? agendaTo || undefined : undefined} value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
               <div className="mkw-plan-product-picker">
                 <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platforms: [] })}>
                   <option value="">اختر المطلوب / المنتج من التاسك</option>
@@ -332,7 +342,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
             </div>;
           })}
         </div></div>}
-      <footer className="mkw-requirement-footer"><button className="secondary" type="button" disabled={busy || noMoreProducts || entries.length >= 500} onClick={() => setEntries(current => [...current, newEntry()])}><Plus size={17}/>{W.addDate}</button></footer>
+      <footer className="mkw-requirement-footer"><button className="secondary" type="button" disabled={busy || noMoreProducts || entries.length >= 500} onClick={() => setEntries(current => [...current, newEntry('', kind === 'agenda' ? agendaFrom : '')])}><Plus size={17}/>{W.addDate}</button></footer>
     </section>
     {previewOpen && <section className="mkw-panel mkw-plan-preview" aria-label="معاينة جدول النشر"><header><h2>معاينة جدول {kind === 'campaign' ? 'التمويل' : 'النشر'} — {entries.length} يوم · {platformLineCount} موعد منصة</h2></header>
       <div className="mkw-horizontal-scroll"><table className="mkw-plan-preview-table"><thead><tr><th>{dateLabel}</th><th>المنتج / المطلوب</th><th>الفكرة</th><th>المنصة</th><th>نوع النشر</th>{kind === 'campaign' && <th>الميزانية</th>}<th>النتيجة</th></tr></thead><tbody>

@@ -68,7 +68,7 @@ export function ReceiptCalendarPage() {
           <div className="mkw-calendar-plan-events">{selectedPlans.map(event => <article className="mkw-calendar-plan-event" key={event.id}>
             <div><span className="mkw-calendar-plan-kind">{event.kind === 'campaign' ? 'حملة نشر' : 'أجندة نشر'}</span><span className="mkw-code">{event.plan_no}</span></div>
             <strong>{event.name}</strong>
-            <small className="mkw-muted">{event.event_type === 'funding_start' ? 'بداية التمويل' : event.event_type === 'funding_end' ? 'نهاية التمويل' : event.event_type === 'funding_both' ? 'بداية ونهاية التمويل' : 'تاريخ نشر الأجندة'} · {showDate(event.event_on)}</small>
+            <small className="mkw-muted">{event.event_type === 'funding_start' ? 'بداية التمويل' : event.event_type === 'funding_end' ? 'نهاية التمويل' : event.event_type === 'funding_both' ? 'بداية ونهاية التمويل' : event.event_type === 'agenda_start' ? 'بداية نشر الأجندة' : event.event_type === 'agenda_end' ? 'نهاية نشر الأجندة' : event.event_type === 'agenda_both' ? 'بداية ونهاية نشر الأجندة' : 'تاريخ نشر الأجندة'} · {showDate(event.event_on)}</small>
             {event.creator_name && <small className="mkw-muted">المنشئ: {event.creator_name}</small>}
             <button type="button" className="secondary" onClick={() => setOpenedPlan(event.plan_id)}>فتح {event.kind === 'campaign' ? 'الحملة' : 'الأجندة'}</button>
           </article>)}</div>

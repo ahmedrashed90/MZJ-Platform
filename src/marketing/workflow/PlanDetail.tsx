@@ -13,7 +13,7 @@ type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'publ
 type Plan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; creator_name?: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
-  readiness: number; canReview: boolean; canEdit: boolean; canEditFunding?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; activated_at?: string | null;
+  readiness: number; canReview: boolean; canEdit: boolean; canEditFunding?: boolean; canEditAgendaWindow?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null; activated_at?: string | null;
 };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
 type EditableLine = { id: string; date: string; productId: string; postTypeId: string; budget: string };
@@ -35,6 +35,8 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   const [editing, setEditing] = useState(false), [rows, setRows] = useState<EditableLine[]>([]);
   const [fundingEditing, setFundingEditing] = useState(false);
   const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
+  const [agendaEditing, setAgendaEditing] = useState(false);
+  const [agendaFrom, setAgendaFrom] = useState(''), [agendaTo, setAgendaTo] = useState('');
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   useEffect(() => {
     if (query.data && !editing) setRows(query.data.lines.map(line => ({ id: line.id, date: String(line.scheduled_on).slice(0, 10), productId: line.product_id,
@@ -45,13 +47,26 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     setFundingFrom(String(query.data.plan.funding_from || '').slice(0, 10));
     setFundingTo(String(query.data.plan.funding_to || '').slice(0, 10));
   }, [query.data, fundingEditing]);
+  useEffect(() => {
+    if (!query.data || agendaEditing) return;
+    setAgendaFrom(String(query.data.plan.agenda_from || '').slice(0, 10));
+    setAgendaTo(String(query.data.plan.agenda_to || '').slice(0, 10));
+  }, [query.data, agendaEditing]);
   useEffect(() => { if (plan?.kind === 'campaign' && plan.review_status === 'revision' && plan.canEditFunding) setFundingEditing(true); }, [plan?.id, plan?.review_status, plan?.canEditFunding, plan?.kind]);
+  useEffect(() => { if (plan?.kind === 'agenda' && plan.review_status === 'revision' && plan.canEditAgendaWindow) setAgendaEditing(true); }, [plan?.id, plan?.review_status, plan?.canEditAgendaWindow, plan?.kind]);
   async function saveFundingPeriod() {
     if (!isWorkDate(fundingFrom) || (fundingTo && (!isWorkDate(fundingTo) || fundingFrom > fundingTo))) {
       setError('حدد تاريخ التمويل من، والنهاية اختيارية بشرط ألا تكون قبل البداية.'); return;
     }
     const ok = await run('update_plan_funding', { planId: id, fundingFrom, fundingTo });
     if (ok) setFundingEditing(false);
+  }
+  async function saveAgendaWindow() {
+    if (!isWorkDate(agendaFrom) || !isWorkDate(agendaTo) || agendaFrom > agendaTo) {
+      setError('حدد بداية ونهاية نشر الأجندة، ويجب ألا تسبق النهاية البداية.'); return;
+    }
+    const ok = await run('update_plan_agenda_window', { planId: id, agendaFrom, agendaTo });
+    if (ok) setAgendaEditing(false);
   }
   async function run(action: string, payload: Record<string, unknown>): Promise<boolean> {
     if (busy) return false;
@@ -90,6 +105,20 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
             <label>تاريخ التمويل من<input aria-label="تعديل تاريخ التمويل من" type="date" value={fundingFrom} disabled={busy} onChange={event => setFundingFrom(event.target.value)}/></label>
             <label>تاريخ التمويل إلى<input aria-label="تعديل تاريخ التمويل إلى" type="date" min={fundingFrom || undefined} value={fundingTo} disabled={busy} onChange={event => setFundingTo(event.target.value)}/></label>
             <button type="button" className="primary" disabled={busy} onClick={() => void saveFundingPeriod()}>{plan!.review_status==='revision'?'\u062d\u0641\u0638 \u0641\u062a\u0631\u0629 \u0627\u0644\u062a\u0645\u0648\u064a\u0644 \u0648\u0625\u0631\u0633\u0627\u0644\u0647\u0627 \u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629':'\u062d\u0641\u0638 \u0641\u062a\u0631\u0629 \u0627\u0644\u062a\u0645\u0648\u064a\u0644'}</button>
+          </div>}
+        </section>}
+      </>}
+      {plan!.kind === 'agenda' && <>
+        <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
+          <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(plan!.agenda_from)}</strong></div>
+          <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(plan!.agenda_to)}</strong></div>
+        </section>
+        {!!plan!.canEditAgendaWindow && <section className="mkw-campaign-funding-edit">
+          <div className="mkw-section-title"><strong>فترة نشر الأجندة</strong><button type="button" className="secondary" disabled={busy} onClick={() => setAgendaEditing(open => !open)}>{agendaEditing ? 'إلغاء تعديل فترة نشر الأجندة' : 'تعديل فترة نشر الأجندة'}</button></div>
+          {agendaEditing && <div className="mkw-campaign-funding-fields">
+            <label>تاريخ نشر الأجندة من<input aria-label="تعديل تاريخ نشر الأجندة من" type="date" value={agendaFrom} disabled={busy} onChange={event => setAgendaFrom(event.target.value)}/></label>
+            <label>تاريخ نشر الأجندة إلى<input aria-label="تعديل تاريخ نشر الأجندة إلى" type="date" min={agendaFrom || undefined} value={agendaTo} disabled={busy} onChange={event => setAgendaTo(event.target.value)}/></label>
+            <button type="button" className="primary" disabled={busy} onClick={() => void saveAgendaWindow()}>{plan!.review_status === 'revision' ? 'حفظ فترة الأجندة وإرسالها للمراجعة' : 'حفظ فترة نشر الأجندة'}</button>
           </div>}
         </section>}
       </>}
