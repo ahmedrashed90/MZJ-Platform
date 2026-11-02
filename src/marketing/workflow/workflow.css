@@ -1138,3 +1138,53 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-review-funding{display:grid;gap:10px;border:1px solid var(--line-strong);background:var(--surface-soft);padding:12px;border-radius:10px}
 .mkw-review-funding .mkw-campaign-funding-fields small{width:100%;flex-basis:100%;font-size:11px;color:var(--muted)}
 @media(max-width:520px){.mkw-calendar-plan-hint{font-size:8px}.mkw-calendar-day.has-plan{min-height:58px}}
+
+/* Unified marketing dashboard cards: same compact frame in execution/publishing.
+   Alternating cream/brown tonal variants separate adjacent tasks without
+   changing any status, labels, actions, publication rows or filters. */
+.mkw-dashboard .mkw-dashboard-task,
+.mkw-dashboard .mkw-dashboard-publish-card {
+  min-height:285px;
+  padding:15px;
+  border-radius:13px;
+  gap:10px;
+  align-content:start;
+  background:var(--mkw-card-tint,#f8f3ee);
+  border:1px solid var(--mkw-card-outline,#d7c3b6);
+  border-inline-start:4px solid var(--mkw-card-accent,#69433b);
+  box-shadow:0 3px 13px rgba(74,33,28,.055);
+  transition:border-color .18s ease,box-shadow .18s ease;
+}
+.mkw-dashboard .mkw-dashboard-task:hover,
+.mkw-dashboard .mkw-dashboard-publish-card:hover {
+  border-color:var(--mkw-card-accent,#69433b);
+  box-shadow:0 7px 19px rgba(74,33,28,.085);
+}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 1) {--mkw-card-tint:#f9f2eb;--mkw-card-outline:#e0cfc4;--mkw-card-accent:#704239}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 2) {--mkw-card-tint:#f4ece3;--mkw-card-outline:#d6c2b9;--mkw-card-accent:#977366}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 3) {--mkw-card-tint:#f7f0eb;--mkw-card-outline:#d7c9c0;--mkw-card-accent:#795b56}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 4) {--mkw-card-tint:#f0e8df;--mkw-card-outline:#d9c6ba;--mkw-card-accent:#826151}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 5) {--mkw-card-tint:#f9f4ed;--mkw-card-outline:#d5c6ba;--mkw-card-accent:#6c5047}
+.mkw-dashboard .mkw-column-body > article:nth-of-type(6n + 6) {--mkw-card-tint:#f3e8dc;--mkw-card-outline:#ceb8ab;--mkw-card-accent:#996f65}
+.mkw-dashboard .mkw-dashboard-task .mkw-dashboard-stats>div,
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-stats>div {
+  padding:9px;
+  gap:4px;
+  border-radius:9px;
+  background:rgba(243,232,220,.52);
+  border-color:rgba(105,69,57,.17);
+}
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-progress-wrap {
+  padding:2px 0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  gap:5px;
+}
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-quick-stats {font-size:11px}
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-actions {margin-top:auto;padding:2px 0 0}
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-actions button {min-height:38px}
+.mkw-dashboard .mkw-dashboard-publish-card .mkw-dashboard-publish-tags:empty {display:none}
+@media(max-width:720px){
+  .mkw-dashboard .mkw-dashboard-task,.mkw-dashboard .mkw-dashboard-publish-card{min-height:0}
+}

@@ -1514,6 +1514,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
   const planReviewer = await canReviewPlan(sql,user);
   const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,coalesce(creator.full_name,'') as creator_name,p.activated_at,p.review_status,p.review_note,p.review_revision,
+    approval.actor_name as approved_by_name,approval.created_at as approved_at,
     pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
     i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
     nullif(camp.payload->>'fundingFrom','') as funding_from,nullif(camp.payload->>'fundingTo','') as funding_to,
@@ -1531,6 +1532,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status in('failed','verification_required')) as failed_count
     from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
     left join core.users creator on creator.id=p.created_by
+    left join lateral (select r.actor_name,r.created_at from marketing.work_plan_reviews r
+      where r.plan_id=p.id and r.action='approved' order by r.created_at desc,r.id desc limit 1) approval on true
     join marketing.work_items i on i.id=l.product_id join marketing.work_tasks t on t.id=i.task_id
     left join core.departments d on d.id=i.department_id
     left join marketing.platform_post_types pt on pt.id=l.post_type_id
@@ -1627,7 +1630,8 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
     return customType ? { ...entry, category_name: entry.category_name || customType[1], note: String(entry.note).slice(customType[0].length) } : entry;
   });
   const complete = lines.every(line => line.published_ready);
-  return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
+  const platforms = await sql<{ name: string; code: string }[]>`select name,code from marketing.platforms order by name`;
+  return { ok:true, platforms, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
     readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:await canReviewPlan(sql,user),
     // Funding metadata may be corrected for legacy, already approved campaigns,
     // without changing their publication rows or approval history.
@@ -1853,7 +1857,8 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   if (!selected.length || selected.some(formatId => !formats.some(format => format.id === formatId))) throw new Error(W.selectFormats);
   if (visible.post_type_id && (selected.length !== 1 || selected[0] !== visible.post_type_id)) throw new Error('نوع النشر يجب أن يطابق جدول النشر المحفوظ');
   const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
-  if (!caption || !hashtags) throw new Error(W.requiredFields);
+  // Text is optional for manual publication. The immutable URL marks a post as
+  // published; automatic providers still validate their mandatory copy later.
   const publishTime = text(body.publishTime || '20:00', 5);
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(publishTime)) throw new Error('وقت النشر يجب أن يكون بصيغة ساعة ودقيقة بتوقيت السعودية');
   const defaults = await services.youtubeDefaults(sql);

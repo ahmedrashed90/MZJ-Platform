@@ -14,7 +14,7 @@ type Rating = {
 type RatingPayload = { ok: true; rows: Rating[]; canViewAll: boolean };
 const dateKey = (date: Date) => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 const ratingDate = (timestamp: string) => dateKey(new Date(timestamp));
-const defaultFrom = () => `${dateKey(new Date()).slice(0,4)}-01-01`;
+const defaultFrom = () => `${dateKey(new Date()).slice(0,7)}-01`;
 const monthFormat = new Intl.DateTimeFormat('ar-SA-u-ca-gregory', { year: 'numeric', month: 'long' });
 const asPercent = (value: number) => `${value.toLocaleString('ar-SA-u-nu-latn', {maximumFractionDigits: 2})}%`;
 
@@ -32,8 +32,8 @@ export function MarketingRatingsPage() {
   const [to, setTo] = useState(() => dateKey(new Date()));
   const [applied, setApplied] = useState({ from: defaultFrom(), to: dateKey(new Date()) });
   const [assignee, setAssignee] = useState('all');
-  const [month, setMonth] = useState('all');
-  const [year, setYear] = useState('all');
+  const [month, setMonth] = useState(() => dateKey(new Date()).slice(5,7));
+  const [year, setYear] = useState(() => dateKey(new Date()).slice(0,4));
   const [expanded, setExpanded] = useState('');
   const valid = Boolean(/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to);
   const query = useWorkQuery<RatingPayload>('ratings', { dateFrom: applied.from, dateTo: applied.to });
@@ -45,7 +45,7 @@ export function MarketingRatingsPage() {
   }, [query.reload]);
   const all = query.data?.rows || [];
   const people = useMemo(() => [...new Map(all.map(row => [row.assignee_id, row.assignee_name])).entries()].sort((a,b) => a[1].localeCompare(b[1], 'ar')), [all]);
-  const years = useMemo(() => [...new Set(all.map(row => ratingDate(row.created_at).slice(0,4)))].sort().reverse(), [all]);
+  const years = useMemo(() => [...new Set([dateKey(new Date()).slice(0,4), ...all.map(row => ratingDate(row.created_at).slice(0,4))])].sort().reverse(), [all]);
   const monthlyRows = useMemo(() => all.filter(row => { const key = ratingDate(row.created_at); return (month === 'all' || key.slice(5,7) === month) && (year === 'all' || key.slice(0,4) === year); }), [all,month,year]);
   const rows = useMemo(() => monthlyRows.filter(row => assignee === 'all' || row.assignee_id === assignee), [monthlyRows,assignee]);
   const ranking = useMemo(() => rankRatings(rows), [rows]);
@@ -66,7 +66,7 @@ export function MarketingRatingsPage() {
       <div className="mkw-ratings-filters">
         <label>من تاريخ<input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)}/></label>
         <label>إلى تاريخ<input type="date" value={to} min={from} onChange={e => setTo(e.target.value)}/></label>
-        <button type="button" className="primary-button" disabled={!valid || query.loading} onClick={() => setApplied({from,to})}>تطبيق التاريخ</button>
+        <button type="button" className="primary-button mkw-ratings-apply-button" disabled={!valid || query.loading} onClick={() => setApplied({from,to})}><CalendarBlank size={17} weight="bold"/>تطبيق التاريخ</button>
         <label>الشهر<select value={month} onChange={e=>setMonth(e.target.value)}><option value="all">جميع الشهور</option>{Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(m=><option key={m} value={m}>{monthFormat.format(new Date(2026,Number(m)-1,1)).split(' ')[0]}</option>)}</select></label>
         <label>السنة<select value={year} onChange={e=>setYear(e.target.value)}><option value="all">جميع السنوات</option>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>
         <label>المنفذ<select value={assignee} onChange={e=>setAssignee(e.target.value)}><option value="all">كل المنفذين</option>{people.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>

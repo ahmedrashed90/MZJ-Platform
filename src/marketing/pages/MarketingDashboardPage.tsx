@@ -9,7 +9,7 @@ import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
 import { PlanDetail } from '../workflow/PlanDetail';
-import { PlanStatusBadges, planDisplayState } from '../workflow/PlanStatus';
+import { PlanStatusBadges, planDisplayState, planStateLabels } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, campaignLinesByPlatform } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf } from '../workflow/campaignPdfExport';
@@ -238,6 +238,9 @@ export function MarketingDashboardPage() {
             exportCampaignSummaryPdf({ planName: first.name, planNo: first.plan_no,
               creatorName: first.creator_name, createdAt: first.plan_created_at,
               fundingFrom: first.funding_from, fundingTo: first.funding_to,
+              approvedByName: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_by_name : null,
+              approvedAt: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_at : null,
+              publishState: planStateLabels[planDisplayState(first.review_status || 'in_progress', chooserSourceLines.filter(line => line.published_ready).length, chooserSourceLines.length)],
               lines: chooserSourceLines });
           } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
         }}>تصدير PDF — ملخص الحملة</button>

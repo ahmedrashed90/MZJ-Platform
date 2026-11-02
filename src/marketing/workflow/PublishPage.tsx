@@ -173,9 +173,7 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   async function saveLink() {
     if (busy || !data.canSaveLinks || linkFinalized) return;
     if (!postUrl.trim()) { setError('أدخل رابط المنشور قبل الحفظ.'); return; }
-    if (caption !== data.line.caption || hashtags !== data.line.hashtags) {
-      setError('احفظ الكابشن والهاشتاج أولًا، ثم احفظ رابط المنشور وتاريخه.'); return;
-    }
+    // Manual proof of publication is the immutable URL. Copy is optional.
     setBusy(true); setError(''); setMessage('');
     try {
       await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim() });
@@ -232,8 +230,8 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>اسم المطلوب</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><section className="mkw-preparation-idea"><strong>الفكرة — فكرة المطلوب</strong><p>{data.product.idea || '—'}</p></section>
     <div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
     <div className="mkw-preparation-copy-status"><strong>مطلوب: {data.product.idea_name}</strong><span>{data.line.platform_name} · {data.line.post_type_name}</span>{data.line.kind === 'campaign' && <span className="mkw-budget-value">الميزانية: {Number(data.line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })} ر.س</span>}</div>
-    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{data.line.caption?.trim() && caption === data.line.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.caption}><textarea required value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field></div>
-    <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{data.line.hashtags?.trim() && hashtags === data.line.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.hashtags}><textarea required value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field></div></div>
+    <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{data.line.caption?.trim() && caption === data.line.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.caption}><textarea value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field></div>
+    <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{data.line.hashtags?.trim() && hashtags === data.line.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.hashtags}><textarea value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field></div></div>
     <section className="mkw-post-link-entry" aria-label="بيانات النشر الفعلي">
       <h3>رابط المنشور وتاريخ النشر الفعلي</h3>
       <div className="mkw-post-link-fields">

@@ -6,7 +6,7 @@ import { PublicationTiming, planStatusName } from './PlanDetail';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { CampaignOverview, campaignLinesByPlatform } from './campaignOverview';
-import { exportCampaignSummaryPdf } from './campaignPdfExport';
+import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 
 type ReportPlan = {
@@ -17,7 +17,7 @@ type ReportPlan = {
 type ReportHistory = {
   action: string; note: string; actor_name: string; created_at: string; category_name: string;
 };
-type ReportData = { plan: ReportPlan; lines: WorkPlanLine[]; history: ReportHistory[] };
+type ReportData = { plan: ReportPlan; lines: WorkPlanLine[]; history: ReportHistory[]; platforms?: Array<{ name: string; code?: string }> };
 
 /** The dashboard report is read-only. Editing and approval remain in PlanDetail
  * (database management); post copy and URLs are entered in PreparationModal. */
@@ -29,6 +29,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
   const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : lines;
   const published = lines.filter(line => line.published_ready).length;
   const isCampaign = plan?.kind === 'campaign';
+  const approval = ['publishing', 'published'].includes(plan?.review_status || '')
+    ? query.data?.history.find(entry => entry.action === 'approved') : null;
+  const publishState = plan ? planStatusName(planDisplayState(plan.review_status, published, lines.length)) : ''; 
 
   return <Modal open title={`التقرير${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-report-modal">
     <div className="mkw mkw-plan-report">
@@ -37,13 +40,17 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
         <div className="mkw-section-title mkw-plan-report-heading">
           <div><span className="mkw-code">{plan.plan_no}</span><strong>{isCampaign ? 'حملة' : 'أجندة'} · {plan.name}</strong></div>
           <div className="mkw-plan-report-badges">
-            {isCampaign && <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
+            <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
               try {
                 setPdfError('');
-                exportCampaignSummaryPdf({ planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
-                  createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to, lines });
+                const options = { planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
+                  createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to,
+                  lines, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at };
+                if (isCampaign) exportCampaignSummaryPdf(options);
+                else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: plan.agenda_from,
+                  agendaTo: plan.agenda_to, platforms: query.data?.platforms || [] });
               } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
-            }}>تصدير PDF — ملخص الحملة</button>}
+            }}>{isCampaign ? 'تصدير PDF — ملخص الحملة' : 'تصدير PDF — ملخص الأجندة'}</button>
             <span className="mkw-plan-report-readonly">للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
         </div>
         <div className="mkw-summary mkw-plan-report-summary">

@@ -6642,3 +6642,20 @@
 
 /* Organic account diagnostics remain inside the existing card layout. */
 .marketing-social-account-note { margin: 9px 0; color: var(--muted, #776455); font-size: 12px; line-height: 1.7; }
+
+/* Marketing ratings: a clear apply action in the approved MZJ palette. */
+.mkw-rating-dashboard .mkw-ratings-filters .mkw-ratings-apply-button{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  min-height:43px;padding:9px 22px;border:1px solid #4a211c;
+  border-radius:11px;background:#4a211c;color:#f3e8dc;
+  font-weight:800;font-size:13px;line-height:1.3;
+  box-shadow:0 5px 14px rgba(74,33,28,.16);
+  transition:background .17s,box-shadow .17s,transform .17s;
+}
+.mkw-rating-dashboard .mkw-ratings-filters .mkw-ratings-apply-button:not(:disabled):hover{
+  background:#60332c;box-shadow:0 7px 17px rgba(74,33,28,.21);transform:translateY(-1px);
+}
+.mkw-rating-dashboard .mkw-ratings-filters .mkw-ratings-apply-button:focus-visible{
+  outline:2px solid #4a211c;outline-offset:3px;
+}
+.mkw-rating-dashboard .mkw-ratings-filters .mkw-ratings-apply-button:disabled{opacity:.55;cursor:not-allowed}
