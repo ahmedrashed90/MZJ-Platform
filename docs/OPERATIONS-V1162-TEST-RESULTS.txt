@@ -1,0 +1,107 @@
+MZJ Platform v1.16.2 verification
+Date: 2026-07-21
+
+===== scripts/check-api-imports.mjs =====
+API and server import extension check passed.
+===== scripts/check-crm-service-reclassification-v1156.mjs =====
+CRM service reclassification v1.15.6 check passed
+===== scripts/check-crm-reports-kpi-v1159.mjs =====
+PASS: Package version includes the CRM reports release
+PASS: Ownership page route remains removed
+PASS: Ownership navigation remains removed
+PASS: Ownership dedicated API remains removed
+PASS: Browser voice recording is fully removed
+PASS: Existing attachment upload remains available
+PASS: Reports show requested count labels
+PASS: Report sales totals are calculated from sold
+PASS: Customer report popup exports all filtered rows to PDF
+PASS: KPI PDF actions are centered
+PASS: Each KPI PDF target has dedicated content
+PASS: KPI print layout starts content on the first page
+PASS: Attachment action is compact and writing area is larger
+PASS: Readable bold typography is integrated in canonical styles
+PASS: Finance history layout remains unchanged
+PASS: Ownership page and dedicated handler files remain deleted
+===== scripts/check-crm-manual-leads-v1160.mjs =====
+PASS: Manual lead form hides payment selector
+PASS: Manual lead form hides branch selector
+PASS: Manual lead form hides registration date input
+PASS: Manual lead form hides automatic assignment controls
+PASS: Manual lead WhatsApp-only note is removed
+PASS: New manual leads belong to the logged-in salesperson
+PASS: New manual leads do not call automatic distribution
+PASS: Registration date is generated automatically
+PASS: Tracking navigation no longer duplicates settings
+PASS: Tracking settings remain in unified settings
+PASS: Role choices are deduplicated
+===== scripts/check-crm-module.mjs =====
+CRM module structure and no-sample-data check passed.
+===== scripts/check-customer-completion.mjs =====
+Dynamic customer completion calculation check passed.
+===== scripts/check-crm-reference-v27.mjs =====
+CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+===== scripts/check-crm-settings-v180.mjs =====
+CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+===== scripts/check-crm-reference-v39.mjs =====
+CRM reference v39 migration, reports, pagination, manual edit, XLSX export, and data-review checks passed.
+===== scripts/check-crm-entry-distribution-v192.mjs =====
+CRM v1.9.2 entry/distribution-only flow, full-screen chat, mapped templates, and shared Mersal send endpoint checks passed.
+===== scripts/check-worker-route-discovery-v194.mjs =====
+PASS: WhatsApp text uses the configured canonical worker route
+PASS: WhatsApp media may use its dedicated configured worker route
+PASS: Worker delivery has no route fallback loop
+PASS: Template payload sends both params and components
+PASS: Mersal template name is preferred over provider numeric id
+PASS: UI request returns queued while Vercel finishes the provider call in the background
+PASS: Worker result is stored directly by the background platform task
+PASS: Admin exposes separate text/template and attachment worker route fields
+===== scripts/check-tracking-module-v112.mjs =====
+Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, direct ERPNext webhook, and SMS+ checks passed.
+===== scripts/check-operations-native-v2.mjs =====
+Operations Native V2 structure, branch scope, tracking delete, modal stack, dashboard drill-down, and source-identity checks passed.
+===== scripts/check-dashboard-operations-v1161.mjs =====
+PASS: Package version includes dashboard operations v1.16.1
+PASS: Department cards use department-specific open conversation totals
+PASS: Open conversations exclude closed rows
+PASS: Transferred conversations follow the current lead department
+PASS: Shortages use the five-field vehicle combination
+PASS: Shortages use only active available, reserved, and note statuses
+PASS: Shortages exclude agency and use the four requested stock locations
+PASS: Accessory statements are excluded from shortages
+PASS: Shortage total counts missing combinations by branch
+PASS: Dashboard shortage card opens complete shortage details
+PASS: Dashboard popups use wrapping wide layouts
+PASS: Inventory search applies while typing without Enter
+PASS: Tracking is restored as a progress button
+PASS: Vehicle detail tabs remain centered and tracking opens as a button
+PASS: Movement filters use the upgraded apply action
+PASS: Movement history provides A3 landscape PDF export
+PASS: A3 PDF contains every requested column
+PASS: A3 PDF renders present as correct and absent as wrong
+PASS: Movement API returns the requested vehicle, check, approval, actor, and request data
+===== scripts/check-operations-workflow-v1162.mjs =====
+PASS: Version is 1.16.2
+PASS: Existing check history tables gain the missing note column
+PASS: Approval rows persist pending final delivery requests
+PASS: Final delivery no longer forces the legacy under-delivery transition
+PASS: Missing approvals queue the requested final delivery
+PASS: Completed approvals execute the queued delivery
+PASS: Check history writes the note after schema compatibility runs
+PASS: Vehicle deletion requires exact VIN confirmation
+PASS: Vehicle deletion removes related operational and tracking data
+PASS: Operations dashboard inventory and shortage drilldowns use fullscreen modal
+PASS: Vehicle checks are rendered as separated professional cards
+PASS: Agency movement checks are rendered as separated editor cards
+PASS: Tracking request is a compact progress control with percentage tones
+PASS: Approval screen closes a vehicle after automatic final delivery
+
+===== TypeScript syntax transpilation =====
+PASS: server/_operations-schema.ts
+PASS: server/operations/index.ts
+PASS: src/operations/components/DashboardOperationsModal.tsx
+PASS: src/operations/components/VehicleDetailModal.tsx
+PASS: src/operations/components/VehicleTable.tsx
+PASS: src/operations/pages/ApprovalsPage.tsx
+PASS: src/operations/pages/MovementPage.tsx
+
+NOTE: Full Vite production build was not run in this container because project dependencies/node_modules are not installed.

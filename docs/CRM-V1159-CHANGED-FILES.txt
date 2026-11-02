@@ -1,0 +1,10 @@
+src/crm/components/LeadDrawer.tsx
+src/crm/pages/CrmReportsPage.tsx
+src/crm/pages/CrmKpiPage.tsx
+src/styles.css
+scripts/check-crm-reports-kpi-v1159.mjs
+package.json
+README.md
+docs/CRM-V1159-REPORTS-KPI-TYPOGRAPHY-AR.md
+docs/CRM-V1159-CHANGED-FILES.txt
+docs/CRM-V1159-TEST-RESULTS.txt

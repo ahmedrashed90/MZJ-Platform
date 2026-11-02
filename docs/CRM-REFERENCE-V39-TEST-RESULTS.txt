@@ -1,0 +1,65 @@
+MZJ Platform CRM Reference v39 - نتائج الاختبارات
+التاريخ: 2026-07-20
+الإصدار: 1.15.0
+
+1) فحوص المشروع الآلية - ناجحة
+- node scripts/check-api-imports.mjs
+- node scripts/check-crm-module.mjs
+- node scripts/check-customer-completion.mjs
+- node scripts/check-crm-reference-v27.mjs
+- node scripts/check-crm-settings-v180.mjs
+- node scripts/check-crm-reference-v39.mjs
+- node scripts/check-crm-entry-distribution-v192.mjs
+- node scripts/check-worker-route-discovery-v194.mjs
+- node scripts/check-tracking-module-v112.mjs
+- node scripts/check-operations-native-v2.mjs
+
+2) فحص Syntax لكل ملفات TS/TSX المعدلة والمضافة - ناجح
+تم تمرير جميع الملفات المعدلة والمضافة عبر TypeScript transpile diagnostics، وتشمل API وBackend وصفحات CRM والداش بورد الموحدة وملفات XLSX.
+
+3) فحص TypeScript موجه - ناجح ضمن البيئة المتاحة
+- ملفات Backend الخاصة بتحديث CRM: ناجحة.
+- صفحات وملفات Frontend الخاصة بتحديث CRM: ناجحة.
+- الملفات المشتركة التي تسحب شجرة المشروع كاملة تم فحص Syntax لها بصورة مستقلة.
+- استُخدمت تعريفات مؤقتة للمكتبات فقط بسبب عدم وجود Dependencies الأصلية، وتم حذفها من ملف التسليم.
+
+4) فحص التنسيق وجودة Diff - ناجح
+- git diff --check
+- لا توجد مسافات تالفة أو Conflict markers.
+
+5) اختبارات XLSX - ناجحة
+- تم توليد ملف XLSX حقيقي من src/crm/xlsx.ts.
+- تم فتح الملف باستخدام openpyxl كقارئ مستقل.
+- تم التحقق من:
+  * اللغة العربية.
+  * اتجاه RTL.
+  * Freeze Panes عند A2.
+  * القيم الرقمية كأرقام.
+  * حماية النصوص التي تبدأ بـ = أو + أو - أو @ من Formula Injection.
+  * عدم وجود تحذيرات Styles عند الفتح.
+
+6) اختبارات القيود المطلوبة - ناجحة
+- لا يوجد حد SQL ثابت LIMIT 500 داخل Endpoints CRM التي تم تحديثها.
+- قاعدة بيانات CRM وسجل التمويل وسجل وكيل الصندوق تستخدم Pagination فعلية.
+- تصدير قاعدة بيانات CRM يجلب جميع نتائج الفلتر على دفعات.
+- لا يوجد استخدام لحالة الكاش القديمة «محتمل» في تنفيذ CRM/الداش بورد بعد التحديث.
+- إعدادات المؤشرات تتحقق من الحالات على مستوى API.
+- تعديل العميل اليدوي لا يغيّر الملكية عند تعديل حقل آخر، ومسح سجل الطلب يتم Soft Delete.
+- قارئ شيت التصحيح يدعم خلايا التاريخ المنسقة في Excel.
+- Migration ترفض إعادة التنفيذ بعد وجود Marker.
+- Migration تسجل ملخص Audit لترحيل الحالات.
+- لا يوجد Firebase أو Firestore في الملفات الجديدة أو المعدلة لهذا التحديث.
+
+7) اختبارات لم تُنفذ في بيئة التسليم
+- لم يتم تشغيل Migration على PostgreSQL إنتاجية؛ لا توجد بيانات اعتماد أو اتصال بقاعدة الإنتاج.
+- لم يتم تنفيذ اختبار End-to-End متصل بقنوات الرسائل الحقيقية.
+- لم يتم تنفيذ Production Build كامل؛ بيئة العمل بلا اتصال شبكة ولا تحتوي شجرة Dependencies الأصلية، ومحاولة جلب pnpm/dependencies سبق أن فشلت بسبب EAI_AGAIN.
+
+8) المطلوب قبل النشر النهائي في CI/بيئة متصلة
+1. Backup لقاعدة البيانات.
+2. تشغيل database/verification/20260720_crm_reference_v39_precheck.sql.
+3. تشغيل database/migrations/20260720_crm_reference_v39.sql مرة واحدة.
+4. تشغيل database/verification/20260720_crm_reference_v39_postcheck.sql.
+5. تشغيل pnpm install --frozen-lockfile.
+6. تشغيل pnpm run build.
+7. تنفيذ Smoke Test بالأدوار المذكورة في تقرير التنفيذ ومقارنة الأعداد بين الداش بورد والتقارير والتصدير والداش بورد الموحدة.

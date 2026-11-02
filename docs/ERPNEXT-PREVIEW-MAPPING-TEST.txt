@@ -1,0 +1,36 @@
+ERPNext preview payload validation
+=================================
+Source sample: Sales Order SAL-ORD-2025-00826
+Validation date: 2026-07-21
+
+Verified mappings:
+- OrderNo <- doc.name
+- CustomerName <- doc.customer_name
+- CustomerVAT <- doc.tax_id
+- Branch <- doc.branch
+- OrderDate <- doc.transaction_date
+- DeliveryDate <- doc.delivery_date
+- ItemNo <- item.idx
+- ItemType <- item.type
+- ItemCategory <- item.class
+- ItemModel <- item.model
+- VIN <- item.serial_no
+- InteriorColor <- item.custom_internal_color
+- ExteriorColor <- item.custom_external_color
+- Dealer <- item.agent
+- Qty <- item.qty
+- UnitPrice <- item.net_rate/rate
+- ItemValue <- item.net_amount/amount
+- TaxRate <- item.tax_rate
+- TaxValue <- item.tax_amount
+- TotalInclVAT <- item.total_amount
+
+Runtime normalization result:
+- Order: SAL-ORD-2025-00826
+- Vehicle rows: 15
+- Mapping warnings: 0
+- Grand total: 1222450
+- CustomerPhone: empty because ERPNext preview returned contact_mobile = None
+- SalesPerson: empty because ERPNext preview returned sales_team = []
+
+Result: PASS
