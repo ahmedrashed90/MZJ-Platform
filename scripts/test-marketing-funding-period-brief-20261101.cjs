@@ -55,7 +55,10 @@ check('New campaigns require both dates; existing campaigns can edit the missing
   assert.match(backend, /async function updatePlanFunding/);
   const body=backend.split('async function updatePlanFunding')[1].split('async function createPlan')[0];
   assert.doesNotMatch(body, /set review_status=/);
-  assert.match(body, /payload=jsonb_set/);
+  assert.match(body, /persistPlanFundingWindow/);
+  assert.match(backend, /async function persistPlanFundingWindow/);
+  assert.match(backend, /jsonb_set\(coalesce\(payload/);
+  assert.match(backend, /- 'fundingTo'/);
 });
 check('Per-requirement explanation is stored and read separately from idea', () => {
   assert.match(composer, /idea: item\.idea, explanation: item\.explanation/);

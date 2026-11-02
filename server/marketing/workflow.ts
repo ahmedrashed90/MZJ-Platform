@@ -13,6 +13,7 @@ import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishi
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
 import { finalCoverage, workFormatsReadyForReview, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, workReviewableFormats, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
+import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
 type Sql = ReturnType<typeof getSql>;
@@ -1133,14 +1134,32 @@ async function saveItemCopy(sql: Sql, body: Row, user: SessionUser) {
   await sql`update marketing.work_items set caption=${caption},hashtags=${hashtags},updated_at=now() where id=${itemId}::uuid`;
   return { ok: true, message: W.saved };
 }
+/** Persist funding metadata without changing publish dates, budget or approval.
+ * Called from the revision transaction and the standalone funding editor. */
+async function persistPlanFundingWindow(tx: Sql, planId: string, fundingFrom: string, fundingTo: string) {
+  const changed = await tx`update marketing.campaigns set
+    payload=case when ${fundingTo}='' then
+      jsonb_set(coalesce(payload,'{}'::jsonb),'{fundingFrom}',to_jsonb(${fundingFrom}::text)) - 'fundingTo'
+    else jsonb_set(jsonb_set(coalesce(payload,'{}'::jsonb),'{fundingFrom}',to_jsonb(${fundingFrom}::text)),'{fundingTo}',to_jsonb(${fundingTo}::text)) end,
+    updated_at=now() where id=${planId}::uuid and is_deleted=false returning id`;
+  if (!changed.length) throw new Error(W.notFound);
+}
+function validFundingWindow(fundingFrom: string, fundingTo: string) {
+  return isWorkDate(fundingFrom) && (!fundingTo || (isWorkDate(fundingTo) && fundingFrom <= fundingTo));
+}
 async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId), action = text(body.decision, 24), note = text(body.note, 10000);
   const categoryId = body.categoryId ? id(body.categoryId) : null;
   const categoryName = text(body.categoryName, 100).replace(/[\r\n\t]+/g, ' ').trim();
+  const updateFunding = action === 'revision' && body.updateFunding === true;
+  const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
+  if (updateFunding && !validFundingWindow(fundingFrom, fundingTo))
+    throw new Error('حدد تاريخ التمويل من، ويجب ألا تكون النهاية قبل البداية. يمكن ترك النهاية فارغة للحملات المفتوحة.');
   // Custom category labels are stored with the review text; existing category UUIDs keep their native storage.
   // This preserves old records and avoids a database migration solely for a free-text note type.
   const revisionNote = action === 'revision' && categoryName && !categoryId
     ? `نوع الملاحظة: ${categoryName}\n${note}` : note;
+  const auditedNote = updateFunding ? `${revisionNote}\nفترة التمويل: من ${fundingFrom} إلى ${fundingTo || 'غير محدد'}` : revisionNote;
   if (!['revision','submitted','approved'].includes(action)) throw new Error(W.invalid);
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
@@ -1150,16 +1169,18 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
     if (plan.activated_at) throw new Error('تم تفعيل النشر بالفعل؛ لا يمكن تغيير قرار المراجعة');
     if (action === 'revision') {
       if (!canReviewPlan(user) || !['in_progress','submitted'].includes(plan.review_status) || !note) throw new Error('ملاحظة التعديل مطلوبة، ويجب أن يكون الجدول بانتظار المراجعة');
+      if (updateFunding && plan.kind !== 'campaign') throw new Error(W.invalid);
       if (categoryId) { const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`; if (!category) throw new Error(W.invalid); }
     } else if (action === 'approved') {
       if (!canReviewPlan(user) || !['in_progress','submitted'].includes(plan.review_status)) throw new Error(W.denied);
     } else if (plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status)) throw new Error(W.denied);
+    if (updateFunding) await persistPlanFundingWindow(tx as unknown as Sql, planId, fundingFrom, fundingTo);
     const status = action === 'approved' ? 'publishing' : action === 'submitted' ? 'submitted' : 'revision';
-    await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? revisionNote : plan.review_note},
+    await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? auditedNote : plan.review_note},
       review_revision=review_revision+${action === 'revision' ? 1 : 0},review_note_category_id=${action === 'revision' ? categoryId : plan.review_note_category_id}::uuid,reviewed_by=${user.id}::uuid,
       reviewed_at=now(),updated_at=now() where id=${planId}::uuid`;
     await tx`insert into marketing.work_plan_reviews(plan_id,action,note,category_id,actor_id,actor_name)
-      values(${planId}::uuid,${action},${revisionNote},${action === 'revision' ? categoryId : null}::uuid,${user.id}::uuid,${user.fullName})`;
+      values(${planId}::uuid,${action},${auditedNote},${action === 'revision' ? categoryId : null}::uuid,${user.id}::uuid,${user.fullName})`;
     return { ok:true, message:W.saved };
   });
 }
@@ -1252,18 +1273,15 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
 async function updatePlanFunding(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId);
   const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
-  if (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo)
-    throw new Error('يجب تحديد تاريخ التمويل من وإلى وأن تكون النهاية بعد البداية.');
+  if (!validFundingWindow(fundingFrom, fundingTo))
+    throw new Error('حدد تاريخ التمويل من، ويجب ألا تكون النهاية قبل البداية.');
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [plan] = await tx<any[]>`select p.id,p.created_by,p.kind,p.is_deleted from marketing.work_plans p
       where p.id=${planId}::uuid for update`;
     if (!plan || plan.kind !== 'campaign' || plan.is_deleted) throw new Error(W.notFound);
     if (plan.created_by !== user.id && !canReviewPlan(user)) throw new Error(W.denied);
-    const changed = await tx`update marketing.campaigns set
-      payload=jsonb_set(jsonb_set(coalesce(payload,'{}'::jsonb),'{fundingFrom}',to_jsonb(${fundingFrom}::text)),'{fundingTo}',to_jsonb(${fundingTo}::text)),
-      updated_at=now() where id=${planId}::uuid and is_deleted=false returning id`;
-    if (!changed.length) throw new Error(W.notFound);
+    await persistPlanFundingWindow(tx as unknown as Sql, planId, fundingFrom, fundingTo);
     await tx`update marketing.work_plans set updated_at=now() where id=${planId}::uuid`;
     return { ok:true, fundingFrom, fundingTo, message:W.saved };
   });
@@ -1578,12 +1596,42 @@ async function database(sql: Sql, user: SessionUser, services: WorkflowServices)
   rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   return { ok: true, rows };
 }
+/** Reviewable campaigns appear on funding start/end only. Agendas appear
+ * on each DISTINCT scheduled publication day. Apply the normal line visibility
+ * scope before returning any plan name or event. */
+async function planCalendarEvents(sql: Sql, user: SessionUser, from: string, to: string) {
+  const scopes = departmentScope(user);
+  const allPlans = productManager(user) || isManager(user);
+  const rows = await sql<CalendarPlanRow[]>`select distinct p.id::text as plan_id,p.plan_no,p.name,p.kind,p.review_status,
+    coalesce(creator.full_name,'') as creator_name,
+    case when p.kind='agenda' then l.scheduled_on::text else earliest.first_day end as scheduled_on,
+    nullif(camp.payload->>'fundingFrom','') as funding_from,
+    nullif(camp.payload->>'fundingTo','') as funding_to
+    from marketing.work_plans p
+    join marketing.work_plan_items l on l.plan_id=p.id and l.is_deleted=false
+    join marketing.work_items i on i.id=l.product_id
+    join marketing.work_tasks t on t.id=i.task_id and t.is_deleted=false
+    left join core.departments d on d.id=i.department_id
+    left join core.users creator on creator.id=p.created_by
+    left join marketing.campaigns camp on camp.id=p.id and p.kind='campaign' and camp.is_deleted=false
+    left join lateral (select min(first_line.scheduled_on)::text as first_day
+      from marketing.work_plan_items first_line where first_line.plan_id=p.id and first_line.is_deleted=false) earliest on true
+    where p.is_deleted=false and (p.kind='agenda' or (p.kind='campaign' and camp.id is not null))
+      and (${allPlans} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
+      and ( (p.kind='agenda' and l.scheduled_on between ${from}::date and ${to}::date)
+        or (p.kind='campaign' and
+          (coalesce(nullif(camp.payload->>'fundingFrom',''),earliest.first_day) between ${from} and ${to}
+            or nullif(camp.payload->>'fundingTo','') between ${from} and ${to})))
+    order by plan_id,scheduled_on`;
+  return buildCalendarPlanEvents(rows, from, to);
+}
 async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   requirePermission(user, 'marketing.receipt_calendar.view');
   const from = text(request.query.from, 10), to = text(request.query.to, 10);
   if (!isWorkDate(from) || !isWorkDate(to) || from > to) throw new Error(W.dateInvalid);
   if ((new Date(to).getTime() - new Date(from).getTime()) / 86400000 > 62) throw new Error(W.dateInvalid);
   const seeAll = isManager(user) || await canGradeWorkItem(sql,user);
+  const planEvents = await planCalendarEvents(sql, user, from, to);
   const rows = await sql<any[]>`select i.id,i.task_id,i.due_on::text,i.media_kind,i.idea_name,i.status,t.name as task_name,t.task_no,
     coalesce(u.full_name,'') as assignee_name
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
@@ -1595,7 +1643,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
   // Ratings, however, are summarized for the ENTIRE visible task, even when
   // its other requirements have different due dates (e.g. 3 of 6 graded).
   const taskIds = [...new Set(rows.map(row => String(row.task_id)))];
-  if (!taskIds.length) return { ok: true, rows, ratingSummaries: {} };
+  if (!taskIds.length) return { ok: true, rows, ratingSummaries: {}, planEvents };
   const readinessItems = await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,i.status,i.media_kind,i.formats,
     i.idea_name,coalesce(u.full_name,'') as assignee_name,
     (select rating.percentage::float8 from marketing.work_item_ratings rating where rating.item_id=i.id) as percentage,
@@ -1642,7 +1690,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     if (rated) ratingSummaries[taskId].rated++;
     else ratingSummaries[taskId].missing++;
   }
-  return { ok: true, rows: rows.map(row => ({ ...row, item_readiness: readinessByItem.get(String(row.id)) ?? 0 })), ratingSummaries };
+  return { ok: true, rows: rows.map(row => ({ ...row, item_readiness: readinessByItem.get(String(row.id)) ?? 0 })), ratingSummaries, planEvents };
 }
 
 async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, services: WorkflowServices) {

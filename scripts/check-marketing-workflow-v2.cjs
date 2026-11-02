@@ -32,6 +32,11 @@ const taskLock=()=>step('select id from marketing.work_tasks');
 const itemLock=rows=>step('select * from marketing.work_items',rows);
 const itemLoad=rows=>step('coalesce(d.name',rows);
 const recalc=(rows,expectedStatus)=>[taskLock(),itemLoad(rows),step('update marketing.work_tasks',[],values=>assert.equal(values[0],expectedStatus))];
+const planCalendarStub = (user, from, to) => step('select distinct p.id::text as plan_id', [], values => {
+  assert.equal(values[1], user.id); assert.equal(values[2], user.id);
+  assert.deepEqual(values.slice(4), [from, to, from, to, from, to]);
+  assert.equal(Boolean(values[0]), user === admin);
+});
 const identitySql=scriptedSql([]);
 
 test('Parent readiness includes both approved and uploaded final outputs',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'},item]),{total:2,approved:1,percent:75,complete:false}));
@@ -193,11 +198,11 @@ test('Executors cannot review',()=>assert.equal(api.workflowCapabilities(worker)
 test('Calendar rejects impossible date before any query',async()=>assert.rejects(()=>api.calendar(identitySql,worker,{query:{from:'2026-02-29',to:'2026-03-01'}})));
 test('Calendar bounds excessive ranges',async()=>assert.rejects(()=>api.calendar(identitySql,worker,{query:{from:'2026-01-01',to:'2026-12-31'}})));
 test('Calendar gives platform admin all assignees within selected date range',async()=>{
-  const db=scriptedSql([step('and (? or i.assigned_to=?::uuid) and i.due_on between',[],v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31']))]);
+  const db=scriptedSql([planCalendarStub(admin,'2026-10-01','2026-10-31'),step('and (? or i.assigned_to=?::uuid) and i.due_on between',[],v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31']))]);
   await api.calendar(db,admin,{query:{from:'2026-10-01',to:'2026-10-31'}});db.assertDone();
 });
 test('Calendar limits regular executor to own deliverables',async()=>{
-  const db=scriptedSql([step('and (? or i.assigned_to=?::uuid) and i.due_on between',[],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31']))]);
+  const db=scriptedSql([planCalendarStub(worker,'2026-10-01','2026-10-31'),step('and (? or i.assigned_to=?::uuid) and i.due_on between',[],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31']))]);
   await api.calendar(db,worker,{query:{from:'2026-10-01',to:'2026-10-31'}});db.assertDone();
 });
 test('Calendar shows each requirement readiness even when the same task has another due date',async()=>{
@@ -205,6 +210,7 @@ test('Calendar shows each requirement readiness even when the same task has anot
   const later = {...item,id:uid(52),due_on:'2026-10-25',formats:[format],files:[file],status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
   const cards = [earlier,later].map(({id,task_id,due_on,status})=>({id,task_id,due_on,status,task_name:'Tucson',task_no:'TSK-000001'}));
   const db = scriptedSql([
+    planCalendarStub(admin,'2026-10-01','2026-10-31'),
     step('select i.id,i.task_id,i.due_on::text',cards, v=>assert.deepEqual(v,[true,admin.id,'2026-10-01','2026-10-31'])),
     step('select i.id::text as id,i.task_id::text as task_id',[earlier,later],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
     step('from marketing.work_rejected_items r',[],v=>assert.deepEqual(v,[[item.task_id],true,admin.id])),
@@ -220,6 +226,7 @@ test('Calendar gives regular user readiness from only their visible requirement'
   const calendarCard={id:item.id,task_id:item.task_id,due_on:'2026-10-15'};
   const scopedItem={...item,formats:[format],files:[file],format_reviews:[]};
   const db=scriptedSql([
+    planCalendarStub(worker,'2026-10-01','2026-10-31'),
     step('select i.id,i.task_id,i.due_on::text',[calendarCard],v=>assert.deepEqual(v,[false,worker.id,'2026-10-01','2026-10-31'])),
     step('select i.id::text as id,i.task_id::text as task_id',[scopedItem],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),
     step('from marketing.work_rejected_items r',[],v=>assert.deepEqual(v,[[item.task_id],false,worker.id])),

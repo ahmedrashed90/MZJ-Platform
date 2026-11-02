@@ -62,6 +62,7 @@ const calendarModule=loadTsx('src/marketing/pages/ReceiptCalendarPage.tsx',{
   '../workflow/components':{W:labels,...markers},
   '../workflow/api':{localDay(date=new Date(2026,10,1)){const y=date.getFullYear();const m=String(date.getMonth()+1).padStart(2,'0');const d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`;},showDate:()=>'',useWorkQuery:useCalendarData},
   '../workflow/TaskDetail':{TaskDetail:CalendarTaskDetail},
+  '../workflow/PlanDetail':{PlanDetail:()=>null},
 });
 function renderCalendar(){calendarHooks.next();const tree=calendarModule.ReceiptCalendarPage();calendarHooks.commit();return tree;}
 let view=renderCalendar();

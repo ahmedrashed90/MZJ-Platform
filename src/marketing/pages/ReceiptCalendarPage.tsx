@@ -3,6 +3,8 @@ import { ArrowSquareOut, CaretDown, CaretLeft, CaretRight } from '@phosphor-icon
 import { W, Empty, MediaLabel, Readiness, Status, WorkAlert, WorkHeader } from '../workflow/components';
 import { localDay, showDate, useWorkQuery } from '../workflow/api';
 import { TaskDetail, RatingStars } from '../workflow/TaskDetail';
+import { PlanDetail } from '../workflow/PlanDetail';
+import type { CalendarPlanEvent } from '../../../shared/marketing-plan-calendar';
 
 type Delivery = { id: string; task_id: string; task_no: string; task_name: string; due_on: string; media_kind: 'image' | 'video'; idea_name: string; status: string; assignee_name?: string; item_readiness: number };
 type RatingEntry = { id: string; idea_name: string; assignee_name: string; status: string; rated: boolean; percentage: number | null };
@@ -12,9 +14,11 @@ export function ReceiptCalendarPage() {
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(localDay());
   const [opened, setOpened] = useState<{ id: string; items: string[]; focusItemId?: string; openRatingOnLoad?: boolean } | null>(null);
+  const [openedPlan, setOpenedPlan] = useState<string | null>(null);
   const from = localDay(month), to = localDay(new Date(month.getFullYear(), month.getMonth() + 1, 0));
-  const query = useWorkQuery<{ rows: Delivery[]; ratingSummaries: Record<string, TaskRatingSummary> }>('calendar', { from, to });
+  const query = useWorkQuery<{ rows: Delivery[]; ratingSummaries: Record<string, TaskRatingSummary>; planEvents: CalendarPlanEvent[] }>('calendar', { from, to });
   const rows = query.data?.rows || [], selected = rows.filter(row => row.due_on === selectedDay);
+  const planEvents = query.data?.planEvents || [], selectedPlans = planEvents.filter(event => event.event_on === selectedDay);
   const ratingSummaries = query.data?.ratingSummaries || {};
   const selectedGroups = selected.reduce<Array<{ taskId: string; items: Delivery[] }>>((groups, row) => {
     const group = groups.find(entry => entry.taskId === row.task_id);
@@ -49,10 +53,26 @@ export function ReceiptCalendarPage() {
           <div className="mkw-calendar-grid">
             {weekdays.map((name, index) => <div className="mkw-calendar-weekday" key={index}>{name}</div>)}
             {days.map((day, index) => day
-              ? <button type="button" key={day} className={`mkw-calendar-day ${day === selectedDay ? 'selected' : ''} ${day === localDay() ? 'today' : ''}`} onClick={() => setSelectedDay(day)} aria-label={showDate(day)} aria-pressed={day === selectedDay}><strong>{Number(day.slice(-2))}</strong>{rows.some(row => row.due_on === day) && <small>{rows.filter(row => row.due_on === day).length}</small>}</button>
+              ? (() => { const dueCount = rows.filter(row => row.due_on === day).length;
+                const events = planEvents.filter(event => event.event_on === day);
+                return <button type="button" key={day} className={`mkw-calendar-day ${day === selectedDay ? 'selected' : ''} ${day === localDay() ? 'today' : ''} ${events.length ? 'has-plan' : ''}`}
+                  onClick={() => setSelectedDay(day)} aria-label={`${showDate(day)}${events.length ? ` — ${events.map(event => event.name).join('، ')}` : ''}`} title={events.map(event => `${event.kind === 'campaign' ? 'حملة' : 'أجندة'}: ${event.name}`).join(' — ')} aria-pressed={day === selectedDay}>
+                  <strong>{Number(day.slice(-2))}</strong>{dueCount > 0 && <small>{dueCount}</small>}
+                  {!!events.length && <span className="mkw-calendar-plan-hint">{events.length > 1 ? `${events[0].name} +${events.length - 1}` : events[0].name}</span>}
+                </button>; })()
               : <span key={`blank-${index}`} />)}
           </div>
         </section>
+        {selectedPlans.length > 0 && <section className="mkw-panel mkw-calendar-marketing-plans" aria-label="مواعيد الحملات والأجندات لليوم المختار">
+          <header className="mkw-section-title"><h2>مواعيد الحملات والأجندات</h2><span className="mkw-status">{selectedPlans.length}</span></header>
+          <div className="mkw-calendar-plan-events">{selectedPlans.map(event => <article className="mkw-calendar-plan-event" key={event.id}>
+            <div><span className="mkw-calendar-plan-kind">{event.kind === 'campaign' ? 'حملة نشر' : 'أجندة نشر'}</span><span className="mkw-code">{event.plan_no}</span></div>
+            <strong>{event.name}</strong>
+            <small className="mkw-muted">{event.event_type === 'funding_start' ? 'بداية التمويل' : event.event_type === 'funding_end' ? 'نهاية التمويل' : event.event_type === 'funding_both' ? 'بداية ونهاية التمويل' : 'تاريخ نشر الأجندة'} · {showDate(event.event_on)}</small>
+            {event.creator_name && <small className="mkw-muted">المنشئ: {event.creator_name}</small>}
+            <button type="button" className="secondary" onClick={() => setOpenedPlan(event.plan_id)}>فتح {event.kind === 'campaign' ? 'الحملة' : 'الأجندة'}</button>
+          </article>)}</div>
+        </section>}
         {ratedTaskGroups.length > 0 && <details className="mkw-panel mkw-calendar-ratings-panel" aria-label="تقييمات التاسكات لليوم المختار">
           <summary className="mkw-section-title"><h2>تقييمات التاسكات</h2><span className="mkw-status">{ratedTaskGroups.length}</span><CaretDown className="mkw-calendar-ratings-toggle" size={17}/></summary>
           {ratedTaskGroups.map(group => {
@@ -108,5 +128,6 @@ export function ReceiptCalendarPage() {
     </div>
     {opened && <TaskDetail id={opened.id} onlyItems={opened.items} focusItemId={opened.focusItemId}
       openRatingOnLoad={opened.openRatingOnLoad} onClose={() => setOpened(null)} onChanged={() => void query.reload()} />}
+    {openedPlan && <PlanDetail id={openedPlan} onClose={() => setOpenedPlan(null)} onChanged={() => void query.reload()}/>} 
   </div>;
 }

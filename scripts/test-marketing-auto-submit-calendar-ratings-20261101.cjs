@@ -154,6 +154,7 @@ let tests=0; const pass=x=>{console.log('PASS: '+x);tests++};
  const log=[];
  const calendarSql=async(parts,...values)=>{
   const q=parts.join('?').replace(/\s+/g,' ').trim();log.push({q,values});
+  if(q.includes('select distinct p.id::text as plan_id'))return [];
   if(q.includes('select i.id,i.task_id,i.due_on::text'))return firstDay;
   if(q.includes('select i.id::text as id,i.task_id::text as task_id'))return current;
   if(q.includes('from marketing.work_rejected_items r'))return archive;
@@ -161,6 +162,7 @@ let tests=0; const pass=x=>{console.log('PASS: '+x);tests++};
  };
  const output=await calendar(calendarSql,admin,{query:{from:'2026-11-01',to:'2026-11-30'}});
  assert.equal(output.rows.length,2);
+ assert.deepEqual(output.planEvents,[]);
  assert.deepEqual({total:output.ratingSummaries[uid(250)].total,rated:output.ratingSummaries[uid(250)].rated,missing:output.ratingSummaries[uid(250)].missing},
   {total:6,rated:3,missing:3});
  assert.equal(output.ratingSummaries[uid(250)].items.length,6);
