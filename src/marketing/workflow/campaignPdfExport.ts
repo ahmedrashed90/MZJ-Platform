@@ -1,7 +1,7 @@
 /** Print-only, read-only campaign and agenda summaries. Publication rows stay
  * exclusively in the existing report; this export never duplicates them. */
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
-import { campaignContentSummary, campaignSummaryNameKey, moneySAR } from './campaignOverview';
+import { agendaPublicationSummary, campaignContentSummary, campaignSummaryNameKey, moneySAR } from './campaignOverview';
 import { showDate } from './api';
 
 export type CampaignPdfExportInput = {
@@ -37,7 +37,7 @@ export function inclusivePlanDays(from?: string | null, to?: string | null): num
   return Math.round((end - start) / 86400000) + 1;
 }
 
-function approvalTime(value?: string | null): string {
+export function planApprovalTime(value?: string | null): string {
   if (!value) return 'غير محدد';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 'غير محدد';
@@ -45,6 +45,19 @@ function approvalTime(value?: string | null): string {
     timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: true,
   }).format(date);
+}
+
+/** One approval label for the report screen and the printable summary. */
+export function planApprovalLabel(name?: string | null, approvedAt?: string | null): string {
+  return name?.trim() ? `${name.trim()} — ${planApprovalTime(approvedAt)}` : 'لم يتم الاعتماد بعد';
+}
+
+/** Use the same legacy-date fallback on-screen and in the exported agenda PDF. */
+export function agendaPublicationRange(
+  lines: WorkPlanLine[], agendaFrom?: string | null, agendaTo?: string | null,
+) {
+  const dates = lines.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort();
+  return { from: agendaFrom || dates[0] || null, to: agendaTo || dates.at(-1) || null };
 }
 
 function listHtml(values: string[], emptyText = 'لا توجد بيانات'): string {
@@ -59,37 +72,20 @@ function tile(label: string, value: unknown): string {
 export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
   const campaign = input.kind === 'campaign';
   const summary = campaignContentSummary(input.lines);
+  const agendaSummary = campaign ? null : agendaPublicationSummary(input.lines, input.platforms || []);
   const published = input.lines.filter(line => line.published_ready).length;
   const firstScheduled = input.lines.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort()[0];
-  const lastScheduled = input.lines.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort().at(-1);
-  const from = (campaign ? input.fundingFrom : input.agendaFrom) || firstScheduled || null;
-  const to = (campaign ? input.fundingTo : input.agendaTo) || (!campaign ? lastScheduled : null) || null;
+  const agendaRange = agendaSummary ? agendaPublicationRange(input.lines, input.agendaFrom, input.agendaTo) : null;
+  const from = campaign ? input.fundingFrom || firstScheduled || null : agendaRange?.from || null;
+  const to = campaign ? input.fundingTo || null : agendaRange?.to || null;
   const days = inclusivePlanDays(from, to);
-  const approval = input.approvedByName?.trim()
-    ? `${input.approvedByName.trim()} — ${approvalTime(input.approvedAt)}` : 'لم يتم الاعتماد بعد';
+  const approval = planApprovalLabel(input.approvedByName, input.approvedAt);
   const platformCounts = new Map(summary.platforms.map(item => [campaignSummaryNameKey(item.platform), item]));
-  // All configured platforms, including 0-post platforms; also retain any
-  // historical platform that has been disabled since the agenda was created.
-  const catalog = new Map<string, string>();
-  for (const platform of input.platforms || []) if (platform.name?.trim()) {
-    catalog.set(campaignSummaryNameKey(platform.name), platform.name.trim());
-  }
-  for (const platform of summary.platforms) catalog.set(campaignSummaryNameKey(platform.platform), platform.platform);
-  const platforms = [...catalog.values()].sort((a, b) => a.localeCompare(b, 'ar'));
-  const platformRows = (campaign ? summary.platforms.map(item => item.platform) : platforms).map(name => {
+  const platformRows = (campaign ? summary.platforms.map(item => item.platform) : agendaSummary?.platforms.map(item => item.name) || []).map(name => {
     const value = platformCounts.get(campaignSummaryNameKey(name));
     return `<tr><td>${htmlText(name)}</td><td>${htmlText(value?.count ?? 0)}</td>${campaign ? `<td class="money">${htmlText(moneySAR(value?.budget || 0))}</td>` : ''}</tr>`;
   }).join('');
-  const requirements = campaign ? summary.products.map(product => product.name) : (() => {
-    const byName = new Map<string, string>();
-    for (const line of input.lines) {
-      const medium = line.media_kind === 'video' ? 'فيديو' : line.media_kind === 'image' ? 'صورة' : 'صورة وفيديو';
-      const value = `${medium} — ${String(line.idea_name || 'مطلوب بدون اسم').trim()}`;
-      const key = campaignSummaryNameKey(value);
-      if (!byName.has(key)) byName.set(key, value);
-    }
-    return [...byName.values()];
-  })();
+  const requirements = campaign ? summary.products.map(product => product.name) : agendaSummary?.requirements || [];
   const title = campaign ? 'الحملة' : 'الأجندة';
   const periodTitle = campaign ? 'التمويل والميزانية' : 'فترة نشر الأجندة';
   const overview = [

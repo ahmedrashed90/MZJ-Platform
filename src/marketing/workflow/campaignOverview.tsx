@@ -42,6 +42,39 @@ export function campaignContentSummary(lines: WorkPlanLine[]) {
   };
 }
 
+/** The agenda's on-screen report and its printable PDF share the same source
+ * for platform counts (including zero-post platforms), unique requirements,
+ * and unique creative ideas. Publication records remain untouched. */
+export function agendaPublicationSummary(
+  lines: WorkPlanLine[],
+  configuredPlatforms: ReadonlyArray<{ name: string; code?: string }> = [],
+) {
+  const summary = campaignContentSummary(lines);
+  const counts = new Map(summary.platforms.map(item => [campaignSummaryNameKey(item.platform), item.count]));
+  const catalog = new Map<string, string>();
+  for (const platform of configuredPlatforms) {
+    const name = String(platform.name || '').trim();
+    if (name) catalog.set(campaignSummaryNameKey(name), name);
+  }
+  // Historical posts still count even if their platform was later deactivated.
+  for (const { platform } of summary.platforms) catalog.set(campaignSummaryNameKey(platform), platform);
+
+  const requirements = new Map<string, string>();
+  for (const line of lines) {
+    const medium = line.media_kind === 'video' ? 'فيديو' : line.media_kind === 'image' ? 'صورة' : 'صورة وفيديو';
+    const title = `${medium} — ${String(line.idea_name || 'مطلوب بدون اسم').trim()}`;
+    const key = campaignSummaryNameKey(title);
+    if (!requirements.has(key)) requirements.set(key, title);
+  }
+
+  return {
+    platforms: [...catalog.values()].sort((a, b) => a.localeCompare(b, 'ar'))
+      .map(name => ({ name, count: counts.get(campaignSummaryNameKey(name)) || 0 })),
+    requirements: [...requirements.values()],
+    ideas: summary.ideas,
+  };
+}
+
 /** Group all posts of a platform contiguously while retaining chronological
  * order within that platform. Shared by preparation and read-only report. */
 export function campaignLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[] {

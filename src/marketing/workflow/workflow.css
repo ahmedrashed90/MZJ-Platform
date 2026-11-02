@@ -1078,6 +1078,14 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-campaign-unique-grid>div{min-width:0;border:1px solid #ebdfd6;background:#fff;border-radius:10px;padding:12px}
 .mkw-campaign-unique-list{display:grid;gap:6px}
 .mkw-campaign-unique-list>div{font-size:12px;line-height:1.65;padding:7px 9px;background:#faf4ef;border-radius:7px;overflow-wrap:anywhere}
+/* Agenda report reuses the printable summary's counts and distinct content.
+   The existing publication-details table is intentionally unchanged. */
+.mkw-agenda-report-overview .mkw-agenda-platform-table{border:1px solid #ebdfd6;border-radius:10px;background:#fff;overflow-x:auto}
+.mkw-agenda-report-overview .mkw-agenda-platform-table table{border-collapse:collapse;width:100%;min-width:250px;font-size:13px}
+.mkw-agenda-report-overview .mkw-agenda-platform-table th,.mkw-agenda-report-overview .mkw-agenda-platform-table td{padding:10px 13px;text-align:right;border-bottom:1px solid #f0e6de}
+.mkw-agenda-report-overview .mkw-agenda-platform-table th{background:#f3e8dc;color:#4a211c;font-weight:800}
+.mkw-agenda-report-overview .mkw-agenda-platform-table tr:last-child td{border-bottom:0}
+.mkw-agenda-report-overview .mkw-agenda-platform-table td:last-child{font-weight:800;font-variant-numeric:tabular-nums}
 .mkw-campaign-funding-edit{display:grid;gap:12px;padding:12px;border:1px solid #e8d7cc;border-radius:12px}
 .mkw-campaign-funding-fields{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
 .mkw-campaign-funding-fields label{display:grid;gap:6px;min-width:180px;flex:1;font-weight:700;font-size:12px}

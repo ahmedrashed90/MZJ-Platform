@@ -5,8 +5,8 @@ import { showDate, useWorkQuery } from './api';
 import { PublicationTiming, planStatusName } from './PlanDetail';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
-import { CampaignOverview, campaignLinesByPlatform } from './campaignOverview';
-import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from './campaignPdfExport';
+import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform } from './campaignOverview';
+import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 
 type ReportPlan = {
@@ -31,6 +31,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
   const isCampaign = plan?.kind === 'campaign';
   const approval = ['publishing', 'published'].includes(plan?.review_status || '')
     ? query.data?.history.find(entry => entry.action === 'approved') : null;
+  const agendaSummary = plan && !isCampaign ? agendaPublicationSummary(lines, query.data?.platforms || []) : null;
+  const agendaRange = agendaSummary ? agendaPublicationRange(lines, plan?.agenda_from, plan?.agenda_to) : null;
+  const agendaDuration = agendaRange ? inclusivePlanDays(agendaRange.from, agendaRange.to) : null;
   const publishState = plan ? planStatusName(planDisplayState(plan.review_status, published, lines.length)) : ''; 
 
   return <Modal open title={`التقرير${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-report-modal">
@@ -59,11 +62,37 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <div><small>عدد المنشورات</small><strong>{lines.length}</strong></div>
           <div><small>حالة النشر</small><strong>{planStatusName(planDisplayState(plan.review_status, published, lines.length))}</strong></div>
           <div><small>المنشورات المنشورة</small><strong>{published} من {lines.length}</strong></div>
+          {!isCampaign && <div><small>الاعتماد — المستخدم والتاريخ والساعة</small><strong>{planApprovalLabel(approval?.actor_name, approval?.created_at)}</strong></div>}
         </div>
         {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to}/>}
         {!isCampaign && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
-          <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(plan.agenda_from)}</strong></div>
-          <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(plan.agenda_to)}</strong></div>
+          <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(agendaRange?.from)}</strong></div>
+          <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(agendaRange?.to)}</strong></div>
+          <div><small>المدة</small><strong>{agendaDuration == null ? 'غير محددة' : `${agendaDuration} يوم`}</strong></div>
+        </section>}
+        {agendaSummary && <section className="mkw-campaign-overview mkw-agenda-report-overview" aria-label="ملخص الأجندة">
+          <div className="mkw-campaign-overview-section">
+            <h3>المنصات وعدد المنشورات</h3>
+            <div className="mkw-table-wrap mkw-agenda-platform-table"><table>
+              <thead><tr><th scope="col">المنصة</th><th scope="col">عدد المنشورات</th></tr></thead>
+              <tbody>{agendaSummary.platforms.length
+                ? agendaSummary.platforms.map(platform => <tr key={platform.name}><td>{platform.name}</td><td>{platform.count}</td></tr>)
+                : <tr><td colSpan={2}>لا توجد منصات</td></tr>}
+              </tbody>
+            </table></div>
+          </div>
+          <div className="mkw-campaign-unique-grid">
+            <div><h3>المطلوبات المختلفة ({agendaSummary.requirements.length})</h3>
+              <div className="mkw-campaign-unique-list">{agendaSummary.requirements.length
+                ? agendaSummary.requirements.map(requirement => <div key={requirement}>{requirement}</div>)
+                : <div>لا توجد بيانات</div>}</div>
+            </div>
+            <div><h3>الأفكار المختلفة ({agendaSummary.ideas.length})</h3>
+              <div className="mkw-campaign-unique-list">{agendaSummary.ideas.length
+                ? agendaSummary.ideas.map(idea => <div key={idea}>{idea}</div>)
+                : <div>لا توجد بيانات</div>}</div>
+            </div>
+          </div>
         </section>}
         <div className="mkw-plan-progress"><span>جاهزية النشر: {plan.readiness}% · {published} من {lines.length} روابط نشر</span><progress max={100} value={plan.readiness}/></div>
         {plan.review_status === 'revision' && !!plan.review_note && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan.review_note}</p></section>}
