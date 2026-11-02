@@ -48,6 +48,7 @@ export function WorkflowEvaluationSettings({ readOnly = false }: { readOnly?: bo
   const onReload = async () => { await query.reload(); };
   return <div className="mkw-evaluation-settings-grid">
     {query.error && <div className="mkw-alert" role="alert">{query.error}</div>}
+    <PlanReviewersSettings readOnly={readOnly}/>
     <RatingReviewersSettings data={query.data} readOnly={readOnly || !query.data?.canManage} reload={onReload}/>
     <SettingList title="أنواع ملاحظات المراجعة" kind="category" rows={query.data?.categories || []} readOnly={readOnly || !query.data?.canManage} reload={onReload}/>
     <SettingList title="بنود تقييم المنفذين" kind="criterion" rows={query.data?.criteria || []} readOnly={readOnly || !query.data?.canManage} reload={onReload}/>
@@ -86,5 +87,48 @@ function RatingReviewersSettings({data,readOnly,reload}:{data:WorkEvaluationSett
         onClick={()=>void save()}><FloppyDisk size={17}/> حفظ المقيّمين</button>
     </div>
     {data?.reviewers.length!==2 && <small className="mkw-muted">التقييم متوقف حتى يتم اختيار وحفظ اثنين من المستخدمين النشطين.</small>}
+  </section>;
+}
+
+
+type PlanReviewersConfig = { ok:boolean; canManage:boolean; migrationRequired:boolean;
+  reviewers:Array<{slot:number;user_id:string;name:string;email:string}>;
+  options:Array<{id:string;name:string;email:string}> };
+function PlanReviewersSettings({ readOnly }: { readOnly: boolean }) {
+  const query = useWorkQuery<PlanReviewersConfig>('plan_reviewers');
+  const [slots,setSlots] = useState<[string,string]>(['','']);
+  const [dirty,setDirty] = useState(false),[busy,setBusy] = useState(false);
+  const [error,setError] = useState(''),[message,setMessage] = useState('');
+  const saved:[string,string] = [query.data?.reviewers.find(r=>r.slot===1)?.user_id||'',query.data?.reviewers.find(r=>r.slot===2)?.user_id||''];
+  const chosen=dirty?slots:saved;
+  async function save(){
+    if (busy||!chosen[0]||!chosen[1]||chosen[0]===chosen[1]) {
+      setError('\u0627\u062e\u062a\u0627\u0631 \u0645\u0633\u062a\u062e\u062f\u0645\u064a\u0646 \u0645\u062e\u062a\u0644\u0641\u064a\u0646 \u0645\u0646 \u0646\u0638\u0627\u0645 \u0627\u0644\u062a\u0633\u0648\u064a\u0642');return;
+    }
+    setBusy(true);setError('');setMessage('');
+    try {
+      await workPost('save_plan_reviewers',{userIds:chosen});
+      await query.reload();setDirty(false);
+      setMessage('\u062a\u0645 \u062d\u0641\u0638 \u0645\u0633\u0624\u0648\u0644\u064a \u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u062d\u0645\u0644\u0627\u062a \u0648\u0627\u0644\u0623\u062c\u0646\u062f\u0627\u062a');
+    }catch(e){setError(e instanceof Error?e.message:'\u062a\u0639\u0630\u0631 \u0627\u0644\u062d\u0641\u0638');}
+    finally{setBusy(false);}
+  }
+  return <section className="panel mkw-evaluation-settings-card" aria-label="plan-reviewers-settings">
+    <header><h3>{'\u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f \u0627\u0644\u062d\u0645\u0644\u0627\u062a \u0648\u0627\u0644\u0623\u062c\u0646\u062f\u0627\u062a \u2014 \u0645\u0633\u062a\u062e\u062f\u0645\u0627\u0646 \u0641\u0642\u0637'}</h3></header>
+    <p className="mkw-muted">{'\u064a\u062a\u0648\u0644\u0649 \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645\u0627\u0646 \u0627\u0644\u0645\u062d\u062f\u062f\u0627\u0646 \u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f \u0627\u0644\u062d\u0645\u0644\u0627\u062a \u0648\u0627\u0644\u0623\u062c\u0646\u062f\u0627\u062a \u0641\u0642\u0637. \u0645\u0646\u0634\u0626 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629 \u0647\u0648 \u0627\u0644\u0645\u0633\u0624\u0648\u0644 \u0639\u0646 \u062a\u0646\u0641\u064a\u0630 \u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a \u0648\u062a\u0639\u062f\u064a\u0644 \u0627\u0644\u062a\u0648\u0627\u0631\u064a\u062e \u0648\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644.'}</p>
+    {query.error&&<p className="mkw-alert" role="alert">{query.error}</p>}
+    {error&&<p className="mkw-alert" role="alert">{error}</p>}
+    {message&&<p role="status">{message}</p>}
+    {query.data?.migrationRequired && <p className="mkw-alert" role="alert">{'\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u0645\u0631\u0627\u062c\u0639\u064a\u0646 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u0642\u0628\u0644 \u062a\u062d\u062f\u064a\u062b \u0642\u0627\u0639\u062f\u0629 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u062a\u0633\u0648\u064a\u0642.'}</p>}
+    <div className="mkw-evaluation-settings-inputs">
+      {([0,1] as const).map(slot=><label key={slot}><span>{'\u0627\u0644\u0645\u0631\u0627\u062c\u0639'} {slot+1}</span>
+        <select value={chosen[slot]} disabled={readOnly||busy||!query.data?.canManage||query.data?.migrationRequired} onChange={e=>{
+          const next:[string,string]=[chosen[0],chosen[1]];next[slot]=e.target.value;setSlots(next);setDirty(true);setMessage('');
+        }}><option value="">{'\u0627\u062e\u062a\u0631 \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645'}</option>
+          {(query.data?.options||[]).map(u=><option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select>
+      </label>)}
+      <button type="button" className="primary-button" disabled={readOnly||busy||!query.data?.canManage||query.data?.migrationRequired||!chosen[0]||!chosen[1]||chosen[0]===chosen[1]||!dirty}
+        onClick={()=>void save()}><FloppyDisk size={17}/>{'\u062d\u0641\u0638 \u0645\u0633\u0624\u0648\u0644\u064a \u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629'}</button>
+    </div>
   </section>;
 }

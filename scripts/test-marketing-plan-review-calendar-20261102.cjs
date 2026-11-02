@@ -73,24 +73,23 @@ check('Campaign/agenda milestones are returned even on dates without any task de
   assert.match(server,/if \(!taskIds\.length\) return \{ ok: true, rows, ratingSummaries: \{\}, planEvents \}/);
   assert.match(server,/ratingSummaries, planEvents \}/);
 });
-check('Review funding is optional and updated atomically with the request and audit',()=>{
+check('Reviewers can only request revision and never persist campaign funding dates',()=>{
   const body=server.split('async function changePlanReview')[1].split('async function updatePlanRows')[0];
-  assert.match(body,/updateFunding = action === 'revision' && body\.updateFunding === true/);
-  assert.match(body,/if \(updateFunding && plan\.kind !== 'campaign'\)/);
-  const persist=body.indexOf('await persistPlanFundingWindow');
-  const update=body.indexOf('update marketing.work_plans');
-  const audit=body.indexOf('insert into marketing.work_plan_reviews');
-  assert.ok(persist>0 && persist<update && update<audit, 'Funding, review state and audit run inside the same transaction');
-  assert.match(body,/فترة التمويل: من \$\{fundingFrom\} إلى \$\{fundingTo \|\| 'غير محدد'\}/);
-  assert.match(server,/payload=case when \$\{fundingTo\}='' then/);
+  assert.match(body,/body\.updateFunding === true/);
+  assert.match(body,/canReviewPlan\(tx as unknown as Sql,user\)/);
+  assert.doesNotMatch(body,/await persistPlanFundingWindow/);
+  assert.match(body,/review_note=\$\{action === 'revision'/);
+  assert.match(body,/notifyPlanDecision\(sql,user,planId,action/);
 });
-check('Reviewer sees optional funding dates and can submit both with revision note',()=>{
-  assert.match(detail,/مراجعة فترة التمويل مع طلب التعديل/);
-  assert.match(detail,/تأكيد طلب التعديل/);
-  assert.match(detail,/updateFunding: changeFunding/);
-  assert.match(detail,/changeFunding \? \{ fundingFrom, fundingTo \} : \{\}/);
-  assert.match(detail,/setFundingOnReview\(true\)/);
-  assert.match(detail,/setFundingOnReview\(false\)/);
+check('Only the creator can edit funding and a revision resubmits to selected reviewers',()=>{
+  const body=server.split('async function updatePlanFunding')[1].split('async function createPlan')[0];
+  assert.match(body,/plan.created_by !== user.id/);
+  assert.match(body,/await persistPlanFundingWindow/);
+  assert.match(body,/review_status='submitted'/);
+  assert.match(body,/notifyPlanDecision\(sql,user,planId,'submitted'/);
+  assert.doesNotMatch(detail,/fundingOnReview/);
+  assert.match(detail,/canEditFunding/);
+  assert.match(detail,/onClick=\{\(\) => void saveFundingPeriod\(\)\}/);
 });
 check('Calendar has campaign/agenda names in date cell, detail list and drilldown',()=>{
   assert.match(calendar,/mkw-calendar-plan-hint/);

@@ -9,7 +9,7 @@ const b=source.indexOf('\nasync function updatePlanRows(',a);
 assert.ok(a>=0 && b>a,'Server review handler exists');
 const code=ts.transpileModule(`${source.slice(a,b)}\nexports.review=changePlanReview;`,{fileName:'marketing-workflow.ts',compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const out={};
-vm.runInNewContext(code,{exports:out,id:x=>String(x),text:(v,max)=>String(v??'').slice(0,max),W:{saved:'saved',denied:'denied',invalid:'invalid',notFound:'notFound'},canReviewPlan:()=>true,planLines:async()=>[{id:'line'}]});
+vm.runInNewContext(code,{exports:out,id:x=>String(x),text:(v,max)=>String(v??'').slice(0,max),W:{saved:'saved',denied:'denied',invalid:'invalid',notFound:'notFound'},canReviewPlan:async()=>true,planLines:async()=>[{id:'line'}],notifyPlanDecision:async()=>{}});
 const user={id:'user-uuid',fullName:'مراجع الشركة'};
 let checks=0;
 const check=(ok,label)=>{assert.ok(ok,label);checks++;console.log('PASS '+label)};

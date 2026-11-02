@@ -22,8 +22,8 @@ check(server.includes('const explicitPostTypes = Array.isArray(platform.postType
   'Server persists each publishing type with its own explicit budget');
 check(server.includes('if (kind === \'campaign\' && (platform.rawBudget === \'\' || platform.rawBudget == null))'),
   'Server rejects missing amounts for every individual campaign post type');
-check(!dashboard.includes('تفاصيل الجدول') && dashboard.includes('مراجعة واعتماد'),
-  'Dashboard removes details-table button but retains preapproval review');
+check(!dashboard.includes('تفاصيل الجدول') && dashboard.includes('canReviewPlans') && dashboard.includes('review_status'),
+  'Dashboard removes details-table button and exposes preapproval review only to configured reviewers');
 const statusWidget=read('src/marketing/workflow/PlanStatus.tsx');
 check(dashboard.includes('<PlanStatusBadges') && statusWidget.includes("kind === 'agenda' ? 'أجندة معتمدة' : 'حملة معتمدة'") && statusWidget.includes('planDisplayState'),
   'Approved campaign and agenda show consistent approval and actual publishing progress');

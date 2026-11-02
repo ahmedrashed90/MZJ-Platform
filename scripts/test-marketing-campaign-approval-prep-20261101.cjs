@@ -30,7 +30,7 @@ function check(condition, label) { assert.ok(condition,label);passed++;console.l
 
 (async()=>{
   check(/navigate\(`\/marketing\?plan=\$\{encodeURIComponent\(created.id\)\}`\)/.test(creator), 'create agenda or campaign opens the saved plan for review');
-  check(/<PlanDetail id=\{planId\}/.test(dashboard) && /مراجعة واعتماد/.test(dashboard) && /<PlanReport id=\{tableId\}/.test(dashboard),
+  check(/<PlanDetail id=\{planId\}/.test(dashboard) && /canReviewPlans/.test(dashboard) && /<PlanReport id=\{tableId\}/.test(dashboard),
     'dashboard shows approval/editor separately from read-only report');
   check(!/budgetId|setBudgetId|جدول الميزانية|Wallet/.test(dashboard), 'no separate budget table or button remains');
   check(/chooserIsCampaign && <th>الميزانية \(ر\.س\)<\/th>/.test(dashboard) && /line\.product_idea/.test(dashboard),

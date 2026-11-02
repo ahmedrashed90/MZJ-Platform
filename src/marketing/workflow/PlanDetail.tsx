@@ -34,7 +34,6 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   const metaQuery = useWorkQuery<WorkMeta>('meta', {}, !!plan?.canEdit);
   const [editing, setEditing] = useState(false), [rows, setRows] = useState<EditableLine[]>([]);
   const [fundingEditing, setFundingEditing] = useState(false);
-  const [fundingOnReview, setFundingOnReview] = useState(false);
   const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   useEffect(() => {
@@ -46,6 +45,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     setFundingFrom(String(query.data.plan.funding_from || '').slice(0, 10));
     setFundingTo(String(query.data.plan.funding_to || '').slice(0, 10));
   }, [query.data, fundingEditing]);
+  useEffect(() => { if (plan?.kind === 'campaign' && plan.review_status === 'revision' && plan.canEditFunding) setFundingEditing(true); }, [plan?.id, plan?.review_status, plan?.canEditFunding, plan?.kind]);
   async function saveFundingPeriod() {
     if (!isWorkDate(fundingFrom) || (fundingTo && (!isWorkDate(fundingTo) || fundingFrom > fundingTo))) {
       setError('حدد تاريخ التمويل من، والنهاية اختيارية بشرط ألا تكون قبل البداية.'); return;
@@ -66,21 +66,12 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   }
   async function review(decision: 'revision' | 'submitted' | 'approved') {
     if (decision === 'revision' && !note.trim()) { setError('اكتب ملاحظة التعديل أولًا'); return; }
-    if (decision === 'revision' && fundingOnReview && (!isWorkDate(fundingFrom) || (fundingTo && (!isWorkDate(fundingTo) || fundingFrom > fundingTo)))) {
-      setError('راجع فترة التمويل: البداية مطلوبة والنهاية لا تسبق البداية.'); return;
-    }
-    // Clicking "طلب تعديل" first opens the dates. Only changed dates are
-    // persisted, so simply confirming a review does not rewrite legacy plans.
-    const changeFunding = decision === 'revision' && plan?.kind === 'campaign' && fundingOnReview &&
-      (fundingFrom !== String(plan.funding_from || '').slice(0, 10) || fundingTo !== String(plan.funding_to || '').slice(0, 10));
     const ok = await run('plan_review', {
       planId: id, decision, note: decision === 'revision' ? note.trim() : '',
       categoryId: decision === 'revision' ? settings.data?.categories.find(item => item.is_active && item.name.trim() === noteType.trim())?.id : undefined,
       categoryName: decision === 'revision' ? noteType.trim() : undefined,
-      updateFunding: changeFunding,
-      ...(changeFunding ? { fundingFrom, fundingTo } : {}),
     });
-    if (ok) { setNote(''); setNoteType(''); setFundingOnReview(false); }
+    if (ok) { setNote(''); setNoteType(''); }
   }
   const products = productsQuery.data?.rows || [], meta = metaQuery.data;
   function changeRow(index: number, patch: Partial<EditableLine>) { setRows(old => old.map((row, i) => i === index ? { ...row, ...patch } : row)); }
@@ -98,7 +89,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
           {fundingEditing && <div className="mkw-campaign-funding-fields">
             <label>تاريخ التمويل من<input aria-label="تعديل تاريخ التمويل من" type="date" value={fundingFrom} disabled={busy} onChange={event => setFundingFrom(event.target.value)}/></label>
             <label>تاريخ التمويل إلى<input aria-label="تعديل تاريخ التمويل إلى" type="date" min={fundingFrom || undefined} value={fundingTo} disabled={busy} onChange={event => setFundingTo(event.target.value)}/></label>
-            <button type="button" className="primary" disabled={busy} onClick={() => void saveFundingPeriod()}>حفظ فترة التمويل</button>
+            <button type="button" className="primary" disabled={busy} onClick={() => void saveFundingPeriod()}>{plan!.review_status==='revision'?'\u062d\u0641\u0638 \u0641\u062a\u0631\u0629 \u0627\u0644\u062a\u0645\u0648\u064a\u0644 \u0648\u0625\u0631\u0633\u0627\u0644\u0647\u0627 \u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629':'\u062d\u0641\u0638 \u0641\u062a\u0631\u0629 \u0627\u0644\u062a\u0645\u0648\u064a\u0644'}</button>
           </div>}
         </section>}
       </>}
@@ -106,20 +97,10 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>
         <label>ملاحظة التعديل<div className="mkw-actions"><button type="button" className="secondary" onClick={() => setNote(old => `${old}**نص مهم**`)}>غامق</button><button type="button" className="secondary" onClick={() => setNote(old => `${old}\n• نقطة تعديل`)}>نقطة</button></div><textarea value={note} maxLength={10000} onChange={e => setNote(e.target.value)} placeholder="اكتب المطلوب تعديله في المنتجات أو الجدول أو فترة التمويل" /></label>
-        {plan!.kind === 'campaign' && plan!.canEditFunding && fundingOnReview && <div className="mkw-review-funding">
-          <strong>مراجعة فترة التمويل مع طلب التعديل</strong>
-          <div className="mkw-campaign-funding-fields">
-            <label>تاريخ التمويل من<input aria-label="تاريخ التمويل من مع طلب التعديل" type="date" value={fundingFrom} disabled={busy} onChange={e => setFundingFrom(e.target.value)}/></label>
-            <label>تاريخ التمويل إلى<input aria-label="تاريخ التمويل إلى مع طلب التعديل" type="date" min={fundingFrom || undefined} value={fundingTo} disabled={busy} onChange={e => setFundingTo(e.target.value)}/></label>
-            <small>عدّل التاريخين عند الحاجة، أو اتركهما كما هما. النهاية اختيارية للحملات القديمة. تُحفظ الفترة مع الملاحظة عند التأكيد.</small>
-          </div>
-          <button type="button" className="secondary" disabled={busy} onClick={() => { setFundingOnReview(false); setFundingFrom(String(plan!.funding_from || '').slice(0, 10)); setFundingTo(String(plan!.funding_to || '').slice(0, 10)); }}>إلغاء تعديل الفترة</button>
-        </div>}
         <div className="mkw-actions">
-        <button type="button" className="secondary" disabled={busy || !note.trim()} onClick={() => {
-          if (plan!.kind === 'campaign' && plan!.canEditFunding && !fundingOnReview) { setError(''); setFundingOnReview(true); }
-          else void review('revision');
-        }}>{fundingOnReview && plan!.kind === 'campaign' ? 'تأكيد طلب التعديل' : 'طلب تعديل'}</button>
+        <button type="button" className="secondary" disabled={busy || !note.trim()} onClick={() => void review('revision')}>
+          {'\u0625\u0631\u0633\u0627\u0644 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644 \u0644\u0645\u0646\u0634\u0626 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'}
+        </button>
         <button type="button" className="primary" disabled={busy || editing} onClick={() => void review('approved')}>اعتماد {plan!.kind === 'campaign' ? 'الحملة' : 'الأجندة'} — جاهزة للنشر</button>
       </div></section>}
       {plan!.created_by && plan!.canEdit && <div className="mkw-actions">

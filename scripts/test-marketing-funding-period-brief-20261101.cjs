@@ -49,12 +49,14 @@ check('Campaign stores funding window in existing native payload and reads the s
   assert.match(backend, /camp\.payload->>'fundingTo'/);
   assert.match(backend, /funding_to: plan\.funding_to \|\| null/);
 });
-check('New campaigns require both dates; existing campaigns can edit the missing end without touching approval state', () => {
+check('New campaigns require both dates; creator can edit legacy missing end and resubmit after a revision', () => {
   assert.match(composer, /fundingFrom > fundingTo/);
   assert.match(detail, /update_plan_funding/);
   assert.match(backend, /async function updatePlanFunding/);
   const body=backend.split('async function updatePlanFunding')[1].split('async function createPlan')[0];
-  assert.doesNotMatch(body, /set review_status=/);
+  assert.match(body, /plan.created_by !== user.id/);
+  assert.match(body, /review_status='submitted'/);
+  assert.match(body, /plan.review_status === 'revision'/);
   assert.match(body, /persistPlanFundingWindow/);
   assert.match(backend, /async function persistPlanFundingWindow/);
   assert.match(backend, /jsonb_set\(coalesce\(payload/);

@@ -1116,8 +1116,68 @@ async function saveProductDraft(sql: Sql, user: SessionUser, body: Row) {
   return { ok: true, id: productId, message: W.saved };
 }
 
-function canReviewPlan(user: SessionUser) {
-  return hasPermission(user, 'platform.superadmin') || (isManager(user) && hasPermission(user, 'marketing.task.review'));
+async function planReviewerTableReady(sql: Sql) {
+  const [row] = await sql<{ present: boolean }[]>`select to_regclass('marketing.work_plan_reviewers') is not null as present`;
+  return Boolean(row?.present);
+}
+async function planReviewerIds(sql: Sql): Promise<string[]> {
+  if (!(await planReviewerTableReady(sql))) return [];
+  const rows = await sql<{ user_id: string }[]>`select rr.user_id::text from marketing.work_plan_reviewers rr
+    join core.users u on u.id=rr.user_id and u.is_active=true and coalesce(u.is_archived,false)=false
+    join core.user_systems us on us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true
+    order by rr.slot`;
+  return rows.map(row => row.user_id);
+}
+async function canReviewPlan(sql: Sql, user: SessionUser) {
+  return (await planReviewerIds(sql)).includes(user.id);
+}
+async function planReviewersSettings(sql: Sql, user: SessionUser) {
+  if (!hasPermission(user,'settings.marketing.view') && !hasPermission(user,'settings.marketing.manage') && !hasPermission(user,'platform.superadmin')) throw new Error(W.denied);
+  const canManage = hasPermission(user,'settings.marketing.manage') || hasPermission(user,'platform.superadmin');
+  const migrationRequired = !(await planReviewerTableReady(sql));
+  const [reviewers, options] = await Promise.all([
+    migrationRequired ? Promise.resolve([]) : sql<any[]>`select rr.slot,rr.user_id::text,coalesce(u.full_name,'') as name,u.email
+      from marketing.work_plan_reviewers rr join core.users u on u.id=rr.user_id order by rr.slot`,
+    canManage ? sql<any[]>`select u.id::text,coalesce(u.full_name,'') as name,u.email
+      from core.users u join core.user_systems us on us.user_id=u.id
+      where us.system_code='marketing' and us.is_enabled=true and u.is_active=true
+        and coalesce(u.is_archived,false)=false order by u.full_name,u.id` : Promise.resolve([])
+  ]);
+  return { ok:true, migrationRequired, canManage, reviewers, options };
+}
+async function savePlanReviewers(sql: Sql, user: SessionUser, body: Row) {
+  if (!hasPermission(user,'settings.marketing.manage') && !hasPermission(user,'platform.superadmin')) throw new Error(W.denied);
+  if (!(await planReviewerTableReady(sql))) throw new Error('\u062d\u062f\u0651\u062b \u0642\u0627\u0639\u062f\u0629 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u062a\u0633\u0648\u064a\u0642 \u0623\u0648\u0644\u064b\u0627');
+  const selected = list(body.userIds).map(id);
+  if (selected.length !== 2 || new Set(selected).size !== 2) throw new Error(W.invalid);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    await tx`lock table marketing.work_plan_reviewers in exclusive mode`;
+    const valid = await tx<any[]>`select u.id::text from core.users u
+      join core.user_systems us on us.user_id=u.id
+      where u.id=any(${selected}::uuid[]) and u.is_active=true and coalesce(u.is_archived,false)=false
+        and us.system_code='marketing' and us.is_enabled=true`;
+    if (valid.length !== 2) throw new Error(W.denied);
+    await tx`delete from marketing.work_plan_reviewers`;
+    for (let slot=0;slot<2;slot++) await tx`insert into marketing.work_plan_reviewers(slot,user_id,updated_by)
+      values(${slot+1},${selected[slot]}::uuid,${user.id}::uuid)`;
+    return { ok:true, message:W.saved };
+  });
+}
+async function notifyPlanDecision(sql: Sql, user: SessionUser, planId: string, decision: string, creatorId: string, planName: string, note = '') {
+  const audience = decision === 'submitted' ? await planReviewerIds(sql) : [creatorId];
+  if (!audience.length) return;
+  const title = decision === 'revision'
+    ? '\u062a\u0645 \u0625\u0631\u0633\u0627\u0644 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644 \u0625\u0644\u0649 \u0645\u0646\u0634\u0626 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'
+    : decision === 'submitted' ? '\u062a\u0645 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u062a\u0639\u062f\u064a\u0644\u0627\u062a \u0644\u0644\u0645\u0631\u0627\u062c\u0639\u0629'
+    : '\u062a\u0645 \u0627\u0639\u062a\u0645\u0627\u062f \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629';
+  await createNotification({ systemCode:'marketing',eventType:`workflow.plan.${decision}`,
+    title: `${title}: ${planName}`,body:note,entityType:'marketing_work_plan',entityId:planId,
+    actionUrl:`/marketing?plan=${encodeURIComponent(planId)}`,
+    actorId:user.id,actorName:user.fullName,audienceUserIds:audience,
+    severity:decision==='revision'?'warning':decision==='approved'?'success':'info',
+    dedupeKey:`marketing-plan:${decision}:${randomUUID()}`
+  }).catch(error => console.error('Marketing plan notification failed',error));
 }
 function publishedLink(value: unknown): string {
   const url = text(value, 2000);
@@ -1135,7 +1195,7 @@ async function saveItemCopy(sql: Sql, body: Row, user: SessionUser) {
   return { ok: true, message: W.saved };
 }
 /** Persist funding metadata without changing publish dates, budget or approval.
- * Called from the revision transaction and the standalone funding editor. */
+ * Called only by the creator through the funding editor. */
 async function persistPlanFundingWindow(tx: Sql, planId: string, fundingFrom: string, fundingTo: string) {
   const changed = await tx`update marketing.campaigns set
     payload=case when ${fundingTo}='' then
@@ -1151,43 +1211,40 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId), action = text(body.decision, 24), note = text(body.note, 10000);
   const categoryId = body.categoryId ? id(body.categoryId) : null;
   const categoryName = text(body.categoryName, 100).replace(/[\r\n\t]+/g, ' ').trim();
-  const updateFunding = action === 'revision' && body.updateFunding === true;
-  const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
-  if (updateFunding && !validFundingWindow(fundingFrom, fundingTo))
-    throw new Error('حدد تاريخ التمويل من، ويجب ألا تكون النهاية قبل البداية. يمكن ترك النهاية فارغة للحملات المفتوحة.');
+  if (body.updateFunding === true) throw new Error(W.denied);
   // Custom category labels are stored with the review text; existing category UUIDs keep their native storage.
   // This preserves old records and avoids a database migration solely for a free-text note type.
   const revisionNote = action === 'revision' && categoryName && !categoryId
     ? `نوع الملاحظة: ${categoryName}\n${note}` : note;
-  const auditedNote = updateFunding ? `${revisionNote}\nفترة التمويل: من ${fundingFrom} إلى ${fundingTo || 'غير محدد'}` : revisionNote;
+  const auditedNote = revisionNote;
   if (!['revision','submitted','approved'].includes(action)) throw new Error(W.invalid);
-  return sql.begin(async tx => {
+  const result = await sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [plan] = await tx<any[]>`select * from marketing.work_plans where id=${planId}::uuid and is_deleted=false for update`;
     if (!plan) throw new Error(W.notFound);
     if (!(await planLines(tx as unknown as Sql, user, planId)).length) throw new Error(W.denied);
     if (plan.activated_at) throw new Error('تم تفعيل النشر بالفعل؛ لا يمكن تغيير قرار المراجعة');
     if (action === 'revision') {
-      if (!canReviewPlan(user) || !['in_progress','submitted'].includes(plan.review_status) || !note) throw new Error('ملاحظة التعديل مطلوبة، ويجب أن يكون الجدول بانتظار المراجعة');
-      if (updateFunding && plan.kind !== 'campaign') throw new Error(W.invalid);
+      if (!(await canReviewPlan(tx as unknown as Sql,user)) || !['in_progress','submitted'].includes(plan.review_status) || !note) throw new Error('ملاحظة التعديل مطلوبة، ويجب أن يكون الجدول بانتظار المراجعة');
       if (categoryId) { const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`; if (!category) throw new Error(W.invalid); }
     } else if (action === 'approved') {
-      if (!canReviewPlan(user) || !['in_progress','submitted'].includes(plan.review_status)) throw new Error(W.denied);
+      if (!(await canReviewPlan(tx as unknown as Sql,user)) || !['in_progress','submitted'].includes(plan.review_status)) throw new Error(W.denied);
     } else if (plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status)) throw new Error(W.denied);
-    if (updateFunding) await persistPlanFundingWindow(tx as unknown as Sql, planId, fundingFrom, fundingTo);
     const status = action === 'approved' ? 'publishing' : action === 'submitted' ? 'submitted' : 'revision';
     await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? auditedNote : plan.review_note},
       review_revision=review_revision+${action === 'revision' ? 1 : 0},review_note_category_id=${action === 'revision' ? categoryId : plan.review_note_category_id}::uuid,reviewed_by=${user.id}::uuid,
       reviewed_at=now(),updated_at=now() where id=${planId}::uuid`;
     await tx`insert into marketing.work_plan_reviews(plan_id,action,note,category_id,actor_id,actor_name)
       values(${planId}::uuid,${action},${auditedNote},${action === 'revision' ? categoryId : null}::uuid,${user.id}::uuid,${user.fullName})`;
-    return { ok:true, message:W.saved };
+    return { ok:true, message:W.saved, creatorId:String(plan.created_by), planName:String(plan.name) };
   });
+  await notifyPlanDecision(sql,user,planId,action,result.creatorId,result.planName,action==='revision'?note:'').catch(error => console.error('Marketing plan notification lookup failed',error));
+  return { ok:true,message:result.message };
 }
 async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId), incoming = list(body.entries);
   if (!incoming.length || incoming.length > 500) throw new Error(W.requiredFields);
-  return sql.begin(async tx => {
+  const result = await sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
     const [plan] = await tx<any[]>`select * from marketing.work_plans where id=${planId}::uuid and is_deleted=false for update`;
     if (!plan || plan.created_by !== user.id || !['in_progress','revision','submitted'].includes(plan.review_status) || plan.activated_at) throw new Error(W.denied);
@@ -1237,8 +1294,10 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
       values(${planId}::uuid,'submitted','تم إرسال التعديلات للمراجعة تلقائيًا بعد الحفظ',${user.id}::uuid,${user.fullName})`;
     if (plan.kind === 'agenda') await tx`update marketing.agendas set publish_start=${dates[0]}::date,publish_end=${dates.at(-1)}::date where id=${planId}::uuid`;
     else await tx`update marketing.campaigns set publish_start=${dates[0]}::date,publish_end=${dates.at(-1)}::date where id=${planId}::uuid`;
-    return { ok:true, message:W.saved };
+    return { ok:true, message:W.saved, planName:String(plan.name) };
   });
+  await notifyPlanDecision(sql,user,planId,'submitted',user.id,result.planName).catch(error => console.error('Marketing plan notification lookup failed',error));
+  return {ok:true,message:result.message};
 }
 async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   const lineId = id(body.lineId), url = publishedLink(body.url);
@@ -1250,7 +1309,7 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
       join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
     if (!line || !['publishing','published'].includes(line.review_status)) throw new Error('لا يمكن تسجيل رابط النشر قبل اعتماد الحملة أو الأجندة');
     if (!(await planLines(tx as unknown as Sql,user,String(line.plan_id))).some(visible => visible.id === lineId)) throw new Error(W.denied);
-    if (line.created_by !== user.id && !canReviewPlan(user) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
+    if (line.created_by !== user.id && !(await canReviewPlan(tx as unknown as Sql,user)) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
     // Locking the row above makes the first-save check atomic across devices.
     // A previously deleted legacy link is also locked if it has a first-save date.
     if (String(line.manual_post_url || '').trim() || line.manual_published_on) {
@@ -1269,22 +1328,31 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
 }
 
 /** Change only the campaign funding window; leave publication scheduling,
- * budgets and approval state untouched. Also supports legacy plans with no end. */
+ * budgets untouched. A creator correcting a revision resubmits for approval. */
 async function updatePlanFunding(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId);
   const fundingFrom = text(body.fundingFrom, 10), fundingTo = text(body.fundingTo, 10);
   if (!validFundingWindow(fundingFrom, fundingTo))
     throw new Error('حدد تاريخ التمويل من، ويجب ألا تكون النهاية قبل البداية.');
-  return sql.begin(async tx => {
+  const result = await sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
-    const [plan] = await tx<any[]>`select p.id,p.created_by,p.kind,p.is_deleted from marketing.work_plans p
+    const [plan] = await tx<any[]>`select p.id,p.created_by,p.kind,p.name,p.review_status,p.activated_at,p.is_deleted from marketing.work_plans p
       where p.id=${planId}::uuid for update`;
     if (!plan || plan.kind !== 'campaign' || plan.is_deleted) throw new Error(W.notFound);
-    if (plan.created_by !== user.id && !canReviewPlan(user)) throw new Error(W.denied);
+    if (plan.created_by !== user.id) throw new Error(W.denied);
+    if (plan.activated_at && plan.review_status === 'revision') throw new Error(W.denied);
     await persistPlanFundingWindow(tx as unknown as Sql, planId, fundingFrom, fundingTo);
-    await tx`update marketing.work_plans set updated_at=now() where id=${planId}::uuid`;
-    return { ok:true, fundingFrom, fundingTo, message:W.saved };
+    if (plan.review_status === 'revision') {
+      await tx`update marketing.work_plans set review_status='submitted',reviewed_by=${user.id}::uuid,
+        reviewed_at=now(),updated_at=now() where id=${planId}::uuid`;
+      await tx`insert into marketing.work_plan_reviews(plan_id,action,note,actor_id,actor_name)
+        values(${planId}::uuid,'submitted','',${user.id}::uuid,${user.fullName})`;
+    } else await tx`update marketing.work_plans set updated_at=now() where id=${planId}::uuid`;
+    return { ok:true, fundingFrom, fundingTo, message:W.saved,
+      resubmitted:plan.review_status==='revision', planName:String(plan.name) };
   });
+  if (result.resubmitted) await notifyPlanDecision(sql,user,planId,'submitted',user.id,result.planName).catch(error => console.error('Marketing plan notification lookup failed',error));
+  return { ok:true, fundingFrom, fundingTo, message:result.message, resubmitted:result.resubmitted };
 }
 
 async function createPlan(sql: Sql, body: Row, user: SessionUser) {
@@ -1399,6 +1467,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
 }
 async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
+  const planReviewer = await canReviewPlan(sql,user);
   const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,coalesce(creator.full_name,'') as creator_name,p.activated_at,p.review_status,p.review_note,p.review_revision,
     pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
     i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
@@ -1425,7 +1494,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
         select 1 from marketing.campaigns campaign
         where campaign.id=p.id and campaign.is_deleted=false
       )) and (
-      ${productManager(user)} or ${isManager(user)} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
+      ${productManager(user)} or ${isManager(user)} or ${planReviewer} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     order by l.scheduled_on,p.created_at desc,l.id`;
   return rows.map(row => {
     const effective_post_url = String(row.manual_post_url || row.provider_post_url || '');
@@ -1508,14 +1577,14 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   });
   const complete = lines.every(line => line.published_ready);
   return { ok:true, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
-    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:canReviewPlan(user),
+    readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:await canReviewPlan(sql,user),
     // Funding metadata may be corrected for legacy, already approved campaigns,
     // without changing their publication rows or approval history.
-    canEditFunding: plan.kind === 'campaign' && (plan.created_by === user.id || canReviewPlan(user)),
+    canEditFunding: plan.kind === 'campaign' && plan.created_by === user.id,
     funding_from: plan.funding_from || (plan.kind === 'campaign' ? lines.map(l => workDate(l.scheduled_on)).sort()[0] : null),
     funding_to: plan.funding_to || null,
     canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
-    canSaveLinks: ['publishing','published'].includes(plan.review_status) && (plan.created_by === user.id || canReviewPlan(user) || hasPermission(user,'marketing.publish.now')) }, lines, history };
+    canSaveLinks: ['publishing','published'].includes(plan.review_status) && (plan.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user,'marketing.publish.now')) }, lines, history };
 }
 /** One confirmed task deletion removes every linked campaign/agenda plan and all its
  * future publication rows, even if that plan also references a product from another
@@ -1709,7 +1778,7 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
   return { ok: true, line, product, targets, plannedFormat: plannedFormat || null, draftFormatIds: list(draft?.format_ids),
     youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user),
     canSaveLinks: ['publishing', 'published'].includes(line.review_status) &&
-      (line.created_by === user.id || canReviewPlan(user) || hasPermission(user, 'marketing.publish.now')) };
+      (line.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user, 'marketing.publish.now')) };
 }
 
 async function savePreparation(sql: Sql, user: SessionUser, body: Row, services: WorkflowServices) {
@@ -2134,7 +2203,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready),
       publicationDatesReady: Boolean(publicationDates?.ready),
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
-      ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready && publicationDates?.ready),
+      planReviewersReady: await planReviewerTableReady(sql),
+      ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready && publicationDates?.ready && await planReviewerTableReady(sql)),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
     return true;
@@ -2147,7 +2217,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     await assertMarketingWorkflowReady(sql);
     const upgraded = await marketingPlanScheduleSchemaStatus(sql);
     const structure = await marketingWorkflowStructureStatus(sql);
-    response.status(200).json({ ok: true, ready: upgraded.ready && structure.ready, performanceReady: true,
+    response.status(200).json({ ok: true, ready: upgraded.ready && structure.ready && await planReviewerTableReady(sql), performanceReady: true,
       baseReady: upgraded.baseReady, missing: [...upgraded.missing, ...structure.missing],
       message: 'تم تحديث جداول التسويق بنجاح دون حذف البيانات' });
     return true;
@@ -2169,12 +2239,14 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       const meta = await services.meta(sql, user, false);
       const enabled = new Set((await sql<any[]>`select user_id::text from core.user_systems where system_code='marketing' and is_enabled=true`).map(row => row.user_id));
       result = { ...meta, users: [], departments: meta.departments.map((department: any) => ({ ...department, users: department.users.filter((member: any) => enabled.has(member.id)) })), capabilities: workflowCapabilities(user), userId: user.id };
+    } else if (resource === 'work_plan_reviewers') {
+      result = await planReviewersSettings(sql,user);
     } else if (resource === 'work_publish_button_settings') {
       if (!hasPermission(user, 'settings.marketing.view') && !hasPermission(user, 'settings.marketing.manage') && !hasPermission(user, 'marketing.dashboard.view')) throw new Error(W.denied);
       result = { ok: true, ...(await publishControlSettings(sql)), canManage: canManagePublishControls(user) };
     } else if (resource === 'work_dashboard') {
-      requirePermission(user, 'marketing.dashboard.view');
-      result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user) };
+      if (!hasPermission(user,'marketing.dashboard.view') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
+      result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user), canReviewPlans:await canReviewPlan(sql,user), userId:user.id };
     } else if (resource === 'work_task') {
       if (!hasPermission(user, 'marketing.task.view_assigned') && !hasPermission(user, 'marketing.task.view_all') && !hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.task.review') && !(await canGradeWorkItem(sql,user))) throw new Error(W.denied);
       result = await taskSummary(sql, user, id(request.query.id));
@@ -2190,7 +2262,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_database') result = await database(sql, user, services);
     else if (resource === 'work_calendar') result = await calendar(sql, user, request);
     else if (resource === 'work_plan') {
-      if (!hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.dashboard.view')) throw new Error(W.denied);
+      if (!hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.dashboard.view') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
       result = await planDetails(sql, user, id(request.query.id));
     }
     else if (resource === 'work_publishing') {
@@ -2243,6 +2315,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
+    else if (action === 'work_save_plan_reviewers') result = await savePlanReviewers(sql, user, body);
     else if (action === 'work_update_plan') result = await updatePlanRows(sql, user, body);
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
