@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Medal, TrendUp, UsersThree, CalendarBlank } from '@phosphor-icons/react';
 import { workRatingLevel } from '../../../shared/marketing-workflow';
 import { RatingStars } from '../workflow/TaskDetail';
+import { isValidRatingPeriod, ratingDatesForSelection, selectionForRatingDates } from './ratingsDateFilters';
 import { useWorkQuery } from '../workflow/api';
 import '../marketing.css';
 
@@ -35,7 +36,26 @@ export function MarketingRatingsPage() {
   const [month, setMonth] = useState(() => dateKey(new Date()).slice(5,7));
   const [year, setYear] = useState(() => dateKey(new Date()).slice(0,4));
   const [expanded, setExpanded] = useState('');
-  const valid = Boolean(/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to);
+  const valid = isValidRatingPeriod(from, to);
+  const editDates = (nextFrom: string, nextTo: string) => {
+    setFrom(nextFrom);
+    setTo(nextTo);
+    const selected = selectionForRatingDates(nextFrom, nextTo);
+    setMonth(selected.month);
+    setYear(selected.year);
+  };
+  const editCalendar = (nextMonth: string, nextYear: string) => {
+    const period = ratingDatesForSelection(nextMonth, nextYear, dateKey(new Date()));
+    setFrom(period.from);
+    setTo(period.to);
+    setMonth(period.month);
+    setYear(period.year);
+  };
+  const applyPeriod = () => {
+    if (!valid) return;
+    setExpanded('');
+    setApplied({ from, to });
+  };
   const query = useWorkQuery<RatingPayload>('ratings', { dateFrom: applied.from, dateTo: applied.to });
   // Keep the ranking up-to-date when a requirement is graded in another panel.
   useEffect(() => {
@@ -45,13 +65,17 @@ export function MarketingRatingsPage() {
   }, [query.reload]);
   const all = query.data?.rows || [];
   const people = useMemo(() => [...new Map(all.map(row => [row.assignee_id, row.assignee_name])).entries()].sort((a,b) => a[1].localeCompare(b[1], 'ar')), [all]);
-  const years = useMemo(() => [...new Set([dateKey(new Date()).slice(0,4), ...all.map(row => ratingDate(row.created_at).slice(0,4))])].sort().reverse(), [all]);
-  const monthlyRows = useMemo(() => all.filter(row => { const key = ratingDate(row.created_at); return (month === 'all' || key.slice(5,7) === month) && (year === 'all' || key.slice(0,4) === year); }), [all,month,year]);
-  const rows = useMemo(() => monthlyRows.filter(row => assignee === 'all' || row.assignee_id === assignee), [monthlyRows,assignee]);
+  const years = useMemo(() => [...new Set([
+    ...Array.from({length: 10}, (_, i) => String(Number(dateKey(new Date()).slice(0, 4)) - i)),
+    year, from.slice(0,4), to.slice(0,4), ...all.map(row => ratingDate(row.created_at).slice(0,4))])]
+    .filter(value => /^\d{4}$/.test(value)).sort().reverse(), [all, year, from, to]);
+  // The server already filters by the applied range. Do not filter its rows by
+  // another, possibly stale month/year: custom ranges may cross month boundaries.
+  const rows = useMemo(() => all.filter(row => assignee === 'all' || row.assignee_id === assignee), [all,assignee]);
   const ranking = useMemo(() => rankRatings(rows), [rows]);
   const months = useMemo(() => {
     const groups = new Map<string, Rating[]>();
-    for (const row of monthlyRows) {
+    for (const row of all) {
       const key = ratingDate(row.created_at).slice(0,7);
       groups.set(key, [...(groups.get(key) || []), row]);
     }
@@ -59,16 +83,16 @@ export function MarketingRatingsPage() {
       const leaders = rankRatings(group.filter(row => assignee === 'all' || row.assignee_id === assignee));
       return { key, winner: leaders[0] || null, count: group.length };
     }).filter(month => month.winner);
-  }, [monthlyRows,assignee]);
+  }, [all,assignee]);
   const average = rows.length ? rows.reduce((sum,row)=>sum+Number(row.percentage),0)/rows.length : null;
   return <div className="mkw-rating-dashboard">
     <section className="panel mkw-ratings-head"><div><h2>تقييمات المنفذين</h2></div>
       <div className="mkw-ratings-filters">
-        <label>من تاريخ<input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)}/></label>
-        <label>إلى تاريخ<input type="date" value={to} min={from} onChange={e => setTo(e.target.value)}/></label>
-        <button type="button" className="primary-button mkw-ratings-apply-button" disabled={!valid || query.loading} onClick={() => setApplied({from,to})}><CalendarBlank size={17} weight="bold"/>تطبيق التاريخ</button>
-        <label>الشهر<select value={month} onChange={e=>setMonth(e.target.value)}><option value="all">جميع الشهور</option>{Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(m=><option key={m} value={m}>{monthFormat.format(new Date(2026,Number(m)-1,1)).split(' ')[0]}</option>)}</select></label>
-        <label>السنة<select value={year} onChange={e=>setYear(e.target.value)}><option value="all">جميع السنوات</option>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>
+        <label>من تاريخ<input type="date" value={from} onChange={e => editDates(e.target.value, to)}/></label>
+        <label>إلى تاريخ<input type="date" value={to} onChange={e => editDates(from, e.target.value)}/></label>
+        <button type="button" className="primary-button mkw-ratings-apply-button" disabled={!valid || query.loading} onClick={applyPeriod}><CalendarBlank size={17} weight="bold"/>تطبيق التاريخ</button>
+        <label>الشهر<select value={month} onChange={e=>editCalendar(e.target.value, year)}><option value="all">جميع الشهور</option>{Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(m=><option key={m} value={m}>{monthFormat.format(new Date(2026,Number(m)-1,1)).split(' ')[0]}</option>)}</select></label>
+        <label>السنة<select value={year} onChange={e=>editCalendar(e.target.value === 'all' ? 'all' : month, e.target.value)}><option value="all">جميع السنوات</option>{years.map(y=><option key={y} value={y}>{y}</option>)}</select></label>
         <label>المنفذ<select value={assignee} onChange={e=>setAssignee(e.target.value)}><option value="all">كل المنفذين</option>{people.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
       </div>
     </section>
