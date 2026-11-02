@@ -1067,6 +1067,8 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-campaign-overview{display:grid;gap:14px;min-width:0;border:1px solid #e8d7cc;background:#fffaf6;border-radius:14px;padding:16px;direction:rtl}
 .mkw-campaign-overview h3{font-size:13px;color:#4a211c;margin:0 0 10px}
 .mkw-campaign-overview-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+/* Four financial tiles in the campaign report only: start, end, duration, budget. */
+.mkw-plan-report .mkw-campaign-overview-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
 .mkw-campaign-overview-stats>div{display:grid;gap:6px;border:1px solid #ebdfd6;background:#fff;border-radius:10px;padding:12px}
 .mkw-campaign-overview-stats small{color:#846b62;font-size:12px}
 .mkw-campaign-overview-stats strong{color:#4a211c;font-size:14px;overflow-wrap:anywhere}
@@ -1096,7 +1098,7 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-calendar-rating-inline .mkw-rating-stars{display:inline-flex;gap:1px;white-space:nowrap}
 .mkw-requirement-explanation{display:grid;gap:5px;font-size:12px;font-weight:700;color:#4a211c}
 .mkw-requirement-explanation textarea{min-height:76px}
-@media(max-width:760px){.mkw-campaign-overview-stats{grid-template-columns:1fr}.mkw-campaign-unique-grid{grid-template-columns:1fr}.mkw-campaign-funding-fields{display:grid}}
+@media(max-width:760px){.mkw-campaign-overview-stats,.mkw-plan-report .mkw-campaign-overview-stats{grid-template-columns:1fr}.mkw-campaign-unique-grid{grid-template-columns:1fr}.mkw-campaign-funding-fields{display:grid}}
 
 /* Keep the entire task-ratings panel collapsed until explicitly opened. */
 .mkw-calendar-ratings-panel>summary{list-style:none;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}

@@ -34,6 +34,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
   const agendaSummary = plan && !isCampaign ? agendaPublicationSummary(lines, query.data?.platforms || []) : null;
   const agendaRange = agendaSummary ? agendaPublicationRange(lines, plan?.agenda_from, plan?.agenda_to) : null;
   const agendaDuration = agendaRange ? inclusivePlanDays(agendaRange.from, agendaRange.to) : null;
+  // Match the printable campaign summary, including its legacy start-date fallback.
+  const campaignStart = plan?.funding_from || lines.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort()[0] || null;
+  const campaignDuration = isCampaign ? inclusivePlanDays(campaignStart, plan?.funding_to) : undefined;
   const publishState = plan ? planStatusName(planDisplayState(plan.review_status, published, lines.length)) : ''; 
 
   return <Modal open title={`التقرير${plan ? ` — ${plan.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-report-modal">
@@ -62,9 +65,9 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <div><small>عدد المنشورات</small><strong>{lines.length}</strong></div>
           <div><small>حالة النشر</small><strong>{planStatusName(planDisplayState(plan.review_status, published, lines.length))}</strong></div>
           <div><small>المنشورات المنشورة</small><strong>{published} من {lines.length}</strong></div>
-          {!isCampaign && <div><small>الاعتماد — المستخدم والتاريخ والساعة</small><strong>{planApprovalLabel(approval?.actor_name, approval?.created_at)}</strong></div>}
+          <div><small>الاعتماد — المستخدم والتاريخ والساعة</small><strong>{planApprovalLabel(approval?.actor_name, approval?.created_at)}</strong></div>
         </div>
-        {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to}/>}
+        {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to} durationDays={campaignDuration}/>}
         {!isCampaign && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
           <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(agendaRange?.from)}</strong></div>
           <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(agendaRange?.to)}</strong></div>

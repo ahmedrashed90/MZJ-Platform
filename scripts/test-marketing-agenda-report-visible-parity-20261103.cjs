@@ -103,6 +103,59 @@ check('Campaign report stays unchanged: no agenda-only summary in campaign',()=>
   assert.equal(byClass(campaignView,'mkw-agenda-platform-table').length,0);
   data.plan=original;
 });
+check('Campaign on-screen report displays approver, Riyadh approval timestamp, and the PDF-matching funding duration',()=>{
+  const original=data.plan;
+  data.plan={...original,kind:'campaign',plan_no:'CMP-001',funding_from:'2026-11-02',funding_to:'2026-11-05'};
+  try {
+    const view=PlanReport({id:'campaign',onClose:()=>{}});
+    const text=getText(view);
+    const approvalLabel=planApprovalLabel(data.history[0].actor_name,data.history[0].created_at);
+    assert(text.includes('الاعتماد — المستخدم والتاريخ والساعة'));
+    assert(text.includes(approvalLabel));
+    let component=null;
+    traverse(view,node=>{if(node && typeof node==='object' && node.type?.name==='CampaignOverview') component=node;});
+    assert(component,'CampaignOverview must be present in campaign report');
+    const overview=getText(component.type(component.props));
+    assert(overview.includes('تاريخ التمويل من'));
+    assert(overview.includes('تاريخ التمويل إلى'));
+    assert(overview.includes('المدة'));
+    assert(overview.includes('4 يوم'));
+    assert(overview.includes('إجمالي ميزانية الحملة'));
+    const pdf=planPdfSummaryHtml({kind:'campaign',planNo:data.plan.plan_no,planName:data.plan.name,
+      creatorName:data.plan.creator_name,createdAt:data.plan.created_at,
+      fundingFrom:data.plan.funding_from,fundingTo:data.plan.funding_to,
+      lines:data.lines,approvedByName:data.history[0].actor_name,approvedAt:data.history[0].created_at});
+    assert(pdf.includes(approvalLabel));
+    assert(pdf.includes('4 يوم'));
+  } finally {data.plan=original;}
+});
+check('Campaign report with no end date or approval shows honest placeholders; review fields remain untouched',()=>{
+  const original=data.plan,history=data.history;
+  data.plan={...original,kind:'campaign',funding_from:'2026-11-02',funding_to:null,review_status:'submitted'};
+  data.history=[];
+  try {
+    const view=PlanReport({id:'campaign-legacy',onClose:()=>{}});
+    assert(getText(view).includes('لم يتم الاعتماد بعد'));
+    let component=null;
+    traverse(view,node=>{if(node && typeof node==='object' && node.type?.name==='CampaignOverview') component=node;});
+    assert(component);
+    assert(getText(component.type(component.props)).includes('غير محددة'));
+    assert(!getText(component.type(component.props)).includes('0 يوم'));
+    const pdf=planPdfSummaryHtml({kind:'campaign',planNo:data.plan.plan_no,planName:data.plan.name,
+      fundingFrom:data.plan.funding_from,fundingTo:null,lines:data.lines});
+    assert(pdf.includes('غير محددة'));
+    assert(pdf.includes('لم يتم الاعتماد بعد'));
+  } finally {data.plan=original;data.history=history;}
+});
+check('Only campaign read-only summary adds duration; agenda layout and PlanDetail stay unchanged',()=>{
+  const src=read('src/marketing/workflow/PlanReport.tsx');
+  const overview=read('src/marketing/workflow/campaignOverview.tsx');
+  const detail=read('src/marketing/workflow/PlanDetail.tsx');
+  assert(src.includes('durationDays={campaignDuration}'));
+  assert(overview.includes('durationDays !== undefined'));
+  assert(!detail.includes('durationDays='));
+  assert(src.includes('تفاصيل النشر حسب المنصة ونوع المنشور'));
+});
 check('Old agendas without date fields show their scheduled first/last dates in report and PDF',()=>{
   const older=agendaPublicationRange(data.lines,null,null);
   assert.equal(older.from,'2026-11-02');assert.equal(older.to,'2026-11-05');

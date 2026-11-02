@@ -89,8 +89,10 @@ export function moneySAR(value: number): string {
   return `${value.toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
 }
 
-export function CampaignOverview({ lines, fundingFrom, fundingTo }: {
+export function CampaignOverview({ lines, fundingFrom, fundingTo, durationDays }: {
   lines: WorkPlanLine[]; fundingFrom?: string | null; fundingTo?: string | null;
+  /** Shown only in the read-only campaign report; approval/edit screens stay unchanged. */
+  durationDays?: number | null;
 }) {
   const summary = campaignContentSummary(lines);
   const firstDay = fundingFrom || lines.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort()[0];
@@ -98,6 +100,7 @@ export function CampaignOverview({ lines, fundingFrom, fundingTo }: {
     <div className="mkw-campaign-overview-stats">
       <div><small>تاريخ التمويل من</small><strong>{firstDay ? showDate(firstDay) : 'غير محدد'}</strong></div>
       <div><small>تاريخ التمويل إلى</small><strong>{fundingTo ? showDate(fundingTo) : 'غير محدد — حملة سابقة'}</strong></div>
+      {durationDays !== undefined && <div><small>المدة</small><strong>{durationDays == null ? 'غير محددة' : `${durationDays} يوم`}</strong></div>}
       <div><small>إجمالي ميزانية الحملة</small><strong>{moneySAR(summary.total)}</strong></div>
     </div>
     <div className="mkw-campaign-overview-section"><h3>ميزانية كل منصة</h3>
