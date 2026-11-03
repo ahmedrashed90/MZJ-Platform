@@ -11,7 +11,7 @@ import { normalizeYouTubePublishOptions, YOUTUBE_CATEGORY_FALLBACKS, type YouTub
 const ManualPublishPage = lazy(() => import('../pages/ManualPublishPage').then(module => ({ default: module.ManualPublishPage })));
 
 type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string; postId?: number; scheduledAt?: string; url?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions; publishTime?: string } };
-type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities; canSaveLinks: boolean };
+type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities; canSaveLinks: boolean; canCorrectPublishedDate: boolean };
 type ProductDraft = { product_id: string; format_ids: string[]; caption: string; hashtags: string; updated_at: string };
 type PublishingData = { products: WorkProduct[]; lines: WorkPlanLine[]; drafts: ProductDraft[]; capabilities: WorkCapabilities };
 
@@ -133,10 +133,11 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
 
 export function PreparationModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const query = useWorkQuery<PrepData>('prep', { id });
+  const [correctionNotice, setCorrectionNotice] = useState('');
   async function refresh() { await query.reload(); onChanged(); }
-  return <Modal open title={W.prepare} onClose={onClose} className="mkw-fullscreen mkw-preparation-fullscreen"><div className="mkw mkw-preparation-full-content"><WorkAlert>{query.error}</WorkAlert>{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} />}</div></Modal>;
+  return <Modal open title={W.prepare} onClose={onClose} className="mkw-fullscreen mkw-preparation-fullscreen"><div className="mkw mkw-preparation-full-content"><WorkAlert>{query.error}</WorkAlert><WorkAlert success>{correctionNotice}</WorkAlert>{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} onDateCorrected={() => setCorrectionNotice('تم حفظ تاريخ النشر المصحح وتسجيل السبب في سجل التدقيق.')} />}</div></Modal>;
 }
-function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => Promise<void> }) {
+function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData; refresh: () => Promise<void>; onDateCorrected: () => void }) {
   const plannedIds = data.line.post_type_id ? [data.line.post_type_id] : [];
   const initialSelected = plannedIds.length ? plannedIds : data.targets.filter(target => target.status !== 'cancelled').map(target => target.post_type_id);
   const availableFormats = data.plannedFormat && !data.product.formats.some(format => format.id === data.plannedFormat?.id)
@@ -144,6 +145,9 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
   const [postUrl, setPostUrl] = useState(data.line.manual_post_url || '');
+  const [correctingDate, setCorrectingDate] = useState(false);
+  const [correctedPublishedOn, setCorrectedPublishedOn] = useState(String(data.line.manual_published_on || '').slice(0, 10));
+  const [correctionReason, setCorrectionReason] = useState('');
   const linkFinalized = Boolean(String(data.line.manual_post_url || '').trim() || data.line.manual_published_on);
   const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
@@ -178,6 +182,24 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
     try {
       await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim() });
       await refresh(); setMessage('تم حفظ رابط المنشور بشكل نهائي وتثبيت تاريخ نشره الفعلي');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function correctPublishedDate() {
+    if (busy || !data.canCorrectPublishedDate || !correctingDate) return;
+    if (!correctedPublishedOn || correctionReason.trim().length < 5) {
+      setError('حدد التاريخ الصحيح واكتب سبب التصحيح (5 أحرف على الأقل).'); return;
+    }
+    if (correctedPublishedOn === String(data.line.manual_published_on || '').slice(0, 10)) {
+      setError('التاريخ الجديد مطابق للتاريخ المسجل.'); return;
+    }
+    if (!window.confirm(`تأكيد تصحيح تاريخ النشر الفعلي إلى ${showDate(correctedPublishedOn)}؟\nسيُسجل التاريخ السابق وسبب التصحيح في سجل التدقيق، ولن يتغير رابط المنشور.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await workPost('correct_plan_published_on', { lineId:data.line.id, publishedOn:correctedPublishedOn, reason:correctionReason.trim() });
+      setCorrectingDate(false);
+      await refresh();
+      onDateCorrected();
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
@@ -240,6 +262,15 @@ function PreparationEditor({ data, refresh }: { data: PrepData; refresh: () => P
       </div>
       {linkFinalized ? <small className="mkw-publish-final-link-notice"><CheckCircle size={18} weight="fill"/> تم حفظ الرابط وتاريخ النشر الفعلي نهائيًا. لا يمكن إضافة رابط آخر أو تعديل الرابط أو حذفه.</small>
         : <small>يُسجل تاريخ أول حفظ للرابط تلقائيًا بتوقيت السعودية. بعد الحفظ لا يمكن تغييره أو حذف الرابط.</small>}
+      {data.canCorrectPublishedDate && linkFinalized && <div className="mkw-published-date-correction">
+        {!correctingDate ? <button type="button" className="secondary" disabled={busy} onClick={() => setCorrectingDate(true)}>تصحيح تاريخ النشر الفعلي</button> : <>
+          <strong>تصحيح التاريخ — للمراجعين المعتمدين فقط</strong>
+          <label>التاريخ الصحيح<input type="date" value={correctedPublishedOn} disabled={busy} onChange={event => setCorrectedPublishedOn(event.target.value)} /></label>
+          <label>سبب التصحيح<textarea value={correctionReason} maxLength={500} rows={2} disabled={busy} placeholder="اكتب سبب تغيير تاريخ النشر الفعلي" onChange={event => setCorrectionReason(event.target.value)} /></label>
+          <div className="mkw-actions"><button type="button" className="primary" disabled={busy || !correctedPublishedOn || correctionReason.trim().length < 5 || correctedPublishedOn === String(data.line.manual_published_on || '').slice(0, 10)} onClick={() => void correctPublishedDate()}>حفظ تصحيح التاريخ</button>
+            <button type="button" className="secondary" disabled={busy} onClick={() => { setCorrectingDate(false); setCorrectionReason(''); setError(''); }}>إلغاء</button></div>
+        </>}
+      </div>}
       {!data.canSaveLinks && !linkFinalized && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
       {data.line.effective_post_url && <a href={data.line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور المحفوظ</a>}
       {data.canSaveLinks && !linkFinalized && <button type="button" className="secondary" disabled={busy || !postUrl.trim()} onClick={() => void saveLink()}>حفظ رابط المنشور نهائيًا</button>}

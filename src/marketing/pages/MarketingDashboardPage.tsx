@@ -152,6 +152,8 @@ export function MarketingDashboardPage() {
             const kinds = uniqueValues(group.map(line => line.post_type_name));
             const distinctProducts = new Set(group.map(line => line.product_id)).size;
             const days = summarizePublishingDays(group);
+            const onTimePosts = days.reduce((total, day) => total + day.onTimeCount, 0);
+            const latePosts = days.reduce((total, day) => total + day.lateCount, 0);
             const productsOpen = expandedPlanIds.has(id);
             return <article className={`mkw-dashboard-publish-card mkw-plan-${visualStatus}`} key={id}>
               <div className="mkw-dashboard-publish-card-head">
@@ -189,6 +191,12 @@ export function MarketingDashboardPage() {
                 </div>
               </div>
 
+              {group[0].kind === 'agenda' && (onTimePosts > 0 || latePosts > 0) &&
+                <div className="mkw-dashboard-agenda-timing mkw-delivery-summary" aria-label="الالتزام بمواعيد نشر الأجندة">
+                  {onTimePosts > 0 && <div className="mkw-delivery-summary-card is-on-time"><span>نشر في الموعد</span><strong>{onTimePosts}</strong></div>}
+                  {latePosts > 0 && <div className="mkw-delivery-summary-card is-late"><span>تأخر في النشر</span><strong>{latePosts}</strong></div>}
+                </div>}
+
               <div id={`mkw-publish-products-${id}`} className="mkw-dashboard-publish-preview" hidden={!productsOpen}>
                 <div className="mkw-dashboard-publish-preview-head"><strong>مواعيد النشر</strong><span>{days.length} يوم · {distinctProducts} منتج · {group.length} منشور</span></div>
                 <div className="mkw-dashboard-publish-preview-list">
@@ -216,7 +224,7 @@ export function MarketingDashboardPage() {
               <div className="mkw-dashboard-publish-actions">
                 <button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>التقرير</button>
                 {((query.data?.canReviewPlans && ['in_progress','submitted'].includes(reviewStatus)) || (group[0].created_by === query.data?.userId && ['in_progress','revision','submitted'].includes(reviewStatus))) && <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>{reviewStatus === 'revision' ? '\u0639\u0631\u0636 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644' : query.data?.canReviewPlans ? '\u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f' : '\u062a\u0641\u0627\u0635\u064a\u0644 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'}</button>}
-                <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
+                <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare && !query.data?.canReviewPlans} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
                 {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
               </div>
             </article>;

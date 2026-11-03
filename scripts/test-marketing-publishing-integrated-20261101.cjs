@@ -67,7 +67,8 @@ for(const field of ['plan.created_at','line.idea_name','line.platform_name','lin
 }
 assert.match(report,/className="mkw-fullscreen mkw-plan-report-modal"/);
 assert.match(report,/للعرض فقط/);
-assert.doesNotMatch(report,/<input\b|<textarea\b|<select\b|<button\b|\bworkPost\s*\(|\bLinkEditor\b/);
+assert.doesNotMatch(report,/<input\b|<textarea\b|<select\b|\bworkPost\s*\(|\bLinkEditor\b/);
+assert.match(report,/<button[^>]+mkw-campaign-export-pdf/, 'the existing export button does not mutate report data');
 assert.doesNotMatch(report,/تاريخ النشر الفعلي/);
 assert.doesNotMatch(manager,/save_plan_post_url|LinkEditor/);
 assert.match(prep,/رابط المنشور وتاريخ النشر الفعلي/);

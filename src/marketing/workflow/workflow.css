@@ -985,7 +985,7 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-plan-report-product { min-width:170px; max-width:260px; }
 .mkw-plan-report-product strong { display:block; }
 .mkw-plan-report-product small { display:block; color:var(--muted); margin-top:5px; font-size:11px; }
-.mkw-plan-report-copy { min-width:160px; max-width:300px; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; font-size:12px; font-weight:500; }
+.mkw-plan-report-copy { min-width:160px; max-width:250px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; line-height:1.8; font-size:12px; font-weight:500; direction:rtl; }
 .mkw-plan-report-link { display:inline-block; white-space:nowrap; color:var(--brand); text-decoration:underline; text-underline-offset:3px; }
 .mkw-plan-report .mkw-plan-history { min-width:0; }
 @media(max-width:850px) {
@@ -1198,3 +1198,18 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 @media(max-width:720px){
   .mkw-dashboard .mkw-dashboard-task,.mkw-dashboard .mkw-dashboard-publish-card{min-height:0}
 }
+
+/* Agenda publication punctuality, derived from the existing per-line timing,
+   without changing execution task cards or their delivery logic. */
+.mkw-dashboard-agenda-timing { margin-top:-3px; }
+.mkw-dashboard-agenda-timing .mkw-delivery-summary-card { background:var(--surface); }
+
+/* Reviewer-only correction of a recorded publication date; the URL remains locked. */
+.mkw-published-date-correction{display:grid;gap:10px;border:1px solid var(--line-strong);border-radius:12px;padding:12px;background:var(--surface-soft)}
+.mkw-published-date-correction>button{justify-self:start}
+.mkw-published-date-correction>strong{color:var(--brand);font-size:13px}
+.mkw-published-date-correction label{display:grid;gap:6px;font-size:12px;font-weight:700}
+.mkw-published-date-correction input,.mkw-published-date-correction textarea{width:100%;min-width:0}
+.mkw-published-date-correction .mkw-actions{justify-content:flex-start}
+
+.mkw-dashboard-agenda-timing:has(.mkw-delivery-summary-card:only-child){grid-template-columns:minmax(0,1fr)}

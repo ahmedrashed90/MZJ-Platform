@@ -132,8 +132,8 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
               <td>{line.platform_name || '—'}</td>
               <td>{line.post_type_name || '—'}</td>
               {isCampaign && <td>{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}
-              <td><div className="mkw-plan-report-copy">{line.caption || 'لم يتم تجهيز الكابشن'}</div></td>
-              <td><div className="mkw-plan-report-copy">{line.hashtags || 'لم يتم تجهيز الهاشتاج'}</div></td>
+              <td><div className="mkw-plan-report-copy" title={line.caption || 'لم يتم تجهيز الكابشن'}>{line.caption || 'لم يتم تجهيز الكابشن'}</div></td>
+              <td><div className="mkw-plan-report-copy" title={line.hashtags || 'لم يتم تجهيز الهاشتاج'}>{line.hashtags || 'لم يتم تجهيز الهاشتاج'}</div></td>
               <td><PublicationTiming line={line}/></td>
               <td>{line.published_ready ? 'تم النشر' : planStatusName(plan.status)}</td>
               <td>{line.effective_post_url

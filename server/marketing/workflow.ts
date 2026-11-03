@@ -1075,14 +1075,17 @@ async function products(sql: Sql, user: SessionUser) {
   return rows.filter(row => finalCoverage(row as WorkItem)).map(row => ({ ...row,
     statement: `${row.task_name} - ${row.media_kind === 'video' ? W.video : W.image}` }));
 }
-async function productVisible(db: any, user: SessionUser, itemId: string) {
+async function productVisible(db: any, user: SessionUser, itemId: string, allowPlanReviewer = false) {
   const scopes = departmentScope(user);
+  const selectedPlanReviewer = allowPlanReviewer && await canReviewPlan(db as Sql,user);
   const [row] = await db`select i.*,i.due_on::text,t.name as task_name,t.task_no,t.status as task_status,t.completed_at,
     u.full_name as assignee_name,d.name as department_name from marketing.work_items i
     join marketing.work_tasks t on t.id=i.task_id left join core.users u on u.id=i.assigned_to
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=d.id
     where i.id=${itemId}::uuid and i.status='approved' and t.is_deleted=false and (
-      ${productManager(user)} or ${isManager(user)} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))`;
+      ${productManager(user)} or ${isManager(user)} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]) or
+      (${selectedPlanReviewer} and exists(select 1 from marketing.work_plan_items pl join marketing.work_plans wp on wp.id=pl.plan_id
+        where pl.product_id=i.id and pl.is_deleted=false and wp.is_deleted=false and wp.review_status in ('publishing','published'))))`;
   if (!row) throw new Error(W.productUnavailable);
   const item = (await loadItems(db, row.task_id)).find(r => r.id === itemId);
   if (!item || !finalCoverage(item)) throw new Error(W.productUnavailable);
@@ -1327,6 +1330,39 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
       returning manual_published_on::text as published_on`;
     if (!saved) throw new Error('الرابط محفوظ بالفعل؛ أعد تحميل بيانات المنشور.');
     return { ok:true, publishedOn:saved?.published_on || null, message:W.saved };
+  });
+}
+
+/** Correct an ALREADY SAVED manual publication date. The first URL is immutable;
+ * only the explicitly configured Marketing plan reviewers may correct the date.
+ * Preserve the previous value and the reason in the central audit log atomically. */
+async function correctPlanPublicationDate(sql: Sql, user: SessionUser, body: Row) {
+  const lineId = id(body.lineId);
+  const publishedOn = text(body.publishedOn, 10);
+  const reason = text(body.reason, 500);
+  if (!isWorkDate(publishedOn)) throw new Error('حدد تاريخ النشر الفعلي الصحيح.');
+  if (reason.length < 5) throw new Error('اكتب سبب التصحيح بوضوح (5 أحرف على الأقل).');
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    if (!(await canReviewPlan(tx as unknown as Sql, user))) throw new Error(W.denied);
+    const [line] = await tx<any[]>`select l.id,l.plan_id,l.manual_post_url,l.manual_published_on::text as previous_on,p.review_status
+      from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
+    if (!line) throw new Error(W.notFound);
+    if (!['publishing','published'].includes(line.review_status) || !String(line.manual_post_url || '').trim() || !line.previous_on)
+      throw new Error('لا يمكن تصحيح التاريخ قبل حفظ رابط المنشور لأول مرة واعتماد الحملة أو الأجندة.');
+    const previousOn = workDate(line.previous_on);
+    if (previousOn === publishedOn) throw new Error('التاريخ الجديد مطابق لتاريخ النشر المسجل.');
+    const [changed] = await tx<any[]>`update marketing.work_plan_items
+      set manual_published_on=${publishedOn}::date,updated_at=now(),version=version+1
+      where id=${lineId}::uuid and manual_published_on=${previousOn}::date
+      returning manual_published_on::text as published_on`;
+    if (!changed || workDate(changed.published_on) !== publishedOn) throw new Error('لم يتم تأكيد حفظ التاريخ المصحح؛ أعد تحميل البيانات.');
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+      values(${user.id}::uuid,'marketing','work_correct_plan_published_on','marketing_work_plan_item',${lineId},
+        ${tx.json({ planId:String(line.plan_id), publishedOn:previousOn })},
+        ${tx.json({ planId:String(line.plan_id), publishedOn, reason, correctedBy:user.id })})`;
+    return { ok:true, id:lineId, publishedOn, message:'تم تصحيح تاريخ النشر الفعلي وتسجيل سبب التعديل' };
   });
 }
 
@@ -1826,10 +1862,11 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
 }
 
 async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, services: WorkflowServices) {
-  requirePermission(user, 'marketing.publish_prep.view');
+  const planReviewer = await canReviewPlan(sql,user);
+  if (!hasPermission(user, 'marketing.publish_prep.view') && !planReviewer) throw new Error(W.denied);
   const [line] = (await planLines(sql, user)).filter(row => row.id === lineId);
   if (!line) throw new Error(W.notFound);
-  const product = await productVisible(sql, user, line.product_id);
+  const product = await productVisible(sql, user, line.product_id, planReviewer);
   const targets = await sql<any[]>`select target.id,target.post_type_id,target.schedule_id,s.status,s.publish_result,s.published_at,
     s.caption,s.hashtags,s.publish_options,s.updated_at,p.code as platform_code,p.name as platform_name,pt.name as post_type_name
     from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id
@@ -1841,7 +1878,9 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
   return { ok: true, line, product, targets, plannedFormat: plannedFormat || null, draftFormatIds: list(draft?.format_ids),
     youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user),
     canSaveLinks: ['publishing', 'published'].includes(line.review_status) &&
-      (line.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user, 'marketing.publish.now')) };
+      (line.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user, 'marketing.publish.now')),
+    canCorrectPublishedDate: ['publishing', 'published'].includes(line.review_status) &&
+      !!String(line.manual_post_url || '').trim() && !!line.manual_published_on && planReviewer };
 }
 
 async function savePreparation(sql: Sql, user: SessionUser, body: Row, services: WorkflowServices) {
@@ -2384,6 +2423,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_update_plan_agenda_window') result = await updatePlanAgendaWindow(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
+    else if (action === 'work_correct_plan_published_on') result = await correctPlanPublicationDate(sql, user, body);
     else if (action === 'work_activate_plan') {
       const settings = await publishControlSettings(sql);
       if (!settings.enabled) throw new Error('زر النشر التلقائي متوقف من إعدادات التسويق');
