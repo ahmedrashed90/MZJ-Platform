@@ -8,6 +8,7 @@ import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
 import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
+import { DEFAULT_LEAD_FORM_PIXELS, validateLeadFormPixels, getPublicLeadFormPixels } from '../../shared/lead-form-pixels.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
 const sourceName = (v: unknown) => clean(v, 100).replace(/[\r\n\t]/g, ' ') || 'direct';
@@ -254,7 +255,17 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const sql = getSql();
   const [form] = await sql<any[]>`select * from marketing.lead_forms where slug=${clean(params.slug,110)} and status='published'`;
   if (!form) return fail(res,404,'الفورم غير متاح حاليًا');
-  if (action==='public' && req.method==='GET') return res.json({ok:true,form:publicConfig(form)});
+  if (action==='public' && req.method==='GET') {
+    const [row] = await sql<{config:unknown}[]>`select config from marketing.form_pixel_settings where scope='global'`;
+    let pixels = DEFAULT_LEAD_FORM_PIXELS;
+    if (row) {
+      try { pixels = validateLeadFormPixels(row.config); }
+      catch { /* Invalid legacy settings must fail closed, not activate tracking. */
+        pixels = {meta:{id:'',enabled:false},snapchat:{id:'',enabled:false},tiktok:{id:'',enabled:false}};
+      }
+    }
+    return res.json({ok:true,form:publicConfig(form),pixels:getPublicLeadFormPixels(pixels)});
+  }
   if (req.method!=='POST') return fail(res,405,'الطريقة غير مدعومة');
   const visitor = clean(params.visitor,50);
   if (!uuidPattern.test(visitor)) return fail(res,400,'معرف الجلسة غير صالح');
@@ -306,17 +317,18 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   // The stored view/campaign is authoritative when present; avoid arbitrary changing of UTM on submission.
   const [visit] = await sql<any[]>`select source,campaign,medium,ad_id from marketing.form_visits where form_id=${form.id}::uuid and visitor_key=${visitorKey}`;
   const info = visit || { source:meta.source,campaign:meta.campaign,medium:meta.medium,ad_id:meta.adId };
-  const [lead] = await sql<{id:string;sheet_status:string}[]>`
+  const [lead] = await sql<{id:string;sheet_status:string;created:boolean}[]>`
     insert into marketing.form_leads(form_id,submission_key,name,phone,answers,answer_labels,source,campaign,medium,ad_id,sheet_status,crm_status,ip_hash)
     values(${form.id}::uuid,${key},${name},${phone},${sql.json(answers)},${sql.json(answerLabels)},${info.source},${info.campaign},${info.medium},${info.ad_id},${form.sheet_id?'pending':'not_configured'},'pending',${hash})
     on conflict(form_id,submission_key) do update set submission_key=excluded.submission_key
-    returning id::text,sheet_status`;
+    returning id::text,sheet_status,(xmax=0) as created`;
   // Public submission succeeds as soon as the form lead is stored; CRM errors are
   // retained in marketing.form_leads for an explicit admin retry, never lost.
-  try { await syncMarketingFormLeadToCrm(lead.id); }
+  let crmStatus: string | null = null;
+  try { const crm = await syncMarketingFormLeadToCrm(lead.id); crmStatus = crm.status; }
   catch (error) { console.error('Marketing form CRM sync failed', { formLeadId: lead.id, error }); }
   if (lead?.sheet_status==='pending' && sheetServiceAccount()) await withDatabaseAdvisoryLock(`mzj:form-sheet:${lead.id}`,()=>syncLead(lead.id));
-  return res.json({ok:true,id:lead.id, sheetEnabled:Boolean(form.sheet_id),sheetConfigured:Boolean(sheetServiceAccount())});
+  return res.json({ok:true,id:lead.id,created:lead.created,crmStatus,sheetEnabled:Boolean(form.sheet_id),sheetConfigured:Boolean(sheetServiceAccount())});
 }
 export default async function leadFormsHandler(req:VercelRequest,res:VercelResponse) {
   try {
@@ -335,6 +347,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       create:'marketing.lead_forms.create', save:'marketing.lead_forms.edit', duplicate:'marketing.lead_forms.create', publish:'marketing.lead_forms.publish', pause:'marketing.lead_forms.publish', archive:'marketing.lead_forms.publish',
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
       sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
+      pixel_settings:'marketing.lead_forms.view', pixel_settings_save:'marketing.lead_forms.edit',
       design_templates:'marketing.lead_forms.view', design_template_save:'marketing.lead_forms.create',
     } as Record<string,string>)[action];
     if (!permission) return fail(res,404,'عملية غير معروفة');
@@ -355,6 +368,19 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       const [saved]=await sql<any[]>`insert into marketing.form_design_templates(name,template,config,created_by)
         values(${name},${template},${sql.json(config)},${user.id}::uuid) returning id::text`;
       return res.json({ok:true,id:saved.id,message:'تم حفظ التصميم في مكتبة القوالب'});
+    }
+    if (action==='pixel_settings' && req.method==='GET') {
+      const [row] = await sql<{config:unknown}[]>`select config from marketing.form_pixel_settings where scope='global'`;
+      return res.json({ok:true,pixels:row ? validateLeadFormPixels(row.config) : DEFAULT_LEAD_FORM_PIXELS});
+    }
+    if (action==='pixel_settings_save' && req.method==='POST') {
+      let pixels;
+      try { pixels = validateLeadFormPixels(params.pixels); }
+      catch (error) { return fail(res,400,error instanceof Error?error.message:'إعدادات Pixels غير صالحة'); }
+      await sql`insert into marketing.form_pixel_settings(scope,config)
+        values('global',${sql.json(pixels)})
+        on conflict(scope) do update set config=excluded.config,updated_at=now()`;
+      return res.json({ok:true,pixels});
     }
     if (action==='sheet_status' && req.method==='GET') {
       const account=sheetServiceAccount(); return res.json({ok:true,configured:!!account,serviceEmail:account?.client_email || ''});

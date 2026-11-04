@@ -6,6 +6,7 @@ import { resolveFormDesign, type DesignBlock } from '../../../shared/lead-form-d
 import './lead-forms.css';
 
 export type RendererForm = { title:string; description:string; template:FormTemplate; config:FormConfig; slug?:string };
+export type StoredFormLead = {id:string;created:boolean;crmStatus:string|null};
 function uuid() { return typeof crypto!=='undefined' && crypto.randomUUID ? crypto.randomUUID() : `00000000-0000-4000-8000-${Math.floor(Math.random()*2**48).toString(16).padStart(12,'0')}`; }
 function getVisitor(slug:string) {
   try {const key=`mzj-form-visitor-${slug}`,old=sessionStorage.getItem(key);if(old)return old;const next=uuid();sessionStorage.setItem(key,next);return next;} catch { return uuid(); }
@@ -14,7 +15,7 @@ function getTracking() {
   const u=new URLSearchParams(window.location.search);
   return { source:(u.get('utm_source')||u.get('source')||'direct').slice(0,100), campaign:(u.get('utm_campaign')||'').slice(0,160), medium:(u.get('utm_medium')||'').slice(0,120), adId:(u.get('ad_id')||u.get('utm_content')||'').slice(0,140) };
 }
-export function LeadFormRenderer({ form, preview=false, compact=false }:{ form:RendererForm;preview?:boolean;compact?:boolean }) {
+export function LeadFormRenderer({ form, preview=false, compact=false, onLeadStored }:{ form:RendererForm;preview?:boolean;compact?:boolean;onLeadStored?:(lead:StoredFormLead)=>void }) {
   const config=form.config?.fields?.length?form.config:DEFAULT_FORM_CONFIG;
   const style=config.style || DEFAULT_FORM_CONFIG.style;
   const design=useMemo(()=>resolveFormDesign(config.design,form.template,config.fields),[config.design,config.fields,form.template]);
@@ -60,6 +61,9 @@ export function LeadFormRenderer({ form, preview=false, compact=false }:{ form:R
       const json=await result.json().catch(()=>({}));
       if(!result.ok||!json.ok)throw new Error(String(json.error||'تعذر إرسال الطلب'));
       setDone(true);
+      // A third-party pixel must never change the result of a successful form save.
+      try { if(typeof json.id==='string')onLeadStored?.({id:json.id,created:json.created===true,crmStatus:typeof json.crmStatus==='string'?json.crmStatus:null}); }
+      catch { /* Nonessential measurement cannot affect customer submissions. */ }
     } catch(e) {setError(e instanceof Error?e.message:'تعذر إرسال الطلب');}
     finally {setSending(false);}
   }

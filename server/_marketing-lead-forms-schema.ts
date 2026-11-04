@@ -31,6 +31,12 @@ create table if not exists marketing.form_design_templates (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- The lead-form module owns these settings exclusively; there are no ads API tokens.
+create table if not exists marketing.form_pixel_settings (
+  scope text primary key check(scope='global'),
+  config jsonb not null,
+  updated_at timestamptz not null default now()
+);
 create table if not exists marketing.form_visits (
   id uuid primary key default gen_random_uuid(),
   form_id uuid not null references marketing.lead_forms(id) on delete cascade,
@@ -88,12 +94,12 @@ let ready: Promise<void> | null = null;
 export function ensureMarketingLeadFormsSchema() {
   if (!ready) ready = (async () => {
     const sql = getSql();
-    const [check] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.lead_forms') is not null and to_regclass('marketing.form_visits') is not null and to_regclass('marketing.form_leads') is not null and to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null
+    const [check] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.lead_forms') is not null and to_regclass('marketing.form_visits') is not null and to_regclass('marketing.form_leads') is not null and to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null and to_regclass('marketing.form_pixel_settings') is not null
       and (select count(*)=5 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
         and column_name in ('answer_labels','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
     if (check?.ok) return;
     await withDatabaseAdvisoryLock('mzj:marketing-lead-forms:20261025', async () => {
-      const [again] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null
+      const [again] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null and to_regclass('marketing.form_pixel_settings') is not null
       and (select count(*)=5 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
         and column_name in ('answer_labels','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
       if (again?.ok) return;

@@ -331,3 +331,22 @@
 .mlf-crm-failed{color:#a4342e;font-weight:800}
 .mlf-crm-retry{background:#f3e8dc;border:1px solid #d9b4a3;border-radius:8px;color:#4a211c;font:inherit;font-size:11px;padding:5px 9px;cursor:pointer}
 .mlf-crm-retry:disabled{opacity:.6;cursor:wait}
+
+/* Lead Forms Pixels: an isolated opt-in on public forms only. No tracking on previews. */
+.mlf-pixel-consent{box-sizing:border-box;position:fixed;z-index:1100;bottom:14px;left:50%;transform:translateX(-50%);width:min(520px,calc(100vw - 26px));max-height:min(65dvh,470px);overflow-y:auto;background:#f3e8dc;color:#4a211c;border:1px solid #c7a595;box-shadow:0 12px 36px #2f171955;border-radius:13px;padding:16px 18px;font-family:'Tajawal',sans-serif}
+.mlf-pixel-consent strong{font-size:15px;color:#4a211c}
+.mlf-pixel-consent p{font-size:12px;line-height:1.7;margin:9px 0 13px;color:#573b32}
+.mlf-pixel-consent-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.mlf-pixel-consent-actions button{border-radius:9px;padding:9px 13px;font:inherit;font-size:12px;font-weight:800;cursor:pointer;min-height:36px}
+.mlf-pixel-consent-actions .primary{background:#4a211c;color:#f3e8dc;border:1px solid #4a211c}
+.mlf-pixel-consent-actions .secondary{background:transparent;color:#4a211c;border:1px solid #b18e7e}
+.mlf-pixel-consent-actions a{font-size:11px;color:#4a211c;text-decoration:underline}
+.mlf-pixel-privacy-control{position:fixed;z-index:100;bottom:10px;left:10px;border:1px solid #ddc8bb;background:#f3e8dc;color:#4a211c;padding:5px 9px;border-radius:8px;font:inherit;font-size:10px;opacity:.88;cursor:pointer}
+.mlf-pixel-settings{display:grid;gap:13px}
+.mlf-pixel-platform{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,2fr) auto;gap:14px;align-items:end;padding:14px;border:1px solid #e4d3c8;border-radius:12px;background:#faf7f4}
+.mlf-pixel-platform>strong{color:#4a211c;align-self:center}
+.mlf-pixel-platform>label{display:grid;gap:6px;font-size:12px;font-weight:700;color:#4a211c}
+.mlf-pixel-platform input[type=text]{width:100%;box-sizing:border-box;border:1px solid #d5bdb0;border-radius:8px;padding:10px;direction:ltr;text-align:left;font:inherit;color:#4a211c;background:white}
+.mlf-pixel-toggle{display:flex!important;align-items:center;gap:7px;white-space:nowrap}
+.mlf-pixel-toggle input{accent-color:#4a211c}
+@media(max-width:670px){.mlf-pixel-platform{grid-template-columns:1fr;gap:8px}}

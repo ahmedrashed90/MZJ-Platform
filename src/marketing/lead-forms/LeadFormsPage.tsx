@@ -12,6 +12,7 @@ import { FormVisualDesigner } from './FormVisualDesigner';
 import { FormTemplateThumbnail } from './FormTemplateThumbnail';
 import { createTemplateDesign } from '../../../shared/lead-form-design';
 import type { SavedFormDesign } from '../../../shared/lead-forms';
+import { DEFAULT_LEAD_FORM_PIXELS, type LeadFormPixelPlatform, type LeadFormPixelSettings } from '../../../shared/lead-form-pixels';
 import './lead-forms.css';
 
 type Tab='dashboard'|'library'|'builder'|'manage'|'leads'|'reports'|'sheets'|'settings';
@@ -73,6 +74,9 @@ export function LeadFormsPage(){
   const leadsRequestId=useRef(0);
   const canViewLeads=can('leads.view');
   const [sheetStatus,setSheetStatus]=useState<{configured:boolean;serviceEmail:string}|null>(null);
+  const [pixels,setPixels]=useState<LeadFormPixelSettings>(DEFAULT_LEAD_FORM_PIXELS);
+  const [pixelBusy,setPixelBusy]=useState(false);
+  const [pixelsLoaded,setPixelsLoaded]=useState(false);
   const setActive=(value:Tab)=>{setTab(value);setError('');setNotice('');const params=new URLSearchParams(window.location.search);params.set('lf',value);window.history.replaceState({},'',`${window.location.pathname}?${params.toString()}`);};
   const reload=useCallback(async()=>{setLoading(true);try{const response=await formsApi<FormListResponse>('list');setForms(response.forms.map(normalizeForm));}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل الفورمات');}finally{setLoading(false);}},[]);
   useEffect(()=>{void reload();},[reload]);
@@ -104,6 +108,28 @@ export function LeadFormsPage(){
     finally{setBusy('');}
   };
   useEffect(()=>{if(tab==='sheets'&&can('sheets.manage'))void formsApi<{ok:true;configured:boolean;serviceEmail:string}>('sheet_status').then(setSheetStatus).catch(()=>setSheetStatus(null));},[tab,user]);
+  useEffect(()=>{
+    if(tab!=='settings')return;
+    let active=true;
+    setPixelsLoaded(false);
+    void formsApi<{ok:true;pixels:LeadFormPixelSettings}>('pixel_settings')
+      .then(data=>{if(active){setPixels(data.pixels);setPixelsLoaded(true);}})
+      .catch(e=>{if(active)setError(e instanceof Error?e.message:'تعذر جلب إعدادات Pixels');});
+    return()=>{active=false;};
+  },[tab]);
+  const updatePixel=(platform:LeadFormPixelPlatform,part:Partial<{id:string;enabled:boolean}>)=>{
+    setPixels(current=>({...current,[platform]:{...current[platform],...part}}));
+  };
+  const savePixels=async()=>{
+    if(!can('edit'))return;
+    setPixelBusy(true);setNotice('');setError('');
+    try{
+      const saved=await formsApi<{ok:true;pixels:LeadFormPixelSettings}>('pixel_settings_save',{pixels},'POST');
+      setPixels(saved.pixels);
+      setNotice('تم حفظ إعدادات Pixels لفورم المنصات فقط. تسري على جميع الفورمات المنشورة والجديدة.');
+    }catch(e){setError(e instanceof Error?e.message:'تعذر حفظ إعدادات التتبع');}
+    finally{setPixelBusy(false);}
+  };
   useEffect(()=>{if(!selected && forms.length)setSelected(forms[0].id);},[forms.length]);
   const perform=async(action:string,payload:Record<string,unknown>,success='تم الحفظ')=>{setBusy(action);setError('');setNotice('');try{const result=await formsApi<{ok:true;id?:string;message?:string}>(action,payload,'POST');setNotice(result.message||success);await reload();return result;}catch(e){setError(e instanceof Error?e.message:'تعذر الحفظ');return null;}finally{setBusy('');}};
   const editForm=(form:LeadForm)=>{setSelected(form.id);setDraft(structuredClone(normalizeForm(form)));setActive('builder');};
@@ -185,6 +211,19 @@ export function LeadFormsPage(){
 
     {tab==='settings'&&<>
       <section className="marketing-card"><h2>إعدادات فورم المنصات</h2><div className="mlf-settings-grid"><div><strong>رابط نشر الفورمات</strong><p>يستخدم نفس دومين المنصة تلقائيًا. العميل لا يحتاج إلى تسجيل دخول.</p><code dir="ltr">{window.location.origin}/forms/...</code></div><div><strong>المعاينة قبل النشر</strong><p>وضع المعاينة لا يحفظ ليدًا حقيقيًا ولا يضيفه إلى الإحصائيات.</p></div><div><strong>الهوية والخط</strong><p>الخط Tajawal، ويمكن تغيير ألوان كل فورم وصورة الغلاف من داخل المحرر.</p><div className="mlf-color-samples"><i style={{background:'#4A211C'}}/><i style={{background:'#F3E8DC'}}/></div></div><div><strong>صلاحيات المستخدمين</strong><p>صلاحيات مستقلة للفورمات، إنشاء، تعديل، نشر، عرض وتصدير الليدات، التقارير، وإعدادات الشيت.</p>{hasPermission(user,'settings.users.view')&&<Link to="/settings?section=users" className="mlf-settings-link"><ShieldCheck size={17}/> إدارة المستخدمين والصلاحيات</Link>}</div></div></section>
+      <section className="marketing-card" aria-label="إعدادات Pixels فورم المنصات">
+        <h3>تتبع الحملات — Pixels فقط</h3>
+        <p>تُستخدم هذه الإعدادات لجميع فورمات MZJ المنشورة والجديدة تلقائيًا. لا يوجد أي ربط مع Conversions API أو Events API. عند فتح الرابط من منصة معروفة، يُطلب من الزائر السماح بالتتبع أولًا، ثم يُرسل PageView وحدث الليد بعد حفظه بنجاح فقط. بيانات العميل وإجاباته لا تُمرر كمعلمات أحداث.</p>
+        {!pixelsLoaded?<p>جاري تحميل إعدادات Pixels...</p>:<div className="mlf-pixel-settings">
+          {([['meta','Meta (Facebook / Instagram)'],['snapchat','Snapchat'],['tiktok','TikTok']] as const).map(([platform,label])=><div key={platform} className="mlf-pixel-platform">
+            <strong>{label}</strong>
+            <label>Pixel ID<input type="text" value={pixels[platform].id} disabled={!can('edit')||pixelBusy} maxLength={50} onChange={e=>updatePixel(platform,{id:e.target.value})} placeholder={`معرف ${label}`}/></label>
+            <label className="mlf-pixel-toggle"><input type="checkbox" checked={pixels[platform].enabled} disabled={!can('edit')||pixelBusy} onChange={e=>updatePixel(platform,{enabled:e.target.checked})}/> تفعيل</label>
+          </div>)}
+          {can('edit')&&<div className="mlf-card-actions"><button className="primary" type="button" disabled={pixelBusy} onClick={()=>void savePixels()}><FloppyDisk size={18}/>{pixelBusy?'جاري الحفظ...':'حفظ إعدادات Pixels'}</button></div>}
+        </div>}
+        <p className="mlf-hint">مهم: التتبع لا يعمل في المعاينة أو زيارات direct أو بدون موافقة الزائر، ولا يؤثر على نظام CRM أو الحملات الحالية. لقياس الحملات استخدم رابط الإعلان من «إدارة الفورمات» مع utm_source الصحيح.</p>
+      </section>
       <section className="marketing-card"><h3>سياسة الخصوصية</h3><p>كل فورم منشور يحتوي على موافقة العميل ورابط سياسة الخصوصية.</p><a className="mlf-settings-link" href="/privacy" target="_blank" rel="noopener noreferrer">عرض سياسة الخصوصية <LinkSimple size={17}/></a></section>
     </>}
 
