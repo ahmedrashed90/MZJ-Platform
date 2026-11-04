@@ -43,12 +43,32 @@ export function detectFormAdPlatform(search: string, referrer: string): LeadForm
   if (['meta','facebook','fb','instagram','ig','facebook_ads','instagram_ads'].includes(source)) return 'meta';
   if (['snapchat','snap','snap_ads'].includes(source)) return 'snapchat';
   if (['tiktok','tik_tok','tiktok_ads'].includes(source)) return 'tiktok';
-  // A present, unrecognized source must not be overridden by a different referrer.
-  if (source) return null;
+
+  // The Lead Forms campaign-link builder owns this stable key. Some link previewers
+  // (including ChatGPT) replace utm_source with their own referral source while
+  // preserving custom parameters. Do not lose the declared ad Pixel in that case.
+  const declared = String(query.get('mzj_pixel_source') || '').trim().toLowerCase();
+  const previewSource = !source || ['chatgptcom','chatgpt','openaicom'].includes(source);
+  if (previewSource && (declared === 'meta' || declared === 'snapchat' || declared === 'tiktok')) return declared;
+
   const keys = new Set([...query.keys()].map(k => k.toLowerCase()));
+  if (previewSource) {
+    // Test-mode links are supplied by TikTok/Snapchat and are unambiguous even
+    // when a link previewer overwrites utm_source. They do not authorize direct
+    // visitors without a recognized ad or test marker to be tracked.
+    if (keys.has('sctestmodeid') || keys.has('sccid') || keys.has('sc_click_id')) return 'snapchat';
+    if (keys.has('tt_test_id') || keys.has('ttclid')) return 'tiktok';
+    if (source) {
+      // Compatibility for the existing MZJ test links shared before the stable
+      // marker was added. Never infer a real campaign platform from its title.
+      const campaign = String(query.get('utm_campaign') || '').toUpperCase();
+      if (campaign.startsWith('MZJ_SNAP_PIXEL_TEST_')) return 'snapchat';
+      if (campaign.startsWith('MZJ_TIKTOK_PIXEL_TEST_')) return 'tiktok';
+    }
+  }
+  // An unrelated source must not be overridden by a different referrer.
+  if (source) return null;
   if (keys.has('fbclid')) return 'meta';
-  if (keys.has('sccid') || keys.has('sc_click_id')) return 'snapchat';
-  if (keys.has('ttclid')) return 'tiktok';
   try {
     const domain = new URL(referrer).hostname.toLowerCase();
     if (domain === 'facebook.com' || domain.endsWith('.facebook.com') || domain === 'instagram.com' || domain.endsWith('.instagram.com') || domain === 'fb.com') return 'meta';
@@ -86,7 +106,27 @@ function bootMeta(pixelId: string) {
     inited.add(`meta:${pixelId}`);
   }
 }
+/** Snap's browser test tool supplies ScTestModeId in its opened URL.
+ * With late, consent-gated SDK loading, preserve that test marker for the SDK
+ * before initialization. Keep it limited to this Pixel and clean up on a real
+ * campaign visit so test mode cannot leak into production tracking.
+ */
+function prepareSnapTestMode(pixelId: string) {
+  try {
+    const testId = [...new URLSearchParams(window.location.search).entries()]
+      .find(([key]) => key.toLowerCase() === 'sctestmodeid')?.[1];
+    const key = '_scTestEvent';
+    if (testId?.toLowerCase() === pixelId.toLowerCase()) {
+      window.localStorage.setItem(key, `${pixelId}|${Date.now()}`);
+    } else {
+      const previous = window.localStorage.getItem(key);
+      if (previous?.split('|')[0]?.toLowerCase() === pixelId.toLowerCase())
+        window.localStorage.removeItem(key);
+    }
+  } catch { /* Storage may be unavailable in private browsing. */ }
+}
 function bootSnap(pixelId: string) {
+  prepareSnapTestMode(pixelId);
   const w = window as BrowserWithPixels;
   if (!w.snaptr) {
     const fn: PixelFunction = (...args: unknown[]) => {
@@ -99,7 +139,7 @@ function bootSnap(pixelId: string) {
   }
   if (!inited.has(`snapchat:${pixelId}`)) {
     // No user_email/user_phone or other advanced-matching information.
-    w.snaptr?.('init', pixelId);
+    w.snaptr?.('init', pixelId, {});
     inited.add(`snapchat:${pixelId}`);
   }
 }

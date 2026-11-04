@@ -25,7 +25,7 @@ assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,
 assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,id:''}}));
 function mockedBrowser(){
   const scripts=[];const values={};
-  const window={location:{search:'',reload(){},},localStorage:{getItem:k=>values[k]||null,setItem:(k,v)=>values[k]=v}};
+  const window={location:{search:'',reload(){},},localStorage:{getItem:k=>values[k]||null,setItem:(k,v)=>values[k]=v,removeItem:k=>delete values[k]}};
   const document={head:{appendChild:tag=>scripts.push(tag)},createElement:()=>({})};
   return {window,document,scripts};
 }
@@ -40,6 +40,20 @@ function testPlatform(platform, expectedEvent, expectedScript){
   assert.equal(mod.detectFormAdPlatform('',''), null);
   assert.equal(mod.detectFormAdPlatform('?ttclid=x',''), 'tiktok');
   assert.equal(mod.detectFormAdPlatform('?ScCid=x',''), 'snapchat');
+  // Link previewers can replace utm_source. A known MZJ campaign/test marker
+  // must still select the correct Pixel, but an unknown visit must stay off.
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&utm_campaign=MZJ_TIKTOK_PIXEL_TEST_20261104',''), 'tiktok');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&tt_test_id=DBLL5EBC77UASCMH46OG_123',''), 'tiktok');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&ScTestModeId=0013dd43-0c92-4403-bb53-1793e1f5d077',''), 'snapchat');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&utm_campaign=MZJ_SNAP_PIXEL_TEST_20261104',''), 'snapchat');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&mzj_pixel_source=tiktok',''), 'tiktok');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=snapchat&mzj_pixel_source=tiktok',''), 'snapchat');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=google&utm_campaign=car','https://tiktok.com/'), null);
+  assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&utm_campaign=generic',''), null);
+  assert.equal(mod.detectFormAdPlatform('?utm_source=direct',''), null);
+  assert.equal(mod.detectFormAdPlatform('?fbclid=some-id',''), 'meta');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=google&mzj_pixel_source=tiktok',''), null);
+
   assert.equal(mod.detectFormAdPlatform('','https://l.instagram.com/path'), 'meta');
   mod.startFormAdPixel(platform,settings,'mymzj-form',null);
   mod.startFormAdPixel(platform,settings,'mymzj-form','deny');
@@ -65,9 +79,33 @@ function testPlatform(platform, expectedEvent, expectedScript){
 testPlatform('meta','Lead','facebook.net');
 testPlatform('snapchat','SIGN_UP','sc-static.net');
 testPlatform('tiktok','Lead','analytics.tiktok.com');
+// Snapchat's browser test URL must be prepared before SDK initialization and
+// the test marker must be removed when returning to a real campaign URL.
+{
+  const {window,document,scripts}=mockedBrowser();
+  const mod=transpiled('src/marketing/lead-forms/pixel-tracking.ts',{window,document});
+  const pixel=settings.snapchat.id;
+  window.location.search=`?utm_source=snapchat&ScTestModeId=${pixel}`;
+  mod.startFormAdPixel('snapchat',settings,'test-form','deny');
+  assert.equal(window.localStorage.getItem('_scTestEvent'),null);
+  mod.startFormAdPixel('snapchat',settings,'test-form','allow');
+  const testFlag=window.localStorage.getItem('_scTestEvent');
+  assert.ok(testFlag.startsWith(`${pixel}|`));
+  assert.equal(scripts.length,1);
+  window.location.search='?utm_source=snapchat';
+  mod.startFormAdPixel('snapchat',settings,'different-form','allow');
+  assert.equal(window.localStorage.getItem('_scTestEvent'),null);
+}
+
 // Only browser pixel scripts and public lead-forms, no external conversion APIs.
 const pixelJs=fs.readFileSync(path.join(root,'src/marketing/lead-forms/pixel-tracking.ts'),'utf8');
 assert.doesNotMatch(pixelJs,/\bfetch\s*\(|access_token|business-api|Conversions API.*http/i);
+const linkBuilder=fs.readFileSync(path.join(root,'src/marketing/lead-forms/LeadFormsPage.tsx'),'utf8');
+assert.match(linkBuilder,/mzj_pixel_source=\{linkPlatform\}/);
+assert.match(linkBuilder,/url\.searchParams\.set\('mzj_pixel_source',linkPlatform\)/);
+const publicPage=fs.readFileSync(path.join(root,'src/marketing/lead-forms/PublicLeadFormPage.tsx'),'utf8');
+assert.match(publicPage,/useLocation\(\)/);
+assert.match(publicPage,/detectFormAdPlatform\(location\.search/);
 const renderer=fs.readFileSync(path.join(root,'src/marketing/lead-forms/LeadFormRenderer.tsx'),'utf8');
 assert.match(renderer,/onLeadStored\?\.\(/);
 assert.match(renderer,/json\.created===true/);

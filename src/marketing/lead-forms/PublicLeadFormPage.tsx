@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { LeadFormRenderer, type RendererForm, type StoredFormLead } from './LeadFormRenderer';
 import type { LeadFormPixelSettings } from '../../../shared/lead-form-pixels';
 import { detectFormAdPlatform, readPixelConsent, savePixelConsent, startFormAdPixel, trackStoredFormLead, type TrackingChoice } from './pixel-tracking';
@@ -7,12 +7,13 @@ import './lead-forms.css';
 
 export function PublicLeadFormPage() {
   const { slug='' } = useParams();
+  const location = useLocation();
   const [form,setForm] = useState<RendererForm|null>(null);
   const [pixels,setPixels] = useState<LeadFormPixelSettings|null>(null);
   const [error,setError] = useState('');
   const [consent,setConsent] = useState<TrackingChoice>(readPixelConsent);
   const [changeConsent,setChangeConsent] = useState(false);
-  const platform = useMemo(() => detectFormAdPlatform(window.location.search,document.referrer),[slug]);
+  const platform = useMemo(() => detectFormAdPlatform(location.search,document.referrer),[location.search]);
   const pixelEnabled = !!(platform && pixels?.[platform]?.enabled && pixels[platform].id);
 
   useEffect(() => {
