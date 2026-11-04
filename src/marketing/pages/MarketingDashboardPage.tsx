@@ -154,6 +154,7 @@ export function MarketingDashboardPage() {
             const days = summarizePublishingDays(group);
             const onTimePosts = days.reduce((total, day) => total + day.onTimeCount, 0);
             const latePosts = days.reduce((total, day) => total + day.lateCount, 0);
+            const overduePosts = days.reduce((total, day) => total + day.overdueCount, 0);
             const productsOpen = expandedPlanIds.has(id);
             return <article className={`mkw-dashboard-publish-card mkw-plan-${visualStatus}`} key={id}>
               <div className="mkw-dashboard-publish-card-head">
@@ -191,10 +192,10 @@ export function MarketingDashboardPage() {
                 </div>
               </div>
 
-              {group[0].kind === 'agenda' && (onTimePosts > 0 || latePosts > 0) &&
-                <div className="mkw-dashboard-agenda-timing mkw-delivery-summary" aria-label="الالتزام بمواعيد نشر الأجندة">
+              {(onTimePosts > 0 || latePosts > 0) &&
+                <div className="mkw-dashboard-plan-timing mkw-delivery-summary" aria-label="الالتزام بمواعيد النشر">
                   {onTimePosts > 0 && <div className="mkw-delivery-summary-card is-on-time"><span>نشر في الموعد</span><strong>{onTimePosts}</strong></div>}
-                  {latePosts > 0 && <div className="mkw-delivery-summary-card is-late"><span>تأخر في النشر</span><strong>{latePosts}</strong></div>}
+                  {latePosts > 0 && <div className="mkw-delivery-summary-card is-late"><span>تأخر في النشر{overduePosts > 0 && <small>منها {overduePosts} لم يُنشر بعد</small>}</span><strong>{latePosts}</strong></div>}
                 </div>}
 
               <div id={`mkw-publish-products-${id}`} className="mkw-dashboard-publish-preview" hidden={!productsOpen}>
@@ -206,7 +207,8 @@ export function MarketingDashboardPage() {
                     <div className="mkw-dashboard-publish-day-footer"><span>أنواع النشر: {day.postTypeNames.join('، ') || '—'}</span><strong>{day.publishedCount} / {day.publicationCount} تم النشر</strong></div>
                     <div className="mkw-dashboard-day-status">
                       {day.onTimeCount > 0 && <span className="mkw-publish-timing is-on-time">نشر في الموعد: {day.onTimeCount}</span>}
-                      {day.lateCount > 0 && <span className="mkw-publish-timing is-late">تأخر في النشر: {day.lateCount}</span>}
+                      {day.publishedLateCount > 0 && <span className="mkw-publish-timing is-late">نُشر متأخرًا: {day.publishedLateCount}</span>}
+                      {day.overdueCount > 0 && <span className="mkw-publish-timing is-late">متأخر ولم يُنشر: {day.overdueCount}</span>}
                       {day.pendingCount > 0 && <span className="mkw-publish-timing is-pending">بانتظار النشر: {day.pendingCount}</span>}
                       {day.undatedCount > 0 && <span className="mkw-publish-timing is-undated">تاريخ النشر غير مسجل: {day.undatedCount}</span>}
                     </div>

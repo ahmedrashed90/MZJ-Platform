@@ -1199,10 +1199,10 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
   .mkw-dashboard .mkw-dashboard-task,.mkw-dashboard .mkw-dashboard-publish-card{min-height:0}
 }
 
-/* Agenda publication punctuality, derived from the existing per-line timing,
-   without changing execution task cards or their delivery logic. */
-.mkw-dashboard-agenda-timing { margin-top:-3px; }
-.mkw-dashboard-agenda-timing .mkw-delivery-summary-card { background:var(--surface); }
+/* Publication timing for campaigns and agendas. Execution delivery stays untouched. */
+.mkw-dashboard-plan-timing { margin-top:-3px; }
+.mkw-dashboard-plan-timing .mkw-delivery-summary-card { background:var(--surface); }
+.mkw-dashboard-plan-timing .mkw-delivery-summary-card small { display:block; font-size:10px; font-weight:600; opacity:.85; }
 
 /* Reviewer-only correction of a recorded publication date; the URL remains locked. */
 .mkw-published-date-correction{display:grid;gap:10px;border:1px solid var(--line-strong);border-radius:12px;padding:12px;background:var(--surface-soft)}
@@ -1212,4 +1212,4 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-published-date-correction input,.mkw-published-date-correction textarea{width:100%;min-width:0}
 .mkw-published-date-correction .mkw-actions{justify-content:flex-start}
 
-.mkw-dashboard-agenda-timing:has(.mkw-delivery-summary-card:only-child){grid-template-columns:minmax(0,1fr)}
+.mkw-dashboard-plan-timing:has(.mkw-delivery-summary-card:only-child){grid-template-columns:minmax(0,1fr)}

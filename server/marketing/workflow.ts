@@ -13,6 +13,7 @@ import { normalizeMarketingPublishFormat } from '../../shared/marketing-publishi
 import { normalizeYouTubePublishOptions } from '../../shared/youtube-publishing.js';
 import { finalCoverage, workFormatsReadyForReview, matchingWorkflowPublishFiles, workItemReadiness, workReadiness, workReviewableFormats, isWorkDate, supportsWorkMedia, ideaFileAllowed, workFileMatches, workDate, type WorkItem, type WorkFormat, type WorkCapabilities } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
+import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 
@@ -1583,14 +1584,15 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
       )) and (
       ${productManager(user)} or ${isManager(user)} or ${planReviewer} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     order by l.scheduled_on,p.created_at desc,l.id`;
+  const todayInSaudiArabia = saudiCalendarDay();
   return rows.map(row => {
     const effective_post_url = String(row.manual_post_url || row.provider_post_url || '');
     const published_ready = !!effective_post_url;
     // A manual post link takes precedence over an automatic URL. Its actual
     // date is fixed on the FIRST manual URL save, using the Saudi date.
     const published_on = row.manual_post_url ? (row.manual_published_on ? workDate(row.manual_published_on) : null) : row.provider_published_on;
-    const publication_timing = published_ready && published_on
-      ? (published_on <= workDate(row.scheduled_on) ? 'on_time' : 'late') : null;
+    const publication_timing = classifyWorkPublicationTiming(
+      workDate(row.scheduled_on), published_ready, published_on, todayInSaudiArabia);
     return { ...row, effective_post_url, published_ready, published_on, publication_timing,
       manual_published_on: row.manual_published_on ? workDate(row.manual_published_on) : null,
       status: row.review_status === 'publishing' && published_ready ? 'published' :

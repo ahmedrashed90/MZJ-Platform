@@ -30,10 +30,10 @@ assert.match(css,/\.mkw-plan-report-copy\s*\{[^}]*white-space:nowrap;[^}]*text-o
 assert.match(report,/className="mkw-plan-report-copy" title=\{line.caption/);
 assert.match(report,/className="mkw-plan-report-copy" title=\{line.hashtags/);
 check('Both report copy columns are one line with full-text title and without scrolling cells');
-assert.match(dashboard,/group\[0\]\.kind === 'agenda' && \(onTimePosts > 0 \|\| latePosts > 0\)/);
-assert.match(dashboard,/mkw-dashboard-agenda-timing mkw-delivery-summary/);
+assert.match(dashboard,/\(onTimePosts > 0 \|\| latePosts > 0\)/);
+assert.match(dashboard,/mkw-dashboard-plan-timing mkw-delivery-summary/);
 assert.match(dashboard,/نشر في الموعد/);assert.match(dashboard,/تأخر في النشر/);
-check('Agenda cards show compact on-time/late counts, keeping campaign/day rows intact');
+check('Agenda and campaign cards show compact on-time/late counts, keeping day rows intact');
 const days=summarizePublishingDays([
   {scheduled_on:'2026-11-02',published_ready:true,publication_timing:'on_time'},
   {scheduled_on:'2026-11-02',published_ready:true,publication_timing:'late'},
@@ -53,7 +53,7 @@ assert.match(server,/const planReviewer = await canReviewPlan\(sql,user\)/);
 assert.match(server,/productVisible\(sql, user, line.product_id, planReviewer\)/);
 assert.match(server,/selectedPlanReviewer.*exists\(select 1 from marketing\.work_plan_items pl/s);
 check('Reviewer has read-only preparation access even without general copy-edit permission');
-assert.doesNotMatch(execution,/correct_plan_published_on|canCorrectPublishedDate|mkw-dashboard-agenda-timing/);
+assert.doesNotMatch(execution,/correct_plan_published_on|canCorrectPublishedDate|mkw-dashboard-plan-timing/);
 check('Execution workflow has no reviewer-date or agenda-timing code');
 for(const f of ['server/marketing/workflow.ts','src/marketing/workflow/PublishPage.tsx','src/marketing/pages/MarketingDashboardPage.tsx','src/marketing/workflow/PlanReport.tsx']){
   const source=read(f),parsed=ts.createSourceFile(f,source,ts.ScriptTarget.ES2022,true,f.endsWith('tsx')?ts.ScriptKind.TSX:ts.ScriptKind.TS);

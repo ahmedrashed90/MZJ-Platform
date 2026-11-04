@@ -9,6 +9,8 @@ export type PublishingDaySummary = {
   publishedCount: number;
   onTimeCount: number;
   lateCount: number;
+  publishedLateCount: number;
+  overdueCount: number;
   pendingCount: number;
   undatedCount: number;
 };
@@ -28,7 +30,9 @@ export function summarizePublishingDays(lines: WorkPlanLine[]): PublishingDaySum
   return [...days.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([date, dayLines]) => {
     const publishedCount = dayLines.filter(line => line.published_ready).length;
     const onTimeCount = dayLines.filter(line => line.published_ready && line.publication_timing === 'on_time').length;
-    const lateCount = dayLines.filter(line => line.published_ready && line.publication_timing === 'late').length;
+    const publishedLateCount = dayLines.filter(line => line.published_ready && line.publication_timing === 'late').length;
+    const overdueCount = dayLines.filter(line => !line.published_ready && line.publication_timing === 'overdue').length;
+    const lateCount = publishedLateCount + overdueCount;
     return {
       date,
       publicationCount: dayLines.length,
@@ -38,8 +42,10 @@ export function summarizePublishingDays(lines: WorkPlanLine[]): PublishingDaySum
       publishedCount,
       onTimeCount,
       lateCount,
-      pendingCount: dayLines.length - publishedCount,
-      undatedCount: publishedCount - onTimeCount - lateCount,
+      publishedLateCount,
+      overdueCount,
+      pendingCount: dayLines.length - publishedCount - overdueCount,
+      undatedCount: publishedCount - onTimeCount - publishedLateCount,
     };
   });
 }

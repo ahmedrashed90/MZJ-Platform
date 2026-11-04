@@ -20,6 +20,7 @@ type EditableLine = { id: string; date: string; productId: string; postTypeId: s
 export function planStatusName(status: string) { return planStateLabels[status as PlanState] || status; }
 
 export function PublicationTiming({ line }: { line: WorkPlanLine }) {
+  if (!line.published_ready && line.publication_timing === 'overdue') return <span className="mkw-publish-timing is-late">متأخر ولم يُنشر</span>;
   if (!line.published_ready) return <span className="mkw-publish-timing is-pending">بانتظار النشر</span>;
   if (line.publication_timing === 'on_time') return <span className="mkw-publish-timing is-on-time">نشر في الموعد</span>;
   if (line.publication_timing === 'late') return <span className="mkw-publish-timing is-late">تأخر في النشر</span>;

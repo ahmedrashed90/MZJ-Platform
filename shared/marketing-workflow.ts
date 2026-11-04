@@ -51,7 +51,7 @@ export type WorkPlanLine = {
   review_status?: 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published'; review_note?: string; review_revision?: number;
   caption?: string; hashtags?: string;
   manual_post_url?: string; manual_published_on?: string | null; effective_post_url?: string;
-  published_on?: string | null; publication_timing?: 'on_time' | 'late' | null;
+  published_on?: string | null; publication_timing?: 'on_time' | 'late' | 'overdue' | null;
   published_ready?: boolean; created_by?: string; creator_name?: string; plan_created_at?: string; approved_by_name?: string | null; approved_at?: string | null;
   funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
   post_type_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
