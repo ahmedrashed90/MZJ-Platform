@@ -75,8 +75,8 @@ export function agendaPublicationSummary(
   };
 }
 
-/** Group all posts of a platform contiguously while retaining chronological
- * order within that platform. Shared by preparation and read-only report. */
+/** Group posts by platform for the read-only campaign report, retaining
+ * chronological order within each platform. Preparation uses date-first order. */
 export function campaignLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[] {
   return [...lines].sort((a, b) =>
     String(a.platform_name || '').localeCompare(String(b.platform_name || ''), 'ar') ||

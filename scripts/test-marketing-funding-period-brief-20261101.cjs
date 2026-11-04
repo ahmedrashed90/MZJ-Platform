@@ -75,11 +75,18 @@ check('Calendar evaluations start collapsed and show stored percentage with star
   assert.match(file('src/marketing/workflow/workflow.css'), /mkw-calendar-ratings-panel:not\(\[open\]\)>\.mkw-calendar-rating-summary\{display:none\}/);
   assert.match(backend, /rating\.percentage::float8/);
 });
-check('Reports and preparation share actual campaign overview and platform grouping', () => {
+check('Report retains platform grouping, while preparation is sorted by publication date', () => {
   assert.match(report, /CampaignOverview lines=\{lines\}/);
   assert.match(report, /campaignLinesByPlatform\(lines\)/);
   assert.match(dashboard, /CampaignOverview lines=\{chooserSourceLines\}/);
-  assert.match(dashboard, /campaignLinesByPlatform\(chooserSourceLines\)/);
+  assert.match(dashboard, /chooserLines = preparationLinesByDate\(chooserSourceLines\)/);
+  assert.match(dashboard, /chooserLines\.map\(\(line, index\)/);
   assert.match(dashboard, /group\[0\]\?\.kind === 'campaign' \|\| group\.length > 1/);
+  const { preparationLinesByDate } = sourceModule('src/marketing/workflow/campaignOverview.tsx');
+  const prepared = preparationLinesByDate(lines);
+  assert.deepEqual(Array.from(prepared, row => row.scheduled_on), [
+    '2026-11-01', '2026-11-01', '2026-11-01', '2026-11-02'
+  ]);
+  assert.equal(lines[0].scheduled_on, '2026-11-02', 'sorting must not mutate source rows');
 });
 console.log(`${passed}/${passed} campaign funding, overview, explanation and rating checks passed`);
