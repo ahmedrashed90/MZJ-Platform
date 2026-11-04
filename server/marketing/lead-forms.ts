@@ -1,10 +1,11 @@
-/** MZJ marketing lead forms: isolated admin/public endpoint. No CRM or ads API calls. */
+/** MZJ marketing lead forms: isolated admin/public endpoint and CRM inbound-lead bridge. No ads API calls. */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, createSign, randomUUID } from 'node:crypto';
 import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { requireUser, requestIp } from '../_auth.js';
 import { requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
+import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
 import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
 
@@ -285,13 +286,14 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const fields = sanitizeConfig(form.published_config || form.config).fields;
   const rawAnswers: Record<string,unknown> = params.answers && typeof params.answers==='object' && !Array.isArray(params.answers) ? params.answers : {};
   const answers: Record<string,string>={};
+  const answerLabels: Record<string,string>={};
   for (const field of fields) {
     if (field.showIf && answers[field.showIf.fieldId] !== field.showIf.equals) continue;
     const value=clean(rawAnswers[field.id],180);
     if (field.required && !value) return fail(res,400,`يرجى الإجابة عن: ${field.label}`);
     if (field.type==='choice' && value && !field.options.includes(value)) return fail(res,400,'إجابة اختيار غير صالحة');
     if (field.type==='number' && value && !/^\d{1,12}(?:\.\d{1,2})?$/.test(value)) return fail(res,400,'قيمة رقمية غير صالحة');
-    if (value) answers[field.id]=value;
+    if (value) { answers[field.id]=value; answerLabels[field.id]=field.label; }
   }
   // Count submissions by IP to limit automated abuse without storing raw addresses.
   const hash=ipHash(req);
@@ -305,10 +307,14 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const [visit] = await sql<any[]>`select source,campaign,medium,ad_id from marketing.form_visits where form_id=${form.id}::uuid and visitor_key=${visitorKey}`;
   const info = visit || { source:meta.source,campaign:meta.campaign,medium:meta.medium,ad_id:meta.adId };
   const [lead] = await sql<{id:string;sheet_status:string}[]>`
-    insert into marketing.form_leads(form_id,submission_key,name,phone,answers,source,campaign,medium,ad_id,sheet_status,ip_hash)
-    values(${form.id}::uuid,${key},${name},${phone},${sql.json(answers)},${info.source},${info.campaign},${info.medium},${info.ad_id},${form.sheet_id?'pending':'not_configured'},${hash})
+    insert into marketing.form_leads(form_id,submission_key,name,phone,answers,answer_labels,source,campaign,medium,ad_id,sheet_status,crm_status,ip_hash)
+    values(${form.id}::uuid,${key},${name},${phone},${sql.json(answers)},${sql.json(answerLabels)},${info.source},${info.campaign},${info.medium},${info.ad_id},${form.sheet_id?'pending':'not_configured'},'pending',${hash})
     on conflict(form_id,submission_key) do update set submission_key=excluded.submission_key
     returning id::text,sheet_status`;
+  // Public submission succeeds as soon as the form lead is stored; CRM errors are
+  // retained in marketing.form_leads for an explicit admin retry, never lost.
+  try { await syncMarketingFormLeadToCrm(lead.id); }
+  catch (error) { console.error('Marketing form CRM sync failed', { formLeadId: lead.id, error }); }
   if (lead?.sheet_status==='pending' && sheetServiceAccount()) await withDatabaseAdvisoryLock(`mzj:form-sheet:${lead.id}`,()=>syncLead(lead.id));
   return res.json({ok:true,id:lead.id, sheetEnabled:Boolean(form.sheet_id),sheetConfigured:Boolean(sheetServiceAccount())});
 }
@@ -325,6 +331,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     if (!user) return;
     const permission = ({
       list:'marketing.lead_forms.view', get:'marketing.lead_forms.view', stats:'marketing.lead_forms.reports.view', leads:'marketing.lead_forms.leads.view',
+      retry_crm:'marketing.lead_forms.edit',
       create:'marketing.lead_forms.create', save:'marketing.lead_forms.edit', duplicate:'marketing.lead_forms.create', publish:'marketing.lead_forms.publish', pause:'marketing.lead_forms.publish', archive:'marketing.lead_forms.publish',
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
       sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
@@ -401,13 +408,27 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     if (action==='leads' && req.method==='GET') {
       const id=clean(params.id,45),search=clean(params.search,90);
       if (id&&!uuidPattern.test(id)) return fail(res,400,'معرف فورم غير صالح');
-      const rows=await sql<any[]>`select l.id::text,l.form_id::text,f.title form_title,l.name,l.phone,l.answers,l.source,l.campaign,l.medium,l.ad_id,l.sheet_status,l.sheet_error,l.created_at
+      const rows=await sql<any[]>`select l.id::text,l.form_id::text,f.title form_title,l.name,l.phone,l.answers,l.answer_labels,l.source,l.campaign,l.medium,l.ad_id,
+          l.sheet_status,l.sheet_error,l.crm_status,l.crm_lead_id::text,l.crm_error,l.created_at
         from marketing.form_leads l join marketing.lead_forms f on f.id=l.form_id
         where (${id}='' or l.form_id::text=${id}) and (${search}='' or l.name ilike ${'%'+search+'%'} or l.phone ilike ${'%'+search+'%'})
         order by l.created_at desc limit 2000`;
       return res.json({ok:true,leads:rows});
     }
     if (req.method!=='POST') return fail(res,405,'الطريقة غير مدعومة');
+    if (action==='retry_crm') {
+      const leadId=clean(params.id,45);
+      if (!uuidPattern.test(leadId)) return fail(res,400,'معرف ليد غير صالح');
+      const [existing]=await sql<{id:string}[]>`select id::text from marketing.form_leads where id=${leadId}::uuid`;
+      if (!existing) return fail(res,404,'ليد الفورم غير موجود');
+      try {
+        const synced=await syncMarketingFormLeadToCrm(leadId);
+        return res.json({ok:true,crmStatus:synced.status,message:'تم التحقق من وصول الليد إلى CRM'});
+      } catch (error) {
+        console.error('Manual form CRM retry failed', {leadId,error});
+        return fail(res,503,'تعذر نقل الليد إلى CRM، يرجى إعادة المحاولة لاحقًا');
+      }
+    }
     if (action==='create' || action==='duplicate') {
       const source = action==='duplicate' && uuidPattern.test(clean(params.id,40))
         ? (await sql<any[]>`select * from marketing.lead_forms where id=${clean(params.id)}::uuid`)[0] : null;

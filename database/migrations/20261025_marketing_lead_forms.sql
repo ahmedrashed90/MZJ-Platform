@@ -1,4 +1,4 @@
--- Isolated MZJ Marketing Lead Forms feature. Additive only; no existing tables changed.
+-- Isolated Marketing Lead Forms feature. Only marketing form tables are extended; no CRM schema changes.
 create schema if not exists marketing;
 create extension if not exists pgcrypto;
 create table if not exists marketing.lead_forms (
@@ -64,6 +64,11 @@ create table if not exists marketing.form_leads (
   sheet_status text not null default 'not_configured' check(sheet_status in ('not_configured','pending','sent','failed')),
   sheet_error text,
   sheet_synced_at timestamptz,
+  answer_labels jsonb not null default '{}'::jsonb,
+  crm_status text not null default 'not_requested' check(crm_status in ('not_requested','pending','linked','existing','failed')),
+  crm_lead_id uuid,
+  crm_error text,
+  crm_synced_at timestamptz,
   ip_hash text,
   created_at timestamptz not null default now(),
   unique(form_id,submission_key)
@@ -71,3 +76,11 @@ create table if not exists marketing.form_leads (
 create index if not exists marketing_form_leads_created_idx on marketing.form_leads(form_id,created_at desc);
 create index if not exists marketing_form_leads_ip_rate_idx on marketing.form_leads(ip_hash,created_at desc);
 create index if not exists marketing_form_leads_sync_idx on marketing.form_leads(sheet_status,created_at) where sheet_status in ('pending','failed');
+
+-- Additive form-side bridge fields for existing installations. No CRM schema changes.
+alter table marketing.form_leads add column if not exists answer_labels jsonb not null default '{}'::jsonb;
+alter table marketing.form_leads add column if not exists crm_status text not null default 'not_requested';
+alter table marketing.form_leads add column if not exists crm_lead_id uuid;
+alter table marketing.form_leads add column if not exists crm_error text;
+alter table marketing.form_leads add column if not exists crm_synced_at timestamptz;
+create index if not exists marketing_form_leads_crm_status_idx on marketing.form_leads(crm_status,created_at desc) where crm_status in ('pending','failed');

@@ -318,3 +318,16 @@
 .mlf-gallery-fake-input{height:24px;border:1px solid #e0c8bb;border-radius:5px;background:#f3e8dc;margin-top:5px}
 .mlf-gallery-fake-input.full{height:29px;padding:8px;font-size:10px;color:#8c7260}
 .mlf-gallery-classic-button{justify-self:start;background:#4a211c;color:#f3e8dc;border-radius:6px;padding:7px 12px;display:flex;align-items:center;gap:5px;font-size:10px}
+
+/* Lead database: keep rows stable and show readable answers in a fixed overlay. */
+.mlf-answer-open{border:1px solid #e6d4c9;background:#faf6f3;color:#4a211c;border-radius:9px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:800;white-space:nowrap}
+.mlf-answer-open:hover{background:#f3e8dc}
+.mlf-answer-modal{max-width:550px;width:min(550px,95vw)}
+.mlf-answer-list{display:grid;gap:10px;max-height:65dvh;overflow:auto;padding:2px}
+.mlf-answer-item{background:#faf6f3;border:1px solid #eadbd2;border-radius:11px;padding:12px 14px;display:grid;gap:7px;overflow-wrap:anywhere}
+.mlf-answer-item strong{color:#4a211c;font-size:13px}
+.mlf-answer-item span{font-size:14px;color:#33211b;line-height:1.65}
+.mlf-crm-cell{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:95px}
+.mlf-crm-failed{color:#a4342e;font-weight:800}
+.mlf-crm-retry{background:#f3e8dc;border:1px solid #d9b4a3;border-radius:8px;color:#4a211c;font:inherit;font-size:11px;padding:5px 9px;cursor:pointer}
+.mlf-crm-retry:disabled{opacity:.6;cursor:wait}
