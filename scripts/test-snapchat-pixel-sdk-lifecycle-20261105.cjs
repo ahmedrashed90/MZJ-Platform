@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/marketing/lead-forms/pixel-tracking.ts');
 const output = ts.transpileModule(fs.readFileSync(filename,'utf8'), {
   fileName: filename,

@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
-const ts=(()=>{try{return require('typescript');}catch{return require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');}})();
+const ts = require('typescript');
 const compiled=ts.transpileModule(fs.readFileSync('src/marketing/workflow/PlanDetail.tsx','utf8'),{
   fileName:'PlanDetail.tsx',reportDiagnostics:true,compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}});
 assert.equal(compiled.diagnostics?.length||0,0);

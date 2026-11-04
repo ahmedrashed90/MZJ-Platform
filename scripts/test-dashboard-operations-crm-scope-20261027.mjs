@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+const ts = require('typescript');
 const read = name => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
 const dashboard = read('src/pages/DashboardPage.tsx');
 const dashboardApi = read('server/dashboard.ts');

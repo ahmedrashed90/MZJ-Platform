@@ -42,3 +42,9 @@ Input: MZJ-MARKETING-PIXELS-CRM-PUBLISH-DATE-BUILD-FIX-CLEAN-FULL-20261104(1).zi
 - على بيئة المشروع التي تحوي الاعتمادات: pnpm install --frozen-lockfile ثم pnpm run build
 - بعد النشر: افتح Test Events في نفس Pixel account على Snapchat واستعمل رابط الفورم مع قبول التتبع.
 - لا يمكن إثبات استلام Snapchat الفعلي للأحداث من الاختبارات المحلية؛ تأكيده يحتاج Events Manager بعد النشر.
+
+BUILD PORTABILITY FIX (05 Nov 2026):
+Removed machine-specific TypeScript import paths from all 15 test scripts.
+The tests now load the TypeScript devDependency from the project via require('typescript').
+The application source, pixel events, CRM, TikTok, and marketing business logic were not changed by this build fix.
+Vercel: pnpm install --frozen-lockfile; pnpm run build (existing vercel.json).

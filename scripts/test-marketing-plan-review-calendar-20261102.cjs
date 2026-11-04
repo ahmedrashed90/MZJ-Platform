@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const ts = (() => { try { return require('typescript'); } catch { return require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript'); } })();
+const ts = require('typescript');
 const root = path.join(__dirname, '..');
 function read(p) { return fs.readFileSync(path.join(root, p), 'utf8'); }
 function load(p, deps={}) {

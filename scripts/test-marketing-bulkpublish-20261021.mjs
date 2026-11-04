@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js');
+const ts = require('typescript');
 const source = fs.readFileSync(path.resolve('server/_marketing-bulkpublish.ts'), 'utf8');
 const output = ts.transpileModule(source, { fileName: 'server/_marketing-bulkpublish.ts', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, lib: ['es2022', 'dom'] }, reportDiagnostics: true });
 assert.equal((output.diagnostics || []).filter(d => d.category === ts.DiagnosticCategory.Error).length, 0, 'Adapter must be syntactically valid');

@@ -2,8 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-let ts;
-try { ts = require('typescript'); } catch { ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript'); }
+const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 function load(relative, overrides={}) {
   const filename = path.join(root, relative);

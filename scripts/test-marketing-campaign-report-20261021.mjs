@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-let ts;
-try { ts = require('typescript'); } catch { ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript'); }
+const ts = require('typescript');
 function loadTS(file, mocks = {}) {
   const source = fs.readFileSync(file, 'utf8');
   const output = ts.transpileModule(source, { fileName: file, reportDiagnostics: true,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const ts = require("/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript");
+const ts = require('typescript');
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 const operations = read("server/operations/index.ts");
 const schema = read("server/_tracking-schema.ts");

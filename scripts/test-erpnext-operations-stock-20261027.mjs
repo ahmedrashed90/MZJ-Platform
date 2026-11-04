@@ -6,7 +6,7 @@ import vm from 'node:vm';
 
 const root = new URL('../', import.meta.url);
 const require = createRequire(import.meta.url);
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+const ts = require('typescript');
 const worker = (await import('../cloudflare-worker/mzj-next-wordpress-operations-full.js')).default;
 
 const receipt = 'MAT-PRE-2026-00145';

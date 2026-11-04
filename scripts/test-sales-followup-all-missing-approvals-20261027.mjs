@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ts = require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+const ts = require('typescript');
 const read = (filename) => readFileSync(new URL(`../${filename}`, import.meta.url), 'utf8');
 const operations = read('server/operations/index.ts');
 const modal = read('src/operations/components/SalesFollowupQuickApprovalModal.tsx');

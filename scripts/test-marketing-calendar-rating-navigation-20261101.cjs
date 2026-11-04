@@ -3,7 +3,7 @@
 // No network requests or live database writes.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const ts = (() => { try { return require('typescript'); } catch { return require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript'); } })();
+const ts = require('typescript');
 const jsx = (type, props) => ({ type, props: props || {} });
 const jsxRuntime = { jsx, jsxs: jsx, Fragment: 'Fragment' };
 const walk = (tree, fn) => {
