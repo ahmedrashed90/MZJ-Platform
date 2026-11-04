@@ -67,7 +67,7 @@ assert(component.includes('setResumeFrom(index)') && component.includes('است�
 assert(transport.includes('HTTP ${status}') && transport.includes('x-vercel-id'));
 console.log('PASS: Duplicate checks run before assignment, imports serialize and are chunked');
 assert(routing.includes('chooseSheetImportAssignment'));
-assert(routing.includes('chooseFromConfiguredRule(departmentCode, "", sourceCode)'));
+assert(routing.includes('chooseFromConfiguredRule(departmentCode, "", sourceCode, requirePhysicalBranch)'));
 assert(routing.includes('chooseFinanceImportAssignment(sourceCode)'));
 assert(routing.includes("b.code not in ('online','website')"));
 assert(service.includes('if (!assignment.assignedTo || !assignment.branchCode)'));

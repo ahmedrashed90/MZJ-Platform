@@ -85,6 +85,19 @@ export function campaignLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[]
     String(a.id).localeCompare(String(b.id)));
 }
 
+/** Dashboard preparation only: publish date takes precedence over platform.
+ * Unscheduled legacy rows come last; preserve deterministic ties without
+ * mutating the plan or altering the platform-grouped campaign report.
+ */
+export function preparationLinesByDate<T extends WorkPlanLine>(lines: T[]): T[] {
+  return [...lines].sort((a, b) =>
+    (String(a.scheduled_on || '').slice(0, 10) || '9999-12-31')
+      .localeCompare(String(b.scheduled_on || '').slice(0, 10) || '9999-12-31') ||
+    String(a.platform_name || '').localeCompare(String(b.platform_name || ''), 'ar') ||
+    String(a.post_type_name || '').localeCompare(String(b.post_type_name || ''), 'ar') ||
+    String(a.id).localeCompare(String(b.id)));
+}
+
 export function moneySAR(value: number): string {
   return `${value.toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
 }

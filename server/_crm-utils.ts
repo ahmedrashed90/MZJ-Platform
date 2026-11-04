@@ -225,7 +225,7 @@ type AssignmentResult = {
   ruleName?: string;
 };
 
-async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
+async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string, requirePhysicalBranch = false): Promise<AssignmentResult | null> {
   const sql = getSql();
   const requested = clean(requestedBranch);
   const source = clean(sourceCode);
@@ -241,6 +241,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     where r.is_active=true
       and r.department_code=${departmentCode}
       and (${requested || null}::text is null or r.branch_code is null or r.branch_code=${requested || null})
+      and (${!requirePhysicalBranch} or r.branch_code is null or r.branch_code not in ('online','website'))
       and (coalesce(array_length(r.source_codes,1),0)=0 or ${source}=any(r.source_codes) or ${routingSource}=any(r.source_codes))
     order by branch_specificity,source_specificity,r.sort_order,r.created_at,r.id
   `;
@@ -265,6 +266,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
           from core.user_system_branches usb
           join core.branches b on b.id=usb.branch_id and b.is_active=true
           where usb.user_id=u.id and usb.system_code='crm'
+            and (${!requirePhysicalBranch} or b.code not in ('online','website'))
           order by usb.is_primary desc,b.sort_order,b.name
           limit 1
         ),
@@ -273,6 +275,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
           from core.user_branches ub
           join core.branches b on b.id=ub.branch_id and b.is_active=true
           where ub.user_id=u.id
+            and (${!requirePhysicalBranch} or b.code not in ('online','website'))
           order by ub.is_primary desc,b.sort_order,b.name
           limit 1
         )
@@ -384,6 +387,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     selectedRule = ruleById.get(selected.rule_id) || firstRule;
   }
   const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested;
+  if (requirePhysicalBranch && (!selectedBranch || ['online', 'website'].includes(selectedBranch))) return null;
 
   await sql`
     insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
@@ -417,8 +421,8 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
 
 // Only for external finance imports: choose among the CRM's active finance rules
 // without forcing the online branch. Keep all other assignment paths unchanged.
-export async function chooseFinanceImportAssignment(sourceCode: string) {
-  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode);
+export async function chooseFinanceImportAssignment(sourceCode: string, requirePhysicalBranch = false) {
+  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode, requirePhysicalBranch);
   if (configured?.assignedTo) return configured;
 
   // Import-only fallback. Use the actual active CRM finance representatives and
@@ -431,10 +435,12 @@ export async function chooseFinanceImportAssignment(sourceCode: string) {
         (select b.code from core.user_system_branches usb
          join core.branches b on b.id=usb.branch_id and b.is_active=true
          where usb.user_id=u.id and usb.system_code='crm'
+           and (${!requirePhysicalBranch} or b.code not in ('online','website'))
          order by usb.is_primary desc,b.sort_order,b.name limit 1),
         (select b.code from core.user_branches ub
          join core.branches b on b.id=ub.branch_id and b.is_active=true
          where ub.user_id=u.id
+           and (${!requirePhysicalBranch} or b.code not in ('online','website'))
            and not exists (select 1 from core.user_system_branches usb0
                            where usb0.user_id=u.id and usb0.system_code='crm')
          order by ub.is_primary desc,b.sort_order,b.name limit 1)
@@ -457,7 +463,7 @@ export async function chooseFinanceImportAssignment(sourceCode: string) {
       )
     order by u.full_name,u.id::text
   `;
-  const eligible = candidates.filter((candidate) => clean(candidate.branch_code) && clean(candidate.branch_code) !== 'website');
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code) && !['website', ...(requirePhysicalBranch ? ['online'] : [])].includes(clean(candidate.branch_code)));
   if (!eligible.length) {
     console.error('Finance lead import has no eligible active finance representative', { sourceCode });
     return { assignedTo: null, assignedName: "", branchCode: "" };
@@ -499,13 +505,14 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "",
  */
 export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance", sourceCode = "sheet_lead"): Promise<AssignmentResult> {
   const departmentCode = serviceKey === "finance" ? "finance_sales" : "cash_sales";
+  const requirePhysicalBranch = sourceCode !== 'sheet_lead';
   if (serviceKey === "finance") {
-    const result = await chooseFinanceImportAssignment(sourceCode);
+    const result = await chooseFinanceImportAssignment(sourceCode, requirePhysicalBranch);
     return ["online", "website"].includes(clean(result.branchCode))
       ? { assignedTo: null, assignedName: "", branchCode: "" }
       : result;
   }
-  const configured = await chooseFromConfiguredRule(departmentCode, "", sourceCode);
+  const configured = await chooseFromConfiguredRule(departmentCode, "", sourceCode, requirePhysicalBranch);
   if (configured?.assignedTo) {
     return ["online", "website"].includes(clean(configured.branchCode))
       ? { assignedTo: null, assignedName: "", branchCode: "" }

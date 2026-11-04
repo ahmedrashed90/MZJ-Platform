@@ -256,6 +256,9 @@ export async function classifyConversationService(input: {
             ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
             : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
         : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
+      if (input.marketingFormImportRouting && needsPrimaryAssignment && !assignment.assignedTo) {
+        throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+      }
       const callCenter = needsCallCenterAssignment
         ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
         : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
@@ -303,6 +306,12 @@ export async function classifyConversationService(input: {
       : input.financeImportRouting && serviceKey === "finance"
         ? await chooseFinanceImportAssignment(sourceCode)
         : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
+  // A newly submitted marketing form must never be saved as "غير موزع".
+  // Fail the CRM sync and allow an explicit retry instead of silently creating
+  // a lead with a missing owner; existing CRM customers are not redistributed.
+  if (input.marketingFormImportRouting && !assignment.assignedTo) {
+    throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+  }
   const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
     ? await chooseCallCenterAssignment(sourceCode, "online")
     : { assignedTo: null, assignedName: "" };

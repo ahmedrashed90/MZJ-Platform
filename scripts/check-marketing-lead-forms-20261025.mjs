@@ -7,6 +7,7 @@ const app = read('src/App.tsx');
 const nav = read('src/marketing/MarketingLayout.tsx');
 const formAdmin = read('src/marketing/lead-forms/LeadFormsPage.tsx');
 const renderer = read('src/marketing/lead-forms/LeadFormRenderer.tsx');
+const pixelAttribution = read('src/marketing/lead-forms/pixel-tracking.ts');
 const publicPage = read('src/marketing/lead-forms/PublicLeadFormPage.tsx');
 const handler = read('server/marketing/lead-forms.ts');
 const catalog = read('shared/access-control.ts');
@@ -29,7 +30,7 @@ const checks = [
   ['Runtime schema syncs SQL migration', schemaRuntime.includes('const FORM_SCHEMA_SQL = String.raw`') && schemaRuntime.includes('marketing_form_leads_ip_rate_idx')],
   ['Access catalog includes form permissions', ['marketing.lead_forms.view','marketing.lead_forms.create','marketing.lead_forms.edit','marketing.lead_forms.publish','marketing.lead_forms.leads.view','marketing.lead_forms.leads.export','marketing.lead_forms.reports.view','marketing.lead_forms.sheets.manage'].every(s=>catalog.includes(s)&&catalogSql.includes(s))],
   ['Six starter templates', ['steps','visual','chat','quiz','minimal','classic'].every(t=>templates.includes(`id: '${t}'`))],
-  ['Campaign UTM attribution', formAdmin.includes('utm_source') && formAdmin.includes('utm_campaign') && renderer.includes('utm_campaign') && handler.includes('form_visits')],
+  ['Campaign UTM attribution', formAdmin.includes('utm_source') && formAdmin.includes('utm_campaign') && renderer.includes('formLeadAttribution') && pixelAttribution.includes('utm_campaign') && handler.includes('form_visits')],
   ['Published snapshot is separate from draft', handler.includes('published_config=config') && handler.includes('published_metadata=') && handler.includes('row.published_config || row.config')],
   ['Stored real leads and visits', handler.includes('insert into marketing.form_leads') && handler.includes('insert into marketing.form_visits') && handler.includes('marketing.form_step_events')],
   ['Sheet integration optional and server-side only', handler.includes('MZJ_GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON') && !renderer.includes('MZJ_GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON')],

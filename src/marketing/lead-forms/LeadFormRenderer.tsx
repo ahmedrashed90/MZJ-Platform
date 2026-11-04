@@ -3,17 +3,27 @@ import { ArrowLeft, ArrowRight, CheckCircle, LockKey, WarningCircle, ChatCircleD
 import type { FormConfig, FormField, FormTemplate } from '../../../shared/lead-forms';
 import { DEFAULT_FORM_CONFIG } from '../../../shared/lead-forms';
 import { resolveFormDesign, type DesignBlock } from '../../../shared/lead-form-design';
+import { formLeadAttribution } from './pixel-tracking';
 import './lead-forms.css';
 
 export type RendererForm = { title:string; description:string; template:FormTemplate; config:FormConfig; slug?:string };
 export type StoredFormLead = {id:string;created:boolean;crmStatus:string|null};
 function uuid() { return typeof crypto!=='undefined' && crypto.randomUUID ? crypto.randomUUID() : `00000000-0000-4000-8000-${Math.floor(Math.random()*2**48).toString(16).padStart(12,'0')}`; }
-function getVisitor(slug:string) {
-  try {const key=`mzj-form-visitor-${slug}`,old=sessionStorage.getItem(key);if(old)return old;const next=uuid();sessionStorage.setItem(key,next);return next;} catch { return uuid(); }
+function getVisitor(slug: string, tracking: ReturnType<typeof formLeadAttribution>) {
+  // Same browser tab can test multiple campaign links for the same form. A
+  // visit's UTM is immutable on the server, so keep a distinct visit per link.
+  const scope = JSON.stringify([tracking.source.toLowerCase(), tracking.campaign, tracking.medium, tracking.adId]);
+  try {
+    const key = `mzj-form-visitor-${slug}`;
+    const record = JSON.parse(sessionStorage.getItem(key) || 'null') as { id?: string; scope?: string } | null;
+    if (record?.scope === scope && record.id && /^[0-9a-f-]{36}$/i.test(record.id)) return record.id;
+    const id = uuid();
+    sessionStorage.setItem(key, JSON.stringify({ id, scope }));
+    return id;
+  } catch { return uuid(); }
 }
 function getTracking() {
-  const u=new URLSearchParams(window.location.search);
-  return { source:(u.get('utm_source')||u.get('source')||'direct').slice(0,100), campaign:(u.get('utm_campaign')||'').slice(0,160), medium:(u.get('utm_medium')||'').slice(0,120), adId:(u.get('ad_id')||u.get('utm_content')||'').slice(0,140) };
+  return formLeadAttribution(window.location.search, document.referrer);
 }
 export function LeadFormRenderer({ form, preview=false, compact=false, onLeadStored }:{ form:RendererForm;preview?:boolean;compact?:boolean;onLeadStored?:(lead:StoredFormLead)=>void }) {
   const config=form.config?.fields?.length?form.config:DEFAULT_FORM_CONFIG;
@@ -23,10 +33,10 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   const [step,setStep]=useState(0);
   const [name,setName]=useState(''),[phone,setPhone]=useState(''),[consent,setConsent]=useState(false);
   const [sending,setSending]=useState(false),[error,setError]=useState(''),[done,setDone]=useState(false);
-  const session=useRef(getVisitor(form.slug || 'preview'));
+  const tracking=useMemo(getTracking,[]);
+  const session=useRef(getVisitor(form.slug || 'preview',tracking));
   const submissionKey=useRef(uuid());
   const touch=useRef<{x:number;y:number}|null>(null);
-  const tracking=useMemo(getTracking,[]);
   const fields=config.fields.filter(f=>!f.showIf || answers[f.showIf.fieldId]===f.showIf.equals);
   const count=fields.length+1;
   const current=fields[step];

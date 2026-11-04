@@ -78,6 +78,28 @@ export function detectFormAdPlatform(search: string, referrer: string): LeadForm
   return null;
 }
 
+/** The CRM attribution and the browser Pixel must agree on the same ad source.
+ * Keep the original Facebook/Instagram labels, but restore TikTok/Snapchat when
+ * ad link previews replace utm_source or their official click/test markers exist.
+ * Do not turn unknown campaign visits into advertising leads.
+ */
+export function formLeadAttribution(search: string, referrer: string) {
+  const query = new URLSearchParams(search);
+  const rawSource = String(query.get('utm_source') || query.get('source') || '').trim();
+  const platform = detectFormAdPlatform(search, referrer);
+  const source = platform === 'tiktok' || platform === 'snapchat'
+    ? platform
+    : platform === 'meta' && !['meta', 'facebook', 'fb', 'instagram', 'ig', 'facebook_ads', 'instagram_ads'].includes(rawSource.toLowerCase())
+      ? 'meta'
+      : rawSource || 'direct';
+  return {
+    source: source.slice(0, 100),
+    campaign: String(query.get('utm_campaign') || '').slice(0, 160),
+    medium: String(query.get('utm_medium') || '').slice(0, 120),
+    adId: String(query.get('ad_id') || query.get('utm_content') || '').slice(0, 140),
+  };
+}
+
 /** Avoid document.write and never pass form fields, telephone, name or answers. */
 function appendPixelScript(src: string) {
   const tag = document.createElement('script');
@@ -106,27 +128,25 @@ function bootMeta(pixelId: string) {
     inited.add(`meta:${pixelId}`);
   }
 }
-/** Snap's browser test tool supplies ScTestModeId in its opened URL.
- * With late, consent-gated SDK loading, preserve that test marker for the SDK
- * before initialization. Keep it limited to this Pixel and clean up on a real
- * campaign visit so test mode cannot leak into production tracking.
+/** Snapchat Test Events uses its own UUID, not the advertising Pixel ID.
+ * Consent-gated SDK loading happens after the page is opened; preserve the test
+ * marker exactly in the SDK's one-hour localStorage format before booting it.
  */
-function prepareSnapTestMode(pixelId: string) {
+function prepareSnapTestMode() {
   try {
     const testId = [...new URLSearchParams(window.location.search).entries()]
-      .find(([key]) => key.toLowerCase() === 'sctestmodeid')?.[1];
+      .find(([key]) => key.toLowerCase() === 'sctestmodeid')?.[1]?.trim();
     const key = '_scTestEvent';
-    if (testId?.toLowerCase() === pixelId.toLowerCase()) {
-      window.localStorage.setItem(key, `${pixelId}|${Date.now()}`);
+    if (testId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(testId)) {
+      window.localStorage.setItem(key, `${testId}|${Date.now()}`);
     } else {
-      const previous = window.localStorage.getItem(key);
-      if (previous?.split('|')[0]?.toLowerCase() === pixelId.toLowerCase())
-        window.localStorage.removeItem(key);
+      // A test visit must never leave real campaign conversions in test mode.
+      window.localStorage.removeItem(key);
     }
   } catch { /* Storage may be unavailable in private browsing. */ }
 }
 function bootSnap(pixelId: string) {
-  prepareSnapTestMode(pixelId);
+  prepareSnapTestMode();
   const w = window as BrowserWithPixels;
   if (!w.snaptr) {
     const fn: PixelFunction = (...args: unknown[]) => {
