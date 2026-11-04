@@ -497,8 +497,7 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "",
  * the representative's real CRM branch. They never use the removed online branch
  * or change another lead's existing assignment.
  */
-export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance"): Promise<AssignmentResult> {
-  const sourceCode = "sheet_lead";
+export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance", sourceCode = "sheet_lead"): Promise<AssignmentResult> {
   const departmentCode = serviceKey === "finance" ? "finance_sales" : "cash_sales";
   if (serviceKey === "finance") {
     const result = await chooseFinanceImportAssignment(sourceCode);
@@ -546,8 +545,12 @@ export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance"
     order by u.full_name,u.id::text
   `;
   const eligible = candidates.filter((candidate) => clean(candidate.branch_code));
+  // Marketing form intake can use the same active finance sales representatives
+  // when there is no eligible cash representative. Sheet imports keep their
+  // original cash-only behavior unchanged.
+  if (!eligible.length && sourceCode !== 'sheet_lead') return chooseFinanceImportAssignment(sourceCode);
   if (!eligible.length) return { assignedTo: null, assignedName: "", branchCode: "" };
-  const poolKey = "sheet_import:cash_sales:all_branches";
+  const poolKey = sourceCode === 'sheet_lead' ? 'sheet_import:cash_sales:all_branches' : 'marketing_form:cash_sales:all_branches';
   const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
   const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
   const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];

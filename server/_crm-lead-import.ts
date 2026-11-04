@@ -193,6 +193,9 @@ export function isLeadImportEvent(routeSource: string, payload: any) {
 export async function processLeadImportEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
   const sourceCode = sourceCodeForImport(routeSource, payload);
+  const isMarketingForm = routeSource === 'marketing-form' && payload?.provider === 'marketing_lead_form';
+  const serviceKey: 'cash' | 'finance' = isMarketingForm && payload?.serviceKey === 'cash' ? 'cash' : 'finance';
+  const departmentCode = serviceKey === 'cash' ? 'cash_sales' : 'finance_sales';
   if (sourceCode === "meta_lead") {
     await sql`insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group)
       values('meta_lead','ميتا ليد',65,true,array['crm'],'whatsapp',false,'digital') on conflict(code) do nothing`;
@@ -273,7 +276,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
         provider,classification_state,metadata
       ) values(
         ${externalId},${lead?.id || null}::uuid,${contact.id}::uuid,${request?.id || null}::uuid,${sourceCode},${data.customerName},${data.phoneNormalized},'open',
-        0,null,${request?.service_key || lead?.service_key || "finance"},${request?.department_code || lead?.department_code || "finance_sales"},
+        0,null,${request?.service_key || lead?.service_key || serviceKey},${request?.department_code || lead?.department_code || departmentCode},
         ${request?.branch_code || lead?.branch_code || "online"},${request?.assigned_to || lead?.assigned_to || null}::uuid,
         ${request?.call_center_assigned_to || lead?.call_center_assigned_to || null}::uuid,${routeSource},${request || lead ? "classified" : "new"},
         ${sql.json({ routeSource, sourceCode, importOnly: true, preferredContactChannel, lastEventId: eventId })}
@@ -311,12 +314,13 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
       conversationId: conversation.id,
-      serviceKey: "finance",
+      serviceKey,
       sourceCode,
       classificationMethod: "lead_import",
       eventKey: eventId,
       skipAutomaticTemplate: true,
       financeImportRouting: true,
+      marketingFormImportRouting: isMarketingForm,
     });
     createdLead = !lead && classified.reused !== true;
     request = classified.request;
@@ -364,6 +368,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     lastImportPayload: toJsonValue(data.raw),
     ...(campaign.sheetCampaignName ? { lastSheetCampaignName: campaign.sheetCampaignName } : {}),
     ...(campaign.metaPlatform ? { lastMetaPlatform: campaign.metaPlatform } : {}),
+    ...(isMarketingForm ? { marketingFormPurchasePreference: first(payload?.purchasePreference, 'undecided') } : {}),
   };
   if (sourceCode === "installment_calculator") {
     nextExtraData.calculator = toJsonValue(data.calculator);
@@ -381,11 +386,11 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       source_code=${sourceCode},
       source_name=${sourceName},
       platform_code=${sourceCode},
-      service_key=${lead.service_key || 'finance'},
-      department_code=${lead.department_code || 'finance_sales'},
+      service_key=${lead.service_key || serviceKey},
+      department_code=${lead.department_code || departmentCode},
       branch_code=${lead.branch_code || 'online'},
       status_label='عميل جديد',
-      payment_type=case when ${existedBefore} then payment_type else 'تمويل' end,
+      payment_type=case when ${existedBefore} then payment_type else ${serviceKey === 'cash' ? 'كاش' : 'تمويل'} end,
       car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
       car_type=case when ${existedBefore} then coalesce(nullif(car_type,''),${data.carName || null}) else ${data.carName || null} end,
       campaign_name=case when ${existedBefore} then coalesce(nullif(campaign_name,''),${campaign.campaignName || null}) else ${campaign.campaignName || null} end,

@@ -3,6 +3,7 @@ import type { SessionUser } from "./_auth.js";
 import {
   branchForDepartment,
   chooseAssignment,
+  chooseSheetImportAssignment,
   chooseFinanceImportAssignment,
   chooseCallCenterAssignment,
   clean,
@@ -225,6 +226,7 @@ export async function classifyConversationService(input: {
   actor?: SessionUser | null; eventKey?: string; skipAutomaticTemplate?: boolean;
   assignPrimary?: boolean; assignCallCenter?: boolean; requestedBranchCode?: string;
   financeImportRouting?: boolean;
+  marketingFormImportRouting?: boolean;
 }) {
   const sql = getSql();
   const serviceKey = departmentKey(input.serviceKey);
@@ -248,9 +250,11 @@ export async function classifyConversationService(input: {
     if (needsPrimaryAssignment || needsCallCenterAssignment) {
       const requestedBranchCode = clean(input.requestedBranchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
       const assignment = needsPrimaryAssignment
-        ? (input.financeImportRouting && existingServiceKey === "finance"
-          ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
-          : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
+        ? (input.marketingFormImportRouting && (existingServiceKey === 'cash' || existingServiceKey === 'finance')
+          ? await chooseSheetImportAssignment(existingServiceKey, input.sourceCode || existing.source_code || conversation.channel_code || 'website')
+          : input.financeImportRouting && existingServiceKey === "finance"
+            ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
+            : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
         : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
       const callCenter = needsCallCenterAssignment
         ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
@@ -294,9 +298,11 @@ export async function classifyConversationService(input: {
   const requestedBranchCode = clean(input.requestedBranchCode) || branchForDepartment(serviceKey);
   const assignment = input.assignPrimary === false
     ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
-    : (input.financeImportRouting && serviceKey === "finance"
-      ? await chooseFinanceImportAssignment(sourceCode)
-      : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
+    : (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
+      ? await chooseSheetImportAssignment(serviceKey, sourceCode)
+      : input.financeImportRouting && serviceKey === "finance"
+        ? await chooseFinanceImportAssignment(sourceCode)
+        : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
   const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
     ? await chooseCallCenterAssignment(sourceCode, "online")
     : { assignedTo: null, assignedName: "" };
