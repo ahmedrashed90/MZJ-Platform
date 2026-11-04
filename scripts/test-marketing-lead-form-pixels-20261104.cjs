@@ -25,11 +25,11 @@ assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,
 assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,id:''}}));
 function mockedBrowser(){
   const scripts=[];const values={};
-  const window={location:{search:'',reload(){},},localStorage:{getItem:k=>values[k]||null,setItem:(k,v)=>values[k]=v,removeItem:k=>delete values[k]}};
-  const document={head:{appendChild:tag=>scripts.push(tag)},createElement:()=>({})};
+  const window={location:{pathname:'/forms/mymzj-form',search:'',reload(){},},localStorage:{getItem:k=>values[k]||null,setItem:(k,v)=>values[k]=v,removeItem:k=>delete values[k]}};
+  const document={head:{appendChild:tag=>scripts.push(tag)},createElement:()=>({remove(){}})};
   return {window,document,scripts};
 }
-function testPlatform(platform, expectedEvent, expectedScript){
+async function testPlatform(platform, expectedEvent, expectedScript){
   const {window,document,scripts}=mockedBrowser();
   const mod=transpiled('src/marketing/lead-forms/pixel-tracking.ts',{window,document});
   assert.equal(mod.detectFormAdPlatform('?utm_source=facebook',''), 'meta');
@@ -63,22 +63,44 @@ function testPlatform(platform, expectedEvent, expectedScript){
   assert.ok(scripts[0].src.includes(expectedScript));
   mod.startFormAdPixel(platform,settings,'mymzj-form','allow');
   assert.equal(scripts.length,1,'Repeated mount must not re-load script');
-  let queue=platform==='meta'?window.fbq.queue:platform==='snapchat'?window.snaptr.queue:window.ttq;
-  const current=queue.length;
-  assert.ok(current>=(platform==='tiktok'?1:2),'Pixel initialization + page view');
-  mod.trackStoredFormLead(platform,settings,'deny',{id:'new-1',created:true,crmStatus:'linked'});
-  mod.trackStoredFormLead(platform,settings,'allow',{id:'new-1',created:false,crmStatus:'linked'});
+  const snapshot={id:'new-1',created:true,crmStatus:'linked'};
+  mod.trackStoredFormLead(platform,settings,'deny',snapshot);
+  mod.trackStoredFormLead(platform,settings,'allow',{...snapshot,created:false});
   mod.trackStoredFormLead(platform,settings,'allow',{id:'existing-1',created:true,crmStatus:'existing'});
-  assert.equal(queue.length,current,'No Lead if denied or duplicate');
-  mod.trackStoredFormLead(platform,settings,'allow',{id:'new-1',created:true,crmStatus:'linked'});
-  assert.equal(queue.length,current+1,'New CRM lead sends one conversion');
-  assert.ok(JSON.stringify(queue[current]).includes(expectedEvent));
-  mod.trackStoredFormLead(platform,settings,'allow',{id:'new-1',created:true,crmStatus:'linked'});
-  assert.equal(queue.length,current+1,'No double conversion for same lead');
+  if (platform === 'snapchat') {
+    // The old test only checked a temporary JS queue. Now the event must be
+    // handed to the loaded SDK, and neither PAGE_VIEW nor SIGN_UP can fire early.
+    const realCalls=[];
+    assert.equal(window.snaptr.queue.length,0,'No event sent to a placeholder before SDK is ready');
+    mod.trackStoredFormLead(platform,settings,'allow',snapshot);
+    mod.trackStoredFormLead(platform,settings,'allow',snapshot);
+    assert.equal(realCalls.length,0);
+    window.snaptr.handleRequest=(...args)=>realCalls.push(args);
+    scripts[0].onload();
+    await settle();
+    assert.equal(realCalls.filter(args=>args[0]==='init').length,1,'Snap SDK initializes once');
+    assert.equal(realCalls.filter(args=>args[0]==='track'&&args[1]==='PAGE_VIEW').length,1,'Real SDK received one PAGE_VIEW');
+    assert.equal(realCalls.filter(args=>args[0]==='track'&&args[1]===expectedEvent).length,1,'Real SDK received one SIGN_UP');
+    mod.startFormAdPixel(platform,settings,'mymzj-form','allow');
+    mod.trackStoredFormLead(platform,settings,'allow',snapshot);
+    await settle();
+    assert.equal(realCalls.length,3,'Repeated mount + conversion cannot duplicate events');
+  } else {
+    const queue=platform==='meta'?window.fbq.queue:window.ttq;
+    const current=queue.length;
+    assert.ok(current>=(platform==='tiktok'?1:2),'Pixel initialization + page view');
+    mod.trackStoredFormLead(platform,settings,'allow',snapshot);
+    assert.equal(queue.length,current+1,'New CRM lead sends one conversion');
+    assert.ok(JSON.stringify(queue[current]).includes(expectedEvent));
+    mod.trackStoredFormLead(platform,settings,'allow',snapshot);
+    assert.equal(queue.length,current+1,'No double conversion for same lead');
+  }
 }
-testPlatform('meta','Lead','facebook.net');
-testPlatform('snapchat','SIGN_UP','sc-static.net');
-testPlatform('tiktok','Lead','analytics.tiktok.com');
+async function settle(){for(let i=0;i<10;i++) await Promise.resolve();}
+async function runAsyncPixelTests(){
+await testPlatform('meta','Lead','facebook.net');
+await testPlatform('snapchat','SIGN_UP','sc-static.net');
+await testPlatform('tiktok','Lead','analytics.tiktok.com');
 // Snapchat's browser test URL must be prepared before SDK initialization and
 // the test marker must be removed when returning to a real campaign URL.
 {
@@ -92,10 +114,17 @@ testPlatform('tiktok','Lead','analytics.tiktok.com');
   const testFlag=window.localStorage.getItem('_scTestEvent');
   assert.ok(testFlag.startsWith(`${pixel}|`));
   assert.equal(scripts.length,1);
+  const calls=[];
+  window.snaptr.handleRequest=(...args)=>calls.push(args);
+  scripts[0].onload();
+  await settle();
   window.location.search='?utm_source=snapchat';
   mod.startFormAdPixel('snapchat',settings,'different-form','allow');
+  await settle();
   assert.equal(window.localStorage.getItem('_scTestEvent'),null);
+  assert.equal(calls.filter(args=>args[0]==='track' && args[1]==='PAGE_VIEW').length,2,'Ad link gets its own PageView');
 }
+} // runAsyncPixelTests
 
 // Only browser pixel scripts and public lead-forms, no external conversion APIs.
 const pixelJs=fs.readFileSync(path.join(root,'src/marketing/lead-forms/pixel-tracking.ts'),'utf8');
@@ -118,4 +147,4 @@ for(const rel of ['src/marketing/lead-forms/LeadFormsPage.tsx','src/marketing/le
   const errs=(r.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error);
   assert.equal(errs.length,0,rel+': '+errs.map(x=>ts.flattenDiagnosticMessageText(x.messageText,' ')).join(','));
 }
-console.log('PASS lead-form browser Pixels: consent gating, source routing, 3 providers, conversion dedupe, typescript syntax, form-only settings');
+runAsyncPixelTests().then(()=>console.log('PASS lead-form browser Pixels: consent gating, SDK-ready delivery, source routing, 3 providers, conversion dedupe, typescript syntax, form-only settings')).catch(error=>{console.error(error);process.exitCode=1;});

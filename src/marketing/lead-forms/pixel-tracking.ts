@@ -9,6 +9,10 @@ const CHOICE_STORAGE_KEY = 'mzj-lead-forms-pixel-consent-v1';
 const viewed = new Set<string>();
 const converted = new Set<string>();
 const inited = new Set<string>();
+// Snapchat must not consider an event sent while its SDK is still loading.
+const snapPendingViews = new Set<string>();
+const snapPendingConversions = new Set<string>();
+let snapSdkPromise: Promise<void> | null = null;
 
 type PixelFunction = ((...args: unknown[]) => void) & {
   queue?: unknown[][];
@@ -128,9 +132,9 @@ function bootMeta(pixelId: string) {
     inited.add(`meta:${pixelId}`);
   }
 }
-/** Snapchat Test Events uses its own UUID, not the advertising Pixel ID.
- * Consent-gated SDK loading happens after the page is opened; preserve the test
- * marker exactly in the SDK's one-hour localStorage format before booting it.
+/** Respect the test marker supplied by Snapchat Events Manager. Their Pixel SDK
+ * uses _scTestEvent to keep its test context after consent-gated loading.
+ * Never generate a test ID locally or substitute our Pixel ID for the URL value.
  */
 function prepareSnapTestMode() {
   try {
@@ -139,15 +143,21 @@ function prepareSnapTestMode() {
     const key = '_scTestEvent';
     if (testId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(testId)) {
       window.localStorage.setItem(key, `${testId}|${Date.now()}`);
-    } else {
-      // A test visit must never leave real campaign conversions in test mode.
+    } else if (!testId) {
+      // Real campaign visits must not inherit an earlier test session.
       window.localStorage.removeItem(key);
     }
   } catch { /* Storage may be unavailable in private browsing. */ }
 }
-function bootSnap(pixelId: string) {
-  prepareSnapTestMode();
+
+/** An SDK request can return 200 for metadata without ever sending an event.
+ * Wait for the real SDK's handleRequest before dispatching PAGE_VIEW/SIGN_UP,
+ * rather than treating a call to its temporary queue as successful delivery.
+ * If a script load fails, permit the next attempt to load a fresh script.
+ */
+function ensureSnapSdk(): Promise<void> {
   const w = window as BrowserWithPixels;
+  if (typeof w.snaptr?.handleRequest === 'function') return Promise.resolve();
   if (!w.snaptr) {
     const fn: PixelFunction = (...args: unknown[]) => {
       if (fn.handleRequest) fn.handleRequest(...args);
@@ -155,13 +165,72 @@ function bootSnap(pixelId: string) {
     };
     fn.queue = [];
     w.snaptr = fn;
-    appendPixelScript('https://sc-static.net/scevent.min.js');
   }
-  if (!inited.has(`snapchat:${pixelId}`)) {
-    // No user_email/user_phone or other advanced-matching information.
-    w.snaptr?.('init', pixelId, {});
-    inited.add(`snapchat:${pixelId}`);
+  if (!snapSdkPromise) {
+    let pendingTag: HTMLScriptElement | null = null;
+    snapSdkPromise = new Promise<void>((resolve, reject) => {
+      const tag = document.createElement('script');
+      pendingTag = tag;
+      tag.async = true;
+      tag.src = 'https://sc-static.net/scevent.min.js';
+      tag.referrerPolicy = 'strict-origin-when-cross-origin';
+      tag.onload = () => {
+        if (typeof w.snaptr?.handleRequest === 'function') resolve();
+        else reject(new Error('Snapchat Pixel SDK loaded without an event handler'));
+      };
+      tag.onerror = () => reject(new Error('Snapchat Pixel SDK failed to load'));
+      try { document.head.appendChild(tag); }
+      catch (error) { reject(error); }
+    }).catch(error => {
+      // Never cache a failed SDK load or mark an event as already dispatched.
+      pendingTag?.remove();
+      snapSdkPromise = null;
+      throw error;
+    });
   }
+  return snapSdkPromise;
+}
+
+async function sendSnapEvent(pixelId: string, eventName: 'PAGE_VIEW' | 'SIGN_UP', expectedUrl?: string): Promise<boolean> {
+  prepareSnapTestMode();
+  // One bounded retry protects against transient SDK loading failures.
+  try { await ensureSnapSdk(); }
+  catch { await ensureSnapSdk(); }
+  // Someone may have revoked consent while the async library was loading.
+  if (readPixelConsent() === 'deny') return false;
+  if (expectedUrl && expectedUrl !== `${window.location.pathname}${window.location.search}`) return false;
+  const w = window as BrowserWithPixels;
+  if (typeof w.snaptr?.handleRequest !== 'function') throw new Error('Snapchat Pixel SDK is not ready');
+  const initKey = `snapchat:${pixelId}`;
+  if (!inited.has(initKey)) {
+    w.snaptr('init', pixelId, {});
+    inited.add(initKey);
+  }
+  w.snaptr('track', eventName);
+  return true;
+}
+
+function trackSnapPageView(pixelId: string, slug: string) {
+  // React StrictMode must not duplicate events. A separate test URL or ad link
+  // must still get a new PAGE_VIEW even if it renders the same form slug.
+  const pageUrl = `${window.location.pathname}${window.location.search}`;
+  const viewKey = `snapchat:${pixelId}:${slug}:${pageUrl}`;
+  if (viewed.has(viewKey) || snapPendingViews.has(viewKey)) return;
+  snapPendingViews.add(viewKey);
+  void sendSnapEvent(pixelId, 'PAGE_VIEW', pageUrl).then(sent => {
+    if (sent) viewed.add(viewKey);
+  }).catch(error => console.warn('Snapchat PAGE_VIEW was not dispatched', error))
+    .finally(() => snapPendingViews.delete(viewKey));
+}
+
+function trackSnapConversion(pixelId: string, leadId: string) {
+  const key = `snapchat:${pixelId}:${leadId}`;
+  if (converted.has(key) || snapPendingConversions.has(key)) return;
+  snapPendingConversions.add(key);
+  void sendSnapEvent(pixelId, 'SIGN_UP').then(sent => {
+    if (sent) converted.add(key);
+  }).catch(error => console.warn('Snapchat SIGN_UP was not dispatched', error))
+    .finally(() => snapPendingConversions.delete(key));
 }
 function bootTikTok(pixelId: string) {
   const w = window as BrowserWithPixels;
@@ -208,17 +277,19 @@ export function startFormAdPixel(
   const entry = settings[platform];
   if (!entry?.enabled || !entry.id) return;
   const { id } = entry;
+  if (platform === 'snapchat') {
+    trackSnapPageView(id, slug);
+    return;
+  }
   const viewKey = `${platform}:${id}:${slug}`;
   try {
     if (platform === 'meta') bootMeta(id);
-    if (platform === 'snapchat') bootSnap(id);
     if (platform === 'tiktok') bootTikTok(id);
     // StrictMode / React remounts must not send duplicate PageViews.
     if (viewed.has(viewKey)) return;
     viewed.add(viewKey);
     const w = window as BrowserWithPixels;
     if (platform === 'meta') w.fbq?.('trackSingle', id, 'PageView');
-    else if (platform === 'snapchat') w.snaptr?.('track', 'PAGE_VIEW');
     else w.ttq?.page();
   } catch (error) {
     // Tracking can fail or be blocked without affecting the form or CRM.
@@ -236,15 +307,17 @@ export function trackStoredFormLead(
   if (consent !== 'allow' || !platform || !settings || !lead.created || lead.crmStatus === 'existing') return;
   const entry = settings[platform];
   if (!entry?.enabled || !entry.id || !lead.id) return;
+  if (platform === 'snapchat') {
+    trackSnapConversion(entry.id, lead.id);
+    return;
+  }
   const key = `${platform}:${entry.id}:${lead.id}`;
   if (converted.has(key)) return;
   try {
     if (platform === 'meta') bootMeta(entry.id);
-    if (platform === 'snapchat') bootSnap(entry.id);
     if (platform === 'tiktok') bootTikTok(entry.id);
     const w = window as BrowserWithPixels;
     if (platform === 'meta') w.fbq?.('trackSingle', entry.id, 'Lead');
-    else if (platform === 'snapchat') w.snaptr?.('track', 'SIGN_UP');
     else w.ttq?.track('Lead'); // TikTok's current standard name for a submitted form.
     converted.add(key);
   } catch (error) {

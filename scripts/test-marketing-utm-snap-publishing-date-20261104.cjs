@@ -53,30 +53,38 @@ assert.notEqual(visitor('form', attrs('snapchat')), tiktokVisit);
 assert.notEqual(visitor('form', attrs('tiktok','campaign-2')), tiktokVisit);
 console.log('PASS: visitor attribution is scoped by campaign and source, avoiding prior direct Website visits');
 
-const testId = 'c14460bd-200c-4e18-b379-718a6a0adfd2';
 const pixelId = '0013dd43-0c92-4403-bb53-1793e1f5d077';
+// The identifier in the browser test URL is supplied by Snap; do not assume
+// it must differ from the advertising Pixel ID shown in Events Manager.
+const testId = pixelId;
 const scripts=[];
 const local=new Map();
 const browser = {
-  location: {search:`?utm_source=snapchat&ScTestModeId=${testId}`},
+  location: {pathname:'/forms/test-form',search:`?utm_source=snapchat&ScTestModeId=${testId}`},
   localStorage: { getItem: k=>local.get(k)||null, setItem: (k,v)=>local.set(k,v), removeItem:k=>local.delete(k)},
 };
-const document = {head:{appendChild: tag=>scripts.push(tag)},createElement:()=>({})};
+const document = {head:{appendChild: tag=>scripts.push(tag)},createElement:()=>({remove(){}})};
 const snap = load('src/marketing/lead-forms/pixel-tracking.ts',{context:{window:browser,document}});
 const pixels={snapchat:{id:pixelId,enabled:true},tiktok:{id:'',enabled:false},meta:{id:'',enabled:false}};
+async function testSnapSdkAfterLoad(){
 snap.startFormAdPixel('snapchat',pixels,'test-form','deny');
 assert.equal(local.has('_scTestEvent'),false);
 snap.startFormAdPixel('snapchat',pixels,'test-form','allow');
 assert.ok(local.get('_scTestEvent').startsWith(`${testId}|`));
-assert.notEqual(testId,pixelId, 'test ID must be distinct from Pixel ID');
 assert.equal(scripts.length,1);
-assert.ok(JSON.stringify(browser.snaptr.queue).includes('PAGE_VIEW'));
+assert.equal(browser.snaptr.queue.length,0,'No premature queued PAGE_VIEW');
 snap.trackStoredFormLead('snapchat',pixels,'allow',{id:'new-id',created:true,crmStatus:'linked'});
-assert.ok(JSON.stringify(browser.snaptr.queue).includes('SIGN_UP'));
+const calls=[];
+browser.snaptr.handleRequest=(...args)=>calls.push(args);
+scripts[0].onload();
+for(let i=0;i<10;i++) await Promise.resolve();
+assert.deepEqual(calls.filter(args=>args[0]==='track').map(args=>args[1]),['PAGE_VIEW','SIGN_UP']);
 browser.location.search='?utm_source=snapchat';
 snap.startFormAdPixel('snapchat',pixels,'campaign-form','allow');
 assert.equal(local.has('_scTestEvent'),false,'No test marker on real campaigns');
-console.log('PASS: Snap Test Events gets test UUID (not Pixel ID) on consent, emits events, clears test state on real URL');
+console.log('PASS: Snap Test Events preserves URL test UUID, sends events after SDK load, clears on real URL');
+}
+testSnapSdkAfterLoad().catch(error=>{console.error(error);process.exitCode=1;});
 
 const crm=load('server/marketing/lead-forms-crm.ts');
 assert.equal(crm.crmSourceForForm('tiktok'),'tiktok_lead');
