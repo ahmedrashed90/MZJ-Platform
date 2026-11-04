@@ -333,6 +333,7 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.lead_forms.publish", "نشر وإيقاف الفورمات", "marketing", "lead_forms", "publish", "action", "نشر وإيقاف الروابط العامة", true),
   p("marketing.lead_forms.leads.view", "عرض ليدات الفورم", "marketing", "lead_forms", "leads_view", "action", "عرض الأسماء وأرقام الهواتف والإجابات", true),
   p("marketing.lead_forms.leads.export", "تصدير ليدات الفورم", "marketing", "lead_forms", "leads_export", "action", "تحميل بيانات الليدات", true),
+  p("marketing.lead_forms.leads.delete", "حذف بيانات فورم المنصات", "marketing", "lead_forms", "leads_delete", "action", "حذف ليد محدد أو مسح بيانات الزيارات والليدات بعد تأكيد المدير", true),
   p("marketing.lead_forms.reports.view", "مشاهدة تقارير الفورم", "marketing", "lead_forms", "reports_view", "action"),
   p("marketing.lead_forms.sheets.manage", "إعدادات Google Sheets للفورم", "marketing", "lead_forms", "sheets_manage", "settings", "تغيير وجهة بيانات العملاء وتحديث المزامنة", true),
   p("marketing.campaign.create", "إنشاء حملة", "marketing", "create", "campaign_create", "action", "إنشاء حملة جديدة", true),

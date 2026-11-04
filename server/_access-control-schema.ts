@@ -393,6 +393,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
 ('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
 ('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.leads.delete','حذف بيانات فورم المنصات','marketing','lead_forms','leads_delete','حذف بيانات فورم المنصات','حذف ليد محدد أو مسح بيانات الزيارات والليدات','action',true,1578,true),
 ('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
 ('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
 ('marketing.campaign.create','إنشاء حملة','marketing','create_campaign','create','إنشاء حملة','إنشاء حملة جديدة','action',true,1570,true),
@@ -637,6 +638,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
 ('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
 ('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.leads.delete','حذف بيانات فورم المنصات','marketing','lead_forms','leads_delete','حذف بيانات فورم المنصات','حذف ليد محدد أو مسح بيانات الزيارات والليدات','action',true,1578,true),
 ('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
 ('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
 ('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
@@ -831,7 +833,7 @@ async function requiredPagePermissionCatalogReady() {
           )
       )
       and exists(select 1 from core.system_pages where system_code='marketing' and code='lead_forms' and is_active=true)
-      and (select count(*)::int from core.permissions where code like 'marketing.lead_forms.%' and is_active=true) >= 8
+      and exists(select 1 from core.permissions where code='marketing.lead_forms.leads.delete' and is_active=true and is_sensitive=true)
       and exists(
         select 1 from core.system_pages
         where system_code='core' and code='owners_community' and is_active=true

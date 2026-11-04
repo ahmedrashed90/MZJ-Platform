@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, createSign, randomUUID } from 'node:crypto';
 import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { requireUser, requestIp } from '../_auth.js';
-import { requirePermissionForUser } from '../_access-control.js';
+import { logSecurityEvent, requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
@@ -344,6 +344,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     const permission = ({
       list:'marketing.lead_forms.view', get:'marketing.lead_forms.view', stats:'marketing.lead_forms.reports.view', leads:'marketing.lead_forms.leads.view',
       retry_crm:'marketing.lead_forms.edit',
+      data_summary:'marketing.lead_forms.leads.delete', delete_lead:'marketing.lead_forms.leads.delete', clear_data:'marketing.lead_forms.leads.delete',
       create:'marketing.lead_forms.create', save:'marketing.lead_forms.edit', duplicate:'marketing.lead_forms.create', publish:'marketing.lead_forms.publish', pause:'marketing.lead_forms.publish', archive:'marketing.lead_forms.publish',
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
       sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
@@ -431,6 +432,22 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       ]);
       return res.json({ok:true,byForm,bySource,daily,byStep,byCampaign});
     }
+    // Destructive controls are isolated to the platform forms tables; they never
+    // delete contacts from CRM, Google Sheets, advertising platforms, or forms.
+    if (action==='data_summary' && req.method==='GET') {
+      const formId=clean(params.formId,45);
+      if(formId && !uuidPattern.test(formId))return fail(res,400,'معرف الفورم غير صالح');
+      if(formId){
+        const [exists]=await sql`select id from marketing.lead_forms where id=${formId}::uuid`;
+        if(!exists)return fail(res,404,'الفورم غير موجود');
+      }
+      const [summary]=await sql<{leads:number;visits:number;steps:number}[]>`
+        select
+          (select count(*)::int from marketing.form_leads where (${formId}='' or form_id::text=${formId})) as leads,
+          (select count(*)::int from marketing.form_visits where (${formId}='' or form_id::text=${formId})) as visits,
+          (select count(*)::int from marketing.form_step_events where (${formId}='' or form_id::text=${formId})) as steps`;
+      return res.json({ok:true,formId,summary});
+    }
     if (action==='leads' && req.method==='GET') {
       const id=clean(params.id,45),search=clean(params.search,90);
       if (id&&!uuidPattern.test(id)) return fail(res,400,'معرف فورم غير صالح');
@@ -442,6 +459,57 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       return res.json({ok:true,leads:rows});
     }
     if (req.method!=='POST') return fail(res,405,'الطريقة غير مدعومة');
+    if (action==='delete_lead') {
+      const leadId=clean(params.id,45);
+      if(!uuidPattern.test(leadId) || params.confirm!=='DELETE_LEAD')return fail(res,400,'يجب تأكيد حذف الليد المطلوب');
+      const [deleted]=await sql<{id:string;form_id:string}[]>`
+        delete from marketing.form_leads where id=${leadId}::uuid
+        returning id::text,form_id::text`;
+      if(!deleted)return fail(res,404,'الليد غير موجود أو تم حذفه بالفعل');
+      await logSecurityEvent({request:req,user,systemCode:'marketing',pageCode:'lead_forms',
+        permissionCode:'marketing.lead_forms.leads.delete',action:'delete_form_lead',
+        entityType:'marketing_form_lead',entityId:deleted.id,result:'success',
+        beforeData:{formId:deleted.form_id},afterData:{deleted:true}});
+      return res.json({ok:true,deleted:1,message:'تم حذف الليد من قاعدة بيانات فورم المنصات وتحديث أعداد التسجيلات'});
+    }
+    if (action==='clear_data') {
+      const formId=clean(params.formId,45);
+      if(formId && !uuidPattern.test(formId))return fail(res,400,'معرف الفورم غير صالح');
+      if(params.confirm!=='CLEAR_FORM_DATA')return fail(res,400,'يلزم تأكيد مسح بيانات الفورمات');
+      const expected={leads:Number(params.expectedLeads),visits:Number(params.expectedVisits),steps:Number(params.expectedSteps)};
+      if(Object.values(expected).some(v=>!Number.isSafeInteger(v)||v<0))return fail(res,400,'أعد فتح نافذة التأكيد لتحديث الأعداد قبل المسح');
+      const removed=await sql.begin(async tx=>{
+        // A table lock keeps new submissions/visits from being erased after the
+        // administrator reviewed the preview counts; all three deletes commit together.
+        await tx.unsafe('lock table marketing.form_leads, marketing.form_visits, marketing.form_step_events in share row exclusive mode');
+        if(formId){
+          const [exists]=await tx`select id from marketing.lead_forms where id=${formId}::uuid`;
+          if(!exists)throw new FormInputError('الفورم غير موجود');
+        }
+        const [current]=await tx<{leads:number;visits:number;steps:number}[]>`
+          select
+            (select count(*)::int from marketing.form_leads where (${formId}='' or form_id::text=${formId})) as leads,
+            (select count(*)::int from marketing.form_visits where (${formId}='' or form_id::text=${formId})) as visits,
+            (select count(*)::int from marketing.form_step_events where (${formId}='' or form_id::text=${formId})) as steps`;
+        if(current.leads!==expected.leads || current.visits!==expected.visits || current.steps!==expected.steps)
+          throw new FormInputError('تم تسجيل بيانات جديدة بعد فتح نافذة التأكيد. أعد مراجعة الأعداد قبل المسح.');
+        const [leadsResult]=await tx<{total:number}[]>`
+          with deleted as (delete from marketing.form_leads where (${formId}='' or form_id::text=${formId}) returning id)
+          select count(*)::int as total from deleted`;
+        const [visitsResult]=await tx<{total:number}[]>`
+          with deleted as (delete from marketing.form_visits where (${formId}='' or form_id::text=${formId}) returning id)
+          select count(*)::int as total from deleted`;
+        const [stepsResult]=await tx<{total:number}[]>`
+          with deleted as (delete from marketing.form_step_events where (${formId}='' or form_id::text=${formId}) returning id)
+          select count(*)::int as total from deleted`;
+        return {leads:leadsResult.total,visits:visitsResult.total,steps:stepsResult.total};
+      });
+      await logSecurityEvent({request:req,user,systemCode:'marketing',pageCode:'lead_forms',
+        permissionCode:'marketing.lead_forms.leads.delete',action:'clear_form_analytics_data',
+        entityType:'marketing_lead_form',entityId:formId||null,result:'success',
+        beforeData:{scope:formId||'all',...removed},afterData:{leads:0,visits:0,steps:0}});
+      return res.json({ok:true,removed,message:`تم مسح ${removed.leads} ليد و${removed.visits} زيارة من فورم المنصات`});
+    }
     if (action==='retry_crm') {
       const leadId=clean(params.id,45);
       if (!uuidPattern.test(leadId)) return fail(res,400,'معرف ليد غير صالح');

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowClockwise, ArrowDown, ArrowUp, ChartBar, CheckCircle, ClipboardText, Copy, Database, Eye, FileArrowDown, FloppyDisk, Gear, LinkSimple, Monitor, PauseCircle, PencilSimple, PlayCircle, Plus, ShieldCheck, DeviceMobile, SquaresFour, Table, Trash, TrendUp, UsersThree, WarningCircle, X } from '@phosphor-icons/react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -67,22 +67,42 @@ export function LeadFormsPage(){
   const [preview,setPreview]=useState<RendererForm|null>(null),[previewDevice,setPreviewDevice]=useState<'phone'|'desktop'>('phone');
   const [linkForm,setLinkForm]=useState<LeadForm|null>(null),[linkPlatform,setLinkPlatform]=useState('meta'),[linkCampaign,setLinkCampaign]=useState(''),[linkAdId,setLinkAdId]=useState('');
   const [stats,setStats]=useState<FormStats|null>(null),[statsBusy,setStatsBusy]=useState(false);
+  const statsRequestId=useRef(0);
   const [from,setFrom]=useState(()=>new Date(Date.now()-29*86400000).toISOString().slice(0,10));
   const [to,setTo]=useState(()=>new Date().toISOString().slice(0,10));
   const [statsForm,setStatsForm]=useState(''),[leads,setLeads]=useState<LeadRow[]>([]),[leadsBusy,setLeadsBusy]=useState(false),[leadsSearch,setLeadsSearch]=useState(''),[leadsForm,setLeadsForm]=useState('');
   const [leadsQuery,setLeadsQuery]=useState(''),[answersLead,setAnswersLead]=useState<LeadRow|null>(null);
+  const [clearPreview,setClearPreview]=useState<{formId:string;summary:{leads:number;visits:number;steps:number}}|null>(null);
+  const [clearConfirmation,setClearConfirmation]=useState('');
   const leadsRequestId=useRef(0);
   const canViewLeads=can('leads.view');
+  const canViewReports=can('reports.view');
+  const canDeleteLeads=can('leads.delete');
   const [sheetStatus,setSheetStatus]=useState<{configured:boolean;serviceEmail:string}|null>(null);
   const [pixels,setPixels]=useState<LeadFormPixelSettings>(DEFAULT_LEAD_FORM_PIXELS);
   const [pixelBusy,setPixelBusy]=useState(false);
   const [pixelsLoaded,setPixelsLoaded]=useState(false);
   const setActive=(value:Tab)=>{setTab(value);setError('');setNotice('');const params=new URLSearchParams(window.location.search);params.set('lf',value);window.history.replaceState({},'',`${window.location.pathname}?${params.toString()}`);};
-  const reload=useCallback(async()=>{setLoading(true);try{const response=await formsApi<FormListResponse>('list');setForms(response.forms.map(normalizeForm));}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل الفورمات');}finally{setLoading(false);}},[]);
+  const reload=useCallback(async(quiet=false)=>{if(!quiet)setLoading(true);try{const response=await formsApi<FormListResponse>('list');setForms(response.forms.map(normalizeForm));}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل الفورمات');}finally{if(!quiet)setLoading(false);}},[]);
   useEffect(()=>{void reload();},[reload]);
   const reloadDesigns=useCallback(async()=>{try{const data=await formsApi<{ok:true;templates:SavedFormDesign[]}>('design_templates');setSavedDesigns(data.templates);}catch{/* Form templates are optional until the feature schema is initialized. */}},[]);
   useEffect(()=>{void reloadDesigns();},[reloadDesigns]);
-  const loadStats=useCallback(async()=>{if(!can('reports.view'))return;setStatsBusy(true);try{setStats(await formsApi<FormStats>('stats',{from,to,id:statsForm}));}catch(e){setError(e instanceof Error?e.message:'تعذر جلب الإحصائيات');}finally{setStatsBusy(false);}},[from,to,statsForm,user]);
+  // Session verification updates user every 30s. Stats must depend on the effective
+  // boolean permission and filter values, not on a freshly created user object.
+  // Keep the previous chart mounted, deduplicate identical responses and ignore
+  // obsolete requests, so no white flash or chart reset occurs on session refresh.
+  const loadStats=useCallback(async()=>{
+    if(!canViewReports)return;
+    const requestId=++statsRequestId.current;
+    setStatsBusy(true);
+    try {
+      const next=await formsApi<FormStats>('stats',{from,to,id:statsForm});
+      if(requestId!==statsRequestId.current)return;
+      setStats(current=>JSON.stringify(current)===JSON.stringify(next)?current:next);
+    } catch(e) {
+      if(requestId===statsRequestId.current)setError(e instanceof Error?e.message:'تعذر جلب الإحصائيات');
+    } finally {if(requestId===statsRequestId.current)setStatsBusy(false);}
+  },[from,to,statsForm,canViewReports]);
   useEffect(()=>{if(tab==='dashboard'||tab==='reports')void loadStats();},[tab,loadStats]);
   // Stable permissions + debounce prevent a fetch on every keystroke or auth context refresh.
   useEffect(()=>{const timer=window.setTimeout(()=>setLeadsQuery(leadsSearch.trim()),450);return()=>window.clearTimeout(timer);},[leadsSearch]);
@@ -98,6 +118,43 @@ export function LeadFormsPage(){
     } finally {if(requestId===leadsRequestId.current)setLeadsBusy(false);}
   },[leadsForm,leadsQuery,canViewLeads]);
   useEffect(()=>{if(tab==='leads'&&canViewLeads)void loadLeads();},[tab,loadLeads,canViewLeads]);
+  const deleteLead=async(row:LeadRow)=>{
+    if(!canDeleteLeads || busy)return;
+    if(!window.confirm(`حذف الليد «${row.name}» من قاعدة بيانات فورم المنصات نهائيًا؟\n\nهيتحدث عدد الليدات في الداش بورد، لكن لن يتم حذف أي بيانات سبق نقلها إلى CRM أو Google Sheets.`))return;
+    setBusy(`delete-${row.id}`);setError('');setNotice('');
+    try {
+      const result=await formsApi<{ok:true;message:string}>('delete_lead',{id:row.id,confirm:'DELETE_LEAD'},'POST');
+      if(answersLead?.id===row.id)setAnswersLead(null);
+      await Promise.all([loadLeads(),reload(true),loadStats()]);
+      setNotice(result.message);
+    } catch(e) {setError(e instanceof Error?e.message:'تعذر حذف الليد');}
+    finally{setBusy('');}
+  };
+  const openClearData=async()=>{
+    if(!canDeleteLeads || busy)return;
+    setBusy('clear-preview');setError('');setNotice('');setClearConfirmation('');
+    try {
+      const result=await formsApi<{ok:true;formId:string;summary:{leads:number;visits:number;steps:number}}>('data_summary',{formId:leadsForm});
+      setClearPreview({formId:result.formId,summary:result.summary});
+    }catch(e){setError(e instanceof Error?e.message:'تعذر مراجعة بيانات المسح');}
+    finally{setBusy('');}
+  };
+  const clearData=async()=>{
+    if(!canDeleteLeads || !clearPreview || clearConfirmation.trim()!=='مسح' || busy)return;
+    setBusy('clear-data');setError('');setNotice('');
+    try {
+      const result=await formsApi<{ok:true;message:string}>('clear_data',{
+        formId:clearPreview.formId,confirm:'CLEAR_FORM_DATA',
+        expectedLeads:clearPreview.summary.leads,expectedVisits:clearPreview.summary.visits,expectedSteps:clearPreview.summary.steps,
+      },'POST');
+      setClearPreview(null);setClearConfirmation('');setAnswersLead(null);
+      await Promise.all([loadLeads(),reload(true),loadStats()]);
+      setNotice(result.message+'؛ تم تحديث الداش بورد والتقارير. لا يشمل المسح CRM أو Google Sheets.');
+    }catch(e){
+      setClearPreview(null);setClearConfirmation('');
+      setError(e instanceof Error?e.message:'تعذر مسح بيانات التجارب');
+    }finally{setBusy('');}
+  };
   const retryCrm=async(id:string)=>{
     setBusy(`crm-${id}`);setError('');setNotice('');
     try{
@@ -197,7 +254,7 @@ export function LeadFormsPage(){
 
     {tab==='manage'&&<section className="marketing-card"><div className="mlf-section-title"><div><h2>إدارة الفورمات</h2></div><span>{forms.length} فورم</span></div><div className="mlf-table-scroll"><table><thead><tr><th>اسم الفورم</th><th>التصميم</th><th>الحالة</th><th>الزيارات</th><th>الليدات</th><th>رابط النشر والإجراءات</th></tr></thead><tbody>{forms.map(f=><tr key={f.id}><td><strong>{f.title}</strong><small className="mlf-row-note">{f.slug}</small></td><td>{FORM_TEMPLATES.find(t=>t.id===f.template)?.name}</td><td><span className={`mlf-status ${f.status}`}>{statusLabel(f.status)}</span></td><td>{int(f.visits)}</td><td>{int(f.submissions)}</td><td><div className="mlf-card-actions">{can('edit')&&<button title="تعديل" className="secondary" onClick={()=>editForm(f)}><PencilSimple size={16}/></button>}<button title="معاينة" className="secondary" onClick={()=>setPreview(previewForm(f.status==='published'?(f.published_metadata?.template||f.template):f.template,f.status==='published'?(f.published_config||f.config):f.config,f.status==='published'?(f.published_metadata?.title||f.title):f.title))}><Eye size={16}/></button>{f.status==='published'&&<><button title="إنشاء رابط حملة بمصدر معروف" className="secondary" onClick={()=>{setLinkForm(f);setLinkPlatform('meta');setLinkCampaign('');setLinkAdId('');}}><LinkSimple size={16}/> رابط إعلان</button><button title="نسخ الرابط" className="secondary" onClick={()=>void copyLink(f.slug)}><Copy size={16}/></button><a className="mlf-small-link" title="فتح الرابط" target="_blank" rel="noopener noreferrer" href={formLink(f.slug)}><LinkSimple size={16}/></a></>}{can('publish')&&(f.status!=='published'?<button className="primary" onClick={()=>void publish(f)}><PlayCircle size={16}/> نشر</button>:<button className="secondary" onClick={()=>void perform('pause',{id:f.id},'تم إيقاف نشر الفورم')}><PauseCircle size={16}/></button>)}{can('create')&&<button className="secondary" title="نسخ كمسودة جديدة" onClick={()=>{const slug=window.prompt('اكتب رمز الرابط الجديد بالإنجليزية (حروف وأرقام وشرطة)',`${f.slug}-copy`);if(slug)void perform('duplicate',{id:f.id,slug:slug.trim(),title:`${f.title} - نسخة`},'تم نسخ الفورم كمسودة جديدة');}}><Copy size={16}/></button>}{can('publish')&&<button title="أرشفة" className="danger" onClick={()=>{if(window.confirm('أرشفة هذا الفورم وإيقاف رابطه العام؟'))void perform('archive',{id:f.id},'تمت أرشفة الفورم');}}><Trash size={16}/></button>}</div></td></tr>)}{!forms.length&&<tr><td colSpan={6}>لم يتم إنشاء فورمات بعد. ابدأ من مكتبة التصاميم.</td></tr>}</tbody></table></div></section>}
 
-    {tab==='leads'&&can('leads.view')&&<section className="marketing-card"><div className="mlf-section-title"><div><h2>قاعدة بيانات الليدات</h2><p>طلبات العملاء الحقيقية التي أُرسلت من روابط الفورمات المنشورة</p></div>{can('leads.export')&&<button type="button" className="secondary" disabled={!leads.length} onClick={()=>downloadCsv(leads)}><FileArrowDown size={18}/> تصدير Excel / CSV</button>}</div><div className="mlf-filters"><label>الفورم<select value={leadsForm} onChange={e=>setLeadsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option value={f.id} key={f.id}>{f.title}</option>)}</select></label><label>بحث بالاسم أو الجوال<input placeholder="بحث" value={leadsSearch} onChange={e=>setLeadsSearch(e.target.value)}/></label><button type="button" className="secondary" disabled={leadsBusy} onClick={()=>void loadLeads()}><ArrowClockwise size={17}/> تحديث</button></div><div className="mlf-table-scroll"><table><thead><tr><th>تاريخ التسجيل</th><th>اسم العميل</th><th>الجوال</th><th>الفورم</th><th>المصدر</th><th>الحملة</th><th>الإجابات</th><th>CRM</th><th>الشيت</th></tr></thead><tbody>{leads.map(r=><tr key={r.id}><td>{new Date(r.created_at).toLocaleString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'Asia/Riyadh'})}</td><td>{r.name}</td><td dir="ltr">{r.phone}</td><td>{r.form_title}</td><td>{r.source}</td><td>{r.campaign||'—'}</td><td><button className="mlf-answer-open" type="button" onClick={()=>setAnswersLead(r)}>عرض الإجابات</button></td><td><div className="mlf-crm-cell"><span className={r.crm_status==='failed'?'mlf-crm-failed':''}>{crmStatusLabel[r.crm_status||'not_requested']||'—'}</span>{can('edit')&&['failed','pending','not_requested'].includes(r.crm_status||'not_requested')&&<button type="button" className="mlf-crm-retry" disabled={busy===`crm-${r.id}`} onClick={()=>void retryCrm(r.id)}>{busy===`crm-${r.id}`?'جاري النقل':r.crm_status==='not_requested'?'ترحيل':'إعادة المحاولة'}</button>}</div></td><td>{({sent:'تم الإرسال',pending:'معلق',failed:'فشل الإرسال',not_configured:'غير مربوط'} as Record<string,string>)[r.sheet_status]||r.sheet_status}</td></tr>)}{!leads.length&&<tr><td colSpan={9}>لا توجد ليدات مطابقة</td></tr>}</tbody></table></div><small className="mlf-hint">يعرض آخر 2000 ليد مطابق؛ الأرقام في التقارير تشمل كل البيانات المسجلة خلال الفترة المحددة.</small></section>}
+    {tab==='leads'&&can('leads.view')&&<section className="marketing-card"><div className="mlf-section-title"><div><h2>قاعدة بيانات الليدات</h2><p>الطلبات المسجلة من روابط الفورمات المنشورة</p></div><div className="mlf-destructive-actions">{canDeleteLeads&&<button type="button" className="mlf-delete-button" disabled={Boolean(busy)} onClick={()=>void openClearData()}><Trash size={17}/> مسح بيانات التجارب</button>}{can('leads.export')&&<button type="button" className="secondary" disabled={!leads.length} onClick={()=>downloadCsv(leads)}><FileArrowDown size={18}/> تصدير Excel / CSV</button>}</div></div><div className="mlf-filters"><label>الفورم<select value={leadsForm} onChange={e=>setLeadsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option value={f.id} key={f.id}>{f.title}</option>)}</select></label><label>بحث بالاسم أو الجوال<input placeholder="بحث" value={leadsSearch} onChange={e=>setLeadsSearch(e.target.value)}/></label><button type="button" className="secondary" disabled={leadsBusy} onClick={()=>void loadLeads()}><ArrowClockwise size={17}/> تحديث</button></div><div className="mlf-table-scroll"><table><thead><tr><th>تاريخ التسجيل</th><th>اسم العميل</th><th>الجوال</th><th>الفورم</th><th>المصدر</th><th>الحملة</th><th>الإجابات</th><th>CRM</th><th>الشيت</th>{canDeleteLeads&&<th>الإجراءات</th>}</tr></thead><tbody>{leads.map(r=><tr key={r.id}><td>{new Date(r.created_at).toLocaleString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'Asia/Riyadh'})}</td><td>{r.name}</td><td dir="ltr">{r.phone}</td><td>{r.form_title}</td><td>{r.source}</td><td>{r.campaign||'—'}</td><td><button className="mlf-answer-open" type="button" onClick={()=>setAnswersLead(r)}>عرض الإجابات</button></td><td><div className="mlf-crm-cell"><span className={r.crm_status==='failed'?'mlf-crm-failed':''}>{crmStatusLabel[r.crm_status||'not_requested']||'—'}</span>{can('edit')&&['failed','pending','not_requested'].includes(r.crm_status||'not_requested')&&<button type="button" className="mlf-crm-retry" disabled={busy===`crm-${r.id}`} onClick={()=>void retryCrm(r.id)}>{busy===`crm-${r.id}`?'جاري النقل':r.crm_status==='not_requested'?'ترحيل':'إعادة المحاولة'}</button>}</div></td><td>{({sent:'تم الإرسال',pending:'معلق',failed:'فشل الإرسال',not_configured:'غير مربوط'} as Record<string,string>)[r.sheet_status]||r.sheet_status}</td>{canDeleteLeads&&<td><button type="button" className="mlf-delete-button mlf-delete-single" disabled={Boolean(busy)} onClick={()=>void deleteLead(r)} aria-label={`حذف ليد ${r.name}`}><Trash size={16}/>{busy===`delete-${r.id}`?'جاري الحذف':'حذف'}</button></td>}</tr>)}{!leads.length&&<tr><td colSpan={canDeleteLeads?10:9}>لا توجد ليدات مطابقة</td></tr>}</tbody></table></div><small className="mlf-hint">يعرض آخر 2000 ليد مطابق؛ الأرقام في التقارير تشمل كل البيانات المسجلة خلال الفترة المحددة.</small></section>}
 
     {tab==='reports'&&can('reports.view')&&<>
       <section className="marketing-card"><div className="mlf-section-title"><h2>التقارير والتحليلات</h2></div><div className="mlf-filters"><label>من تاريخ<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>إلى تاريخ<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><label>الفورم<select value={statsForm} onChange={e=>setStatsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option key={f.id} value={f.id}>{f.title}</option>)}</select></label></div></section>
@@ -227,6 +284,8 @@ export function LeadFormsPage(){
       <section className="marketing-card"><h3>سياسة الخصوصية</h3><p>كل فورم منشور يحتوي على موافقة العميل ورابط سياسة الخصوصية.</p><a className="mlf-settings-link" href="/privacy" target="_blank" rel="noopener noreferrer">عرض سياسة الخصوصية <LinkSimple size={17}/></a></section>
     </>}
 
+    {clearPreview&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)setClearPreview(null);}}><div className="mlf-modal mlf-clear-modal" role="dialog" aria-modal="true" aria-label="تأكيد مسح بيانات فورم المنصات"><div className="mlf-modal-bar"><b><WarningCircle size={19}/> تأكيد مسح بيانات التجارب</b><button type="button" className="secondary" disabled={Boolean(busy)} aria-label="إغلاق" onClick={()=>setClearPreview(null)}><X size={19}/></button></div><div className="mlf-clear-content"><p>سيتم مسح <strong>{clearPreview.formId?(forms.find(f=>f.id===clearPreview.formId)?.title||'الفورم المحدد'):'كل الفورمات'}</strong> من قاعدة بيانات فورم المنصات:</p><div className="mlf-clear-counts"><span><strong>{int(clearPreview.summary.leads)}</strong> ليد</span><span><strong>{int(clearPreview.summary.visits)}</strong> زيارة</span><span><strong>{int(clearPreview.summary.steps)}</strong> خطوة مسجلة</span></div><p className="mlf-clear-warning">تحذير: المسح نهائي ويشمل أي بيانات حقيقية ضمن النطاق المحدد. ستصبح أرقام الداش بورد والتقارير معتمدة فقط على البيانات المتبقية. لن يتم حذف العملاء من CRM أو الصفوف المرسلة إلى Google Sheets، ولن تُحذف الفورمات أو إعدادات Pixels.</p><label>اكتب كلمة <strong>مسح</strong> للتأكيد<input autoFocus value={clearConfirmation} onChange={e=>setClearConfirmation(e.target.value)} placeholder="مسح" disabled={Boolean(busy)} /></label><div className="mlf-clear-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={()=>setClearPreview(null)}>إلغاء</button><button type="button" className="mlf-delete-button" disabled={clearConfirmation.trim()!=='مسح'||Boolean(busy)||!Object.values(clearPreview.summary).some(Boolean)} onClick={()=>void clearData()}><Trash size={17}/>{busy==='clear-data'?'جاري المسح...':'مسح البيانات نهائيًا'}</button></div></div></div></div>}
+
     {answersLead&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setAnswersLead(null);}}><div className="mlf-modal mlf-answer-modal" role="dialog" aria-modal="true" aria-label="إجابات العميل"><div className="mlf-modal-bar"><b>إجابات العميل — {answersLead.name}</b><button type="button" className="secondary" aria-label="إغلاق" onClick={()=>setAnswersLead(null)}><X size={19}/></button></div><div className="mlf-modal-content"><div className="mlf-answer-list">{readableAnswers(answersLead,forms).map(answer=><div className="mlf-answer-item" key={answer.id}><strong>{answer.label}</strong><span>{answer.value}</span></div>)}{!Object.keys(answersLead.answers||{}).length&&<p>لم تُسجل إجابات إضافية لهذا الطلب.</p>}</div></div></div></div>}
 
     {linkForm&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setLinkForm(null);}}><div className="mlf-modal mlf-link-modal" role="dialog" aria-modal="true" aria-label="رابط الإعلان"><div className="mlf-modal-bar"><b>رابط إعلان — {linkForm.title}</b><button type="button" className="secondary" aria-label="إغلاق" onClick={()=>setLinkForm(null)}><X size={19}/></button></div><div className="mlf-modal-content mlf-link-content"><p>نفس الفورم، لكن رابط مختلف لكل منصة وحملة علشان نعرف مصدر الليد من غير ربط API بالمنصة.</p><label>المنصة<select value={linkPlatform} onChange={e=>setLinkPlatform(e.target.value)}><option value="meta">Meta (Facebook / Instagram)</option><option value="snapchat">Snapchat</option><option value="tiktok">TikTok</option></select></label><label>اسم الحملة<input value={linkCampaign} onChange={e=>setLinkCampaign(e.target.value)} placeholder="مثال: حملة أكسنت أكتوبر"/></label><label>معرف الإعلان (اختياري)<input value={linkAdId} onChange={e=>setLinkAdId(e.target.value)}/></label><div className="mlf-link-box" dir="ltr">{formLink(linkForm.slug)}?utm_source={linkPlatform}&utm_medium=paid_social&mzj_pixel_source={linkPlatform}{linkCampaign?`&utm_campaign=${encodeURIComponent(linkCampaign)}`:''}{linkAdId?`&ad_id=${encodeURIComponent(linkAdId)}`:''}</div><button className="primary" type="button" onClick={()=>{const url=new URL(formLink(linkForm.slug));url.searchParams.set('utm_source',linkPlatform);url.searchParams.set('utm_medium','paid_social');url.searchParams.set('mzj_pixel_source',linkPlatform);if(linkCampaign)url.searchParams.set('utm_campaign',linkCampaign);if(linkAdId)url.searchParams.set('ad_id',linkAdId);void navigator.clipboard.writeText(url.href).then(()=>{setNotice('تم نسخ رابط الإعلان مع المصدر والحملة');setLinkForm(null);}).catch(()=>setError('تعذر النسخ. انسخ الرابط المعروض يدويًا.'));}}><Copy size={17}/> نسخ رابط الحملة</button></div></div></div>}
@@ -234,11 +293,11 @@ export function LeadFormsPage(){
   </div>;
 }
 
-function StatsLine({stats}:{stats:FormStats|null}) {
+const StatsLine=memo(function StatsLine({stats}:{stats:FormStats|null}) {
   const data=stats?.daily||[];
   return <div className="mlf-line-chart">{data.length?<ResponsiveContainer width="100%" height={275}><LineChart data={data} margin={{left:0,right:10,top:15,bottom:10}}><CartesianGrid strokeDasharray="3 3" stroke="#e7dbd4"/><XAxis dataKey="date" tick={{fontSize:10}} tickFormatter={v=>v.slice(5)}/><YAxis width={35} tick={{fontSize:10}} allowDecimals={false}/><Tooltip/><Legend/><Line type="monotone" name="زيارات" dataKey="visits" stroke="#4A211C" strokeWidth={2} dot={false}/><Line type="monotone" name="ليدات" dataKey="submissions" stroke="#a07762" strokeWidth={2} dot={false}/></LineChart></ResponsiveContainer>:<p className="mlf-empty">لا توجد زيارات بعد</p>}</div>;
-}
-function SourcesTable({stats}:{stats:FormStats|null}){
+});
+const SourcesTable=memo(function SourcesTable({stats}:{stats:FormStats|null}){
   const total=stats?.bySource.reduce((sum,r)=>sum+r.submissions,0)||0;
   return <div className="mlf-sources">{stats?.bySource.map(row=><div key={row.source}><div><strong>{row.source}</strong><span>{int(row.submissions)} ليد</span></div><div className="mlf-source-track"><i style={{width:`${total?100*row.submissions/total:0}%`}}/></div></div>)}{!stats?.bySource.length&&<p className="mlf-empty">لا توجد مصادر بعد</p>}</div>;
-}
+});

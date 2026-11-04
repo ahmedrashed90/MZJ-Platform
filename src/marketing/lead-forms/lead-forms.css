@@ -350,3 +350,20 @@
 .mlf-pixel-toggle{display:flex!important;align-items:center;gap:7px;white-space:nowrap}
 .mlf-pixel-toggle input{accent-color:#4a211c}
 @media(max-width:670px){.mlf-pixel-platform{grid-template-columns:1fr;gap:8px}}
+
+/* Lead-form test data maintenance: local to the form leads table and its modal. */
+.mlf-destructive-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
+.mlf-delete-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:8px 13px;border-radius:10px;border:1px solid #a5786b;background:#f5e8e0;color:#4a211c;font:inherit;font-weight:800;white-space:nowrap}
+.mlf-delete-button:hover:not(:disabled){background:#ead3c7;border-color:#744437}
+.mlf-delete-single{padding:6px 9px;min-height:34px;font-size:12px}
+.mlf-clear-modal{width:min(510px,100%)}
+.mlf-clear-modal .mlf-modal-bar b{display:inline-flex;align-items:center;gap:8px;color:#4a211c}
+.mlf-clear-content{padding:19px;overflow:auto;display:grid;gap:15px}
+.mlf-clear-content p{margin:0;font-size:13px;line-height:1.8;color:#4a211c}
+.mlf-clear-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.mlf-clear-counts span{display:grid;gap:5px;justify-items:center;padding:12px 7px;background:#f3e8dc;border-radius:10px;font-size:12px;color:#4a211c}
+.mlf-clear-counts strong{font-size:23px;font-variant-numeric:tabular-nums}
+.mlf-clear-content .mlf-clear-warning{padding:11px 12px;border:1px solid #ddbdac;border-radius:10px;background:#faf2eb;color:#754333}
+.mlf-clear-content label{display:grid;gap:6px;font-weight:800;font-size:13px;color:#4a211c}
+.mlf-clear-actions{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap}
+@media(max-width:620px){.mlf-clear-counts{grid-template-columns:1fr 1fr 1fr}.mlf-clear-content{padding:14px}}
