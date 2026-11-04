@@ -154,7 +154,6 @@ export function MarketingDashboardPage() {
             const days = summarizePublishingDays(group);
             const onTimePosts = days.reduce((total, day) => total + day.onTimeCount, 0);
             const latePosts = days.reduce((total, day) => total + day.lateCount, 0);
-            const overduePosts = days.reduce((total, day) => total + day.overdueCount, 0);
             const productsOpen = expandedPlanIds.has(id);
             return <article className={`mkw-dashboard-publish-card mkw-plan-${visualStatus}`} key={id}>
               <div className="mkw-dashboard-publish-card-head">
@@ -195,7 +194,7 @@ export function MarketingDashboardPage() {
               {(onTimePosts > 0 || latePosts > 0) &&
                 <div className="mkw-dashboard-plan-timing mkw-delivery-summary" aria-label="الالتزام بمواعيد النشر">
                   {onTimePosts > 0 && <div className="mkw-delivery-summary-card is-on-time"><span>نشر في الموعد</span><strong>{onTimePosts}</strong></div>}
-                  {latePosts > 0 && <div className="mkw-delivery-summary-card is-late"><span>تأخر في النشر{overduePosts > 0 && <small>منها {overduePosts} لم يُنشر بعد</small>}</span><strong>{latePosts}</strong></div>}
+                  {latePosts > 0 && <div className="mkw-delivery-summary-card is-late"><span>تأخر في النشر</span><strong>{latePosts}</strong></div>}
                 </div>}
 
               <div id={`mkw-publish-products-${id}`} className="mkw-dashboard-publish-preview" hidden={!productsOpen}>

@@ -60,7 +60,9 @@ const dashboard=fs.readFileSync('src/marketing/pages/MarketingDashboardPage.tsx'
 const detail=fs.readFileSync('src/marketing/workflow/PlanDetail.tsx','utf8');
 const server=fs.readFileSync('server/marketing/workflow.ts','utf8');
 const execution=fs.readFileSync('src/marketing/workflow/TaskDetail.tsx','utf8');
-assert.match(dashboard,/const overduePosts = days\.reduce/);
+assert.match(dashboard,/<span>تأخر في النشر<\/span><strong>\{latePosts\}<\/strong>/);
+assert.doesNotMatch(dashboard,/منها.*لم يُنشر بعد/);
+assert.doesNotMatch(dashboard,/const overduePosts = days\.reduce/);
 assert.match(dashboard,/mkw-dashboard-plan-timing mkw-delivery-summary/);
 assert.doesNotMatch(dashboard,/group\[0\]\.kind === 'agenda' && \(onTimePosts/);
 ok('Overdue summary appears in both campaign and agenda cards');
