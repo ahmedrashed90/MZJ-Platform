@@ -78,6 +78,82 @@ async function savePublishControlSettings(sql: Sql, user: SessionUser, body: Row
       updated_by=excluded.updated_by,updated_at=now()`;
   return { ok: true, enabled: body.enabled, message: 'تم حفظ إعداد زر النشر' };
 }
+/** Campaign goals are configured by marketing settings administrators.
+ * Publication reviewers may map already-created campaigns without editing
+ * budgets, status, dates or publication records. */
+async function campaignGoalSettings(sql: Sql, user: SessionUser) {
+  if (!['settings.marketing.view','settings.marketing.manage','marketing.campaign.create','marketing.campaign.edit','marketing.dashboard.view','marketing.database.view'].some(permission => hasPermission(user, permission)) && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
+  const [table] = await sql<{ ready: boolean }[]>`select to_regclass('marketing.work_campaign_goals') is not null as ready`;
+  if (!table?.ready) return { ok: true, goals: [], migrationRequired: true };
+  const goals = await sql<any[]>`select id::text,name,sort_order,is_active from marketing.work_campaign_goals where is_active=true order by sort_order,name`;
+  return { ok: true, goals, migrationRequired: false };
+}
+async function manageCampaignGoal(sql: Sql, user: SessionUser, body: Row, remove = false) {
+  requirePermission(user, 'settings.marketing.manage');
+  const [table] = await sql<{ ready: boolean }[]>`select to_regclass('marketing.work_campaign_goals') is not null as ready`;
+  if (!table?.ready) throw new Error('حدّث جداول التسويق من الداش بورد أولًا لإدارة أهداف الحملات.');
+  const targetId = body.id ? id(body.id) : null;
+  if (remove) {
+    if (!targetId) throw new Error(W.invalid);
+    const [removed] = await sql<any[]>`update marketing.work_campaign_goals set is_active=false,updated_by=${user.id}::uuid,updated_at=now()
+      where id=${targetId}::uuid and is_active=true returning id`;
+    if (!removed) throw new Error(W.notFound);
+    return { ok:true,id:targetId,message:'تم حذف الهدف من الاختيارات الجديدة مع الاحتفاظ به في الحملات السابقة.' };
+  }
+  const name = text(body.name,121).replace(/\s+/g,' ').trim();
+  const sortOrder = Number(body.sortOrder || 0);
+  if (!name || name.length > 120 || !Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 100000) throw new Error('أدخل اسم هدف صحيحًا وترتيبًا صالحًا.');
+  const [duplicate] = await sql<any[]>`select id::text from marketing.work_campaign_goals where is_active=true and lower(btrim(name))=lower(${name}) and (${targetId}::uuid is null or id<>${targetId}::uuid) limit 1`;
+  if (duplicate) throw new Error('هذا الهدف موجود بالفعل في الإعدادات.');
+  if (targetId) {
+    const [updated] = await sql<any[]>`update marketing.work_campaign_goals set name=${name},sort_order=${sortOrder},updated_by=${user.id}::uuid,updated_at=now() where id=${targetId}::uuid and is_active=true returning id`;
+    if (!updated) throw new Error(W.notFound);
+    return { ok:true,id:targetId,message:'تم تحديث الهدف.' };
+  }
+  const [added] = await sql<any[]>`insert into marketing.work_campaign_goals(name,sort_order,created_by,updated_by)
+    values(${name},${sortOrder},${user.id}::uuid,${user.id}::uuid) returning id::text`;
+  return { ok:true,id:added.id,message:'تمت إضافة الهدف.' };
+}
+/** Validate IDs against the current catalog, and snapshot the official names.
+ * Malformed, foreign or duplicate platform/goal selections are rejected. */
+async function validateCampaignPlatformGoals(tx: any, requested: unknown, permittedPlatforms: string[]) {
+  if (!Array.isArray(requested)) throw new Error('اختر هدفًا واحدًا على الأقل لكل منصة في الحملة.');
+  const allowed = new Set(permittedPlatforms.map(platformId => platformId.toLowerCase()));
+  const selected = new Map<string,string[]>();
+  if (requested.length !== allowed.size) throw new Error('حدد أهداف جميع المنصات في الحملة بدون تكرار.');
+  for (const item of requested) {
+    if (!item || typeof item !== 'object') throw new Error(W.invalid);
+    const platformId = id(item.platformId).toLowerCase();
+    if (!allowed.has(platformId) || selected.has(platformId)) throw new Error('اختيارات المنصات غير مطابقة للحملة.');
+    if (!Array.isArray(item.goalIds) || !item.goalIds.length || item.goalIds.length > 30) throw new Error('اختر من هدف واحد إلى 30 هدفًا لكل منصة.');
+    const ids = item.goalIds.map((value: unknown) => id(value).toLowerCase());
+    if (new Set(ids).size !== ids.length) throw new Error('لا يمكن اختيار نفس الهدف مرتين للمنصة.');
+    selected.set(platformId,ids);
+  }
+  const wantedIds = [...new Set([...selected.values()].flat())];
+  const catalog = await tx<any[]>`select id::text,name from marketing.work_campaign_goals where is_active=true and id=any(${wantedIds}::uuid[])`;
+  const names = new Map(catalog.map((goal: any) => [String(goal.id),String(goal.name)]));
+  if (names.size !== wantedIds.length) throw new Error('بعض الأهداف المختارة لم تعد متاحة في الإعدادات. حدّث الصفحة واختَر أهدافًا فعالة.');
+  return [...selected.entries()].map(([platformId,goalIds]) => ({ platformId, goals: goalIds.map(goalId => ({ id:goalId,name:names.get(goalId)! })) }));
+}
+async function saveCampaignGoals(sql: Sql, user: SessionUser, body: Row) {
+  const planId = id(body.planId);
+  if (!(await canReviewPlan(sql,user))) throw new Error('تعديل أهداف الحملات السابقة متاح فقط لحسابات مراجعة واعتماد الحملات.');
+  return sql.begin(async tx => {
+    const [plan] = await tx<any[]>`select id,kind,is_deleted from marketing.work_plans where id=${planId}::uuid for update`;
+    if (!plan || plan.is_deleted || plan.kind!=='campaign') throw new Error(W.notFound);
+    const platforms = await tx<any[]>`select distinct pf.id::text as id from marketing.work_plan_items item
+      join marketing.platform_post_types pt on pt.id=item.post_type_id join marketing.platforms pf on pf.id=pt.platform_id
+      where item.plan_id=${planId}::uuid and item.is_deleted=false`;
+    if (!platforms.length) throw new Error('الحملة ليس بها منصات نشر لاختيار أهداف لها.');
+    const platformGoals = await validateCampaignPlatformGoals(tx,body.platformGoals,platforms.map((p: any)=>p.id));
+    const [updated] = await tx<any[]>`update marketing.campaigns set payload=jsonb_set(coalesce(payload,'{}'::jsonb),'{platformGoals}',${tx.json(platformGoals)}::jsonb,true),updated_at=now()
+      where id=${planId}::uuid and is_deleted=false returning id`;
+    if (!updated) throw new Error(W.notFound);
+    await tx`update marketing.work_plans set updated_at=now() where id=${planId}::uuid`;
+    return { ok:true,id:planId,platformGoals,message:'تم حفظ أهداف المنصات للحملة دون تعديل النشر أو الاعتماد أو الميزانيات.' };
+  });
+}
 function productManager(user: SessionUser) {
   return getSystemAccess(user, 'marketing').dataScope === 'all' &&
     (hasPermission(user, 'marketing.products.view') || hasPermission(user, 'marketing.publish_prep.view'));
@@ -1233,6 +1309,22 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
       if (categoryId) { const [category] = await tx<any[]>`select id from marketing.work_review_categories where id=${categoryId}::uuid and is_active=true`; if (!category) throw new Error(W.invalid); }
     } else if (action === 'approved') {
       if (!(await canReviewPlan(tx as unknown as Sql,user)) || !['in_progress','submitted'].includes(plan.review_status)) throw new Error(W.denied);
+      // An edited campaign may add a new platform after its first draft.
+      // Do not approve it until every CURRENT platform has at least one goal.
+      // Historical already-approved campaigns are never rewritten by this rule.
+      if (plan.kind === 'campaign') {
+        const livePlatforms = await tx<{ platform_id: string }[]>`select distinct pt.platform_id::text as platform_id
+          from marketing.work_plan_items item join marketing.platform_post_types pt on pt.id=item.post_type_id
+          where item.plan_id=${planId}::uuid and item.is_deleted=false`;
+        const [campaign] = await tx<{ platform_goals: Array<{ platformId: string; goals: Array<{ name: string }> }> | null }[]>`
+          select payload->'platformGoals' as platform_goals from marketing.campaigns
+          where id=${planId}::uuid and is_deleted=false`;
+        const selectedGoals = Array.isArray(campaign?.platform_goals) ? campaign.platform_goals : [];
+        if (!livePlatforms.length || livePlatforms.some(platform => !selectedGoals.some(row =>
+          row.platformId === platform.platform_id && Array.isArray(row.goals) && row.goals.some(goal => String(goal?.name || '').trim())))) {
+          throw new Error('لا يمكن اعتماد الحملة قبل اختيار هدف واحد على الأقل لكل منصة مستخدمة. افتح «تحديد أهداف منصات الحملة» ثم احفظ الأهداف.');
+        }
+      }
     } else if (plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status)) throw new Error(W.denied);
     const status = action === 'approved' ? 'publishing' : action === 'submitted' ? 'submitted' : 'revision';
     await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? auditedNote : plan.review_note},
@@ -1452,7 +1544,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     await tx`select pg_advisory_xact_lock(hashtext(${`work-plan:${user.id}:${requestKey}`}))`;
     const [existing] = await tx<any[]>`select id from marketing.work_plans where created_by=${user.id}::uuid and request_key=${requestKey}::uuid`;
     if (existing) return { ok: true, id: existing.id, message: W.saved };
-    const normalized: { productId: string; date: string; postTypeId: string; budget: number }[] = [];
+    const normalized: { productId: string; date: string; postTypeId: string; budget: number; platformId: string }[] = [];
     const seen = new Set<string>(), usedProducts = new Set<string>();
     // New composers submit exactly one product per row with several selected
     // platforms. Old clients may still send the original flat plan entries.
@@ -1500,21 +1592,23 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
           const key = `${date}:${productId}:${platform.postTypeId}`;
           if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
           seen.add(key);
-          normalized.push({ productId, date, postTypeId: platform.postTypeId, budget });
+          normalized.push({ productId, date, postTypeId: platform.postTypeId, budget, platformId:platform.platformId });
         }
       } else {
         // Backward-compatible single-post-type payload from older deployments.
         const postTypeId = id(entry.postTypeId);
         const budget = kind === 'campaign' ? Number(entry.budget) : 0;
         if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.round(budget * 100) / 100 !== budget) throw new Error(W.invalid);
-        await validateFormats(tx, product.media_kind, [postTypeId]);
+        const verified = await validateFormats(tx, product.media_kind, [postTypeId]);
         const key = `${date}:${productId}:${postTypeId}`;
         if (seen.has(key)) throw new Error('نفس المنتج والمنصة ونوع النشر والتاريخ مكرر في الجدول');
         seen.add(key);
-        normalized.push({ productId, date, postTypeId, budget });
+        normalized.push({ productId, date, postTypeId, budget, platformId:String(verified[0].platform_id) });
       }
       if (normalized.length > 500) throw new Error('الحد الأقصى 500 موعد نشر داخل الحملة أو الأجندة.');
     }
+    const platformGoals = kind==='campaign'
+      ? await validateCampaignPlatformGoals(tx,body.platformGoals,[...new Set(normalized.map(entry=>entry.platformId))]) : [];
     let seq: any, planNo = '';
     do {
       [seq] = await tx<any[]>`select nextval('marketing.work_plan_number_seq')::text as value`;
@@ -1532,7 +1626,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     // Native records are publication adapters, not the old creation workflow.
     // They preserve existing post -> engagement -> CRM relationships.
     const payload = tx.json({ workflowVersion: 2, workflowPlanId: planId,
-      ...(kind === 'campaign' && hasFundingPeriod ? { fundingFrom, fundingTo } : {}),
+      ...(kind === 'campaign' ? { platformGoals, ...(hasFundingPeriod ? { fundingFrom, fundingTo } : {}) } : {}),
       ...(kind === 'agenda' && hasAgendaWindow ? { agendaFrom, agendaTo } : {}) });
     if (kind === 'agenda') await tx`insert into marketing.agendas(id,name,month_key,publish_start,publish_end,status,payload,progress,created_by)
       values(${planId}::uuid,${name},${agendaStart.slice(0, 7)},${agendaStart}::date,${agendaEnd}::date,'publishing',${payload},100,${user.id}::uuid)`;
@@ -1552,7 +1646,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const planReviewer = await canReviewPlan(sql,user);
   const rows = await sql<any[]>`select l.*,l.scheduled_on::text,p.plan_no,p.kind,p.name,p.created_at,p.created_at as plan_created_at,p.created_by,coalesce(creator.full_name,'') as creator_name,p.activated_at,p.review_status,p.review_note,p.review_revision,
     approval.actor_name as approved_by_name,approval.created_at as approved_at,
-    pt.name as post_type_name,pf.name as platform_name,pf.code as platform_code,
+    pt.name as post_type_name,pf.id::text as platform_id,pf.name as platform_name,pf.code as platform_code,
+    camp.payload->'platformGoals' as campaign_platform_goals,
     i.idea_name,i.idea as product_idea,i.media_kind,t.task_no,t.name as task_name,
     nullif(camp.payload->>'fundingFrom','') as funding_from,nullif(camp.payload->>'fundingTo','') as funding_to,
     coalesce(nullif(ag.payload->>'agendaFrom',''),ag.publish_start::text) as agenda_from,
@@ -1652,6 +1747,7 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const lines = await planLines(sql, user, planId);
   if (!lines.length) throw new Error(W.notFound);
   const [plan] = await sql<any[]>`select p.id::text,p.plan_no,p.name,p.kind,p.created_by::text,p.created_at,p.review_status,p.review_note,p.review_note_category_id,p.review_revision,p.activated_at,
+    camp.payload->'platformGoals' as platform_goals,
     nullif(camp.payload->>'fundingFrom','') as funding_from,
     nullif(camp.payload->>'fundingTo','') as funding_to,
     coalesce(nullif(ag.payload->>'agendaFrom',''),ag.publish_start::text) as agenda_from,
@@ -1671,6 +1767,7 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
   const platforms = await sql<{ name: string; code: string }[]>`select name,code from marketing.platforms order by name`;
   return { ok:true, platforms, plan: { ...plan, status:plan.review_status === 'publishing' && complete ? 'published' : plan.review_status,
     readiness: Math.round(lines.filter(line => line.published_ready).length * 100 / lines.length), canReview:await canReviewPlan(sql,user),
+    canEditGoals: plan.kind === 'campaign' && await canReviewPlan(sql,user),
     // Funding metadata may be corrected for legacy, already approved campaigns,
     // without changing their publication rows or approval history.
     canEditFunding: plan.kind === 'campaign' && plan.created_by === user.id,
@@ -2309,6 +2406,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       publicationDatesReady: Boolean(publicationDates?.ready),
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
       planReviewersReady: await planReviewerTableReady(sql),
+      campaignGoalsReady: Boolean((await sql<{ ready:boolean }[]>`select to_regclass('marketing.work_campaign_goals') is not null as ready`)[0]?.ready),
       ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready && publicationDates?.ready && await planReviewerTableReady(sql)),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
@@ -2344,6 +2442,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       const meta = await services.meta(sql, user, false);
       const enabled = new Set((await sql<any[]>`select user_id::text from core.user_systems where system_code='marketing' and is_enabled=true`).map(row => row.user_id));
       result = { ...meta, users: [], departments: meta.departments.map((department: any) => ({ ...department, users: department.users.filter((member: any) => enabled.has(member.id)) })), capabilities: workflowCapabilities(user), userId: user.id };
+    } else if (resource === 'work_campaign_goal_settings') {
+      result = await campaignGoalSettings(sql,user);
     } else if (resource === 'work_plan_reviewers') {
       result = await planReviewersSettings(sql,user);
     } else if (resource === 'work_publish_button_settings') {
@@ -2421,6 +2521,9 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
     else if (action === 'work_save_plan_reviewers') result = await savePlanReviewers(sql, user, body);
+    else if (action === 'work_save_campaign_goal') result = await manageCampaignGoal(sql,user,body);
+    else if (action === 'work_delete_campaign_goal') result = await manageCampaignGoal(sql,user,body,true);
+    else if (action === 'work_save_campaign_platform_goals') result = await saveCampaignGoals(sql,user,body);
     else if (action === 'work_update_plan') result = await updatePlanRows(sql, user, body);
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_update_plan_agenda_window') result = await updatePlanAgendaWindow(sql, user, body);

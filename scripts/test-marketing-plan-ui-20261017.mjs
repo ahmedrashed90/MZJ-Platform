@@ -11,6 +11,7 @@ const shared = createLoader(root)('shared/marketing-workflow.ts');
 const plan = createLoader(root)('src/marketing/workflow/planComposer.ts');
 const uid = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const ig = uid(10), fb = uid(11);
+const campaignGoalOne = uid(61), campaignGoalTwo = uid(62);
 const postTypes = [
   { id: uid(21), platform_id: ig, name: 'Photo' },
   { id: uid(22), platform_id: ig, name: 'Story' },
@@ -43,7 +44,8 @@ vm.runInNewContext(transpiled.outputText, { exports: frontExports, crypto,
     if (name === 'react-router-dom') return { useNavigate: () => path => navigations.push(path), useSearchParams: () => [new URLSearchParams(), () => {}] };
     if (name === '@phosphor-icons/react') return Object.fromEntries(['CalendarBlank','FilmStrip','ImageSquare','ListChecks','Megaphone','Plus','X'].map(key => [key,Stub]));
     if (name === './components') return { W: { selectProduct: 'اختر المنتج', addDate: 'إضافة يوم', remove: 'حذف', choose: 'اختر', agenda: 'أجندة', campaign: 'حملة', publishDate: 'تاريخ النشر', fundingDate: 'تاريخ التمويل', createCampaign: 'إنشاء حملة', createAgenda: 'إنشاء أجندة', cancel: 'إلغاء', loading: 'تحميل' }, Empty: Stub, Field: Stub, FormatSelector: Stub, ProductViewButton: Stub, WorkAlert: Stub, WorkHeader: Stub };
-    if (name === './api') return { useWorkQuery: () => ({ data: { rows: products }, loading: false, error: '' }), workPost: async (action, body) => { saves.push({action,body}); return {ok:true,id:uid(99)}; }, uploadWorkFile: () => {}, showDate: () => {} };
+    if (name === './api') return { useWorkQuery: resource => ({ data: resource === 'campaign_goal_settings' ? { goals: [{id:campaignGoalOne,name:'طلبات تمويل'},{id:campaignGoalTwo,name:'زيادة المبيعات'}],migrationRequired:false } : { rows: products }, loading: false, error: '' }), workPost: async (action, body) => { saves.push({action,body}); return {ok:true,id:uid(99)}; }, uploadWorkFile: () => {}, showDate: () => {} };
+    if (name === './CampaignGoals') return { CampaignGoalPicker: Stub };
     if (name === '../../../shared/marketing-workflow') return shared;
     if (name === './requiredMedia') return { splitRequiredMediaSelection: () => [] };
     if (name === './planComposer') return plan;
@@ -118,10 +120,16 @@ byLabel(workRows(tree)[1], 'input', 'ميزانية Instagram — Reel')[0].prop
 const secondDate = nodes(workRows(tree)[1], node => node.type === 'input' && node.props.type === 'date')[0];
 secondDate.props.onChange({ target: { value: '2026-10-18' } });
 tree = render();
+const goalPickers = nodes(tree, node => node.type === Stub && node.props.platformName && Array.isArray(node.props.selectedIds));
+check(goalPickers.length === 2, 'Each selected platform has one multi-goal picker, including repeated publishing days');
+goalPickers.find(node => node.props.platformName === 'Instagram').props.onChange([campaignGoalOne,campaignGoalTwo]);
+goalPickers.find(node => node.props.platformName === 'Facebook').props.onChange([campaignGoalOne]);
+tree = render();
 const form = nodes(tree, node => node.type === 'form')[0];
 await form.props.onSubmit({ preventDefault() {} });
 check(saves.length === 1 && saves[0].action === 'create_plan' && saves[0].body.entries.length === 2, 'Submitting campaign sends one product per day to the original create_plan route');
 check(saves[0].body.fundingFrom === '2026-10-16' && saves[0].body.fundingTo === '2026-10-31', 'New campaign submits both funding dates together with legacy publishing rows');
+check(saves[0].body.platformGoals.length === 2 && saves[0].body.platformGoals.find(row=>row.platformId===ig).goalIds.length===2 && saves[0].body.platformGoals.find(row=>row.platformId===fb).goalIds.length===1, 'New campaign persists distinct goals once per platform');
 check(saves[0].body.entries[0].platforms.length === 2 && saves[0].body.entries[0].platforms[0].postTypes[0].budget === 120.5 && saves[0].body.entries[0].platforms[0].postTypes[1].budget === 22 && saves[0].body.entries[0].platforms[1].postTypes[0].budget === 80, 'Campaign sends exact independent budget for every Instagram and Facebook post type');
 check(saves[0].body.entries[1].platforms.length === 1 && saves[0].body.entries[1].platforms[0].postTypeId === uid(23), 'Second video product retains its different compatible publish format');
 check(navigations.at(-1) === `/marketing?plan=${uid(99)}`, 'Successful save opens the persisted campaign for review and approval');

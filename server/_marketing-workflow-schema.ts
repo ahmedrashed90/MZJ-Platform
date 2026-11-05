@@ -438,6 +438,23 @@ commit;`;
  * schema-4 marker, so an older database can never be reported as ready.
  * This inspection is strictly read-only and safe on dashboard requests.
  */
+/** Isolated, idempotent schema for configurable campaign objectives.
+ * Stored plan selections live in campaigns.payload and need no legacy row rewrite. */
+export const MARKETING_WORKFLOW_CAMPAIGN_GOALS_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.work_campaign_goals (
+ id uuid primary key default gen_random_uuid(), name text not null,
+ sort_order integer not null default 0, is_active boolean not null default true,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+ created_by uuid references core.users(id), updated_by uuid references core.users(id),
+ check(char_length(btrim(name)) between 1 and 120)
+);
+create unique index if not exists work_campaign_goals_active_name_uq
+ on marketing.work_campaign_goals(lower(btrim(name))) where is_active=true;
+insert into marketing.workflow_migrations(code) values('schema-16') on conflict do nothing;
+commit;`;
+
 const PLAN_SCHEDULE_COLUMNS = [
   ['work_plans', 'is_deleted'], ['work_plans', 'activated_at'],
   ['work_plans', 'activated_by'], ['work_plans', 'deleted_at'],
@@ -554,12 +571,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false, hasCampaignGoals: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15'), hasCampaignGoals: rows.some(x => x.code === 'schema-16') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers && existing.hasCampaignGoals
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -580,6 +597,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasPublishControl) await runSqlScript(MARKETING_WORKFLOW_PUBLISH_CONTROL_SQL);
       if (!(await flags()).hasPublicationDates) await runSqlScript(MARKETING_WORKFLOW_PUBLICATION_DATES_SQL);
       if (!(await flags()).hasPlanReviewers) await runSqlScript(MARKETING_WORKFLOW_PLAN_REVIEWERS_SQL);
+      if (!(await flags()).hasCampaignGoals) await runSqlScript(MARKETING_WORKFLOW_CAMPAIGN_GOALS_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

@@ -3,6 +3,7 @@
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { agendaPublicationSummary, campaignContentSummary, campaignSummaryNameKey, moneySAR } from './campaignOverview';
 import { showDate } from './api';
+import { campaignPlatformGoalRows, type CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 export type CampaignPdfExportInput = {
   planName: string;
@@ -12,6 +13,7 @@ export type CampaignPdfExportInput = {
   fundingFrom?: string | null;
   fundingTo?: string | null;
   lines: WorkPlanLine[];
+  platformGoals?: CampaignPlatformGoals[] | null;
   approvedByName?: string | null;
   approvedAt?: string | null;
   publishState?: string;
@@ -85,6 +87,8 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
     const value = platformCounts.get(campaignSummaryNameKey(name));
     return `<tr><td>${htmlText(name)}</td><td>${htmlText(value?.count ?? 0)}</td>${campaign ? `<td class="money">${htmlText(moneySAR(value?.budget || 0))}</td>` : ''}</tr>`;
   }).join('');
+  const goalRows = campaign ? campaignPlatformGoalRows(input.lines,input.platformGoals) : [];
+  const goalTableRows = goalRows.map(row=>`<tr><td>${htmlText(row.platformName)}</td><td>${row.goals.length ? row.goals.map(goal=>htmlText(goal.name)).join('، ') : 'لم تُحدَّد أهداف بعد'}</td></tr>`).join('');
   const requirements = campaign ? summary.products.map(product => product.name) : agendaSummary?.requirements || [];
   const title = campaign ? 'الحملة' : 'الأجندة';
   const periodTitle = campaign ? 'التمويل والميزانية' : 'فترة نشر الأجندة';
@@ -126,6 +130,7 @@ ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1p
 <section><h2>${htmlText(periodTitle)}</h2><div class="stats">${funding}</div></section>
 <section><h2>${campaign ? 'ميزانية كل منصة' : 'المنصات وعدد المنشورات'}</h2><table><thead><tr><th>المنصة</th><th>عدد المنشورات</th>${campaign ? '<th>الميزانية (ر.س)</th>' : ''}</tr></thead>
 <tbody>${platformRows || `<tr><td colspan="${campaign ? 3 : 2}">لا توجد منصات</td></tr>`}</tbody></table></section>
+${campaign ? `<section><h2>الهدف من الحملة حسب المنصة</h2><table><thead><tr><th>المنصة</th><th>الأهداف</th></tr></thead><tbody>${goalTableRows || '<tr><td colspan="2">لا توجد منصات</td></tr>'}</tbody></table></section>` : ''}
 <section><h2>المطلوبات المختلفة (${requirements.length})</h2>${listHtml(requirements)}</section>
 <section><h2>الأفكار المختلفة (${summary.ideas.length})</h2>${listHtml(summary.ideas)}</section>
 </main></body></html>`;

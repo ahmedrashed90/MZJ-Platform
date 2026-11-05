@@ -5,6 +5,8 @@ import { W, Empty, Field, FormatSelector, ProductViewButton, WorkAlert, WorkHead
 import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
 import { splitRequiredMediaSelection } from './requiredMedia';
+import { CampaignGoalPicker } from './CampaignGoals';
+import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
 import { addPlanPlatform, availablePlanPostTypes, availablePlanProducts, planEntriesPayload, planEntryValid, planPostTypeBudget, selectedPlanPostTypeIds, validatePlanComposer, type PlanEntryDraft, type PlanPlatformDraft } from './planComposer';
 
 type IdeaAttachment = { key: string; file: File; fileId?: string };
@@ -171,6 +173,8 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
 function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campaign'; initialProduct: string; meta: WorkMeta }) {
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
+  const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings',{},kind==='campaign');
+  const [selectedGoals, setSelectedGoals] = useState<Record<string,string[]>>({});
   const [name, setName] = useState('');
   const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
   const [agendaFrom, setAgendaFrom] = useState(''), [agendaTo, setAgendaTo] = useState('');
@@ -196,6 +200,11 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const selectedProductIds = useMemo(() => new Set(entries.map(entry => entry.productId).filter(Boolean)), [entries]);
   const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.reduce((count, platform) => count + (platform.postTypeIds?.length || (platform.postTypeId ? 1 : 0)), 0), 0);
   const noMoreProducts = Boolean(productsQuery.data?.rows?.length) && products.every(product => selectedProductIds.has(product.id));
+  // One objective selection per PLATFORM across all days, even if the platform
+  // has many post formats and products. Never replicate goals per publish row.
+  const selectedPlatformIds = useMemo(() => [...new Set(entries.flatMap(entry => entry.platforms.map(platform => platform.platformId)))], [entries]);
+  const selectedCampaignPlatforms = selectedPlatformIds.map(id => meta.platforms.find(platform => platform.id === id)).filter((platform): platform is typeof meta.platforms[number] => Boolean(platform));
+  const campaignBudgetTotal = entries.reduce((total, entry) => total + entry.platforms.reduce((platformTotal, platform) => platformTotal + selectedPlanPostTypeIds(platform).reduce((amount, postTypeId,index) => amount + (Number(planPostTypeBudget(platform,postTypeId,index)) || 0),0),0),0);
   const previewRows = entries.flatMap((entry, entryIndex) => {
     const product = products.find(item => item.id === entry.productId);
     const rowValid = planEntryValid(entry, products, meta.postTypes, kind) &&
@@ -231,6 +240,10 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   }
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setError('');
+    if (kind === 'campaign') {
+      if (goalsQuery.error || goalsQuery.data?.migrationRequired || !goalsQuery.data) { setError(goalsQuery.error || 'حدّث جدول أهداف الحملات من الداش بورد ثم أضف الأهداف في إعدادات التسويق.'); return; }
+      if (selectedPlatformIds.some(platformId => !(selectedGoals[platformId] || []).length)) { setError('اختر هدفًا واحدًا على الأقل لكل منصة مستخدمة في الحملة.'); return; }
+    }
     const validationError = validatePlanComposer(entries, products, meta.postTypes, kind);
     if (validationError) { setError(validationError); return; }
     if (kind === 'campaign' && (!isWorkDate(fundingFrom) || !isWorkDate(fundingTo) || fundingFrom > fundingTo)) {
@@ -250,6 +263,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
         requestKey: requestKey.current, kind, name: name.trim(),
         ...(kind === 'campaign' ? { fundingFrom, fundingTo } : { agendaFrom, agendaTo }),
         entries: planEntriesPayload(entries, kind),
+        ...(kind === 'campaign' ? { platformGoals:selectedPlatformIds.map(platformId=>({platformId, goalIds:selectedGoals[platformId] || []})) } : {}),
       });
       // Review the actual persisted schedule (including every platform budget)
       // immediately after creation; do not make the author hunt in Database.
@@ -267,11 +281,13 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
         <Field label="تاريخ نشر الأجندة إلى"><input aria-label="تاريخ نشر الأجندة إلى" type="date" min={agendaFrom || undefined} required value={agendaTo} disabled={busy} onChange={event => setAgendaTo(event.target.value)}/></Field>
       </>}</div>
     </section>
-    <section className="mkw-panel"><header className="mkw-section-title"><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2><span>{entries.length} {W.addDate}</span></header>
+    <section className="mkw-panel mkw-plan-builder-panel"><header className="mkw-section-title"><div><h2>{kind === 'campaign' ? W.createCampaign : W.createAgenda}</h2>{kind==='campaign' && <p className="mkw-muted">حدد المنتجات، منصات النشر، أنواع المحتوى والميزانية لكل نوع، وبعدها اختر هدف كل منصة.</p>}</div><span>{entries.length} {W.addDate}</span></header>
+      {kind==='campaign' && <div className="mkw-campaign-composer-stats"><div><small>أيام الجدول</small><strong>{entries.length}</strong></div><div><small>المنصات المختارة</small><strong>{selectedPlatformIds.length}</strong></div><div><small>أنواع النشر</small><strong>{platformLineCount}</strong></div><div><small>إجمالي الميزانية</small><strong>{campaignBudgetTotal.toLocaleString('ar-SA-u-nu-latn',{minimumFractionDigits:2,maximumFractionDigits:2})} ر.س</strong></div></div>}
       <WorkAlert>{error || productsQuery.error}</WorkAlert>
       {kind === 'campaign' && <p className="mkw-plan-budget-hint">حدد ميزانية مستقلة لكل نوع نشر داخل كل منصة. إجمالي اليوم يجمع مبالغ أنواع النشر المختارة فقط.</p>}
       {productsQuery.loading && !productsQuery.data ? <Empty>{W.loading}</Empty> :
-        <div className="mkw-horizontal-scroll"><div className={`mkw-plan-table ${kind === 'agenda' ? 'agenda' : ''}`}>
+        <div className={kind === 'campaign' ? 'mkw-campaign-card-wrap' : 'mkw-horizontal-scroll'}><div className={`mkw-plan-table ${kind}`}>
+
           <div className="mkw-plan-heading"><span>{dateLabel}</span><span>{W.selectProduct}</span><span>المنصات (اختيار متعدد)</span><span>نوع النشر لكل منصة</span>{kind === 'campaign' && <span>ميزانية كل نوع نشر</span>}<span>{W.remove}</span></div>
           {entries.map((entry, entryIndex) => {
             const product = products.find(item => item.id === entry.productId);
@@ -280,7 +296,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
             const platforms = product ? activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id).length) : [];
             const selected = new Map(entry.platforms.map(platform => [platform.platformId, platform]));
             return <div className="mkw-plan-table-row" key={entry.key}>
-              <input aria-label={dateLabel} type="date" required min={kind === 'agenda' ? agendaFrom || undefined : undefined} max={kind === 'agenda' ? agendaTo || undefined : undefined} value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/>
+              <label className="mkw-plan-date-cell"><small>{dateLabel}</small><input aria-label={dateLabel} type="date" required min={kind === 'agenda' ? agendaFrom || undefined : undefined} max={kind === 'agenda' ? agendaTo || undefined : undefined} value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/></label>
               <div className="mkw-plan-product-picker">
                 <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platforms: [] })}>
                   <option value="">اختر المطلوب / المنتج من التاسك</option>
@@ -295,14 +311,14 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
                   <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
                 </div>}
               </div>
-              <div className="mkw-plan-platform-options" role="group" aria-label={`منصات اليوم ${entryIndex + 1}`}>
+              <div className="mkw-plan-platform-options" role="group" aria-label={`منصات اليوم ${entryIndex + 1}`}><strong className="mkw-campaign-field-heading">المنصات</strong>
                 {!product ? <small className="mkw-muted">اختر المنتج أولًا</small> : !platforms.length ? <small className="mkw-muted">لا توجد منصة متوافقة مع نوع المطلوب في الإعدادات.</small> : platforms.map(platform =>
                   <label key={platform.id} className={selected.has(platform.id) ? 'is-checked' : ''}>
                     <input type="checkbox" checked={selected.has(platform.id)} disabled={busy} onChange={() => togglePlatform(entry.key, platform.id)}/>
                     <span>{platform.name}</span>
                   </label>)}
               </div>
-              <div className="mkw-plan-per-platform">
+              <div className="mkw-plan-per-platform mkw-plan-post-type-cell"><strong className="mkw-campaign-field-heading">نوع النشر لكل منصة</strong>
                 {!entry.platforms.length ? <small className="mkw-muted">حدد منصة أو أكثر</small> : entry.platforms.map(platform => {
                   const formats = availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId);
                   return <label className="mkw-plan-platform-field" key={platform.platformId}>
@@ -324,7 +340,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
                   </label>;
                 })}
               </div>
-              {kind === 'campaign' && <div className="mkw-plan-per-platform mkw-plan-platform-budgets">
+              {kind === 'campaign' && <div className="mkw-plan-per-platform mkw-plan-platform-budgets"><strong className="mkw-campaign-field-heading">ميزانية كل نوع نشر</strong>
                 {!entry.platforms.length ? <small className="mkw-muted">حدد منصة أو أكثر</small> : entry.platforms.map(platform => {
                   const platformName = meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة';
                   const selectedIds = selectedPlanPostTypeIds(platform);
@@ -344,6 +360,15 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
         </div></div>}
       <footer className="mkw-requirement-footer"><button className="secondary" type="button" disabled={busy || noMoreProducts || entries.length >= 500} onClick={() => setEntries(current => [...current, newEntry('', kind === 'agenda' ? agendaFrom : '')])}><Plus size={17}/>{W.addDate}</button></footer>
     </section>
+    {kind==='campaign' && <section className="mkw-panel mkw-campaign-goal-panel" aria-label="الهدف من الحملة">
+      <header className="mkw-section-title"><div><h2>الهدف من الحملة</h2><p className="mkw-muted">اختر هدفًا أو أكثر لكل منصة، ويتم حفظ الأهداف مرة واحدة للمنصة مهما تعددت المنشورات.</p></div><span>{selectedCampaignPlatforms.length} منصة</span></header>
+      <WorkAlert>{goalsQuery.error}</WorkAlert>
+      {goalsQuery.data?.migrationRequired && <p className="mkw-muted">يلزم تحديث جدول أهداف الحملات بواسطة مدير النظام من الداش بورد.</p>}
+      <div className="mkw-campaign-goal-picker-grid">{selectedCampaignPlatforms.length ? selectedCampaignPlatforms.map(platform =>
+        <CampaignGoalPicker key={platform.id} platformName={platform.name} goals={goalsQuery.data?.goals || []} selectedIds={selectedGoals[platform.id] || []} disabled={busy || goalsQuery.loading || goalsQuery.data?.migrationRequired}
+          onChange={ids=>setSelectedGoals(old=>({...old,[platform.id]:ids}))}/>
+      ) : <p className="mkw-muted">اختَر المنصات من جدول الحملة أولًا حتى تظهر لك أهداف كل منصة.</p>}</div>
+    </section>}
     {previewOpen && <section className="mkw-panel mkw-plan-preview" aria-label="معاينة جدول النشر"><header><h2>معاينة جدول {kind === 'campaign' ? 'التمويل' : 'النشر'} — {entries.length} يوم · {platformLineCount} موعد منصة</h2></header>
       <div className="mkw-horizontal-scroll"><table className="mkw-plan-preview-table"><thead><tr><th>{dateLabel}</th><th>المنتج / المطلوب</th><th>الفكرة</th><th>المنصة</th><th>نوع النشر</th>{kind === 'campaign' && <th>الميزانية</th>}<th>النتيجة</th></tr></thead><tbody>
         {previewRows.map(({ key, index, entry, product, platform, postType, budget, valid }) => <tr key={key}>

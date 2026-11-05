@@ -6659,3 +6659,23 @@
   outline:2px solid #4a211c;outline-offset:3px;
 }
 .mkw-rating-dashboard .mkw-ratings-filters .mkw-ratings-apply-button:disabled{opacity:.55;cursor:not-allowed}
+
+/* Marketing settings: managed campaign objective catalog. */
+.mkw-campaign-goals-settings { display:grid; gap:16px; min-width:0; }
+.mkw-campaign-settings-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.mkw-campaign-settings-heading h3 { color:var(--brand); margin:0 0 7px; }
+.mkw-campaign-settings-heading p { color:var(--muted); font-size:13px; line-height:1.8; max-width:820px; margin:0; }
+.mkw-campaign-settings-heading>strong { background:var(--surface-soft); color:var(--brand); padding:8px 14px; border-radius:999px; }
+.mkw-campaign-goal-settings-form { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+.mkw-campaign-goal-settings-form label { display:grid; gap:7px; min-width:min(100%,240px); flex:1; color:var(--brand); font-size:13px; font-weight:700; }
+.mkw-campaign-goal-settings-form label:nth-child(2) { flex:0 1 130px; }
+.mkw-campaign-goal-settings-form input { border:1px solid var(--line-strong); border-radius:10px; min-height:42px; padding:9px 11px; color:var(--ink); background:var(--surface); font:inherit; }
+.mkw-campaign-goal-settings-form button,.mkw-campaign-goal-actions button { display:inline-flex; align-items:center; justify-content:center; gap:7px; border:1px solid var(--line-strong); border-radius:10px; min-height:42px; padding:8px 13px; background:var(--surface); color:var(--brand); font-weight:700; cursor:pointer; }
+.mkw-campaign-goal-settings-form button.primary { background:var(--brand); border-color:var(--brand); color:var(--surface); }
+.mkw-campaign-goal-settings-form button:disabled,.mkw-campaign-goal-actions button:disabled { opacity:.55; cursor:not-allowed; }
+.mkw-campaign-goal-settings-list { display:grid; gap:10px; }
+.mkw-campaign-goal-settings-list>article { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; border:1px solid var(--line); border-radius:12px; padding:12px 15px; background:var(--surface-soft); }
+.mkw-campaign-goal-settings-list>article>div:first-child { display:grid; gap:4px; }
+.mkw-campaign-goal-settings-list>article>div:first-child>strong { font-size:14px; color:var(--ink); }
+.mkw-campaign-goal-settings-list>article>div:first-child>small { color:var(--muted); font-size:11px; }
+.mkw-campaign-goal-actions { display:flex; gap:8px; }

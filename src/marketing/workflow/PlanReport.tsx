@@ -8,11 +8,12 @@ import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform } from './campaignOverview';
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
+import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign';
   created_at: string; creator_name?: string; review_status: string; status: string; review_note?: string;
-  readiness: number; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
+  readiness: number; platform_goals?: CampaignPlatformGoals[] | null; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
 };
 type ReportHistory = {
   action: string; note: string; actor_name: string; created_at: string; category_name: string;
@@ -51,7 +52,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
                 setPdfError('');
                 const options = { planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
                   createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to,
-                  lines, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at };
+                  lines, platformGoals:plan.platform_goals, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at };
                 if (isCampaign) exportCampaignSummaryPdf(options);
                 else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: plan.agenda_from,
                   agendaTo: plan.agenda_to, platforms: query.data?.platforms || [] });
@@ -67,7 +68,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <div><small>المنشورات المنشورة</small><strong>{published} من {lines.length}</strong></div>
           <div><small>الاعتماد — المستخدم والتاريخ والساعة</small><strong>{planApprovalLabel(approval?.actor_name, approval?.created_at)}</strong></div>
         </div>
-        {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to} durationDays={campaignDuration}/>}
+        {isCampaign && <CampaignOverview lines={lines} fundingFrom={plan.funding_from} fundingTo={plan.funding_to} platformGoals={plan.platform_goals} durationDays={campaignDuration}/>}
         {!isCampaign && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
           <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(agendaRange?.from)}</strong></div>
           <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(agendaRange?.to)}</strong></div>

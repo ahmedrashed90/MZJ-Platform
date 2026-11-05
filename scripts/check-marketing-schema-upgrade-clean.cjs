@@ -94,7 +94,7 @@ const schema = load('server/_marketing-workflow-schema.ts');
   console.log('PASS: dashboard shows one-click upgrade and reloads data');
 
   // A production install may already contain schema-1 through schema-7.
-  // The explicit admin action must apply only schema-8 and schema-9,
+  // The explicit admin action applies only subsequent additive migrations,
   // without replaying the initial bootstrap or deleting any existing task.
   async function reviewUpgradeFixture(missingReviewTables = false) {
     const appliedCodes = new Set(Array.from({length:9}, (_,i) => `schema-${i+1}`)
@@ -132,7 +132,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
             : script.includes("values('schema-12')") ? 'schema-12'
             : script.includes("values('schema-13')") ? 'schema-13'
             : script.includes("values('schema-14')") ? 'schema-14'
-            : script.includes("values('schema-15')") ? 'schema-15' : 'unexpected';
+            : script.includes("values('schema-15')") ? 'schema-15'
+            : script.includes("values('schema-16')") ? 'schema-16' : 'unexpected';
           assert.notEqual(code,'unexpected','Only additive workflow migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
@@ -151,8 +152,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15']);
-  console.log('PASS: schema-7 to schema-15 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16']);
+  console.log('PASS: schema-7 to schema-16 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });

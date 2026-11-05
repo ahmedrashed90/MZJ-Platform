@@ -47,7 +47,7 @@ export function MarketingDashboardPage() {
   }
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities; canReviewPlans: boolean; userId: string }>('dashboard');
-  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; canUpgrade: boolean }>('schema_status');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; campaignGoalsReady?: boolean; canUpgrade: boolean }>('schema_status');
   const publishSettings = useWorkQuery<{ enabled: boolean }>('publish_button_settings');
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
 
@@ -111,6 +111,7 @@ export function MarketingDashboardPage() {
       {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
     </div>}
+    {schema.data?.ready && schema.data.campaignGoalsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يوجد تحديث جديد لإعدادات «الهدف من الحملة» دون حذف أي حملة سابقة.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث أهداف الحملات</button></div>}
     {schema.data?.ready && schema.data.publishSettingsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يتوفر تحديث إعدادات التحكم في زر النشر التلقائي.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث إعدادات النشر</button></div>}
     {schema.data?.ready && !schema.data.performanceReady && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status">
       <span>يتوفر تحسين لفهارس قاعدة بيانات التسويق لتسريع تحميل تفاصيل التاسكات والمراجعات.</span>
@@ -224,7 +225,7 @@ export function MarketingDashboardPage() {
 
               <div className="mkw-dashboard-publish-actions">
                 <button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>التقرير</button>
-                {((query.data?.canReviewPlans && ['in_progress','submitted'].includes(reviewStatus)) || (group[0].created_by === query.data?.userId && ['in_progress','revision','submitted'].includes(reviewStatus))) && <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>{reviewStatus === 'revision' ? '\u0639\u0631\u0636 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644' : query.data?.canReviewPlans ? '\u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f' : '\u062a\u0641\u0627\u0635\u064a\u0644 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'}</button>}
+                {((query.data?.canReviewPlans && (['in_progress','submitted'].includes(reviewStatus) || group[0].kind === 'campaign')) || (group[0].created_by === query.data?.userId && ['in_progress','revision','submitted'].includes(reviewStatus))) && <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>{reviewStatus === 'revision' ? '\u0639\u0631\u0636 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644' : query.data?.canReviewPlans ? '\u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f' : '\u062a\u0641\u0627\u0635\u064a\u0644 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'}</button>}
                 <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare && !query.data?.canReviewPlans} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
                 {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
               </div>
@@ -246,7 +247,7 @@ export function MarketingDashboardPage() {
             setPdfError('');
             exportCampaignSummaryPdf({ planName: first.name, planNo: first.plan_no,
               creatorName: first.creator_name, createdAt: first.plan_created_at,
-              fundingFrom: first.funding_from, fundingTo: first.funding_to,
+              fundingFrom: first.funding_from, fundingTo: first.funding_to, platformGoals:first.campaign_platform_goals,
               approvedByName: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_by_name : null,
               approvedAt: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_at : null,
               publishState: planStateLabels[planDisplayState(first.review_status || 'in_progress', chooserSourceLines.filter(line => line.published_ready).length, chooserSourceLines.length)],
@@ -255,7 +256,7 @@ export function MarketingDashboardPage() {
         }}>تصدير PDF — ملخص الحملة</button>
       </div>}
       <WorkAlert>{pdfError}</WorkAlert>
-      {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to}/>}
+      {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to} platformGoals={chooserSourceLines[0]?.campaign_platform_goals}/>}
       {!chooserIsCampaign && !!chooserSourceLines.length && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
         <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(chooserSourceLines[0]?.agenda_from)}</strong></div>
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>

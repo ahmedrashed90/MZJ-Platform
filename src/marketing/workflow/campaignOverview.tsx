@@ -1,5 +1,7 @@
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { showDate } from './api';
+import { CampaignGoalsTable } from './CampaignGoals';
+import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 export type CampaignPeriod = { funding_from?: string | null; funding_to?: string | null };
 export type CampaignRequired = { id: string; name: string; idea: string };
@@ -102,8 +104,8 @@ export function moneySAR(value: number): string {
   return `${value.toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
 }
 
-export function CampaignOverview({ lines, fundingFrom, fundingTo, durationDays }: {
-  lines: WorkPlanLine[]; fundingFrom?: string | null; fundingTo?: string | null;
+export function CampaignOverview({ lines, fundingFrom, fundingTo, durationDays, platformGoals }: {
+  lines: WorkPlanLine[]; fundingFrom?: string | null; fundingTo?: string | null; platformGoals?: CampaignPlatformGoals[] | null;
   /** Shown only in the read-only campaign report; approval/edit screens stay unchanged. */
   durationDays?: number | null;
 }) {
@@ -120,6 +122,7 @@ export function CampaignOverview({ lines, fundingFrom, fundingTo, durationDays }
       <div className="mkw-campaign-platform-totals">{summary.platforms.map(platform =>
         <div key={platform.platform}><span>{platform.platform} <small>({platform.count} منشور)</small></span><strong>{moneySAR(platform.budget)}</strong></div>)}</div>
     </div>
+    <CampaignGoalsTable lines={lines} saved={platformGoals}/>
     <div className="mkw-campaign-unique-grid">
       <div><h3>المطلوبات ({summary.products.length})</h3><div className="mkw-campaign-unique-list">{summary.products.map(product => <div key={product.id}>{product.name}</div>)}</div></div>
       <div><h3>الأفكار المختلفة ({summary.ideas.length})</h3><div className="mkw-campaign-unique-list">{summary.ideas.length ? summary.ideas.map(idea => <div key={idea}>{idea}</div>) : <div>لم تُسجل فكرة</div>}</div></div>

@@ -13,7 +13,7 @@ function sourceModule(p) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX }, reportDiagnostics: true });
   assert.equal((compiled.diagnostics || []).filter(d => d.category === ts.DiagnosticCategory.Error).length, 0);
   const exports = {}, module = { exports };
-  const stub = (name) => name === './api' ? { showDate: String } : name === 'react/jsx-runtime'
+  const stub = (name) => name === './api' ? { showDate: String } : name === './CampaignGoals' ? { CampaignGoalsTable: () => null } : name === 'react/jsx-runtime'
     ? { jsx: () => null, jsxs: () => null } : (() => { throw new Error(`Unexpected runtime import ${name}`); })();
   vm.runInNewContext(compiled.outputText, { require: stub, module, exports, Number, String, Map, Set }, { filename: p });
   return module.exports;
@@ -44,7 +44,7 @@ const backend=file('server/marketing/workflow.ts'), composer=file('src/marketing
   detail=file('src/marketing/workflow/PlanDetail.tsx'), calendar=file('src/marketing/pages/ReceiptCalendarPage.tsx'),
   report=file('src/marketing/workflow/PlanReport.tsx'), dashboard=file('src/marketing/pages/MarketingDashboardPage.tsx');
 check('Campaign stores funding window in existing native payload and reads the same fields', () => {
-  assert.match(backend, /workflowPlanId: planId,\s*\.\.\.\(kind === 'campaign' && hasFundingPeriod \? \{ fundingFrom, fundingTo \}/);
+  assert.match(backend, /workflowPlanId: planId,\s*\.\.\.\(kind === 'campaign' \? \{ platformGoals, \.\.\.\(hasFundingPeriod \? \{ fundingFrom, fundingTo \}/);
   assert.match(backend, /camp\.payload->>'fundingFrom'/);
   assert.match(backend, /camp\.payload->>'fundingTo'/);
   assert.match(backend, /funding_to: plan\.funding_to \|\| null/);

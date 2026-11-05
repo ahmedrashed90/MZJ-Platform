@@ -79,6 +79,7 @@ function makeSql() {
       const ids = values[0];
       return types.filter(t => ids.includes(t.id));
     }
+    if (query.includes('select id::text,name from marketing.work_campaign_goals')) return [{ id: uid(501), name: 'جذب العملاء المحتملين' }];
     if (query.includes('select nextval')) return [{ value: '123' }];
     if (query.includes('select 1 from marketing.campaigns where campaign_code=')) return [];
     if (query.includes('insert into marketing.work_plan_items')) { inserts.push({ date: values[2], productId: values[1], postTypeId: values[3], budget: values[4] }); return []; }
@@ -90,7 +91,14 @@ function makeSql() {
   sql.json = value => value;
   return { sql, inserts, events, agendaAdapters };
 }
-const makeRequest = entries => ({ requestKey: uid(100), kind: 'campaign', name: 'New campaign', entries });
+// Campaign goals now belong to the unique platform, never each post type.
+const makeRequest = entries => ({
+  requestKey: uid(100), kind: 'campaign', name: 'New campaign', entries,
+  platformGoals: [...new Set(entries.flatMap(entry => Array.isArray(entry.platforms)
+    ? entry.platforms.map(platform => platform.platformId)
+    : types.filter(type => type.id === entry.postTypeId).map(type => type.platform_id)))]
+    .map(platformId => ({ platformId, goalIds: [uid(501)] })),
+});
 let db = makeSql();
 let result = await backend.createPlan(db.sql, makeRequest(payload), admin);
 check(result.ok && db.inserts.length === 2 && db.inserts[0].budget === 100.5 && db.inserts[1].budget === 250, 'Backend persists two real plan lines with independent platform budgets');
@@ -171,7 +179,11 @@ for (const [name, entries] of [
 }
 db = makeSql();
 await backend.createPlan(db.sql, makeRequest([{ date: '2026-10-17', productId: products[0].id, postTypeId: uid(21), budget: 45 }]), admin);
-check(db.inserts.length === 1 && db.inserts[0].budget === 45, 'Legacy single-platform clients retain their existing API contract');
+check(db.inserts.length === 1 && db.inserts[0].budget === 45, 'Legacy flat publish lines retain their format when campaign goals are supplied');
+// The backend must prevent the creation of campaigns without objectives.
+db = makeSql();
+await assert.rejects(() => backend.createPlan(db.sql, { ...makeRequest(payload), platformGoals: [] }, admin), /أهداف|هدف/);
+check(db.inserts.length === 0, 'No campaign rows are persisted without a selected objective per platform');
 const front = readFileSync('src/marketing/workflow/CreatePage.tsx', 'utf8');
 const css = readFileSync('src/marketing/workflow/workflow.css', 'utf8');
 check(front.includes('availablePlanProducts(products, entries, entry.key)') && front.includes('selectableGroups'), 'Product dropdown is filtered in both campaign and agenda composers');

@@ -8,12 +8,15 @@ import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import { CampaignOverview } from './campaignOverview';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
+import { CampaignGoalPicker } from './CampaignGoals';
+import type { CampaignGoalOption, CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
+import { campaignPlatformGoalRows } from '../../../shared/marketing-campaign-goals';
 
 type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
 type Plan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; creator_name?: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
-  readiness: number; canReview: boolean; canEdit: boolean; canEditFunding?: boolean; canEditAgendaWindow?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null; activated_at?: string | null;
+  readiness: number; canReview: boolean; canEditGoals?: boolean; platform_goals?: CampaignPlatformGoals[] | null; canEdit: boolean; canEditFunding?: boolean; canEditAgendaWindow?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null; activated_at?: string | null;
 };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
 type EditableLine = { id: string; date: string; productId: string; postTypeId: string; budget: string };
@@ -32,8 +35,11 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   const plan = query.data?.plan;
   const settings = useWorkQuery<{ categories: Array<{ id: string; name: string; is_active: boolean }> }>('evaluation_settings', {}, !!plan?.canReview);
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products', {}, !!plan?.canEdit);
+  const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings',{},!!plan?.canEditGoals);
   const metaQuery = useWorkQuery<WorkMeta>('meta', {}, !!plan?.canEdit);
   const [editing, setEditing] = useState(false), [rows, setRows] = useState<EditableLine[]>([]);
+  const [goalEditing, setGoalEditing] = useState(false);
+  const [goalSelection, setGoalSelection] = useState<Record<string,string[]>>({});
   const [fundingEditing, setFundingEditing] = useState(false);
   const [fundingFrom, setFundingFrom] = useState(''), [fundingTo, setFundingTo] = useState('');
   const [agendaEditing, setAgendaEditing] = useState(false);
@@ -53,6 +59,22 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     setAgendaFrom(String(query.data.plan.agenda_from || '').slice(0, 10));
     setAgendaTo(String(query.data.plan.agenda_to || '').slice(0, 10));
   }, [query.data, agendaEditing]);
+  useEffect(() => {
+    if (!plan || goalEditing) return;
+    setGoalSelection(Object.fromEntries((plan.platform_goals || []).map(row=>[row.platformId,row.goals.map(goal=>goal.id)])));
+  }, [query.data,goalEditing]);
+  const campaignPlatformRows = campaignPlatformGoalRows(query.data?.lines || [],plan?.platform_goals);
+  const availableGoalIds = new Set((goalsQuery.data?.goals || []).map(goal => goal.id));
+  async function saveGoals() {
+    if (!goalsQuery.data || goalsQuery.data.migrationRequired) { setError('حدّث أهداف الحملات من إعدادات التسويق أولًا.'); return; }
+    // Old campaign snapshots keep names after goal catalog deletion. Only
+    // currently active catalog options are selectable for a NEW review save.
+    const currentGoals = campaignPlatformRows.map(row => ({ platformId: row.platformId,
+      goalIds: (goalSelection[row.platformId] || []).filter(goalId => availableGoalIds.has(goalId)) }));
+    if (currentGoals.some(platform => !platform.platformId || !platform.goalIds.length)) { setError('اختر هدفًا واحدًا على الأقل لكل منصة في الحملة.'); return; }
+    const ok = await run('save_campaign_platform_goals',{planId:id,platformGoals:currentGoals});
+    if (ok) setGoalEditing(false);
+  }
   useEffect(() => { if (plan?.kind === 'campaign' && plan.review_status === 'revision' && plan.canEditFunding) setFundingEditing(true); }, [plan?.id, plan?.review_status, plan?.canEditFunding, plan?.kind]);
   useEffect(() => { if (plan?.kind === 'agenda' && plan.review_status === 'revision' && plan.canEditAgendaWindow) setAgendaEditing(true); }, [plan?.id, plan?.review_status, plan?.canEditAgendaWindow, plan?.kind]);
   async function saveFundingPeriod() {
@@ -99,7 +121,16 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
       <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><PlanStatusBadges kind={plan!.kind} reviewStatus={plan!.review_status} publishedCount={query.data.lines.filter(line => line.published_ready).length} totalCount={query.data.lines.length}/></div>
       <div className="mkw-summary"><div><small>منشئ {plan!.kind === 'agenda' ? 'الأجندة' : 'الحملة'}</small><strong>{plan!.creator_name?.trim() || '—'}</strong></div><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
       {plan!.kind === 'campaign' && <>
-        <CampaignOverview lines={query.data.lines} fundingFrom={plan!.funding_from} fundingTo={plan!.funding_to}/>
+        <CampaignOverview lines={query.data.lines} fundingFrom={plan!.funding_from} fundingTo={plan!.funding_to} platformGoals={plan!.platform_goals}/> 
+        {plan!.canEditGoals && <section className="mkw-panel mkw-campaign-goals-review">
+          <header className="mkw-section-title"><div><h3>تحديد أهداف منصات الحملة</h3><p className="mkw-muted">المراجع المعتمد يقدر يضيف أهداف الحملة الحالية أو يعدّلها دون تغيير حالتها أو ميزانياتها.</p></div><button type="button" className="secondary" disabled={busy} onClick={()=>setGoalEditing(value=>!value)}>{goalEditing ? 'إلغاء' : 'اختيار المنصات والأهداف'}</button></header>
+          {goalEditing && <><WorkAlert>{goalsQuery.error}</WorkAlert>
+            {goalsQuery.data?.migrationRequired && <p className="mkw-muted">يلزم تحديث جدول أهداف الحملات من الداش بورد أولًا.</p>}
+            <div className="mkw-campaign-goal-picker-grid">{campaignPlatformRows.map(row=><CampaignGoalPicker key={row.platformId || row.platformName} platformName={row.platformName} goals={goalsQuery.data?.goals || []}
+              selectedIds={(goalSelection[row.platformId] || []).filter(goalId => availableGoalIds.has(goalId))} onChange={goalIds=>setGoalSelection(current=>({...current,[row.platformId]:goalIds}))} disabled={busy || !goalsQuery.data || goalsQuery.data.migrationRequired}/>)}</div>
+            <button type="button" className="primary" disabled={busy || !goalsQuery.data || goalsQuery.data.migrationRequired} onClick={()=>void saveGoals()}>حفظ أهداف الحملة</button>
+          </>}
+        </section>}
         {!!plan!.canEditFunding && <section className="mkw-campaign-funding-edit">
           <div className="mkw-section-title"><strong>فترة تمويل الحملة</strong><button type="button" className="secondary" disabled={busy} onClick={() => setFundingEditing(open => !open)}>{fundingEditing ? 'إلغاء تعديل فترة التمويل' : 'تعديل فترة التمويل'}</button></div>
           {fundingEditing && <div className="mkw-campaign-funding-fields">
