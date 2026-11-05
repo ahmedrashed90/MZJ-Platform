@@ -55,7 +55,7 @@ export type WorkPlanLine = {
   published_ready?: boolean; created_by?: string; creator_name?: string; plan_created_at?: string; approved_by_name?: string | null; approved_at?: string | null;
   funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
   post_type_id?: string | null; platform_id?: string | null; platform_name?: string | null; post_type_name?: string | null; platform_code?: string | null; budget_amount?: number; activated_at?: string | null;
-  campaign_platform_goals?: import('./marketing-campaign-goals').CampaignPlatformGoals[] | null;
+  campaign_platform_goals?: import('./marketing-campaign-goals.js').CampaignPlatformGoals[] | null;
   product_id: string; idea_name: string; product_idea?: string; task_no: string; task_name: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
 };

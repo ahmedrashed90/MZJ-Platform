@@ -277,6 +277,7 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
     </section>
     <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />
+    <small className="mkw-muted">يمكن حفظ التجهيز ورابط المنشور اليدوي حتى لو مقاس الملف المعتمد مختلف. النشر التلقائي فقط يحتاج ملفات متوافقة.</small>
     </details>
     {isTikTok && <div className="mkw-tiktok-schedule-editor"><div><strong>جدولة TikTok</strong><p>اختر وقت النشر مع تاريخ الجدول. الضغط على نشر يرسل الفيديو إلى BulkPublish لينشر تلقائيًا في موعده، وليس فورًا.</p></div><Field label="وقت نشر TikTok (السعودية)"><input type="time" required value={publishTime} disabled={busy || !data.capabilities.prepare || locked} onChange={event => setPublishTime(event.target.value)} /></Field></div>}
     {isYouTube && <fieldset disabled={busy || !data.capabilities.prepare || locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><YouTubeOptionsFields value={youtube} onChange={setYouTube} categories={categories} playlists={playlists} loading={false} /></fieldset>}

@@ -132,7 +132,7 @@ async function validateCampaignPlatformGoals(tx: any, requested: unknown, permit
   }
   const wantedIds = [...new Set([...selected.values()].flat())];
   const catalog = await tx<any[]>`select id::text,name from marketing.work_campaign_goals where is_active=true and id=any(${wantedIds}::uuid[])`;
-  const names = new Map(catalog.map((goal: any) => [String(goal.id),String(goal.name)]));
+  const names = new Map<string, string>(catalog.map((goal: any): [string, string] => [String(goal.id), String(goal.name)]));
   if (names.size !== wantedIds.length) throw new Error('بعض الأهداف المختارة لم تعد متاحة في الإعدادات. حدّث الصفحة واختَر أهدافًا فعالة.');
   return [...selected.entries()].map(([platformId,goalIds]) => ({ platformId, goals: goalIds.map(goalId => ({ id:goalId,name:names.get(goalId)! })) }));
 }
@@ -2036,18 +2036,22 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
     }
     for (const formatId of selected) {
       const format = formats.find(f => f.id === formatId)!;
-      // Deliberate, media-safe cross-platform reuse of existing approved outputs.
+      // Manual publishing is proved by the posted URL, not by an identical
+      // output size. Preparation remains editable when an approved product has
+      // no file matching this platform's configured dimensions. Only STRICTLY
+      // compatible approved outputs may be attached for automatic publishing.
       const files = matchingWorkflowPublishFiles(product.files, taskFormats, format, product.media_kind);
-      if (!files.length || (product.media_kind === 'video' && files.length !== 1) ||
-        (normalizeMarketingPublishFormat(format.name) === 'carousel' && files.length < 2))
-        throw new Error('لا توجد ملفات نهائية معتمدة متوافقة مع نوع النشر والمقاس المحددين. اختر نوع نشر بمقاس الملفات المسلّمة في التاسك.');
+      const autoPublishReady = files.length > 0 &&
+        (product.media_kind !== 'video' || files.length === 1) &&
+        (normalizeMarketingPublishFormat(format.name) !== 'carousel' || files.length >= 2);
+      const automaticFiles = autoPublishReady ? files : [];
       const [currentFormat] = await tx<any[]>`select pt.id from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id
         where pt.id=${formatId}::uuid and pt.platform_id=${format.platform_id}::uuid and pt.is_active=true and p.is_active=true`;
       if (!currentFormat) throw new Error(W.selectFormats);
       const old = existing.find(t => t.post_type_id === formatId);
       if (old && ['published', 'scheduled', 'processing', 'verification_required'].includes(old.status)) continue;
       const options = { workflowProductId: line.product_id, workflowLineId: lineId, workflowKind: line.kind,
-        format: normalizeMarketingPublishFormat(format.name), youtube, publishTime };
+        format: normalizeMarketingPublishFormat(format.name), youtube, publishTime, manualOnly: !autoPublishReady };
       let scheduleId: string;
       if (old) {
         scheduleId = old.schedule_id;
@@ -2062,8 +2066,8 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
       }
       // Only unpublished attachment links are replaced; schedules/posts/logs remain intact.
       await tx`delete from marketing.work_publish_files where schedule_id=${scheduleId}::uuid`;
-      for (let order = 0; order < files.length; order++) await tx`insert into marketing.work_publish_files(schedule_id,file_id,sort_order)
-        values(${scheduleId}::uuid,${files[order].id}::uuid,${order}) on conflict do nothing`;
+      for (let order = 0; order < automaticFiles.length; order++) await tx`insert into marketing.work_publish_files(schedule_id,file_id,sort_order)
+        values(${scheduleId}::uuid,${automaticFiles[order].id}::uuid,${order}) on conflict do nothing`;
     }
     for (const old of existing.filter(t => !selected.includes(t.post_type_id))) {
       await tx`update marketing.publish_schedule set status='cancelled',updated_at=now() where id=${old.schedule_id}::uuid
@@ -2119,12 +2123,15 @@ async function publishTarget(sql: Sql, user: SessionUser, body: Row, services: W
       if (schedule.status === 'published' || schedule.status === 'scheduled') return { alreadyPublished: schedule.status === 'published', alreadyScheduled: schedule.status === 'scheduled', schedule };
       if (['processing', 'verification_required'].includes(schedule.status)) throw new Error(W.unpublishedOnly);
       if (!['waiting','failed'].includes(schedule.status)) throw new Error(W.immutable);
+      if (schedule.publish_options?.manualOnly === true)
+        throw new Error('تم حفظ التجهيز للنشر اليدوي؛ الملفات المعتمدة لا تطابق متطلبات النشر التلقائي. احفظ رابط المنشور بدلًا من النشر التلقائي.');
       const [activePlan] = await tx<any[]>`select 1 from marketing.work_publish_targets target
         join marketing.work_plan_items line on line.id=target.line_id
         join marketing.work_plans plan on plan.id=line.plan_id
         join marketing.work_items item on item.id=line.product_id
         join marketing.work_tasks task on task.id=item.task_id
         where target.schedule_id=${scheduleId}::uuid and plan.activated_at is not null
+          and coalesce(line.manual_post_url,'')=''
           and plan.is_deleted=false and line.is_deleted=false and task.is_deleted=false`;
       if (!activePlan) throw new Error('النشر غير مفعل أو تم إلغاء جدول النشر');
       if (!['facebook', 'instagram', 'youtube', 'tiktok'].includes(schedule.platform_code)) throw new Error(W.invalid);
@@ -2276,6 +2283,17 @@ async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row, serv
     if (!visible.length) throw new Error(W.notFound);
     const unfinished = visible.find(line => !line.prepared_count || line.failed_count || line.prepared_count !== 1);
     if (unfinished) throw new Error('أكمل تجهيز النشر وحفظ الكابشن والهاشتاج لكل صف في جدول النشر أولًا');
+    // Do not activate a schedule that has no usable, approved media. Such
+    // preparation is valid for manual URL tracking, but never for providers.
+    const [manualOnlyPending] = await tx<any[]>`select 1 from marketing.work_publish_targets target
+      join marketing.work_plan_items line on line.id=target.line_id
+      join marketing.publish_schedule s on s.id=target.schedule_id
+      where line.plan_id=${planId}::uuid and line.is_deleted=false and s.status='waiting'
+        and coalesce(line.manual_post_url,'')=''
+        and (s.publish_options->>'manualOnly'='true' or not exists (
+          select 1 from marketing.work_publish_files attached where attached.schedule_id=s.id
+        )) limit 1`;
+    if (manualOnlyPending) throw new Error('يوجد تجهيز للنشر اليدوي بدون ملفات بمقاس متوافق؛ احفظ رابط المنشور، أو جهّز ملفات متوافقة قبل تفعيل النشر التلقائي.');
     const [unsupported] = await tx<any[]>`select 1 from marketing.work_publish_targets target
       join marketing.work_plan_items line on line.id=target.line_id
       join marketing.publish_schedule s on s.id=target.schedule_id
@@ -2283,11 +2301,13 @@ async function activateWorkflowPlan(sql: Sql, user: SessionUser, body: Row, serv
       where line.plan_id=${planId}::uuid and line.is_deleted=false
         and (p.code not in ('facebook','instagram','youtube','tiktok') or s.status='cancelled') limit 1`;
     if (unsupported) throw new Error('المنصة المحددة لا تدعم النشر التلقائي عبر الربط الحالي');
-    const [hasTikTok] = await tx<any[]>`select 1 from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms p on p.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and p.code='tiktok' limit 1`;
+    const [hasTikTok] = await tx<any[]>`select 1 from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms p on p.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and p.code='tiktok'
+      and coalesce(line.manual_post_url,'')='' limit 1`;
     if (hasTikTok && !bulkPublishConfigured()) throw new Error('أضف BULKPUBLISH_API_KEY إلى Vercel لتفعيل الجدولة على TikTok');
     await tx`update marketing.work_plans set activated_at=coalesce(activated_at,now()),
       activated_by=${user.id}::uuid,updated_at=now() where id=${planId}::uuid`;
-    const tiktokTargets = await tx<any[]>`select target.schedule_id::text from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms platform on platform.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and platform.code='tiktok' order by s.publish_date,s.id`;
+    const tiktokTargets = await tx<any[]>`select target.schedule_id::text from marketing.work_publish_targets target join marketing.work_plan_items line on line.id=target.line_id join marketing.publish_schedule s on s.id=target.schedule_id join marketing.platforms platform on platform.id=s.platform_id where line.plan_id=${planId}::uuid and s.status='waiting' and platform.code='tiktok'
+      and coalesce(line.manual_post_url,'')='' order by s.publish_date,s.id`;
     return { ok: true, id: planId, tiktokTargets, message: 'تم تفعيل النشر حسب تواريخ جدول النشر' };
   });
   const outcomes: string[] = [];
@@ -2313,6 +2333,7 @@ export async function runDueWorkflowPublications(sql: Sql, services: WorkflowSer
     join marketing.platforms publish_platform on publish_platform.id=s.platform_id
     where publish_platform.code<>'tiktok' and p.activated_at is not null and p.is_deleted=false and line.is_deleted=false
       and task.is_deleted=false and s.status='waiting'
+      and coalesce(line.manual_post_url,'')='' and s.publish_options->>'manualOnly' is distinct from 'true'
       and s.publish_date <= (now() at time zone 'Asia/Riyadh')::date
     order by s.publish_date,s.created_at,s.id limit 12`;
   const results: { scheduleId: string; ok: boolean; error?: string }[] = [];
