@@ -1269,3 +1269,10 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
  .mkw-campaign-composer-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
  .mkw-campaign-composer-stats strong { font-size:15px; }
 }
+
+/* Original task requirement identity is shared by Products, Preparation and Report. */
+.mkw .mkw-product-reference{display:inline-grid;gap:5px;min-width:175px;max-width:100%;text-align:right}
+.mkw .mkw-product-reference strong{display:block;font-size:inherit;font-weight:750;color:var(--text);overflow-wrap:anywhere}
+.mkw .mkw-product-reference small{display:block;color:var(--muted);font-size:11px;font-weight:500;line-height:1.7;white-space:normal}
+.mkw .mkw-product-reference small [dir="ltr"]{unicode-bidi:isolate;display:inline-block}
+.mkw .mkw-publish-legacy-link-warning{display:block;color:#9a3412;font-weight:700;line-height:1.7}

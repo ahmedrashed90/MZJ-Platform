@@ -6,12 +6,13 @@ import { YouTubeOptionsFields } from '../components/YouTubeOptionsFields';
 import { marketingFetch, marketingQuery } from '../api';
 import { W, Empty, Field, FormatSelector, MediaLabel, ProductViewButton, Search, Status, WorkAlert, WorkHeader } from './components';
 import { fileUrl, showDate, useWorkQuery, workPost } from './api';
+import { ProductReference } from './ProductReference';
 import type { WorkCapabilities, WorkPlanLine, WorkProduct, WorkFormat } from '../../../shared/marketing-workflow';
 import { normalizeYouTubePublishOptions, YOUTUBE_CATEGORY_FALLBACKS, type YouTubePublishOptions, type YouTubePublishSettings, type YouTubeOptionItem } from '../../../shared/youtube-publishing';
 const ManualPublishPage = lazy(() => import('../pages/ManualPublishPage').then(module => ({ default: module.ManualPublishPage })));
 
 type PublishTarget = { id: string; post_type_id: string; schedule_id: string; status: string; publish_result: { error?: string; postId?: number; scheduledAt?: string; url?: string }; updated_at?: string; platform_code: string; platform_name: string; post_type_name: string; publish_options: { youtube?: YouTubePublishOptions; publishTime?: string } };
-type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities; canSaveLinks: boolean; canCorrectPublishedDate: boolean };
+type PrepData = { draftFormatIds?: string[]; plannedFormat?: WorkFormat | null; line: WorkPlanLine & { caption: string; hashtags: string; version: number; missing_persisted_url?: boolean }; product: WorkProduct; targets: PublishTarget[]; youtubeDefaults: YouTubePublishSettings; capabilities: WorkCapabilities; canSaveLinks: boolean; canCorrectPublishedDate: boolean; canRestoreOriginalUrl?: boolean };
 type ProductDraft = { product_id: string; format_ids: string[]; caption: string; hashtags: string; updated_at: string };
 type PublishingData = { products: WorkProduct[]; lines: WorkPlanLine[]; drafts: ProductDraft[]; capabilities: WorkCapabilities };
 
@@ -144,11 +145,12 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
     ? [...data.product.formats, data.plannedFormat] : data.product.formats;
   const [formatIds, setFormatIds] = useState(initialSelected.length ? initialSelected : (data.draftFormatIds?.length ? data.draftFormatIds : data.product.formats.map(format => format.id)));
   const [caption, setCaption] = useState(data.line.caption || ''), [hashtags, setHashtags] = useState(data.line.hashtags || '');
-  const [postUrl, setPostUrl] = useState(data.line.manual_post_url || '');
+  const [postUrl, setPostUrl] = useState(data.line.effective_post_url || data.line.manual_post_url || '');
   const [correctingDate, setCorrectingDate] = useState(false);
   const [correctedPublishedOn, setCorrectedPublishedOn] = useState(String(data.line.manual_published_on || '').slice(0, 10));
   const [correctionReason, setCorrectionReason] = useState('');
-  const linkFinalized = Boolean(String(data.line.manual_post_url || '').trim() || data.line.manual_published_on);
+  const orphanedOriginalUrl = Boolean(data.line.manual_published_on && data.line.missing_persisted_url);
+  const linkFinalized = Boolean(String(data.line.effective_post_url || '').trim() || data.line.manual_published_on);
   const [publishTime, setPublishTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
   const [rescheduleDate, setRescheduleDate] = useState(String(data.line.scheduled_on).slice(0, 10));
   const [rescheduleTime, setRescheduleTime] = useState(data.targets.find(target => target.platform_code === 'tiktok')?.publish_options?.publishTime || '20:00');
@@ -182,6 +184,17 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
     try {
       await workPost('save_plan_post_url', { lineId: data.line.id, url: postUrl.trim() });
       await refresh(); setMessage('تم حفظ رابط المنشور بشكل نهائي وتثبيت تاريخ نشره الفعلي');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  async function restoreOriginalUrl() {
+    if (busy || !data.canRestoreOriginalUrl || !orphanedOriginalUrl) return;
+    if (!postUrl.trim()) { setError('أدخل الرابط الأصلي للمنشور، وليس رابطًا جديدًا.'); return; }
+    if (!window.confirm('استعادة رابط المنشور الأصلي مع الاحتفاظ بتاريخ النشر الفعلي المحفوظ سابقًا؟')) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await workPost('restore_plan_post_url', {lineId:data.line.id,url:postUrl.trim()});
+      await refresh(); setMessage('تم استعادة الرابط الأصلي بدون تغيير تاريخ النشر.');
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
@@ -251,17 +264,19 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
   }
   return <form className="mkw" onSubmit={save}><WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert><div className="mkw-summary"><div><small>{W.name}</small><strong>{data.line.name}</strong></div><div><small>اسم المطلوب</small><strong>{data.product.idea_name}</strong></div><div><small>{data.line.kind === 'agenda' ? W.publishDate : W.fundingDate}</small><strong>{showDate(data.line.scheduled_on)}</strong></div><div><small>{W.taskNo}</small><strong>{data.product.task_no}</strong></div></div><section className="mkw-preparation-idea"><strong>الفكرة — فكرة المطلوب</strong><p>{data.product.idea || '—'}</p></section>
     <div className="mkw-actions"><ProductViewButton id={data.product.id} /><MediaLabel kind={data.product.media_kind} /></div>
-    <div className="mkw-preparation-copy-status"><strong>مطلوب: {data.product.idea_name}</strong><span>{data.line.platform_name} · {data.line.post_type_name}</span>{data.line.kind === 'campaign' && <span className="mkw-budget-value">الميزانية: {Number(data.line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })} ر.س</span>}</div>
+    <div className="mkw-preparation-copy-status"><ProductReference title={data.product.idea_name} details={data.product}/><span>{data.line.platform_name} · {data.line.post_type_name}</span>{data.line.published_ready && <strong className="mkw-publish-final-link-notice"><CheckCircle size={17} weight="fill"/> تم النشر</strong>}{data.line.kind === 'campaign' && <span className="mkw-budget-value">الميزانية: {Number(data.line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })} ر.س</span>}</div>
     <div className="mkw-publish-copy"><div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.caption}</strong>{data.line.caption?.trim() && caption === data.line.caption ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.caption}><textarea value={caption} maxLength={10000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setCaption(event.target.value)} /></Field></div>
     <div className="mkw-publish-copy-field"><div className="mkw-publish-field-state"><strong>{W.hashtags}</strong>{data.line.hashtags?.trim() && hashtags === data.line.hashtags ? <span className="is-saved"><CheckCircle size={17} weight="fill"/> محفوظ</span> : <span>بانتظار الحفظ</span>}</div><Field label={W.hashtags}><textarea value={hashtags} maxLength={3000} readOnly={!data.capabilities.prepare || locked} disabled={busy} onChange={event => setHashtags(event.target.value)} /></Field></div></div>
     <section className="mkw-post-link-entry" aria-label="بيانات النشر الفعلي">
       <h3>رابط المنشور وتاريخ النشر الفعلي</h3>
       <div className="mkw-post-link-fields">
-        <label>رابط المنشور<input type="url" value={postUrl} disabled={busy || !data.canSaveLinks || linkFinalized} readOnly={linkFinalized} placeholder="https://..." onChange={event => setPostUrl(event.target.value)} /></label>
+        <label>رابط المنشور<input type="url" value={postUrl} disabled={busy || ((!data.canSaveLinks || linkFinalized) && !data.canRestoreOriginalUrl)} readOnly={linkFinalized && !data.canRestoreOriginalUrl} placeholder="https://..." onChange={event => setPostUrl(event.target.value)} /></label>
         <label>تاريخ النشر الفعلي (ثابت)<input type="date" value={String(data.line.manual_published_on || '').slice(0, 10)} readOnly disabled aria-label="تاريخ النشر الفعلي المسجل تلقائيًا" /></label>
       </div>
-      {linkFinalized ? <small className="mkw-publish-final-link-notice"><CheckCircle size={18} weight="fill"/> تم حفظ الرابط وتاريخ النشر الفعلي نهائيًا. لا يمكن إضافة رابط آخر أو تعديل الرابط أو حذفه.</small>
-        : <small>يُسجل تاريخ أول حفظ للرابط تلقائيًا بتوقيت السعودية. بعد الحفظ لا يمكن تغييره أو حذف الرابط.</small>}
+      {orphanedOriginalUrl && <small className="mkw-publish-legacy-link-warning">هذا سجل منشور قديم: تاريخ النشر الأصلي محفوظ لكن رابط المنشور مفقود من السجل الأساسي. لا تُغيّر التاريخ؛ استعد الرابط الأصلي فقط.</small>}
+      {data.canRestoreOriginalUrl && orphanedOriginalUrl && <button type="button" className="secondary" disabled={busy || !postUrl.trim()} onClick={() => void restoreOriginalUrl()}>استعادة رابط المنشور الأصلي دون تغيير التاريخ</button>}
+      {!orphanedOriginalUrl && (linkFinalized ? <small className="mkw-publish-final-link-notice"><CheckCircle size={18} weight="fill"/> تم حفظ رابط المنشور وتاريخ نشره الفعلي؛ الكابشن والهاشتاج اختياريان ولا يغيران حالة النشر.</small>
+        : <small>يُسجل تاريخ أول حفظ للرابط تلقائيًا بتوقيت السعودية، ويُعتبر المنشور منشورًا فور حفظ الرابط دون اشتراط كابشن أو هاشتاج.</small>)}
       {data.canCorrectPublishedDate && linkFinalized && <div className="mkw-published-date-correction">
         {!correctingDate ? <button type="button" className="secondary" disabled={busy} onClick={() => setCorrectingDate(true)}>تصحيح تاريخ النشر الفعلي</button> : <>
           <strong>تصحيح التاريخ — للمراجعين المعتمدين فقط</strong>
@@ -271,9 +286,9 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
             <button type="button" className="secondary" disabled={busy} onClick={() => { setCorrectingDate(false); setCorrectionReason(''); setError(''); }}>إلغاء</button></div>
         </>}
       </div>}
-      {!data.canSaveLinks && !linkFinalized && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
+      {!data.canSaveLinks && !linkFinalized && !data.canRestoreOriginalUrl && <small>يُتاح تسجيل الرابط بعد اعتماد الأجندة أو الحملة.</small>}
       {data.line.effective_post_url && <a href={data.line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور المحفوظ</a>}
-      {data.canSaveLinks && !linkFinalized && <button type="button" className="secondary" disabled={busy || !postUrl.trim()} onClick={() => void saveLink()}>حفظ رابط المنشور نهائيًا</button>}
+      {data.canSaveLinks && !linkFinalized && !orphanedOriginalUrl && <button type="button" className="secondary" disabled={busy || !postUrl.trim()} onClick={() => void saveLink()}>حفظ رابط المنشور نهائيًا</button>}
     </section>
     <details className="mkw-publish-format-details"><summary><strong>المقاس ونوع النشر</strong><span>{formatIds.length} محدد ▾</span></summary>
     <FormatSelector formats={data.line.post_type_id ? availableFormats.filter(format => format.id === data.line.post_type_id) : availableFormats} selected={formatIds} onChange={setFormatIds} disabled={busy || !data.capabilities.prepare || locked || !!data.line.post_type_id} />

@@ -8,6 +8,7 @@ import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import { CampaignOverview } from './campaignOverview';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
+import { ProductReference } from './ProductReference';
 import { CampaignGoalPicker } from './CampaignGoals';
 import type { CampaignGoalOption, CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 import { campaignPlatformGoalRows } from '../../../shared/marketing-campaign-goals';
@@ -180,7 +181,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
         })}</tbody></table></div><div className="mkw-actions"><button type="button" className="secondary" disabled={rows.length >= 500} onClick={addRow}>إضافة منتج</button><button type="button" className="primary" disabled={busy || !rows.length || rows.some(row => !row.date || !row.productId || !row.postTypeId)} onClick={() => void run('update_plan', { planId: id, entries: rows.map(row => ({ ...row, budget: Number(row.budget) })) }).then(ok => { if (ok) setEditing(false); })}>حفظ التعديلات وإرسالها للمراجعة</button></div></section> : null}
       <section className="mkw-plan-review-table"><h3>الجدول الكامل للمراجعة — المنتجات والفكرة والمنصات والميزانية</h3>
       <div className="mkw-table-wrap"><table><thead><tr><th>{plan!.kind === 'agenda' ? W.publishDate : 'تاريخ النشر المخطط'}</th><th>تاريخ النشر الفعلي</th><th>المنتج</th><th>الفكرة (فكرة المطلوب)</th><th>المنصة</th><th>نوع النشر</th>{plan!.kind === 'campaign' && <th>الميزانية (ر.س)</th>}<th>الالتزام بالموعد</th><th>الحالة</th><th>رابط المنشور</th></tr></thead><tbody>{query.data.lines.map(line => <tr key={line.id}>
-        <td>{showDate(line.scheduled_on)}</td><td>{showDate(line.published_on)}</td><td>{line.idea_name}<small className="mkw-muted">{line.task_no}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{plan!.kind === 'campaign' && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><PublicationTiming line={line} /></td><td>{line.published_ready ? 'تم النشر' : planStatusName(plan!.status)}</td>
+        <td>{showDate(line.scheduled_on)}</td><td>{showDate(line.published_on)}</td><td><ProductReference title={line.idea_name} details={line}/></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{plan!.kind === 'campaign' && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><PublicationTiming line={line} /></td><td>{line.published_ready ? 'تم النشر' : planStatusName(plan!.status)}</td>
         <td>{line.effective_post_url ? <a href={line.effective_post_url} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : 'لم يُنشر بعد'}</td>
       </tr>)}</tbody></table></div></section>
     </>}

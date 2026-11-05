@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { W, Empty, MediaLabel, ProductViewButton, Search, WorkAlert, WorkHeader } from '../workflow/components';
 import { useWorkQuery } from '../workflow/api';
 import type { WorkProduct } from '../../../shared/marketing-workflow';
+import { ProductReference } from '../workflow/ProductReference';
 
 /** Display the actual product approval timestamp in MZJ's business timezone. */
 function approvalDate(value: string | null | undefined): string {
@@ -38,7 +39,7 @@ export function ProductsPage() {
           return <tr key={product.id}>
             <td><span className="mkw-code">{index + 1}</span></td>
             <td><time dateTime={approvedAt || undefined} dir="ltr" style={{ display: 'inline-block', direction: 'ltr', unicodeBidi: 'isolate', whiteSpace: 'nowrap' }}>{approvalDate(approvedAt)}</time></td>
-            <td className="mkw-table-title">{product.task_name}<small className="mkw-code">{product.task_no}</small><MediaLabel kind={product.media_kind} /></td>
+            <td className="mkw-table-title"><ProductReference title={product.task_name} details={product}/><MediaLabel kind={product.media_kind} /></td>
             <td>{product.idea_name}</td>
             <td>{product.assignee_name || '—'}</td>
             <td><ProductViewButton id={product.id} /></td>

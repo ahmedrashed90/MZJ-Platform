@@ -8,6 +8,7 @@ import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform } from './campaignOverview';
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
+import { ProductReference } from './ProductReference';
 import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
@@ -128,7 +129,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
               <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}`}><th scope="rowgroup" colSpan={11}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
               <tr key={line.id}>
               <td>{showDate(line.scheduled_on)}</td>
-              <td className="mkw-plan-report-product"><strong>{line.idea_name}</strong><small>{line.task_no} · {line.task_name}</small></td>
+              <td className="mkw-plan-report-product"><ProductReference title={line.idea_name} details={line}/></td>
               <td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td>
               <td>{line.platform_name || '—'}</td>
               <td>{line.post_type_name || '—'}</td>
