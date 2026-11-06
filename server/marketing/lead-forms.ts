@@ -43,6 +43,11 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
   const validKinds=new Set(Object.keys(DESIGN_BLOCK_LABELS));
   const animation=['slide','fade','zoom','none'].includes(raw.animation)?raw.animation:'slide';
   const choices=['list','cards','tiles','pills'].includes(raw.choices)?raw.choices:'list';
+  const rawChoices=raw.choiceLayouts&&typeof raw.choiceLayouts==='object'&&!Array.isArray(raw.choiceLayouts)?raw.choiceLayouts:{};
+  const choiceLayouts:NonNullable<FormDesign['choiceLayouts']>={};
+  for(const field of fields){
+    if(field.type==='choice' && ['list','cards','tiles','pills'].includes(rawChoices[field.id]))choiceLayouts[field.id]=rawChoices[field.id];
+  }
   const surface=['paper','soft','dark','borderless'].includes(raw.surface)?raw.surface:'paper';
   const buttonShape=['rounded','pill','square'].includes(raw.buttonShape)?raw.buttonShape:'rounded';
   const maxWidth=Math.max(360,Math.min(860,Math.round(Number(raw.maxWidth)||490)));
@@ -74,7 +79,7 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
     for(const kind of mandatory){if(!blocks.some(b=>b.kind===kind))blocks.push({id:`required_${screen}_${kind}`,kind,align:'right',width:'full',size:'md'});}
     screens[screen]=blocks;
   }
-  return {version:1,screens,animation,choices,surface,buttonShape,maxWidth};
+  return {version:1,screens,animation,choices,choiceLayouts,surface,buttonShape,maxWidth};
 }
 function sanitizeConfig(input: unknown): FormConfig {
   if(JSON.stringify(input ?? {}).length>3_000_000)throw new FormInputError('ملفات الصور أو إعدادات الفورم أكبر من الحجم المسموح');
@@ -136,6 +141,7 @@ function sanitizeConfig(input: unknown): FormConfig {
     successMessage: clean(rawStyle.successMessage,350) || base.successMessage,
     coverUrl: imageUrl(rawStyle.coverUrl), logoUrl: imageUrl(rawStyle.logoUrl) || '/logo.png',
     subtitle: clean(rawStyle.subtitle,100) || base.subtitle,
+    contactTitle: clean(rawStyle.contactTitle,140),
     coverHeight: Math.max(64,Math.min(260,Math.round(Number(rawStyle.coverHeight)||base.coverHeight||120))),
   } };
 }
@@ -315,11 +321,12 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   if (action!=='submit') return fail(res,404,'عملية غير معروفة');
   if (clean(params.website,200)) return res.json({ok:true}); // honeypot: do not store bot-generated leads
   const publishedConfig=sanitizeConfig(form.published_config || form.config);
-  // A notice-only request must not be recorded as an explicit consent. Both modes
-  // keep the privacy policy accessible before submitting; checkbox mode needs opt-in.
-  if(publishedConfig.privacy?.mode==='notice'){
-    if(!bool(params.noticeProvided))return fail(res,400,'يجب عرض إشعار الخصوصية قبل إرسال الطلب');
-  }else if(!bool(params.consent))return fail(res,400,'يلزم الموافقة على سياسة الخصوصية');
+  // Request follow-up is supported by a visible privacy-policy link, without
+  // inventing explicit opt-in. Keep compatibility for older open tabs that
+  // submitted the original checkbox, but do not require it on the new forms.
+  const noticeShown=bool(params.noticeProvided);
+  const legacyOptIn=publishedConfig.privacy?.mode==='checkbox' && bool(params.consent);
+  if(!noticeShown && !legacyOptIn)return fail(res,400,'يجب إتاحة سياسة الخصوصية قبل إرسال الطلب');
   const key=clean(params.submissionKey,50), name=publishedConfig.contact?.askName===false?'عميل من فورم المنصات':clean(params.name,130), rawPhone=clean(params.phone,28).replace(/[\s()-]/g,'');
   if (!uuidPattern.test(key)) return fail(res,400,'معرف الطلب غير صالح');
   if (publishedConfig.contact?.askName!==false && name.length<2) return fail(res,400,'يرجى كتابة الاسم');

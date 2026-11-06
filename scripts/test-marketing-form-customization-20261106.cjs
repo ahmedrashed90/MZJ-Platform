@@ -56,12 +56,13 @@ const newAnswers=rules.validFormAnswers(sanitized.fields,{...oldAnswers,purchase
 assert.ok(!newAnswers.trim,'Changing cash to finance must remove an incompatible previous choice');
 const legacy=server.sanitizeConfigForTest(base.DEFAULT_FORM_CONFIG);
 assert.equal(legacy.contact.askName,true,'Existing forms still request name by default');
-assert.equal(legacy.privacy.mode,'checkbox','Existing explicit consent must remain by default');
+assert.equal(legacy.privacy.mode,'notice','New forms use a standalone privacy-policy link without explicit consent');
+assert.equal(server.sanitizeConfigForTest({...base.DEFAULT_FORM_CONFIG,privacy:{mode:'checkbox'}}).privacy.mode,'checkbox','Legacy checkbox submissions remain supported');
 assert.equal(legacy.style.subtitle,'طلب سيارة إلكتروني');
 assert.match(source('src/marketing/MarketingLayout.tsx'),/\/marketing\/packages[^\n]+marketing\.packages\.view/);
 assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/effectiveChoiceOptions\(current,answers\)/);
 assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/mlf-option-logo/);
-assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/noticeProvided:privacyMode==='notice'/);
+assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/consent:false,noticeProvided:true/);
 assert.match(source('src/marketing/lead-forms/lead-forms.css'),/object-fit:contain;object-position:center/);
 assert.match(source('src/marketing/lead-forms/LeadFormsPage.tsx'),/ConditionalChoicesEditor/);
-console.log('PASS: packages tab, cover containment, choice logos, configurable subtitle/contact, two-condition car choices, server sanitization, legacy consent, stale-answer pruning');
+console.log('PASS: packages tab, cover containment, choice logos, configurable subtitle/contact, two-condition car choices, server sanitization, legacy compatibility, standalone privacy-policy link, stale-answer pruning');

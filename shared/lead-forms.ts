@@ -5,7 +5,7 @@ export type { FormDesign, DesignBlock, DesignBlockKind } from './lead-form-desig
 export { createTemplateDesign, resolveFormDesign, DESIGN_BLOCK_LABELS } from './lead-form-design.js';
 export type FormTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'classic';
 export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; optionImages?: Record<string,string>; optionImageModes?: Record<string,'logo'|'photo'>; optionRules?: ChoiceOptionRule[]; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
-export type FormStyle = { brown: string; cream: string; welcome: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string; subtitle?: string; coverHeight?: number };
+export type FormStyle = { brown: string; cream: string; welcome: string; contactTitle?: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string; subtitle?: string; coverHeight?: number };
 export type FormConfig = { fields: FormField[]; style: FormStyle; contact?: { askName: boolean }; privacy?: { mode: 'checkbox' | 'notice' }; design?: FormDesign };
 export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_at:string;updated_at:string};
 export type FormStatus = 'draft' | 'published' | 'paused' | 'archived';
@@ -28,8 +28,8 @@ export const DEFAULT_FORM_CONFIG: FormConfig = {
     { id: 'purchase', label: 'تحب تشتري إزاي؟', type: 'choice', required: true, options: ['كاش', 'تمويل'] },
     { id: 'timeline', label: 'إمتى ناوي تشتري؟', type: 'choice', required: true, options: ['في أقرب وقت', 'خلال شهر', 'لسه بقارن'] },
   ],
-  style: { brown: '#4A211C', cream: '#F3E8DC', welcome: 'سيارتك أقرب مما تتخيل', actionLabel: 'إرسال الطلب', successTitle: 'تم استلام طلبك بنجاح', successMessage: 'شكرًا لتواصلك مع محمد ذعار العجمي للسيارات.', coverUrl: '', logoUrl: '/logo.png', subtitle: 'طلب سيارة إلكتروني', coverHeight: 120 },
-  contact: { askName: true }, privacy: { mode: 'checkbox' },
+  style: { brown: '#4A211C', cream: '#F3E8DC', welcome: 'سيارتك أقرب مما تتخيل', actionLabel: 'إرسال الطلب', successTitle: 'تم استلام طلبك بنجاح', successMessage: 'شكرًا لتواصلك مع محمد ذعار العجمي للسيارات.', coverUrl: '', logoUrl: '/logo.png', subtitle: 'طلب سيارة إلكتروني', contactTitle: '', coverHeight: 120 },
+  contact: { askName: true }, privacy: { mode: 'notice' },
 };
 export const DEFAULT_SHEET_COLUMNS = ['name', 'phone', 'source', 'campaign', 'vehicle', 'purchase', 'timeline', 'submitted_at'];
 export const AVAILABLE_SHEET_COLUMNS = [

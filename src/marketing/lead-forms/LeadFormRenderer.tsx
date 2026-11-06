@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, CheckCircle, LockKey, WarningCircle, ChatCircleDots, CarProfile } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, CheckCircle, WarningCircle, ChatCircleDots, CarProfile } from '@phosphor-icons/react';
 import type { FormConfig, FormField, FormTemplate } from '../../../shared/lead-forms';
 import { DEFAULT_FORM_CONFIG } from '../../../shared/lead-forms';
-import { resolveFormDesign, type DesignBlock } from '../../../shared/lead-form-design';
+import { resolveFormDesign, choiceLayoutFor, type DesignBlock } from '../../../shared/lead-form-design';
 import { effectiveChoiceOptions, isVisibleField, validFormAnswers } from '../../../shared/lead-form-rules';
 import { formLeadAttribution } from './pixel-tracking';
 import './lead-forms.css';
@@ -30,11 +30,10 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   const config=form.config?.fields?.length?form.config:DEFAULT_FORM_CONFIG;
   const style=config.style || DEFAULT_FORM_CONFIG.style;
   const askName=config.contact?.askName!==false;
-  const privacyMode=config.privacy?.mode||'checkbox';
   const design=useMemo(()=>resolveFormDesign(config.design,form.template,config.fields),[config.design,config.fields,form.template]);
   const [answers,setAnswers]=useState<Record<string,string>>({});
   const [step,setStep]=useState(0);
-  const [name,setName]=useState(''),[phone,setPhone]=useState(''),[consent,setConsent]=useState(false);
+  const [name,setName]=useState(''),[phone,setPhone]=useState('');
   const [sending,setSending]=useState(false),[error,setError]=useState(''),[done,setDone]=useState(false);
   const tracking=useMemo(getTracking,[]);
   const session=useRef(getVisitor(form.slug || 'preview',tracking));
@@ -67,11 +66,10 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   async function submit() {
     if(askName && name.trim().length<2){setError('يرجى إدخال الاسم الكامل');return;}
     if(!/^(?:05\d{8}|(?:\+?966)5\d{8})$/.test(phone.replace(/[\s()-]/g,''))){setError('أدخل رقم جوال سعودي صحيح');return;}
-    if(privacyMode==='checkbox' && !consent){setError('يلزم الموافقة على سياسة الخصوصية');return;}
     if(preview){setDone(true);return;}
     setSending(true);setError('');
     try {
-      const result=await fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',slug:form.slug,visitor:session.current,submissionKey:submissionKey.current,name:askName?name.trim():'',phone,consent:privacyMode==='checkbox'&&consent,noticeProvided:privacyMode==='notice',answers:validFormAnswers(config.fields,answers),...tracking,website:''})});
+      const result=await fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',slug:form.slug,visitor:session.current,submissionKey:submissionKey.current,name:askName?name.trim():'',phone,consent:false,noticeProvided:true,answers:validFormAnswers(config.fields,answers),...tracking,website:''})});
       const json=await result.json().catch(()=>({}));
       if(!result.ok||!json.ok)throw new Error(String(json.error||'تعذر إرسال الطلب'));
       setDone(true);
@@ -84,7 +82,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   function fieldContent(){
     if(!current)return null;
     if(current.type!=='choice')return <label className="mlf-public-input"><span>{current.label}</span><input type={current.type==='number'?'number':'text'} inputMode={current.type==='number'?'decimal':'text'} value={answers[current.id]||''} placeholder="اكتب إجابتك هنا" onChange={e=>answer(current,e.target.value)} maxLength={180}/></label>;
-    return <div className={`mlf-choice-grid mlf-choice-mode-${design.choices}`} role="group" aria-label={current.label}>{effectiveChoiceOptions(current,answers).map((option,index)=>
+    return <div className={`mlf-choice-grid mlf-choice-mode-${choiceLayoutFor(design,current.id)}`} role="group" aria-label={current.label}>{effectiveChoiceOptions(current,answers).map((option,index)=>
       <button type="button" key={`${index}-${option}`} className={`mlf-choice ${answers[current.id]===option?'selected':''}`} onClick={()=>answer(current,option)}>
         {current.optionImages?.[option]?<img className={current.optionImageModes?.[option]==='logo'?'mlf-option-image mlf-option-logo':'mlf-option-image'} src={current.optionImages[option]} alt="" loading="lazy"/>:
           <span className="mlf-choice-icon">{form.template==='visual'?<CarProfile size={25} weight="duotone"/>:String(index+1).padStart(2,'0')}</span>}
@@ -94,13 +92,12 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   function contactContent(){return <div className="mlf-contact">
     {askName&&<label>الاسم الكامل<input autoComplete="name" value={name} placeholder="اكتب اسمك" maxLength={130} onChange={e=>setName(e.target.value)}/></label>}
     <label>رقم الجوال<input type="tel" inputMode="tel" autoComplete="tel" value={phone} placeholder="05XXXXXXXX" maxLength={24} onChange={e=>setPhone(e.target.value)}/></label>
-    {privacyMode==='checkbox'&&<label className="mlf-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/><span>أوافق على استخدام بياناتي للتواصل معي بخصوص السيارة المطلوبة وفق <a href="/privacy" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a>.</span></label>}
   </div>;}
   function actionsContent(){return <footer className="mlf-public-actions">
     {step>0&&<button type="button" className="mlf-public-back" onClick={previous}><ArrowRight size={18}/> السابق</button>}
     {current?.type==='choice'?<small>اختار إجابة للانتقال تلقائيًا</small>:<button type="button" disabled={sending} className="mlf-public-button" onClick={()=>current?next():void submit()}>{sending?'جاري إرسال الطلب...':current?'التالي':style.actionLabel}<ArrowLeft size={19}/></button>}
   </footer>;}
-  function successContent(){return <div className="mlf-done" role="status"><CheckCircle size={72} weight="duotone"/><h1>{style.successTitle}</h1><p>{style.successMessage}</p>{preview&&<button type="button" className="mlf-public-button" onClick={()=>{setStep(0);setAnswers({});setName('');setPhone('');setConsent(false);setDone(false);}}>إعادة التجربة</button>}</div>;}
+  function successContent(){return <div className="mlf-done" role="status"><CheckCircle size={72} weight="duotone"/><h1>{style.successTitle}</h1><p>{style.successMessage}</p>{preview&&<button type="button" className="mlf-public-button" onClick={()=>{setStep(0);setAnswers({});setName('');setPhone('');setDone(false);}}>إعادة التجربة</button>}</div>;}
   function history():ReactNode {
     if(form.template!=='chat'||!current)return null;
     return <div className="mlf-chat-history">{fields.slice(0,step).filter(f=>answers[f.id]).map(f=><div key={f.id} className="mlf-chat-exchange"><div className="mlf-chat-bot">{f.label}</div><div className="mlf-chat-human">{answers[f.id]}</div></div>)}</div>;
@@ -113,14 +110,14 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
       case 'heading':content=<div className={`mlf-public-heading ${form.template==='chat'?'mlf-chat-question':''}`}>
         {form.template==='chat'&&<ChatCircleDots size={22} weight="duotone"/>}
         <span>{current?`الخطوة ${step+1} من ${count}`:'بيانات التواصل'}</span>
-        <h1>{block.text || (current?.label || 'آخر خطوة.. خلينا نتواصل معاك')}</h1>
+        <h1>{current ? (block.text || current.label) : (style.contactTitle || block.text || 'آخر خطوة.. خلينا نتواصل معاك')}</h1>
         {(current?.description||(!step?style.welcome:undefined))&&<p>{current?.description||style.welcome}</p>}
       </div>;break;
       case 'progress':content=<div className="mlf-progress" role="progressbar" aria-valuenow={step+1} aria-valuemin={1} aria-valuemax={count}><span style={{width:`${(step+1)/count*100}%`}}/></div>;break;
       case 'question':content=<div className="mlf-question-region">{history()}{fieldContent()}</div>;break;
       case 'contact':content=contactContent();break;
       case 'actions':content=actionsContent();break;
-      case 'trust':content=privacyMode==='notice'?null:<div className="mlf-public-security"><LockKey size={14}/>{preview?'وضع معاينة: لا يتم حفظ أي بيانات':'يتم استخدام بياناتك للرد على طلبك فقط'}</div>;break;
+      case 'trust':content=null;break; // Legacy decorative note: no longer shown to customers.
       case 'success':content=successContent();break;
       case 'text':content=<p className="mlf-custom-text">{block.text||''}</p>;break;
       case 'image':content=block.imageUrl?<img className="mlf-custom-image" src={block.imageUrl} alt={block.text||'صورة الفورم'} loading="lazy"/>:null;break;
@@ -141,7 +138,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
         {blocks.map(renderBlock)}
       </div>
       {error&&<p className="mlf-public-error" role="alert"><WarningCircle size={17}/>{error}</p>}
-      {privacyMode==='notice'&&!done&&<div className="mlf-privacy-link"><a href="/privacy" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a></div>}
+      {!done&&<div className="mlf-privacy-link"><a href="/privacy" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a></div>}
     </div>
   </div>;
 }

@@ -1,5 +1,6 @@
 /** Visual layout primitives for MZJ lead forms. All data is JSON-safe and declarative. */
 export type DesignBaseTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'classic';
+export type FormChoiceLayout = 'list' | 'cards' | 'tiles' | 'pills';
 export type DesignBlockKind = 'brand' | 'cover' | 'heading' | 'progress' | 'question' | 'contact' | 'actions' | 'trust' | 'success' | 'text' | 'image' | 'badge' | 'divider' | 'spacer';
 export type DesignBlock = {
   id: string;
@@ -15,7 +16,10 @@ export type FormDesign = {
   version: 1;
   screens: Record<string, DesignBlock[]>;
   animation: 'slide' | 'fade' | 'zoom' | 'none';
-  choices: 'list' | 'cards' | 'tiles' | 'pills';
+  /** Default for forms created before per-question designs were available. */
+  choices: FormChoiceLayout;
+  /** Per-question option layout, keyed by the stable question ID. */
+  choiceLayouts?: Record<string, FormChoiceLayout>;
   surface: 'paper' | 'soft' | 'dark' | 'borderless';
   buttonShape: 'rounded' | 'pill' | 'square';
   maxWidth: number;
@@ -40,15 +44,15 @@ export function createTemplateDesign(template:DesignBaseTemplate, fields:{id:str
   const screens:Record<string,DesignBlock[]>={};
   for(const [i,field] of fields.entries()){
     const ordered:DesignBlockKind[] = template==='chat'
-      ? ['brand','progress','heading','question','actions','trust']
-      : template==='visual' ? ['brand','cover','heading','progress','question','actions','trust']
-      : template==='quiz' ? ['brand','progress','heading','question','actions','trust']
-      : template==='minimal' ? ['brand','heading','question','progress','actions','trust']
-      : template==='classic' ? ['brand','heading','progress','question','actions','trust']
-      : ['brand','cover','heading','progress','question','actions','trust'];
+      ? ['brand','progress','heading','question','actions']
+      : template==='visual' ? ['brand','cover','heading','progress','question','actions']
+      : template==='quiz' ? ['brand','progress','heading','question','actions']
+      : template==='minimal' ? ['brand','heading','question','progress','actions']
+      : template==='classic' ? ['brand','heading','progress','question','actions']
+      : ['brand','cover','heading','progress','question','actions'];
     screens[field.id]=ordered.filter(k=>k!=='cover'||i===0).map(k=>block(k,field.id));
   }
-  screens.contact=(['brand','progress','heading','contact','actions','trust'] as DesignBlockKind[]).map(k=>block(k,'contact'));
+  screens.contact=(['brand','progress','heading','contact','actions'] as DesignBlockKind[]).map(k=>block(k,'contact'));
   screens.success=(['brand','success'] as DesignBlockKind[]).map(k=>block(k,'success'));
   return {version:1,screens,...settings[template]};
 }
@@ -56,5 +60,10 @@ export function createTemplateDesign(template:DesignBaseTemplate, fields:{id:str
 export function resolveFormDesign(saved:FormDesign|undefined, template:DesignBaseTemplate, fields:{id:string}[]):FormDesign {
   const defaults=createTemplateDesign(template,fields);
   if(!saved||saved.version!==1||!saved.screens)return defaults;
-  return {...defaults,...saved,screens:{...defaults.screens,...saved.screens}};
+  return {...defaults,...saved,screens:{...defaults.screens,...saved.screens},choiceLayouts:{...defaults.choiceLayouts,...saved.choiceLayouts}};
+}
+
+/** Switching a question's option style must not affect its siblings. */
+export function choiceLayoutFor(design: Pick<FormDesign, 'choices' | 'choiceLayouts'>, questionId: string): FormChoiceLayout {
+  return design.choiceLayouts?.[questionId] || design.choices;
 }
