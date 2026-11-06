@@ -76,6 +76,7 @@ const mocks={
   '../_marketing-lead-forms-schema.js':{ensureMarketingLeadFormsSchema:async()=>{}},
   './lead-forms-crm.js':{syncMarketingFormLeadToCrm:async()=>{throw new Error('CRM must remain untouched');}},
   '../../shared/lead-forms.js':{},
+  '../../shared/lead-form-rules.js':{},
   '../../shared/lead-form-design.js':{},
   '../../shared/lead-form-pixels.js':{},
 };

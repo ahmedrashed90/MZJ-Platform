@@ -1,11 +1,12 @@
 /** MZJ platform forms: isolated schema/types; no dependencies on CRM or marketing workflows. */
 import type { FormDesign } from './lead-form-design.js';
+import type { ChoiceOptionRule } from './lead-form-rules.js';
 export type { FormDesign, DesignBlock, DesignBlockKind } from './lead-form-design.js';
 export { createTemplateDesign, resolveFormDesign, DESIGN_BLOCK_LABELS } from './lead-form-design.js';
 export type FormTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'classic';
-export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; optionImages?: Record<string,string>; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
-export type FormStyle = { brown: string; cream: string; welcome: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string };
-export type FormConfig = { fields: FormField[]; style: FormStyle; design?: FormDesign };
+export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; optionImages?: Record<string,string>; optionImageModes?: Record<string,'logo'|'photo'>; optionRules?: ChoiceOptionRule[]; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
+export type FormStyle = { brown: string; cream: string; welcome: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string; subtitle?: string; coverHeight?: number };
+export type FormConfig = { fields: FormField[]; style: FormStyle; contact?: { askName: boolean }; privacy?: { mode: 'checkbox' | 'notice' }; design?: FormDesign };
 export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_at:string;updated_at:string};
 export type FormStatus = 'draft' | 'published' | 'paused' | 'archived';
 // Legacy string columns remain supported for forms linked before the sheet-header mapper.
@@ -27,7 +28,8 @@ export const DEFAULT_FORM_CONFIG: FormConfig = {
     { id: 'purchase', label: 'تحب تشتري إزاي؟', type: 'choice', required: true, options: ['كاش', 'تمويل'] },
     { id: 'timeline', label: 'إمتى ناوي تشتري؟', type: 'choice', required: true, options: ['في أقرب وقت', 'خلال شهر', 'لسه بقارن'] },
   ],
-  style: { brown: '#4A211C', cream: '#F3E8DC', welcome: 'سيارتك أقرب مما تتخيل', actionLabel: 'إرسال الطلب', successTitle: 'تم استلام طلبك بنجاح', successMessage: 'شكرًا لتواصلك مع محمد ذعار العجمي للسيارات.', coverUrl: '', logoUrl: '/logo.png' },
+  style: { brown: '#4A211C', cream: '#F3E8DC', welcome: 'سيارتك أقرب مما تتخيل', actionLabel: 'إرسال الطلب', successTitle: 'تم استلام طلبك بنجاح', successMessage: 'شكرًا لتواصلك مع محمد ذعار العجمي للسيارات.', coverUrl: '', logoUrl: '/logo.png', subtitle: 'طلب سيارة إلكتروني', coverHeight: 120 },
+  contact: { askName: true }, privacy: { mode: 'checkbox' },
 };
 export const DEFAULT_SHEET_COLUMNS = ['name', 'phone', 'source', 'campaign', 'vehicle', 'purchase', 'timeline', 'submitted_at'];
 export const AVAILABLE_SHEET_COLUMNS = [

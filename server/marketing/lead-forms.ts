@@ -7,6 +7,7 @@ import { logSecurityEvent, requirePermissionForUser } from '../_access-control.j
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
+import { effectiveChoiceOptions, isVisibleField } from '../../shared/lead-form-rules.js';
 import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
 import { DEFAULT_LEAD_FORM_PIXELS, validateLeadFormPixels, getPublicLeadFormPixels } from '../../shared/lead-form-pixels.js';
 
@@ -90,26 +91,52 @@ function sanitizeConfig(input: unknown): FormConfig {
     if (type === 'choice' && options.length < 2) throw new FormInputError(`السؤال ${index+1}: أضف اختيارين على الأقل`);
     const showIfRaw = (f as any).showIf;
     const showIf = showIfRaw && typeof showIfRaw==='object' ? { fieldId: clean(showIfRaw.fieldId,45), equals: clean(showIfRaw.equals,80) } : null;
+    const optionRules = type==='choice' && Array.isArray((f as any).optionRules)
+      ? (f as any).optionRules.slice(0,16).map((rule:any)=>({
+          conditions:Array.isArray(rule?.conditions) ? rule.conditions.slice(0,4).map((c:any)=>({fieldId:clean(c?.fieldId,45),equals:clean(c?.equals,80)})) : [],
+          options:Array.isArray(rule?.options) ? [...new Set(rule.options.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,12) as string[] : [],
+        })).filter((rule:any)=>rule.conditions.length>0 && rule.options.length>=2) : [];
     const rawImages=(f as any).optionImages && typeof (f as any).optionImages==='object' ? (f as any).optionImages as Record<string,unknown> : {};
-    const optionImages:Record<string,string>={};
-    for(const option of options){const url=imageUrl(rawImages[option]);if(url)optionImages[option]=url;}
-    fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], optionImages, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
+    const rawModes=(f as any).optionImageModes && typeof (f as any).optionImageModes==='object' ? (f as any).optionImageModes as Record<string,unknown> : {};
+    const optionImages:Record<string,string>={}, optionImageModes:Record<string,'logo'|'photo'>={};
+    const everyOption:string[]=[...new Set<string>([...options,...optionRules.flatMap((rule:any)=>rule.options as string[])])];
+    for(const option of everyOption){
+      const url=imageUrl(rawImages[option]);if(url)optionImages[option]=url;
+      if(url && rawModes[option]==='logo')optionImageModes[option]='logo';
+    }
+    fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
   }
   if (!fields.length) throw new FormInputError('أضف سؤالًا واحدًا على الأقل');
   // Only allow conditions pointing to an earlier question and one of its options.
   fields.forEach((field,index)=>{
     const dep = fields.slice(0,index).find(item=>item.id===field.showIf?.fieldId);
     if (!dep || dep.type!=='choice' || !dep.options.includes(field.showIf?.equals || '')) field.showIf=null;
+    field.optionRules=(field.optionRules||[]).filter(rule=>{
+      const ids=new Set<string>();
+      return rule.conditions.every(condition=>{
+        const preceding=fields.slice(0,index).find(f=>f.id===condition.fieldId);
+        if(!preceding || preceding.type!=='choice' || !preceding.options.includes(condition.equals) || ids.has(condition.fieldId))return false;
+        ids.add(condition.fieldId);
+        return true;
+      });
+    });
   });
   const rawStyle = obj.style && typeof obj.style === 'object' ? obj.style as Record<string,unknown> : {};
+  const rawContact = obj.contact && typeof obj.contact === 'object' ? obj.contact : {};
+  const rawPrivacy = obj.privacy && typeof obj.privacy === 'object' ? obj.privacy : {};
   const base = DEFAULT_FORM_CONFIG.style;
-  return { fields, design:sanitizeDesign(obj.design,fields), style: {
+  return { fields, design:sanitizeDesign(obj.design,fields),
+    contact:{askName:rawContact.askName !== false},
+    privacy:{mode:rawPrivacy.mode==='notice'?'notice':'checkbox'},
+    style: {
     brown: validStyleColor(rawStyle.brown,base.brown), cream: validStyleColor(rawStyle.cream,base.cream),
     welcome: clean(rawStyle.welcome,140) || base.welcome,
     actionLabel: clean(rawStyle.actionLabel,60) || base.actionLabel,
     successTitle: clean(rawStyle.successTitle,140) || base.successTitle,
     successMessage: clean(rawStyle.successMessage,350) || base.successMessage,
     coverUrl: imageUrl(rawStyle.coverUrl), logoUrl: imageUrl(rawStyle.logoUrl) || '/logo.png',
+    subtitle: clean(rawStyle.subtitle,100) || base.subtitle,
+    coverHeight: Math.max(64,Math.min(260,Math.round(Number(rawStyle.coverHeight)||base.coverHeight||120))),
   } };
 }
 function publicConfig(row: any) {
@@ -287,22 +314,27 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   }
   if (action!=='submit') return fail(res,404,'عملية غير معروفة');
   if (clean(params.website,200)) return res.json({ok:true}); // honeypot: do not store bot-generated leads
-  if (!bool(params.consent)) return fail(res,400,'يلزم الموافقة على سياسة الخصوصية');
-  const key=clean(params.submissionKey,50), name=clean(params.name,130), rawPhone=clean(params.phone,28).replace(/[\s()-]/g,'');
+  const publishedConfig=sanitizeConfig(form.published_config || form.config);
+  // A notice-only request must not be recorded as an explicit consent. Both modes
+  // keep the privacy policy accessible before submitting; checkbox mode needs opt-in.
+  if(publishedConfig.privacy?.mode==='notice'){
+    if(!bool(params.noticeProvided))return fail(res,400,'يجب عرض إشعار الخصوصية قبل إرسال الطلب');
+  }else if(!bool(params.consent))return fail(res,400,'يلزم الموافقة على سياسة الخصوصية');
+  const key=clean(params.submissionKey,50), name=publishedConfig.contact?.askName===false?'عميل من فورم المنصات':clean(params.name,130), rawPhone=clean(params.phone,28).replace(/[\s()-]/g,'');
   if (!uuidPattern.test(key)) return fail(res,400,'معرف الطلب غير صالح');
-  if (name.length<2) return fail(res,400,'يرجى كتابة الاسم');
+  if (publishedConfig.contact?.askName!==false && name.length<2) return fail(res,400,'يرجى كتابة الاسم');
   const localPhone=rawPhone.replace(/^(\+?966)/,'0');
   if (!/^05\d{8}$/.test(localPhone)) return fail(res,400,'رقم جوال سعودي غير صالح');
   const phone=`966${localPhone.slice(1)}`;
-  const fields = sanitizeConfig(form.published_config || form.config).fields;
+  const fields = publishedConfig.fields;
   const rawAnswers: Record<string,unknown> = params.answers && typeof params.answers==='object' && !Array.isArray(params.answers) ? params.answers : {};
   const answers: Record<string,string>={};
   const answerLabels: Record<string,string>={};
   for (const field of fields) {
-    if (field.showIf && answers[field.showIf.fieldId] !== field.showIf.equals) continue;
+    if (!isVisibleField(field,answers)) continue;
     const value=clean(rawAnswers[field.id],180);
     if (field.required && !value) return fail(res,400,`يرجى الإجابة عن: ${field.label}`);
-    if (field.type==='choice' && value && !field.options.includes(value)) return fail(res,400,'إجابة اختيار غير صالحة');
+    if (field.type==='choice' && value && !effectiveChoiceOptions(field,answers).includes(value)) return fail(res,400,'إجابة اختيار غير صالحة');
     if (field.type==='number' && value && !/^\d{1,12}(?:\.\d{1,2})?$/.test(value)) return fail(res,400,'قيمة رقمية غير صالحة');
     if (value) { answers[field.id]=value; answerLabels[field.id]=field.label; }
   }

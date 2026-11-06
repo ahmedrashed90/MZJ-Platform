@@ -367,3 +367,44 @@
 .mlf-clear-content label{display:grid;gap:6px;font-weight:800;font-size:13px;color:#4a211c}
 .mlf-clear-actions{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap}
 @media(max-width:620px){.mlf-clear-counts{grid-template-columns:1fr 1fr 1fr}.mlf-clear-content{padding:14px}}
+
+/* MZJ form customization: preserve the whole cover/logo in every preview and published form. */
+.mlf-public .mlf-cover,
+.mlf-template-visual .mlf-cover{
+  display:block;width:auto;max-width:100%;height:auto;
+  max-height:var(--lf-cover-height,120px);aspect-ratio:auto;
+  object-fit:contain;object-position:center;
+  margin:0 auto 17px;border-radius:10px;
+}
+.mlf-designer-form .mlf-dv-cover{
+  display:block;width:auto;max-width:100%;height:auto;
+  max-height:var(--lf-cover-height,120px);object-fit:contain;object-position:center;
+  margin:0 auto;border-radius:9px;
+}
+.mlf-option-image.mlf-option-logo{
+  display:block;width:54px;height:54px;max-width:100%;max-height:54px;
+  border-radius:8px;object-fit:contain;object-position:center;
+  background:transparent;margin-inline:auto;flex:0 0 auto;
+}
+.mlf-designer-form .mlf-dv-options>div>img.mlf-dv-option-logo{
+  width:44px;height:44px;max-width:100%;object-fit:contain;background:transparent;
+}
+.mlf-dv-brand span small{display:block;color:#83665a;font-size:10px;font-weight:600}
+.mlf-privacy-link{text-align:center;font-size:11px;padding:10px 0 0;grid-column:1/-1}
+.mlf-privacy-link a{color:var(--lf-brown);text-decoration:underline;text-underline-offset:3px}
+.mlf-rules-editor{grid-column:1/-1;border:1px solid #e5d0c2;border-radius:11px;padding:11px;background:#fcf8f4;color:#4a211c;min-width:0}
+.mlf-rules-editor>summary{font-weight:900;font-size:12px;cursor:pointer}
+.mlf-rules-editor>p{font-size:11px;color:#80695b;line-height:1.7;margin:9px 0 12px}
+.mlf-rule-card{display:grid;gap:10px;padding:12px;border:1px solid #e7d5c7;border-radius:11px;background:#fff;margin:9px 0}
+.mlf-rule-heading{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.mlf-rule-heading strong{font-size:12px}
+.mlf-rule-condition{display:flex;align-items:flex-end;flex-wrap:wrap;gap:6px}
+.mlf-rule-condition>label{display:grid;gap:6px;flex:1 1 130px;min-width:0}
+.mlf-rule-condition>button{flex:0 0 auto}
+.mlf-rule-card label{font-size:12px;font-weight:800}
+.mlf-rule-card select,.mlf-rule-card textarea{width:100%;max-width:100%;min-width:0;border:1px solid #ddc7b7;border-radius:8px;padding:8px;background:#fff;color:#4a211c;font:inherit}
+.mlf-rule-card textarea{resize:vertical;min-height:75px}
+@media(max-width:490px){
+ .mlf-option-image.mlf-option-logo{width:42px;height:42px}
+ .mlf-template-visual .mlf-cover{max-height:var(--lf-cover-height,120px)}
+}
