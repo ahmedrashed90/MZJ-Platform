@@ -257,7 +257,7 @@ export function Sidebar() {
 
   useEffect(() => {
     if (!user?.id || !attendanceState?.canCheckIn || !attendanceState.activePeriod || attendanceBusy) return;
-    if (!["primary", "exempt"].includes(attendanceState.deviceAttendanceRole || "")) return;
+    if (!['primary', 'exempt'].includes(attendanceState.deviceAttendanceRole || '')) return;
     const period = attendanceState.activePeriod;
     const key = `${user.id}:${period.id}:${period.workDate}`;
     if (autoCheckInAttempts.current.has(key)) return;
