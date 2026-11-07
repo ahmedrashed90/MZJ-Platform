@@ -87,9 +87,9 @@ export function campaignLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[]
     String(a.id).localeCompare(String(b.id)));
 }
 
-/** Dashboard preparation only: publish date takes precedence over platform.
- * Unscheduled legacy rows come last; preserve deterministic ties without
- * mutating the plan or altering the platform-grouped campaign report.
+/** Agenda reports and dashboard preparation: publish date first, then platform
+ * and post type. Unscheduled legacy rows come last. Preserve deterministic ties
+ * without mutating plan rows or altering the platform-grouped campaign report.
  */
 export function preparationLinesByDate<T extends WorkPlanLine>(lines: T[]): T[] {
   return [...lines].sort((a, b) =>

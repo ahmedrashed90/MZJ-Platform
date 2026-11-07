@@ -5,7 +5,7 @@ import { showDate, useWorkQuery } from './api';
 import { PublicationTiming, planStatusName } from './PlanDetail';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
-import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform } from './campaignOverview';
+import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform, preparationLinesByDate } from './campaignOverview';
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
@@ -28,7 +28,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
   const [pdfError, setPdfError] = useState('');
   const plan = query.data?.plan;
   const lines = query.data?.lines || [];
-  const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : lines;
+  const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : preparationLinesByDate(lines);
   const published = lines.filter(line => line.published_ready).length;
   const isCampaign = plan?.kind === 'campaign';
   const approval = ['publishing', 'published'].includes(plan?.review_status || '')

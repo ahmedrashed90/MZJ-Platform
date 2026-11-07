@@ -89,6 +89,43 @@ check('Requirement and idea summaries dedupe exactly like printable PDF',()=>{
   assert(text.includes('المطلوبات المختلفة ( 2 )'));
   assert(text.includes('الأفكار المختلفة ( 2 )'));
 });
+check('Agenda detail rows are ordered by publish date, then grouped by platform within each date',()=>{
+  const originalLines=data.lines;
+  const makeLine=(id, date, platform, type) => ({...originalLines[0], id,
+    scheduled_on:date, platform_name:platform, post_type_name:type, published_ready:false,
+    effective_post_url:undefined});
+  // Intentionally scrambled input: the UI must not depend on database row order.
+  data.lines=[
+    makeLine('later','2026-11-07','انستجرام','ستوري'),
+    makeLine('snap','2026-11-05','سناب شات','Story'),
+    makeLine('ig-story','2026-11-05','انستجرام','ستوري'),
+    makeLine('fb','2026-11-05','فيس بوك','بوست صور'),
+    makeLine('ig-post','2026-11-05','انستجرام','بوست صور'),
+    makeLine('early','2026-11-04','سناب شات','Story'),
+    makeLine('undated','','فيس بوك','ستوري'),
+  ];
+  try {
+    const before=data.lines.map(line=>line.id);
+    const table=byClass(PlanReport({id:'agenda-unsorted',onClose:()=>{}}),'mkw-plan-report-table')[0];
+    const rows=[];
+    traverse(table,node=>{
+      const cells=node?.type==='tr' ? node.props?.children : null;
+      if(Array.isArray(cells) && cells[0]?.type==='td') {
+        rows.push([getText(cells[0]),getText(cells[3]),getText(cells[4])]);
+      }
+    });
+    assert.deepEqual(rows,[
+      ['2026-11-04','سناب شات','Story'],
+      ['2026-11-05','انستجرام','بوست صور'],
+      ['2026-11-05','انستجرام','ستوري'],
+      ['2026-11-05','سناب شات','Story'],
+      ['2026-11-05','فيس بوك','بوست صور'],
+      ['2026-11-07','انستجرام','ستوري'],
+      ['—','فيس بوك','ستوري'],
+    ]);
+    assert.deepEqual(data.lines.map(line=>line.id),before,'sorting cannot mutate published plan rows');
+  } finally { data.lines=originalLines; }
+});
 check('Agenda report keeps the existing publication-details table and headings unchanged',()=>{
   const source=read('src/marketing/workflow/PlanReport.tsx');
   for(const label of ['تفاصيل النشر حسب المنصة ونوع المنشور','تاريخ النشر','المنتج','الفكرة (فكرة المطلوب)','المنصة','نوع النشر','الكابشن','الهاشتاج','الالتزام بالموعد','الحالة','رابط المنشور'])
