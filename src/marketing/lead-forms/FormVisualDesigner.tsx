@@ -1,6 +1,7 @@
 import { useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowLeft, ArrowRight, CaretDown, Check, DeviceMobile, DotsSixVertical, ImageSquare, Monitor, Plus, Trash } from '@phosphor-icons/react';
 import type { FormConfig, FormField, FormTemplate } from '../../../shared/lead-forms';
+import { displayContactTitle } from '../../../shared/lead-forms';
 import { allChoiceOptions } from '../../../shared/lead-form-rules';
 import { ConditionalChoicesEditor } from './ConditionalChoicesEditor';
 import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, createTemplateDesign, resolveFormDesign, choiceLayoutFor, type DesignBlock, type DesignBlockKind, type FormDesign } from '../../../shared/lead-form-design';
@@ -52,7 +53,7 @@ export function FormVisualDesigner({config,template,onChange}:{config:FormConfig
   const active=blocks.find(b=>b.id===selected)||null;
   const currentField=config.fields.find(f=>f.id===screenId);
   const questionChoiceLayout=currentField?.type==='choice'?choiceLayoutFor(design,currentField.id):design.choices;
-  const savedContactTitle=config.style.contactTitle || design.screens.contact?.find(b=>b.kind==='heading')?.text || 'آخر خطوة.. خلينا نتواصل معاك';
+  const savedContactTitle=displayContactTitle(config.style.contactTitle || design.screens.contact?.find(b=>b.kind==='heading')?.text);
   const colors={'--lf-brown':config.style.brown,'--lf-cream':config.style.cream,'--lf-cover-height':`${config.style.coverHeight||120}px`} as CSSProperties;
   function commit(next:FormConfig){history.current.undo.push(clone(config));if(history.current.undo.length>50)history.current.undo.shift();history.current.redo=[];onChange(next);}
   function updateDesign(next:FormDesign){commit({...config,design:next});}
@@ -107,7 +108,7 @@ export function FormVisualDesigner({config,template,onChange}:{config:FormConfig
     switch(b.kind){
       case 'brand':return <div className="mlf-dv-brand">{config.style.logoUrl&&<img src={config.style.logoUrl} alt=""/>}<span>محمد ذعار العجمي للسيارات<small>{config.style.subtitle||'طلب سيارة إلكتروني'}</small></span></div>;
       case 'cover':return config.style.coverUrl?<img className="mlf-dv-cover" src={config.style.coverUrl} alt="صورة الغلاف"/>:<div className="mlf-dv-placeholder"><ImageSquare size={26}/> صورة الغلاف</div>;
-      case 'heading':return <div className="mlf-dv-heading"><small>{screenId==='contact'?'بيانات التواصل':screenId==='success'?'نجاح التسجيل':`السؤال ${config.fields.findIndex(f=>f.id===screenId)+1}`}</small><h3>{screenId==='contact' ? savedContactTitle : (b.text||currentField?.label||'تم التسجيل')}</h3>{currentField?.description&&<p>{currentField.description}</p>}</div>;
+      case 'heading':return <div className="mlf-dv-heading">{screenId!=='contact'&&<small>{screenId==='success'?'نجاح التسجيل':`السؤال ${config.fields.findIndex(f=>f.id===screenId)+1}`}</small>}<h3>{screenId==='contact' ? savedContactTitle : (b.text||currentField?.label||'تم التسجيل')}</h3>{currentField?.description&&<p>{currentField.description}</p>}</div>;
       case 'progress':return <div className="mlf-dv-progress"><span style={{width:`${Math.max(16,100*(config.fields.findIndex(f=>f.id===screenId)+1)/Math.max(config.fields.length+1,1))}%`}}/></div>;
       case 'question':return currentField?.type==='choice'?<div className={`mlf-dv-options mlf-dv-options-${questionChoiceLayout}`}>{currentField.options.map((option,i)=><div key={`${option}-${i}`}>{currentField.optionImages?.[option]?<img className={currentField.optionImageModes?.[option]==='logo'?'mlf-dv-option-logo':''} src={currentField.optionImages[option]} alt=""/>:<span>{String(i+1).padStart(2,'0')}</span>}{option}</div>)}</div>:<div className="mlf-dv-input">{currentField?.label} — اكتب الإجابة</div>;
       case 'contact':return <div className="mlf-dv-contact">{config.contact?.askName!==false&&<div>الاسم الكامل</div>}<div>رقم الجوال</div><small>سياسة الخصوصية</small></div>;

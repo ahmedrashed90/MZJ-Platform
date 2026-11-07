@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, createSign, randomUUID } from 'node:crypto';
 import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { requireUser, requestIp } from '../_auth.js';
-import { logSecurityEvent, requirePermissionForUser } from '../_access-control.js';
+import { hasPermission, logSecurityEvent, requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
@@ -388,7 +388,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       sheets:'marketing.lead_forms.sheets.manage', retry_sheet:'marketing.lead_forms.sheets.manage', sheet_status:'marketing.lead_forms.sheets.manage',
       sheet_tabs:'marketing.lead_forms.sheets.manage', sheet_headers:'marketing.lead_forms.sheets.manage',
       pixel_settings:'marketing.lead_forms.view', pixel_settings_save:'marketing.lead_forms.edit',
-      design_templates:'marketing.lead_forms.view', design_template_save:'marketing.lead_forms.create',
+      design_templates:'marketing.lead_forms.view', design_template_save:'marketing.lead_forms.create', design_template_delete:'marketing.lead_forms.create',
     } as Record<string,string>)[action];
     if (!permission) return fail(res,404,'عملية غير معروفة');
     if (!await requirePermissionForUser(req,res,user,permission,{systemCode:'marketing',pageCode:'lead_forms',action})) return;
@@ -397,7 +397,7 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
     const sql=getSql();
     res.setHeader('Cache-Control','no-store');
     if (action==='design_templates' && req.method==='GET') {
-      const rows=await sql<any[]>`select id::text,name,template,config,created_at,updated_at from marketing.form_design_templates order by updated_at desc limit 100`;
+      const rows=await sql<any[]>`select id::text,name,template,config,created_by::text,created_at,updated_at from marketing.form_design_templates order by updated_at desc limit 100`;
       return res.json({ok:true,templates:rows});
     }
     if (action==='design_template_save' && req.method==='POST') {
@@ -408,6 +408,23 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       const [saved]=await sql<any[]>`insert into marketing.form_design_templates(name,template,config,created_by)
         values(${name},${template},${sql.json(config)},${user.id}::uuid) returning id::text`;
       return res.json({ok:true,id:saved.id,message:'تم حفظ التصميم في مكتبة القوالب'});
+    }
+    if (action==='design_template_delete' && req.method==='POST') {
+      const id=clean(params.id,45);
+      if(!uuidPattern.test(id) || params.confirm!=='DELETE_DESIGN_TEMPLATE')return fail(res,400,'يجب تحديد التصميم وتأكيد حذفه');
+      // A saved template is a reusable copy. Published forms and their data live
+      // in separate tables and are never touched by this operation.
+      const mayManageAll=hasPermission(user,'marketing.lead_forms.edit');
+      const [deleted]=await sql<{id:string;name:string}[]>`
+        delete from marketing.form_design_templates
+        where id=${id}::uuid and (created_by=${user.id}::uuid or ${mayManageAll})
+        returning id::text,name`;
+      if(!deleted)return fail(res,404,'التصميم غير موجود أو ليس لديك صلاحية حذفه');
+      await logSecurityEvent({request:req,user,systemCode:'marketing',pageCode:'lead_forms',
+        permissionCode:'marketing.lead_forms.create',action:'delete_form_design_template',
+        entityType:'marketing_form_design_template',entityId:deleted.id,result:'success',
+        beforeData:{name:deleted.name},afterData:{deleted:true}});
+      return res.json({ok:true,deleted:1,message:`تم حذف التصميم «${deleted.name}» من المكتبة فقط، دون التأثير على الفورمات الموجودة`});
     }
     if (action==='pixel_settings' && req.method==='GET') {
       const [row] = await sql<{config:unknown}[]>`select config from marketing.form_pixel_settings where scope='global'`;

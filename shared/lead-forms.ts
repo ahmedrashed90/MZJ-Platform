@@ -7,7 +7,7 @@ export type FormTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'c
 export type FormField = { id: string; label: string; type: 'choice' | 'text' | 'number'; options: string[]; optionImages?: Record<string,string>; optionImageModes?: Record<string,'logo'|'photo'>; optionRules?: ChoiceOptionRule[]; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
 export type FormStyle = { brown: string; cream: string; welcome: string; contactTitle?: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string; subtitle?: string; coverHeight?: number };
 export type FormConfig = { fields: FormField[]; style: FormStyle; contact?: { askName: boolean }; privacy?: { mode: 'checkbox' | 'notice' }; design?: FormDesign };
-export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_at:string;updated_at:string};
+export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_by:string|null;created_at:string;updated_at:string};
 export type FormStatus = 'draft' | 'published' | 'paused' | 'archived';
 // Legacy string columns remain supported for forms linked before the sheet-header mapper.
 export type SheetColumnMapping = { header: string; source: string; value?: string };
@@ -22,6 +22,15 @@ export const FORM_TEMPLATES: { id: FormTemplate; name: string; description: stri
   { id: 'minimal', name: 'الحد الأدنى', description: 'خطوات أنيقة بدون مشتتات', glyph: '05' },
   { id: 'classic', name: 'الكلاسيكي', description: 'نموذج مقسم وسريع الاستخدام', glyph: '06' },
 ];
+/** Keep the contact heading short on existing published forms, without changing stored data. */
+export const DEFAULT_CONTACT_TITLE = 'بيانات التواصل';
+export function displayContactTitle(value?: string): string {
+  const title = (value || '').trim();
+  // Older forms may persist the original long heading in their style or design block.
+  const legacyTitle = /^آخر\s+خطوة\s*[.،…!\-–]*\s*خلينا\s+نتواصل\s+معاك[.!؟…\s]*$/u;
+  return !title || legacyTitle.test(title) ? DEFAULT_CONTACT_TITLE : title;
+}
+
 export const DEFAULT_FORM_CONFIG: FormConfig = {
   fields: [
     { id: 'vehicle', label: 'إيه السيارة اللي بتدور عليها؟', type: 'choice', required: true, options: ['هيونداي', 'تويوتا', 'نيسان', 'أخرى'] },

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle, WarningCircle, ChatCircleDots, CarProfile } from '@phosphor-icons/react';
 import type { FormConfig, FormField, FormTemplate } from '../../../shared/lead-forms';
-import { DEFAULT_FORM_CONFIG } from '../../../shared/lead-forms';
+import { DEFAULT_FORM_CONFIG, displayContactTitle } from '../../../shared/lead-forms';
 import { resolveFormDesign, choiceLayoutFor, type DesignBlock } from '../../../shared/lead-form-design';
 import { effectiveChoiceOptions, isVisibleField, validFormAnswers } from '../../../shared/lead-form-rules';
 import { formLeadAttribution } from './pixel-tracking';
@@ -109,8 +109,8 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
       case 'cover':content=style.coverUrl?<img className="mlf-cover" src={style.coverUrl} alt="صورة السيارة"/>:null;break;
       case 'heading':content=<div className={`mlf-public-heading ${form.template==='chat'?'mlf-chat-question':''}`}>
         {form.template==='chat'&&<ChatCircleDots size={22} weight="duotone"/>}
-        <span>{current?`الخطوة ${step+1} من ${count}`:'بيانات التواصل'}</span>
-        <h1>{current ? (block.text || current.label) : (style.contactTitle || block.text || 'آخر خطوة.. خلينا نتواصل معاك')}</h1>
+        {current&&<span>{`الخطوة ${step+1} من ${count}`}</span>}
+        <h1>{current ? (block.text || current.label) : displayContactTitle(style.contactTitle || block.text)}</h1>
         {(current?.description||(!step?style.welcome:undefined))&&<p>{current?.description||style.welcome}</p>}
       </div>;break;
       case 'progress':content=<div className="mlf-progress" role="progressbar" aria-valuenow={step+1} aria-valuemin={1} aria-valuemax={count}><span style={{width:`${(step+1)/count*100}%`}}/></div>;break;
