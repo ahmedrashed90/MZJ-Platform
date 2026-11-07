@@ -295,21 +295,16 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
 
   let createdLead = false;
   const requestService = first(request?.service_key, request?.department_code).toLowerCase();
-  const leadService = first(lead?.service_key, lead?.department_code).toLowerCase();
   const requestNeedsFinanceDistribution = Boolean(
     request &&
     ["finance", "finance_sales"].includes(requestService) &&
     (!request.assigned_to || !request.call_center_assigned_to),
   );
-  const leadNeedsFinanceDistribution = Boolean(
-    lead &&
-    !request &&
-    ["finance", "finance_sales"].includes(leadService) &&
-    !lead.assigned_to,
-  );
-  const shouldClassifyForDistribution = !lead || requestNeedsFinanceDistribution || leadNeedsFinanceDistribution
-    || Boolean(request && !["finance", "finance_sales"].includes(requestService))
-    || Boolean(lead && !request && !["finance", "finance_sales"].includes(leadService));
+  // Repeated imports must not create a new service request or reclassify an
+  // existing customer's service, status or assignment. Only a truly new lead
+  // is classified. A matching open finance request may complete a missing
+  // assignment through classifyConversationService's idempotent reuse branch.
+  const shouldClassifyForDistribution = !lead || (requestNeedsFinanceDistribution && serviceKey === "finance");
 
   if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
@@ -389,7 +384,6 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       service_key=${lead.service_key || serviceKey},
       department_code=${lead.department_code || departmentCode},
       branch_code=${lead.branch_code || 'online'},
-      status_label='عميل جديد',
       payment_type=case when ${existedBefore} then payment_type else ${serviceKey === 'cash' ? 'كاش' : 'تمويل'} end,
       car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
       car_type=case when ${existedBefore} then coalesce(nullif(car_type,''),${data.carName || null}) else ${data.carName || null} end,
