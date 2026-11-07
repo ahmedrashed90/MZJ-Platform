@@ -1,6 +1,6 @@
 import { clean, normalizePhone, resolveSourceName } from "./_crm-utils.js";
 import { resolveSheetImportCampaign } from "./_crm-import-campaign.js";
-import { getSql } from "./_db.js";
+import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { publishBackgroundEvent } from "./_crm-background-jobs.js";
 import {
   classifyConversationService,
@@ -190,7 +190,30 @@ export function isLeadImportEvent(routeSource: string, payload: any) {
   return eventType === "lead_import" && (bool(payload?.importOnly) || bool(payload?.import_only) || payload?.saveMessage === false || payload?.save_message === false);
 }
 
+/**
+ * All inbound lead sources share the same phone lock (including the marketing
+ * form bridge). Lock on the local nine digits because CRM also matches existing
+ * phone records by those digits, even when their stored prefix differs.
+ *
+ * The lock covers contact creation, existing-lead lookup and classification.
+ * It complements the existing unique index on active normalized phone numbers;
+ * no schema migration or production data repair is needed.
+ */
 export async function processLeadImportEvent(routeSource: string, eventId: string, payload: any) {
+  const data = importedData(payload);
+  if (!data.phoneNormalized) throw new Error("رقم جوال ليد الاستيراد غير صالح");
+  const phoneKey = data.phoneNormalized.slice(-9);
+  return withDatabaseAdvisoryLock(`mzj:crm:lead-import:${phoneKey}`, () =>
+    processLeadImportEventForPhone(routeSource, eventId, payload, data),
+  );
+}
+
+async function processLeadImportEventForPhone(
+  routeSource: string,
+  eventId: string,
+  payload: any,
+  data: ReturnType<typeof importedData>,
+) {
   const sql = getSql();
   const sourceCode = sourceCodeForImport(routeSource, payload);
   const isMarketingForm = routeSource === 'marketing-form' && payload?.provider === 'marketing_lead_form';
@@ -211,9 +234,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   }
   const sourceName = await resolveSourceName(sourceCode);
   const occurredAt = dateValue(payload);
-  const data = importedData(payload);
   const campaign = resolveSheetImportCampaign(payload, sourceCode);
-  if (!data.phoneNormalized) throw new Error("رقم جوال ليد الاستيراد غير صالح");
 
   const preferredContactChannel = first(payload?.preferredContactChannel, payload?.preferred_contact_channel, payload?.outboundChannel, payload?.outbound_channel, "whatsapp").toLowerCase();
   const externalId = `lead-import:${sourceCode}:${data.phoneNormalized}`;
@@ -282,7 +303,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
         ${sql.json({ routeSource, sourceCode, importOnly: true, preferredContactChannel, lastEventId: eventId })}
       )
       on conflict(legacy_id) do update set
-        contact_id=excluded.contact_id,
+        contact_id=coalesce(crm.conversations.contact_id,excluded.contact_id),
         lead_id=coalesce(crm.conversations.lead_id,excluded.lead_id),
         service_request_id=coalesce(crm.conversations.service_request_id,excluded.service_request_id),
         customer_name=coalesce(nullif(crm.conversations.customer_name,''),excluded.customer_name),
@@ -294,17 +315,10 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   }
 
   let createdLead = false;
-  const requestService = first(request?.service_key, request?.department_code).toLowerCase();
-  const requestNeedsFinanceDistribution = Boolean(
-    request &&
-    ["finance", "finance_sales"].includes(requestService) &&
-    (!request.assigned_to || !request.call_center_assigned_to),
-  );
-  // Repeated imports must not create a new service request or reclassify an
-  // existing customer's service, status or assignment. Only a truly new lead
-  // is classified. A matching open finance request may complete a missing
-  // assignment through classifyConversationService's idempotent reuse branch.
-  const shouldClassifyForDistribution = !lead || (requestNeedsFinanceDistribution && serviceKey === "finance");
+  // Only classify a truly new customer. In particular, a repeated finance
+  // import must not complete an old request's missing assignment or alter its
+  // department, branch, call-center representative or status.
+  const shouldClassifyForDistribution = !lead;
 
   if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
@@ -332,17 +346,13 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       from crm.conversations where id=${conversation.id}::uuid limit 1
     `;
   } else {
+    // Existing conversations retain their customer/request links, routing and
+    // ownership. Only fill genuinely missing links and record the new arrival.
     await sql`
       update crm.conversations set
-        lead_id=${lead.id}::uuid,
-        contact_id=${contact.id}::uuid,
-        service_request_id=coalesce(${request?.id || null}::uuid,service_request_id),
-        service_key=coalesce(${request?.service_key || lead.service_key || null},service_key),
-        department_code=coalesce(${request?.department_code || lead.department_code || null},department_code),
-        branch_code=coalesce(${request?.branch_code || lead.branch_code || null},branch_code),
-        assigned_to=coalesce(${request?.assigned_to || lead.assigned_to || null}::uuid,assigned_to),
-        call_center_assigned_to=coalesce(${request?.call_center_assigned_to || lead.call_center_assigned_to || null}::uuid,call_center_assigned_to),
-        classification_state=case when ${Boolean(request)} then 'classified' else classification_state end,
+        lead_id=coalesce(lead_id,${lead.id}::uuid),
+        contact_id=coalesce(contact_id,${contact.id}::uuid),
+        service_request_id=coalesce(service_request_id,${request?.id || null}::uuid),
         metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, sourceCode, importOnly: true, preferredContactChannel, lastEventId: eventId })}::jsonb,
         updated_at=now()
       where id=${conversation.id}::uuid
@@ -352,9 +362,9 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   const existingExtraData = objectValue(lead.extra_data);
   const nextExtraData: JsonObject = {
     ...existingExtraData,
-    importOnly: true,
-    preferredContactChannel,
-    outboundChannel: preferredContactChannel,
+    // Provenance is recorded separately; repeat imports never reset customer
+    // preferences, the original source or any operational CRM field.
+    ...(!existedBefore ? { importOnly: true, preferredContactChannel, outboundChannel: preferredContactChannel } : {}),
     latestSource: sourceName,
     latestSourceCode: sourceCode,
     latestSourceAt: occurredAt,
@@ -363,45 +373,66 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     lastImportPayload: toJsonValue(data.raw),
     ...(campaign.sheetCampaignName ? { lastSheetCampaignName: campaign.sheetCampaignName } : {}),
     ...(campaign.metaPlatform ? { lastMetaPlatform: campaign.metaPlatform } : {}),
-    ...(isMarketingForm ? { marketingFormPurchasePreference: first(payload?.purchasePreference, 'undecided') } : {}),
+    ...(!existedBefore && isMarketingForm ? { marketingFormPurchasePreference: first(payload?.purchasePreference, 'undecided') } : {}),
   };
-  if (sourceCode === "installment_calculator") {
+  if (!existedBefore && sourceCode === "installment_calculator") {
     nextExtraData.calculator = toJsonValue(data.calculator);
     nextExtraData.rawCalculatorRow = toJsonValue(data.raw);
     nextExtraData.calculatorLastEventAt = occurredAt;
   }
-  const nextSourceHistory = sourceHistory(lead.source_history, sourceCode, sourceName, occurredAt);
+  const originalSource = first(lead.source_code, lead.platform_code);
+  const originalSourceAt = lead.registered_at || lead.created_at || occurredAt;
+  const recordedHistory = existedBefore && originalSource
+    ? sourceHistory(lead.source_history, originalSource, first(lead.source_name, originalSource),
+        originalSourceAt instanceof Date ? originalSourceAt.toISOString() : first(originalSourceAt, occurredAt))
+    : lead.source_history;
+  const nextSourceHistory = sourceHistory(recordedHistory, sourceCode, sourceName, occurredAt);
 
-  [lead] = await sql<any[]>`
-    update crm.leads set
-      contact_id=${contact.id}::uuid,
-      customer_name=case when ${existedBefore} then coalesce(nullif(customer_name,''),${data.customerName}) else ${data.customerName} end,
-      phone=case when ${existedBefore} then coalesce(nullif(phone,''),${data.phone || data.phoneNormalized}) else ${data.phone || data.phoneNormalized} end,
-      phone_normalized=coalesce(nullif(phone_normalized,''),${data.phoneNormalized}),
-      source_code=${sourceCode},
-      source_name=${sourceName},
-      platform_code=${sourceCode},
-      service_key=${lead.service_key || serviceKey},
-      department_code=${lead.department_code || departmentCode},
-      branch_code=${lead.branch_code || 'online'},
-      payment_type=case when ${existedBefore} then payment_type else ${serviceKey === 'cash' ? 'كاش' : 'تمويل'} end,
-      car_name=case when ${existedBefore} then coalesce(nullif(car_name,''),${data.carName || null}) else ${data.carName || null} end,
-      car_type=case when ${existedBefore} then coalesce(nullif(car_type,''),${data.carName || null}) else ${data.carName || null} end,
-      campaign_name=case when ${existedBefore} then coalesce(nullif(campaign_name,''),${campaign.campaignName || null}) else ${campaign.campaignName || null} end,
-      location=case when ${existedBefore} then coalesce(nullif(location,''),${data.location || null}) else ${data.location || null} end,
-      age=case when ${existedBefore} then coalesce(age,${data.age}) else ${data.age} end,
-      salary=case when ${existedBefore} then coalesce(salary,${data.salary}) else ${data.salary} end,
-      obligation=case when ${existedBefore} then coalesce(obligation,${data.obligation}) else ${data.obligation} end,
-      salary_bank=case when ${existedBefore} then coalesce(nullif(salary_bank,''),${data.salaryBank || null}) else ${data.salaryBank || null} end,
-      finance_type=case when ${existedBefore} then coalesce(nullif(finance_type,''),${data.financeType || null}) else ${data.financeType || null} end,
-      notes=case when ${existedBefore} then coalesce(nullif(notes,''),${data.notes || null}) else ${data.notes || null} end,
-      registered_at=coalesce(registered_at,${occurredAt}::timestamptz),
-      source_history=${sql.json(nextSourceHistory)},
-      extra_data=${sql.json(nextExtraData)},
-      updated_at=now()
-    where id=${lead.id}::uuid
-    returning *,id::text,contact_id::text,current_request_id::text,assigned_to::text,call_center_assigned_to::text
-  `;
+  if (existedBefore) {
+    // A repeated lead is provenance-only. It must never mutate the source,
+    // status, contact ownership, request, representative or customer details.
+    [lead] = await sql<any[]>`
+      update crm.leads set
+        source_history=${sql.json(nextSourceHistory)},
+        extra_data=${sql.json(nextExtraData)},
+        updated_at=now()
+      where id=${lead.id}::uuid and is_deleted=false
+      returning *,id::text,contact_id::text,current_request_id::text,assigned_to::text,call_center_assigned_to::text
+    `;
+  } else {
+    // Only a genuinely new customer receives the imported source and details.
+    [lead] = await sql<any[]>`
+      update crm.leads set
+        contact_id=${contact.id}::uuid,
+        customer_name=${data.customerName},
+        phone=${data.phone || data.phoneNormalized},
+        phone_normalized=coalesce(nullif(phone_normalized,''),${data.phoneNormalized}),
+        source_code=${sourceCode},
+        source_name=${sourceName},
+        platform_code=${sourceCode},
+        service_key=${lead.service_key || serviceKey},
+        department_code=${lead.department_code || departmentCode},
+        branch_code=${lead.branch_code || 'online'},
+        payment_type=${serviceKey === 'cash' ? 'كاش' : 'تمويل'},
+        car_name=${data.carName || null},
+        car_type=${data.carName || null},
+        campaign_name=${campaign.campaignName || null},
+        location=${data.location || null},
+        age=${data.age},
+        salary=${data.salary},
+        obligation=${data.obligation},
+        salary_bank=${data.salaryBank || null},
+        finance_type=${data.financeType || null},
+        notes=${data.notes || null},
+        registered_at=coalesce(registered_at,${occurredAt}::timestamptz),
+        source_history=${sql.json(nextSourceHistory)},
+        extra_data=${sql.json(nextExtraData)},
+        updated_at=now()
+      where id=${lead.id}::uuid and is_deleted=false
+      returning *,id::text,contact_id::text,current_request_id::text,assigned_to::text,call_center_assigned_to::text
+    `;
+  }
+  if (!lead) throw new Error("تعذر حفظ الليد بعد التحقق من حالته");
 
   await sql`
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_name,note,details,created_at)
@@ -410,7 +441,8 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       ${sql.json({ eventId, routeSource, sourceCode, sourceName, preferredContactChannel, existedBefore, campaignName: campaign.campaignName, metaPlatform: campaign.metaPlatform })},${occurredAt}::timestamptz
     where not exists(
       select 1 from crm.lead_events
-      where lead_id=${lead.id}::uuid and event_type='lead_import_received' and details->>'eventId'=${eventId}
+      where lead_id=${lead.id}::uuid and event_type='lead_import_received'
+        and details->>'eventId'=${eventId} and details->>'routeSource'=${routeSource} and details->>'sourceCode'=${sourceCode}
     )
   `;
 

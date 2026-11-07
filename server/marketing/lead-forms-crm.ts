@@ -75,68 +75,67 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
           (phone_normalized=${phone} or right(regexp_replace(coalesce(phone_normalized,phone,''),'\\D','','g'),9)=right(${phone},9))
         order by updated_at desc limit 1
       `;
-      if (prior) {
-        await sql`update marketing.form_leads set crm_status='existing',crm_lead_id=${prior.id}::uuid,
-          crm_error=null,crm_synced_at=now() where id=${row.id}::uuid`;
-        return { status: 'existing', leadId: prior.id };
-      }
-
+      // Existing CRM customers still pass through the protected import handler
+      // so their NEW platform appears in source_history and lead_events.
+      // They bypass team eligibility and never enter the classification branch.
       const sourceCode = crmSourceForForm(row.source);
       const carName = findAnswer(row, ['السيارة', 'السياره', 'الماركة', 'ماركة'], ['vehicle', 'car']);
       const purchasePreference = formPurchasePreference(row.answers, row.answer_labels);
-      // Marketing forms alone choose an import department from the submitted answer.
-      // An undecided customer's intake is balanced between the available cash and
-      // finance teams. Never create an unassigned CRM lead when a team has no staff.
-      const eligibleTeams = await sql<{department_code: string}[]>`
-        select distinct d.code as department_code
-        from core.users u
-        join core.user_system_departments usd on usd.user_id=u.id and usd.system_code='crm'
-        join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
-        where u.is_active=true and coalesce(u.is_archived,false)=false
-          and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
-          and d.code in ('cash_sales','finance_sales')
-          and exists (
-            select 1 from core.user_system_branches usb
-            join core.branches b on b.id=usb.branch_id and b.is_active=true
-            where usb.user_id=u.id and usb.system_code='crm' and b.code not in ('online','website')
-            union all
-            select 1 from core.user_branches ub
-            join core.branches b on b.id=ub.branch_id and b.is_active=true
-            where ub.user_id=u.id and b.code not in ('online','website')
-              and not exists (select 1 from core.user_system_branches x where x.user_id=u.id and x.system_code='crm')
-          )
-        union
-        select distinct d.code as department_code
-        from core.users u
-        join core.user_departments ud on ud.user_id=u.id
-        join core.departments d on d.id=ud.department_id and d.is_active=true
-        where u.is_active=true and coalesce(u.is_archived,false)=false
-          and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
-          and d.code in ('cash_sales','finance_sales')
-          and not exists (select 1 from core.user_system_departments x where x.user_id=u.id and x.system_code='crm')
-          and exists (
-            select 1 from core.user_branches ub
-            join core.branches b on b.id=ub.branch_id and b.is_active=true
-            where ub.user_id=u.id and b.code not in ('online','website')
-          )
-      `;
-      const available = new Set(eligibleTeams.map(team => team.department_code));
-      // Explicit cash intake may fall back to the finance team, while an
-      // undecided customer is routed only to departments with their own staff.
-      const hasCashTeam = available.has('cash_sales');
-      const canFinance = available.has('finance_sales');
-      const canCash = hasCashTeam || canFinance;
-      let serviceKey: 'cash' | 'finance';
-      if (purchasePreference === 'cash') serviceKey = 'cash';
-      else if (purchasePreference === 'finance') serviceKey = 'finance';
-      else {
-        const preferred = undecidedFormService(row.id);
-        serviceKey = preferred === 'cash'
-          ? (hasCashTeam ? 'cash' : 'finance')
-          : (canFinance ? 'finance' : 'cash');
-      }
-      if ((serviceKey === 'cash' && !canCash) || (serviceKey === 'finance' && !canFinance)) {
-        throw new Error('لا يوجد مندوب نشط مؤهل لاستقبال ليد الفورم في القسم المحدد');
+      let serviceKey: 'cash' | 'finance' = purchasePreference === 'cash' ? 'cash' : 'finance';
+      if (!prior) {
+        // Marketing forms alone choose an import department from the submitted answer.
+        // An undecided customer's intake is balanced between the available cash and
+        // finance teams. Never create an unassigned CRM lead when a team has no staff.
+        const eligibleTeams = await sql<{department_code: string}[]>`
+          select distinct d.code as department_code
+          from core.users u
+          join core.user_system_departments usd on usd.user_id=u.id and usd.system_code='crm'
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where u.is_active=true and coalesce(u.is_archived,false)=false
+            and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+            and d.code in ('cash_sales','finance_sales')
+            and exists (
+              select 1 from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=u.id and usb.system_code='crm' and b.code not in ('online','website')
+              union all
+              select 1 from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id and b.code not in ('online','website')
+                and not exists (select 1 from core.user_system_branches x where x.user_id=u.id and x.system_code='crm')
+            )
+          union
+          select distinct d.code as department_code
+          from core.users u
+          join core.user_departments ud on ud.user_id=u.id
+          join core.departments d on d.id=ud.department_id and d.is_active=true
+          where u.is_active=true and coalesce(u.is_archived,false)=false
+            and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+            and d.code in ('cash_sales','finance_sales')
+            and not exists (select 1 from core.user_system_departments x where x.user_id=u.id and x.system_code='crm')
+            and exists (
+              select 1 from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id and b.code not in ('online','website')
+            )
+        `;
+        const available = new Set(eligibleTeams.map(team => team.department_code));
+        // Explicit cash intake may fall back to the finance team, while an
+        // undecided customer is routed only to departments with their own staff.
+        const hasCashTeam = available.has('cash_sales');
+        const canFinance = available.has('finance_sales');
+        const canCash = hasCashTeam || canFinance;
+        if (purchasePreference === 'cash') serviceKey = 'cash';
+        else if (purchasePreference === 'finance') serviceKey = 'finance';
+        else {
+          const preferred = undecidedFormService(row.id);
+          serviceKey = preferred === 'cash'
+            ? (hasCashTeam ? 'cash' : 'finance')
+            : (canFinance ? 'finance' : 'cash');
+        }
+        if ((serviceKey === 'cash' && !canCash) || (serviceKey === 'finance' && !canFinance)) {
+          throw new Error('لا يوجد مندوب نشط مؤهل لاستقبال ليد الفورم في القسم المحدد');
+        }
       }
       const eventId = `marketing-form:${row.id}`;
       const raw = {
@@ -162,7 +161,11 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
       const result = await processLeadImportEvent('marketing-form', eventId, payload);
       const crmLeadId = trim(result.lead?.id, 60);
       if (!crmLeadId) throw new Error('لم يتم إنشاء ليد في CRM');
-      await sql`update marketing.form_leads set crm_status='linked',crm_lead_id=${crmLeadId}::uuid,
+      // Another integration can register this phone after our initial lookup.
+      // The import processor resolves that race under its shared phone lock:
+      // report an existing link rather than claiming a new CRM customer.
+      const crmStatus = result.existedBefore ? 'existing' : 'linked';
+      await sql`update marketing.form_leads set crm_status=${crmStatus},crm_lead_id=${crmLeadId}::uuid,
         crm_error=null,crm_synced_at=now() where id=${row.id}::uuid`;
 
       if (result.createLead) {
@@ -180,7 +183,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
           dedupeKey: notificationDedupe('crm-channel-lead', 'marketing-form', eventId),
         }).catch(err => console.error('Marketing form CRM notification failed', err));
       }
-      return { status: 'linked', leadId: crmLeadId };
+      return { status: crmStatus, leadId: crmLeadId };
     } catch (error) {
       // The published form submission must remain stored even if CRM is temporarily unavailable.
       await sql`update marketing.form_leads set crm_status='failed',
