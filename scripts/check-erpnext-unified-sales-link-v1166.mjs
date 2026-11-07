@@ -13,7 +13,7 @@ expect("server/integrations/erpnext-sales-order.ts", "syncErpNextSalesOrder", "u
 expect("server/_erpnext-sales-order-normalizer.ts", 'integrationSource: "erpnext-webhook"');
 expect("server/_erpnext-sales-order-normalizer.ts", '"serial_no"', "VIN field alias");
 expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerName = alternateCustomer.name || accountingCustomerName');
-expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerPhone = alternateCustomer.name ? alternateCustomer.phone');
+expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerPhone = alternateCustomer.phone || accountingCustomerPhone', "user phone first, Customer phone fallback");
 expect("server/_erpnext-sales-order-sync.ts", '=== "to deliver and bill"', "only approved ERP status");
 reject("server/_erpnext-sales-order-sync.ts", '=== "completed"', "Completed status automation");
 expect("server/_erpnext-sales-order-sync.ts", "resolveErpNextPlatformUser(normalized.erpUserId)", "email-only user resolution");

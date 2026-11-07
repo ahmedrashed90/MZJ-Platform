@@ -1,0 +1,18 @@
+PASS: schema state is 1223
+PASS: friend-code ledger exists
+PASS: friend-code ledger is unique per referrer and buyer phone
+PASS: historical friend-code uses are backfilled
+PASS: sessions support unsold/new-customer identity
+PASS: legacy Owners sessions can be created and read
+PASS: cancelled orders release friend-code use
+PASS: OTP request accepts member or new-customer code record
+PASS: OTP verification creates legacy session when no sold member exists
+PASS: new customer portal profile exposes membership, points and customer code
+PASS: new-customer code is restricted to new_customer context
+PASS: friend-code lookup rejects same phone/code after previous order
+PASS: both commerce confirm paths reserve the friend-code phone pair
+PASS: friend code cannot be used by its owner as friend referral
+PASS: public login copy no longer requires completed purchase
+PASS: new-customer portal hides unavailable invite controls
+
+Owners open-login/referral-reuse checks: 16/16 passed.

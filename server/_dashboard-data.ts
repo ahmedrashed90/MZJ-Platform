@@ -5,6 +5,8 @@ import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
 import { getTrackingCountSummary } from "./_tracking-counts.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
+import { crmVisibleCustomerCohortSql, crmRegisteredCustomerCohortSql } from "./_crm-customer-cohort.js";
+import { userScope, crmLeadScopeSql } from "./_crm-utils.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
 
@@ -22,7 +24,7 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     generatedAt: new Date().toISOString(),
     range,
     sectionErrors: {},
-    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
+    crm: { totalCustomers: null, uniqueCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, newInRange: null, otherCustomers: null, representatives: [], recentConversations: [], newCustomersSeries: [] },
     marketing: { campaigns: null, agendas: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
@@ -55,58 +57,117 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
   if (canAccessSystem(user, "crm")) {
     try {
       await ensureCrmSchema();
-      const crmAccess = getSystemAccess(user, "crm");
-      const crmAll = crmAccess.dataScope === "all";
-      const crmAssigned = ["self","assigned","created_by_me","workflow_assigned"].includes(crmAccess.dataScope);
-      const crmBranches = crmAccess.branchCodes.length ? crmAccess.branchCodes : ["__none__"];
-      const crmDepartments = crmAccess.departmentCodes.length ? crmAccess.departmentCodes : ["__none__"];
-      const [[row], recent, series] = await Promise.all([
-        sql<any[]>`with scoped_leads as (
-          select * from crm.leads l
+      const crmScope = userScope(user);
+      const visibleLeadScope = crmLeadScopeSql(sql, crmScope);
+      // The platform month filter scopes the unique customer headline, open
+      // conversations, unanswered status, representatives and department pie
+      // to customers REGISTERED in the selected period. CRM's own historical
+      // status views deliberately retain their separate canonical cohort.
+      // Sales are independent dated transactions, including older customers.
+      const [row] = await sql<any[]>`
+        with scoped_input as (
+          select l.* from crm.leads l
           where l.is_deleted=false
-            and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
-            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
+            and ${crmRegisteredCustomerCohortSql(sql, from, to)}
+            and ${crmVisibleCustomerCohortSql(sql, from, to)}
+            and ${visibleLeadScope}
+        ), scoped_leads as (
+          select distinct on (coalesce(nullif(l.phone_normalized,''),nullif(regexp_replace(l.phone,'[^0-9]','','g'),''),l.id::text)) l.*
+          from scoped_input l
+          order by coalesce(nullif(l.phone_normalized,''),nullif(regexp_replace(l.phone,'[^0-9]','','g'),''),l.id::text),
+            coalesce(l.registered_at,l.created_at) desc,l.id desc
         ), scoped_sold as (
-          select
-            coalesce(st.department_code,l.department_code) as department_code,
+          select coalesce(st.department_code,l.department_code) as department_code,
             greatest(coalesce(st.quantity,1),1)::int as quantity
           from crm.sales_transactions st
           join crm.leads l on l.id=st.lead_id and l.is_deleted=false
           where coalesce(st.is_cancelled,false)=false
             and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
-            and (${crmAll}=true or (${crmAssigned}=true and (st.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (coalesce(st.branch_code,l.branch_code) in ${sql(crmBranches)} and coalesce(st.department_code,l.department_code) in ${sql(crmDepartments)}))
+            and ${visibleLeadScope}
+            and (not ${crmScope.branchManager}::boolean or coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),'')=any(${crmScope.branchCodes}::text[]))
+        ), open_counts as (
+          select l.department_code,count(*)::int as event_count
+          from crm.conversations c
+          join scoped_leads l on l.id=c.lead_id
+          where c.status='open' and c.closed_at is null
+            and coalesce(c.classification_state,'')<>'closed'
+          group by l.department_code
+        ), no_answer_counts as (
+          select l.department_code,count(*)::int as event_count
+          from scoped_leads l where l.status_label='لم يتم الرد'
+          group by l.department_code
+        ), sold_counts as (
+          select department_code,sum(quantity)::int as event_count
+          from scoped_sold group by department_code
+        ), department_activity as (
+          -- Activity is preserved for the independent conversation/no-answer/
+          -- transaction KPIs only. It does not define a unique customer.
+          select department_code,sum(opened)::int as opened,
+            sum(no_answer)::int as no_answer,sum(sold)::int as sold,
+            sum(opened+no_answer+sold)::int as total
+          from (
+            select department_code,event_count as opened,0::int as no_answer,0::int as sold from open_counts
+            union all
+            select department_code,0::int,event_count,0::int from no_answer_counts
+            union all
+            select department_code,0::int,0::int,event_count from sold_counts
+          ) activity_events
+          group by department_code
+        ), reps as (
+          select l.assigned_to::text as id,
+            coalesce(u.full_name,'غير موزع') as name,
+            coalesce(current_branch.name, case when l.assigned_to is null then l.branch_code end,'بدون فرع') as branch,
+            count(*)::int as customers
+          from scoped_leads l
+          left join core.users u on u.id=l.assigned_to
+          left join lateral (
+            select b.name from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+            where usb.user_id=l.assigned_to and usb.system_code='crm'
+            order by usb.is_primary desc,b.sort_order,b.name limit 1
+          ) current_branch on true
+          group by l.assigned_to,u.full_name,current_branch.name,
+            case when l.assigned_to is null then l.branch_code end
+        ), daily as (
+          select d.day::date as day,to_char(d.day,'DD/MM') as label,count(l.id)::int as value
+          from generate_series(${from}::date,${to}::date,interval '1 day') d(day)
+          left join scoped_leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=d.day::date
+          group by d.day order by d.day
         )
         select
           count(*)::int as total_customers,
-          count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
-          coalesce((select sum(quantity) from scoped_sold),0)::int as sold,
-          coalesce((select sum(quantity) from scoped_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
-          coalesce((select sum(quantity) from scoped_sold where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
+          count(*)::int as unique_customers,
+          coalesce((select sum(no_answer) from department_activity),0)::int as no_answer_customers,
+          coalesce((select sum(sold) from department_activity),0)::int as sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
+          coalesce((select sum(sold) from department_activity where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
           count(*) filter(where department_code='customer_service')::int as customer_service,
-          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as new_today,
-          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=date_trunc('week',now() at time zone 'Asia/Riyadh')::date)::int as new_this_week,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed')::int as open_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,'')) in ('cash_sales','wholesale','wholesale_sales'))::int as open_cash_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,'')) in ('finance_sales','call_center'))::int as open_finance_conversations,
-          (select count(*) from crm.conversations c join scoped_leads l on l.id=c.lead_id where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,''))='customer_service')::int as open_service_conversations
-        from scoped_leads`,
-        sql<any[]>`select c.id::text,coalesce(c.customer_name,l.customer_name,'عميل') as customer_name,coalesce(c.preview_text,'') as preview_text,c.last_message_at,coalesce(c.unread_count,0) as unread_count,coalesce(c.lead_id::text,'') as lead_id,coalesce(l.department_code,'') as department_code
-          from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false
-          where (coalesce(c.last_message_at,c.updated_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
-            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
-          order by c.last_message_at desc nulls last limit 5`,
-        sql<any[]>`select to_char(day,'DD/MM') as label,count(l.id)::int as value
-          from generate_series(${from}::date,${to}::date,interval '1 day') day
-          left join crm.leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=day::date and l.is_deleted=false
-            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
-          group by day order by day`,
-      ]);
+          count(*) filter(where department_code not in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center','customer_service') or department_code is null)::int as other_customers,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_today,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=(date_trunc('week',(now() at time zone 'Asia/Riyadh') + interval '1 day') - interval '1 day')::date
+            and (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_this_week,
+          count(*) filter(where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date)::int as new_in_range,
+          coalesce((select sum(opened) from department_activity),0)::int as open_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as open_cash_conversations,
+          coalesce((select sum(opened) from department_activity where department_code in ('finance_sales','call_center')),0)::int as open_finance_conversations,
+          coalesce((select sum(opened) from department_activity where department_code='customer_service'),0)::int as open_service_conversations,
+          (select coalesce(json_agg(r order by r.customers desc,r.name),'[]'::json) from reps r) as representatives,
+          (select coalesce(json_agg(d order by d.day),'[]'::json) from daily d) as daily_series
+        from scoped_leads
+      `;
       data.crm = {
-        totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations), openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSold: asNumber(row?.cash_sold), financeSold: asNumber(row?.finance_sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
-        recentConversations: recent.map((item) => ({ id: item.id, customerName: item.customer_name, preview: item.preview_text, time: item.last_message_at ? new Date(item.last_message_at).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" }) : "", unreadCount: asNumber(item.unread_count), leadId: item.lead_id, department: item.department_code === "finance_sales" || item.department_code === "call_center" ? "finance" : item.department_code === "customer_service" ? "service" : "cash" })),
-        newCustomersSeries: series.map((item) => ({ label: item.label, value: asNumber(item.value) })),
+        totalCustomers: asNumber(row?.total_customers), uniqueCustomers: asNumber(row?.unique_customers), openConversations: asNumber(row?.open_conversations),
+        openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations),
+        openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers),
+        sold: asNumber(row?.sold), cashSold: asNumber(row?.cash_sold), financeSold: asNumber(row?.finance_sold),
+        cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service),
+        otherCustomers: asNumber(row?.other_customers), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week), newInRange: asNumber(row?.new_in_range),
+        representatives: Array.isArray(row?.representatives) ? row.representatives.map((rep: any) => ({ id: String(rep.id || ''), name: String(rep.name || 'غير موزع'), branch: String(rep.branch || 'بدون فرع'), customers: asNumber(rep.customers) })) : [],
+        recentConversations: [],
+        newCustomersSeries: Array.isArray(row?.daily_series) ? row.daily_series.map((item: any) => ({ label: String(item.label || ''), value: asNumber(item.value) })) : [],
       };
     } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
   }
@@ -133,10 +194,9 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
 
   if (canAccessSystem(user, "tracking")) {
     try {
-      // The unified dashboard must mirror the Tracking system counters exactly,
-      // so these figures intentionally use the canonical all-active-orders count
-      // rather than the dashboard date range used by the other dashboard cards.
-      const counts = await getTrackingCountSummary(sql, user);
+      // Period reports use the same canonical Tracking count helper and the
+      // selected dashboard date range. Live inventory remains a current snapshot.
+      const counts = await getTrackingCountSummary(sql, user, { from, to });
       data.tracking = { requests: counts.total, inProgress: counts.inProgress, completed: counts.completed };
       data.operations.salesTracking = {
         total: counts.total,
@@ -176,8 +236,8 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         group by l.code,l.name,l.sort_order order by l.sort_order`,
       sql<any[]>`select
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and coalesce(l.code,'')<>'agency')::int as branch_actual_total,
-        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and l.code='agency')::int as agency,
-        count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")})::int as available_for_sale,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "agency_inventory")} and l.code='agency')::int as agency,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")} and coalesce(l.code,'')<>'agency')::int as available_for_sale,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")} and coalesce(l.code,'')<>'agency')::int as reserved,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,

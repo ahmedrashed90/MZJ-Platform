@@ -30,9 +30,9 @@ expect("Dashboard UI exposes from/to selection", dashboardPage.includes("مدة 
 
 expect("CRM reports resolve the salesperson from the ERP mapping or lead assignment", reports.includes("coalesce(erp.platform_user_id,l.assigned_to)") && reports.includes("report_assigned_name"));
 expect("CRM reports use the primary CRM department", reports.includes("core.user_system_departments") && reports.includes("usd.system_code='crm'"));
-expect("Wholesale reporting is branchless", reports.includes("primary_department.code in ('wholesale','wholesale_sales') then null") && reports.includes('"قسم الجملة"'));
+expect("Wholesale reporting keeps the selected or canonical wholesale branch", reports.includes("primary_department.code in ('wholesale','wholesale_sales')") && reports.includes("wholesale_branch.code") && reports.includes('"قسم الجملة"'));
 expect("CRM metadata exposes system-specific CRM departments", meta.includes("core.user_system_departments") && meta.includes("crm_departments.codes"));
-expect("ERP sales allow wholesale without assigning a branch", erpSync.includes("allowsBranchlessCrmSales") && erpSync.includes("candidate.branch_code = null"));
+expect("ERP sales require and preserve a wholesale branch", erpSync.includes("coalesce(br.code,wholesale_branch.code)") && erpSync.includes('status: "platform_branch_not_configured"') && !erpSync.includes("allowsBranchlessCrmSales"));
 expect("KPI agents require a sales department and primary CRM branch", kpi.includes("primary_department.code in ('cash_sales','finance_sales')") && kpi.includes("core.user_system_branches"));
 expect("Branch KPI visibility is not widened by speed/efficiency edit rights", kpi.includes('scope.all || hasPermission(user, "crm.kpi.rate_all")') && !kpi.includes("evaluatorCanSeeAllAgents"));
 

@@ -15,6 +15,8 @@ import { UnifiedReportsPage } from "./pages/UnifiedReportsPage";
 import { UnifiedDatabasePage } from "./pages/UnifiedDatabasePage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { HelpPage } from "./pages/HelpPage";
+import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage";
+import { TermsOfServicePage } from "./pages/TermsOfServicePage";
 import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
@@ -27,23 +29,34 @@ const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((mod
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmContactsPage = lazy(() => import("./crm/pages/CrmContactsPage").then((module) => ({ default: module.CrmContactsPage })));
+const CashQrRegistrationPage = lazy(() => import("./crm/pages/CashQrRegistrationPage").then((module) => ({ default: module.CashQrRegistrationPage })));
 const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const MarketingLeadFormsPage = lazy(() => import("./marketing/lead-forms/LeadFormsPage").then(m => ({default:m.LeadFormsPage})));
+const PublicLeadFormPage = lazy(() => import("./marketing/lead-forms/PublicLeadFormPage").then(m => ({default:m.PublicLeadFormPage})));
 const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
 const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
-const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPage").then((module) => ({ default: module.CreateCampaignPage })));
-const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
+const MarketingRatingsPage = lazy(() => import("./marketing/pages/MarketingRatingsPage").then(module => ({ default: module.MarketingRatingsPage })));
+const MarketingCreatePage = lazy(() => import("./marketing/workflow/CreatePage").then(module => ({ default: module.MarketingCreatePage })));
+const ProductsPage = lazy(() => import("./marketing/pages/ProductsPage").then(module => ({ default: module.ProductsPage })));
 const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingDatabasePage").then((module) => ({ default: module.MarketingDatabasePage })));
 const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
 const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
 const EngagementPage = lazy(() => import("./marketing/pages/EngagementPage").then((module) => ({ default: module.EngagementPage })));
-const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").then((module) => ({ default: module.MonitoringPage })));
-const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
-const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const SubscriptionsPage = lazy(() => import("./marketing/pages/SubscriptionsPage").then((module) => ({ default: module.SubscriptionsPage })));
+const AttendancePage = lazy(() => import("./attendance/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const TaskFolderPage = lazy(() => import("./marketing/pages/TaskFolderPage").then((module) => ({ default: module.TaskFolderPage })));
+const OwnersCommunityPage = lazy(() => import("./owners/OwnersCommunityPage").then((module) => ({ default: module.OwnersCommunityPage })));
+const OwnersMemberPreviewPage = lazy(() => import("./owners/OwnersMemberPreviewPage").then((module) => ({ default: module.OwnersMemberPreviewPage })));
+const OwnersPortalPage = lazy(() => import("./owners/OwnersPortalPage").then((module) => ({ default: module.OwnersPortalPage })));
+const OwnersInvitePage = lazy(() => import("./owners/OwnersInvitePage").then((module) => ({ default: module.OwnersInvitePage })));
+const WebsiteLayout = lazy(() => import("./website/WebsiteLayout").then((module) => ({ default: module.WebsiteLayout })));
+const WebsiteStockPage = lazy(() => import("./website/WebsiteStockPage").then((module) => ({ default: module.WebsiteStockPage })));
+const WebsiteImagesPage = lazy(() => import("./website/WebsiteImagesPage").then((module) => ({ default: module.WebsiteImagesPage })));
 
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
@@ -108,19 +121,25 @@ function PlatformRoutes() {
           </Route>
           <Route path="/marketing" element={<SystemGuard system="marketing"><MarketingLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="marketing.dashboard.view"><MarketingDashboardPage /></PermissionGuard>} />
-            <Route path="create-campaign" element={<PermissionGuard permission="marketing.create_campaign.view"><CreateCampaignPage /></PermissionGuard>} />
-            <Route path="create-agenda" element={<PermissionGuard permission="marketing.create_agenda.view"><CreateAgendaPage /></PermissionGuard>} />
+            <Route path="create-campaign" element={<Navigate to="/marketing/create?mode=campaign" replace />} />
+            <Route path="create-agenda" element={<Navigate to="/marketing/create?mode=agenda" replace />} />
+            <Route path="create" element={<PermissionGuard permission="marketing.create.view"><MarketingCreatePage /></PermissionGuard>} />
+            <Route path="products" element={<PermissionGuard permission="marketing.products.view"><ProductsPage /></PermissionGuard>} />
             <Route path="database" element={<PermissionGuard permission="marketing.database.view"><MarketingDatabasePage /></PermissionGuard>} />
             <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
             <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><Navigate to="/settings?section=marketing&tab=platforms" replace /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
             <Route path="engagement" element={<PermissionGuard permission="marketing.engagement.view"><EngagementPage /></PermissionGuard>} />
-            <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />
-            <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
+            <Route path="ratings" element={<PermissionGuard permission="marketing.dashboard.view"><MarketingRatingsPage /></PermissionGuard>} />
+            <Route path="monitoring" element={<Navigate to="/marketing" replace />} />
+            <Route path="calendar" element={<Navigate to="/marketing/receipt-calendar" replace />} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
             <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
+            <Route path="subscriptions" element={<PermissionGuard permission="marketing.subscriptions.view"><SubscriptionsPage /></PermissionGuard>} />
+            <Route path="lead-forms" element={<PermissionGuard permission="marketing.lead_forms.view"><MarketingLeadFormsPage /></PermissionGuard>} />
+            <Route path="task-folder" element={<TaskFolderPage />} />
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
-            <Route path="attendance" element={<PermissionGuard permission="marketing.attendance.view"><AttendancePage /></PermissionGuard>} />
+            <Route path="attendance" element={<Navigate to="/attendance" replace />} />
           </Route>
           <Route path="/operations" element={<SystemGuard system="operations"><OperationsLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="operations.inventory.view"><InventoryPage /></PermissionGuard>} />
@@ -139,6 +158,13 @@ function PlatformRoutes() {
             <Route path="archive" element={<PermissionGuard permission="tracking.archive.view"><TrackingOrdersPage archivedOnly /></PermissionGuard>} />
             <Route path="delete" element={<PermissionGuard permission="tracking.delete.view"><TrackingDeletePage /></PermissionGuard>} />
           </Route>
+          <Route path="/website" element={<SystemGuard system="website"><WebsiteLayout /></SystemGuard>}>
+            <Route index element={<PermissionGuard permission="website.stock.view"><WebsiteStockPage /></PermissionGuard>} />
+            <Route path="images" element={<PermissionGuard permission="website.stock.view"><WebsiteImagesPage /></PermissionGuard>} />
+          </Route>
+          <Route path="/owners-community/member/:kind/:id" element={<PermissionGuard permission="owners.community.view"><OwnersMemberPreviewPage /></PermissionGuard>} />
+          <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
+          <Route path="/attendance" element={<PermissionGuard permission="platform.superadmin"><AttendancePage /></PermissionGuard>} />
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />
@@ -156,7 +182,24 @@ export default function App() {
   const { loading, status, user } = useAuth();
   const location = useLocation();
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
+  const isPublicOwners = ["/club", "/club/", "/owners", "/owners/"].includes(location.pathname) || location.pathname.startsWith("/club/invite/") || location.pathname.startsWith("/owners/invite/");
+  const isPublicCashQr = location.pathname === "/cash-register" || location.pathname === "/cash-register/";
+  const isPublicLegal = ["/privacy", "/privacy/", "/terms", "/terms/"].includes(location.pathname);
+  const isPublicLeadForm = /^\/forms\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(location.pathname);
 
+  if (isPublicLegal) {
+    return (
+      <Routes>
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsOfServicePage />} />
+      </Routes>
+    );
+  }
+  if (isPublicLeadForm) {
+    return <Suspense fallback={<div className="crm-loading-panel">جاري تحميل النموذج...</div>}>
+      <Routes><Route path="/forms/:slug" element={<PublicLeadFormPage />} /></Routes>
+    </Suspense>;
+  }
   if (loading) return <PlatformLoadingPage />;
   if (isPublicTracking) {
     return (
@@ -166,6 +209,25 @@ export default function App() {
           <Route path="/track.html" element={<Navigate to={`/track${location.search}`} replace />} />
           <Route path="/Test-Track.html" element={<Navigate to={`/track${location.search}`} replace />} />
         </Routes>
+      </Suspense>
+    );
+  }
+  if (isPublicOwners) {
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل MZJ Club Community...</div>}>
+        <Routes>
+          <Route path="/club" element={<OwnersPortalPage />} />
+          <Route path="/club/invite/:code" element={<OwnersInvitePage />} />
+          <Route path="/owners" element={<OwnersPortalPage />} />
+          <Route path="/owners/invite/:code" element={<OwnersInvitePage />} />
+        </Routes>
+      </Suspense>
+    );
+  }
+  if (isPublicCashQr) {
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل نموذج التسجيل...</div>}>
+        <Routes><Route path="/cash-register" element={<CashQrRegistrationPage />} /></Routes>
       </Suspense>
     );
   }

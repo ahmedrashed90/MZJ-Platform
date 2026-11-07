@@ -1,0 +1,323 @@
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowClockwise, ArrowDown, ArrowUp, ChartBar, CheckCircle, ClipboardText, Copy, Database, Eye, FileArrowDown, FloppyDisk, Gear, LinkSimple, Monitor, PauseCircle, PencilSimple, PlayCircle, Plus, ShieldCheck, DeviceMobile, SquaresFour, Table, Trash, TrendUp, UsersThree, WarningCircle, X } from '@phosphor-icons/react';
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useAuth } from '../../auth/AuthContext';
+import { hasPermission } from '../../systemAccess';
+import { DEFAULT_FORM_CONFIG, FORM_TEMPLATES, displayContactTitle, type FormConfig, type FormField, type FormTemplate, type LeadForm, type LeadRow } from '../../../shared/lead-forms';
+import { formsApi, formLink, slugify, type FormListResponse, type FormStats, type LeadListResponse } from './api';
+import { LeadFormRenderer, type RendererForm } from './LeadFormRenderer';
+import { SheetMappingPanel } from './SheetMappingPanel';
+import { FormVisualDesigner } from './FormVisualDesigner';
+import { ConditionalChoicesEditor } from './ConditionalChoicesEditor';
+import { FormTemplateThumbnail } from './FormTemplateThumbnail';
+import { createTemplateDesign } from '../../../shared/lead-form-design';
+import type { SavedFormDesign } from '../../../shared/lead-forms';
+import { DEFAULT_LEAD_FORM_PIXELS, type LeadFormPixelPlatform, type LeadFormPixelSettings } from '../../../shared/lead-form-pixels';
+import './lead-forms.css';
+
+type Tab='dashboard'|'library'|'builder'|'manage'|'leads'|'reports'|'sheets'|'settings';
+const tabs: { id:Tab;label:string;permission:string;icon:typeof SquaresFour }[] = [
+  {id:'dashboard',label:'الداش بورد',permission:'marketing.lead_forms.reports.view',icon:SquaresFour},
+  {id:'library',label:'مكتبة التصاميم',permission:'marketing.lead_forms.view',icon:SquaresFour},
+  {id:'builder',label:'إنشاء وتصميم فورم',permission:'marketing.lead_forms.create',icon:PencilSimple},
+  {id:'manage',label:'إدارة الفورمات',permission:'marketing.lead_forms.view',icon:ClipboardText},
+  {id:'leads',label:'قاعدة بيانات الليدات',permission:'marketing.lead_forms.leads.view',icon:Database},
+  {id:'reports',label:'التقارير والتحليلات',permission:'marketing.lead_forms.reports.view',icon:ChartBar},
+  {id:'sheets',label:'Google Sheets',permission:'marketing.lead_forms.sheets.manage',icon:Table},
+  {id:'settings',label:'الإعدادات',permission:'marketing.lead_forms.view',icon:Gear},
+];
+const int=(value:number)=>Number(value||0).toLocaleString('ar-SA-u-nu-latn');
+const pct=(visits:number,leads:number)=>visits ? `${(100*leads/visits).toFixed(1)}%`:'0%';
+const statusLabel=(v:string)=>({published:'منشور',draft:'مسودة',paused:'متوقف',archived:'مؤرشف'} as Record<string,string>)[v]||v;
+const blank=()=>structuredClone(DEFAULT_FORM_CONFIG);
+const csvEscape=(value:unknown)=>`"${String(value??'').replace(/^([\s]*[=+@-])/,'\'$1').replace(/"/g,'""')}"`;
+function downloadCsv(rows:LeadRow[]) {
+  const header=['التاريخ','اسم الفورم','اسم العميل','الجوال','المصدر','الحملة','الوسيط','رقم الإعلان','إجابات الفورم','مزامنة الشيت'];
+  const result=[header,...rows.map(r=>[r.created_at,r.form_title,r.name,r.phone,r.source,r.campaign,r.medium,r.ad_id,JSON.stringify(r.answers),r.sheet_status])];
+  const content='\ufeff'+result.map(columns=>columns.map(csvEscape).join(',')).join('\r\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:'text/csv;charset=utf-8'}));a.download=`MZJ-Form-Leads-${new Date().toISOString().slice(0,10)}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+const copyLink=async(slug:string)=>{try{await navigator.clipboard.writeText(formLink(slug));}catch{const area=document.createElement('textarea');area.value=formLink(slug);document.body.append(area);area.select();document.execCommand('copy');area.remove();}};
+const normalizeForm=(form:LeadForm):LeadForm=>({...form,config:form.config?.fields?.length?form.config:blank(),sheet_columns:form.sheet_columns||[]});
+const previewForm=(template:FormTemplate,config:FormConfig=blank(),title='عرض سيارة') : RendererForm =>({template,config,title,description:'جاوب على بعض الأسئلة وسيتم التواصل معك'});
+/** Render actual question labels (including a submission-time snapshot), never opaque q_xxx keys. */
+function readableAnswers(row:LeadRow,forms:LeadForm[]) {
+  const form=forms.find(item=>item.id===row.form_id);
+  const labels=new Map<string,string>();
+  for(const field of form?.published_config?.fields||[])labels.set(field.id,field.label);
+  for(const field of form?.config?.fields||[])if(!labels.has(field.id))labels.set(field.id,field.label);
+  const builtIn:Record<string,string>={vehicle:'السيارة المطلوبة',purchase:'طريقة الشراء',timeline:'موعد الشراء'};
+  return Object.entries(row.answers||{}).map(([id,value],index)=>({
+    id, label:row.answer_labels?.[id]||labels.get(id)||builtIn[id]||`سؤال سابق ${index+1}`,
+    value:String(value??'').trim()||'—',
+  }));
+}
+const crmStatusLabel:Record<string,string>={linked:'تم الربط',existing:'موجود في CRM',failed:'فشل النقل',pending:'قيد الربط',not_requested:'سجل سابق'};
+
+
+export function LeadFormsPage(){
+  const {user}=useAuth();
+  const can=(suffix:string)=>hasPermission(user,`marketing.lead_forms.${suffix}`);
+  const allowedTabs=tabs.filter(t=>t.id==='builder' ? (can('create') || can('edit')) : hasPermission(user,t.permission));
+  const [tab,setTab]=useState<Tab>(()=>{const requested=new URLSearchParams(window.location.search).get('lf');return tabs.some(t=>t.id===requested)?requested as Tab:'dashboard';});
+  const [forms,setForms]=useState<LeadForm[]>([]),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [selected,setSelected]=useState<string>(''),[draft,setDraft]=useState<LeadForm|null>(null);
+  const [newTitle,setNewTitle]=useState(''),[newSlug,setNewSlug]=useState(''),[newTemplate,setNewTemplate]=useState<FormTemplate>('steps');
+  const [savedDesigns,setSavedDesigns]=useState<SavedFormDesign[]>([]),[presetId,setPresetId]=useState('');
+  const [preview,setPreview]=useState<RendererForm|null>(null),[previewDevice,setPreviewDevice]=useState<'phone'|'desktop'>('phone');
+  const [linkForm,setLinkForm]=useState<LeadForm|null>(null),[linkPlatform,setLinkPlatform]=useState('meta'),[linkCampaign,setLinkCampaign]=useState(''),[linkAdId,setLinkAdId]=useState('');
+  const [stats,setStats]=useState<FormStats|null>(null),[statsBusy,setStatsBusy]=useState(false);
+  const statsRequestId=useRef(0);
+  const [from,setFrom]=useState(()=>new Date(Date.now()-29*86400000).toISOString().slice(0,10));
+  const [to,setTo]=useState(()=>new Date().toISOString().slice(0,10));
+  const [statsForm,setStatsForm]=useState(''),[leads,setLeads]=useState<LeadRow[]>([]),[leadsBusy,setLeadsBusy]=useState(false),[leadsSearch,setLeadsSearch]=useState(''),[leadsForm,setLeadsForm]=useState('');
+  const [leadsQuery,setLeadsQuery]=useState(''),[answersLead,setAnswersLead]=useState<LeadRow|null>(null);
+  const [clearPreview,setClearPreview]=useState<{formId:string;summary:{leads:number;visits:number;steps:number}}|null>(null);
+  const [clearConfirmation,setClearConfirmation]=useState('');
+  const leadsRequestId=useRef(0);
+  const canViewLeads=can('leads.view');
+  const canViewReports=can('reports.view');
+  const canDeleteLeads=can('leads.delete');
+  const [sheetStatus,setSheetStatus]=useState<{configured:boolean;serviceEmail:string}|null>(null);
+  const [pixels,setPixels]=useState<LeadFormPixelSettings>(DEFAULT_LEAD_FORM_PIXELS);
+  const [pixelBusy,setPixelBusy]=useState(false);
+  const [pixelsLoaded,setPixelsLoaded]=useState(false);
+  const setActive=(value:Tab)=>{setTab(value);setError('');setNotice('');const params=new URLSearchParams(window.location.search);params.set('lf',value);window.history.replaceState({},'',`${window.location.pathname}?${params.toString()}`);};
+  const reload=useCallback(async(quiet=false)=>{if(!quiet)setLoading(true);try{const response=await formsApi<FormListResponse>('list');setForms(response.forms.map(normalizeForm));}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل الفورمات');}finally{if(!quiet)setLoading(false);}},[]);
+  useEffect(()=>{void reload();},[reload]);
+  const reloadDesigns=useCallback(async()=>{try{const data=await formsApi<{ok:true;templates:SavedFormDesign[]}>('design_templates');setSavedDesigns(data.templates);}catch{/* Form templates are optional until the feature schema is initialized. */}},[]);
+  useEffect(()=>{void reloadDesigns();},[reloadDesigns]);
+  // Session verification updates user every 30s. Stats must depend on the effective
+  // boolean permission and filter values, not on a freshly created user object.
+  // Keep the previous chart mounted, deduplicate identical responses and ignore
+  // obsolete requests, so no white flash or chart reset occurs on session refresh.
+  const loadStats=useCallback(async()=>{
+    if(!canViewReports)return;
+    const requestId=++statsRequestId.current;
+    setStatsBusy(true);
+    try {
+      const next=await formsApi<FormStats>('stats',{from,to,id:statsForm});
+      if(requestId!==statsRequestId.current)return;
+      setStats(current=>JSON.stringify(current)===JSON.stringify(next)?current:next);
+    } catch(e) {
+      if(requestId===statsRequestId.current)setError(e instanceof Error?e.message:'تعذر جلب الإحصائيات');
+    } finally {if(requestId===statsRequestId.current)setStatsBusy(false);}
+  },[from,to,statsForm,canViewReports]);
+  useEffect(()=>{if(tab==='dashboard'||tab==='reports')void loadStats();},[tab,loadStats]);
+  // Stable permissions + debounce prevent a fetch on every keystroke or auth context refresh.
+  useEffect(()=>{const timer=window.setTimeout(()=>setLeadsQuery(leadsSearch.trim()),450);return()=>window.clearTimeout(timer);},[leadsSearch]);
+  const loadLeads=useCallback(async()=>{
+    if(!canViewLeads)return;
+    const requestId=++leadsRequestId.current;
+    setLeadsBusy(true);
+    try {
+      const response=await formsApi<LeadListResponse>('leads',{id:leadsForm,search:leadsQuery});
+      if(requestId===leadsRequestId.current)setLeads(response.leads);
+    } catch(e) {
+      if(requestId===leadsRequestId.current)setError(e instanceof Error?e.message:'تعذر جلب الليدات');
+    } finally {if(requestId===leadsRequestId.current)setLeadsBusy(false);}
+  },[leadsForm,leadsQuery,canViewLeads]);
+  useEffect(()=>{if(tab==='leads'&&canViewLeads)void loadLeads();},[tab,loadLeads,canViewLeads]);
+  const deleteLead=async(row:LeadRow)=>{
+    if(!canDeleteLeads || busy)return;
+    if(!window.confirm(`حذف الليد «${row.name}» من قاعدة بيانات فورم المنصات نهائيًا؟\n\nهيتحدث عدد الليدات في الداش بورد، لكن لن يتم حذف أي بيانات سبق نقلها إلى CRM أو Google Sheets.`))return;
+    setBusy(`delete-${row.id}`);setError('');setNotice('');
+    try {
+      const result=await formsApi<{ok:true;message:string}>('delete_lead',{id:row.id,confirm:'DELETE_LEAD'},'POST');
+      if(answersLead?.id===row.id)setAnswersLead(null);
+      await Promise.all([loadLeads(),reload(true),loadStats()]);
+      setNotice(result.message);
+    } catch(e) {setError(e instanceof Error?e.message:'تعذر حذف الليد');}
+    finally{setBusy('');}
+  };
+  const openClearData=async()=>{
+    if(!canDeleteLeads || busy)return;
+    setBusy('clear-preview');setError('');setNotice('');setClearConfirmation('');
+    try {
+      const result=await formsApi<{ok:true;formId:string;summary:{leads:number;visits:number;steps:number}}>('data_summary',{formId:leadsForm});
+      setClearPreview({formId:result.formId,summary:result.summary});
+    }catch(e){setError(e instanceof Error?e.message:'تعذر مراجعة بيانات المسح');}
+    finally{setBusy('');}
+  };
+  const clearData=async()=>{
+    if(!canDeleteLeads || !clearPreview || clearConfirmation.trim()!=='مسح' || busy)return;
+    setBusy('clear-data');setError('');setNotice('');
+    try {
+      const result=await formsApi<{ok:true;message:string}>('clear_data',{
+        formId:clearPreview.formId,confirm:'CLEAR_FORM_DATA',
+        expectedLeads:clearPreview.summary.leads,expectedVisits:clearPreview.summary.visits,expectedSteps:clearPreview.summary.steps,
+      },'POST');
+      setClearPreview(null);setClearConfirmation('');setAnswersLead(null);
+      await Promise.all([loadLeads(),reload(true),loadStats()]);
+      setNotice(result.message+'؛ تم تحديث الداش بورد والتقارير. لا يشمل المسح CRM أو Google Sheets.');
+    }catch(e){
+      setClearPreview(null);setClearConfirmation('');
+      setError(e instanceof Error?e.message:'تعذر مسح بيانات التجارب');
+    }finally{setBusy('');}
+  };
+  const retryCrm=async(id:string)=>{
+    setBusy(`crm-${id}`);setError('');setNotice('');
+    try{
+      await formsApi('retry_crm',{id},'POST');
+      setNotice('تمت مراجعة ربط الليد بقاعدة بيانات CRM');
+      await loadLeads();
+    }catch(e){setError(e instanceof Error?e.message:'تعذر ربط الليد مع CRM');}
+    finally{setBusy('');}
+  };
+  useEffect(()=>{if(tab==='sheets'&&can('sheets.manage'))void formsApi<{ok:true;configured:boolean;serviceEmail:string}>('sheet_status').then(setSheetStatus).catch(()=>setSheetStatus(null));},[tab,user]);
+  useEffect(()=>{
+    if(tab!=='settings')return;
+    let active=true;
+    setPixelsLoaded(false);
+    void formsApi<{ok:true;pixels:LeadFormPixelSettings}>('pixel_settings')
+      .then(data=>{if(active){setPixels(data.pixels);setPixelsLoaded(true);}})
+      .catch(e=>{if(active)setError(e instanceof Error?e.message:'تعذر جلب إعدادات Pixels');});
+    return()=>{active=false;};
+  },[tab]);
+  const updatePixel=(platform:LeadFormPixelPlatform,part:Partial<{id:string;enabled:boolean}>)=>{
+    setPixels(current=>({...current,[platform]:{...current[platform],...part}}));
+  };
+  const savePixels=async()=>{
+    if(!can('edit'))return;
+    setPixelBusy(true);setNotice('');setError('');
+    try{
+      const saved=await formsApi<{ok:true;pixels:LeadFormPixelSettings}>('pixel_settings_save',{pixels},'POST');
+      setPixels(saved.pixels);
+      setNotice('تم حفظ إعدادات Pixels لفورم المنصات فقط. تسري على جميع الفورمات المنشورة والجديدة.');
+    }catch(e){setError(e instanceof Error?e.message:'تعذر حفظ إعدادات التتبع');}
+    finally{setPixelBusy(false);}
+  };
+  useEffect(()=>{if(!selected && forms.length)setSelected(forms[0].id);},[forms.length]);
+  const perform=async(action:string,payload:Record<string,unknown>,success='تم الحفظ')=>{setBusy(action);setError('');setNotice('');try{const result=await formsApi<{ok:true;id?:string;message?:string}>(action,payload,'POST');setNotice(result.message||success);await reload();return result;}catch(e){setError(e instanceof Error?e.message:'تعذر الحفظ');return null;}finally{setBusy('');}};
+  const editForm=(form:LeadForm)=>{setSelected(form.id);setDraft(structuredClone(normalizeForm(form)));setActive('builder');};
+  const create=async()=>{if(!can('create'))return;const slug=newSlug.toLowerCase().trim();if(newTitle.trim().length<3||!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)){setError('اكتب اسم الفورم (3 حروف على الأقل) ورابطًا إنجليزيًا من حروف وأرقام وشرطة');return;}
+    const chosen=savedDesigns.find(x=>x.id===presetId);
+    const startConfig=chosen?structuredClone(chosen.config):{...blank(),design:createTemplateDesign(newTemplate,blank().fields)};
+    const result=await perform('create',{title:newTitle,slug,template:chosen?.template||newTemplate,config:startConfig},'تم إنشاء مسودة الفورم');if(!result?.id)return;
+    const newForm=await formsApi<{ok:true;form:LeadForm}>('get',{id:result.id});setSelected(result.id);setDraft(normalizeForm(newForm.form));setNewTitle('');setNewSlug('');setPresetId('');setActive('builder');};
+  const save=async()=>{if(!draft)return;const result=await perform('save',{id:draft.id,title:draft.title,description:draft.description,slug:draft.slug,template:draft.template,config:draft.config},'تم حفظ المسودة');if(result)setDraft(structuredClone(draft));};
+  const publish=async(form:LeadForm,fromEditor=false)=>{if(!window.confirm(`نشر «${form.title}» برابط عام متاح للعملاء؟`))return;
+    if(fromEditor && draft?.id===form.id && can('edit')){const saved=await perform('save',{id:draft.id,title:draft.title,description:draft.description,slug:draft.slug,template:draft.template,config:draft.config},'تم حفظ المسودة');if(!saved)return;}
+    const result=await perform('publish',{id:form.id},'تم نشر الفورم');if(result&&draft?.id===form.id)setDraft({...draft,status:'published'});};
+  const updateField=(index:number,fn:(f:FormField)=>FormField)=>setDraft(prev=>{if(!prev)return prev;const fields=prev.config.fields.map((f,i)=>i===index?fn(f):f);return {...prev,config:{...prev.config,fields}};});
+  const setFieldOrder=(i:number,dir:number)=>setDraft(prev=>{if(!prev)return prev;const fields=[...prev.config.fields],j=i+dir;if(j<0||j>=fields.length)return prev;[fields[i],fields[j]]=[fields[j],fields[i]];return {...prev,config:{...prev.config,fields}};});
+  const setStyle=(key:keyof FormConfig['style'],value:string|number)=>setDraft(prev=>prev?{...prev,config:{...prev.config,style:{...prev.config.style,[key]:value}}}:prev);
+  const setFieldType=(index:number,type:FormField['type'])=>updateField(index,f=>({...f,type,options:type==='choice'?(f.options.length>=2?f.options:['نعم','لا']):[]}));
+  const saveAsDesign=async()=>{
+    if(!draft || !can('create'))return;
+    const name=window.prompt('اسم التصميم الجديد في مكتبة التصاميم',`${draft.title} — تصميم مخصص`);
+    if(!name?.trim())return;
+    const config={...draft.config,design:draft.config.design||createTemplateDesign(draft.template,draft.config.fields)};
+    const result=await perform('design_template_save',{name:name.trim(),template:draft.template,config},'تم حفظ التصميم في المكتبة');
+    if(result)await reloadDesigns();
+  };
+  const deleteSavedDesign=async(item:SavedFormDesign)=>{
+    if(!can('create') || busy)return;
+    if(!window.confirm(`حذف التصميم «${item.name}» نهائيًا من مكتبة التصاميم؟\n\nلن يتم حذف أو تعديل أي فورم قائم أو منشور استخدم هذا التصميم.`))return;
+    setBusy(`design-delete-${item.id}`);setError('');setNotice('');
+    try{
+      const result=await formsApi<{ok:true;message:string}>('design_template_delete',{id:item.id,confirm:'DELETE_DESIGN_TEMPLATE'},'POST');
+      setSavedDesigns(current=>current.filter(design=>design.id!==item.id));
+      setPresetId(current=>current===item.id?'':current);
+      setNotice(result.message);
+      await reloadDesigns();
+    }catch(e){setError(e instanceof Error?e.message:'تعذر حذف التصميم من المكتبة');}
+    finally{setBusy('');}
+  };
+  const totalVisits=stats?.byForm.reduce((n,f)=>n+Number(f.visits),0)||0,totalLeads=stats?.byForm.reduce((n,f)=>n+Number(f.submissions),0)||0;
+  const nav=allowedTabs;
+  useEffect(()=>{if(allowedTabs.length && !allowedTabs.some(t=>t.id===tab))setTab(allowedTabs[0].id);},[tab,user]);
+  return <div className="marketing-page mlf-admin" dir="rtl">
+    <header className="marketing-page-head mlf-page-head"><div><h1>فورم المنصات</h1></div><div className="marketing-page-actions"><button type="button" className="secondary" disabled={loading} onClick={()=>void reload()}><ArrowClockwise size={18}/> تحديث</button>{can('create')&&<button type="button" className="primary" onClick={()=>setActive('library')}><Plus size={18}/> إنشاء فورم</button>}</div></header>
+    <nav className="mlf-tabs" aria-label="صفحات فورم المنصات">{nav.map(t=>{const Icon=t.icon;return <button key={t.id} type="button" className={tab===t.id?'active':''} onClick={()=>setActive(t.id)}><Icon size={18}/>{t.label}</button>;})}</nav>
+    {error&&<div role="alert" className="marketing-alert error"><WarningCircle size={18}/>{error}<button type="button" aria-label="إغلاق التنبيه" onClick={()=>setError('')}><X size={16}/></button></div>}
+    {notice&&<div role="status" className="marketing-alert success"><CheckCircle size={18}/>{notice}</div>}
+    {loading&&<p className="mlf-loading">جاري تحميل فورمات المنصات...</p>}
+
+    {tab==='dashboard'&&can('reports.view')&&<>
+      <div className="mlf-filters marketing-card"><label>من تاريخ<input type="date" value={from} max={to} onChange={e=>setFrom(e.target.value)}/></label><label>إلى تاريخ<input type="date" value={to} min={from} onChange={e=>setTo(e.target.value)}/></label><label>الفورم<select value={statsForm} onChange={e=>setStatsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option key={f.id} value={f.id}>{f.title}</option>)}</select></label><button className="secondary" onClick={()=>void loadStats()} disabled={statsBusy}><ArrowClockwise size={17}/>{statsBusy?'جاري التحميل':'تحديث'}</button></div>
+      <div className="mlf-kpis"><article className="marketing-card"><Eye size={25}/><small>الزيارات الفريدة للفورم</small><strong>{int(totalVisits)}</strong></article><article className="marketing-card"><UsersThree size={25}/><small>الطلبات المسجلة</small><strong>{int(totalLeads)}</strong></article><article className="marketing-card"><TrendUp size={25}/><small>معدل التحويل</small><strong>{pct(totalVisits,totalLeads)}</strong></article><article className="marketing-card"><ClipboardText size={25}/><small>الفورمات المنشورة</small><strong>{int(forms.filter(f=>f.status==='published').length)}</strong></article></div>
+      <div className="mlf-two"><section className="marketing-card"><h2>حركة الزيارات والتسجيلات</h2><StatsLine stats={stats}/></section><section className="marketing-card"><h2>مصادر الليدات</h2><SourcesTable stats={stats}/></section></div>
+      <section className="marketing-card"><h2>أداء الفورمات</h2><div className="mlf-table-scroll"><table><thead><tr><th>الفورم</th><th>الحالة</th><th>الزيارات</th><th>الليدات</th><th>التحويل</th></tr></thead><tbody>{stats?.byForm.map(f=><tr key={f.id}><td>{f.title}</td><td><span className={`mlf-status ${f.status}`}>{statusLabel(f.status)}</span></td><td>{int(f.visits)}</td><td>{int(f.submissions)}</td><td><b>{pct(f.visits,f.submissions)}</b></td></tr>)}{!stats?.byForm.length&&<tr><td colSpan={5}>لا توجد فورمات أو بيانات خلال الفترة</td></tr>}</tbody></table></div></section>
+    </>}
+
+    {tab==='library'&&<>
+      <div className="mlf-section-title"><div><h2>مكتبة التصاميم</h2></div></div>
+      <div className="mlf-library">{FORM_TEMPLATES.map(template=><article key={template.id} className="marketing-card mlf-template-card"><FormTemplateThumbnail template={template.id}/><div className="mlf-template-info"><h3>{template.name}</h3><p>{template.description}</p></div><div className="mlf-card-actions"><button type="button" className="secondary" onClick={()=>setPreview(previewForm(template.id))}><Eye size={17}/> معاينة</button>{can('create')&&<button type="button" className="primary" onClick={()=>{setNewTemplate(template.id);setPresetId('');setActive('builder');setDraft(null);}}><Plus size={17}/> استخدام</button>}</div></article>)}</div>
+      {savedDesigns.length>0&&<><div className="mlf-section-title"><h2>تصاميمي المحفوظة</h2></div><div className="mlf-library">{savedDesigns.map(item=><article className="marketing-card mlf-template-card" key={item.id}>
+        <FormTemplateThumbnail template={item.template} config={item.config}/>
+        <div className="mlf-template-info"><h3>{item.name}</h3></div>
+        <div className="mlf-card-actions"><button type="button" className="secondary" onClick={()=>setPreview(previewForm(item.template,item.config,item.name))}><Eye size={17}/> معاينة</button>
+        {can('create')&&<button type="button" className="primary" onClick={()=>{setNewTemplate(item.template);setPresetId(item.id);setDraft(null);setActive('builder');}}><Plus size={17}/> استخدام التصميم</button>}
+        {can('create')&&(item.created_by===user?.id||can('edit'))&&<button type="button" className="danger" title={`حذف التصميم ${item.name}`} aria-label={`حذف التصميم ${item.name}`} disabled={Boolean(busy)} onClick={()=>void deleteSavedDesign(item)}><Trash size={17}/> {busy===`design-delete-${item.id}`?'جاري الحذف':'حذف التصميم'}</button>}</div>
+      </article>)}</div></>}
+    </>}
+
+    {tab==='builder'&&<>
+      {(!draft || !can('edit'))&&can('create')&&<section className="marketing-card mlf-new-card"><h2>إنشاء فورم جديد</h2><div className="mlf-filters"><label>اسم الفورم<input value={newTitle} maxLength={140} onChange={e=>{const value=e.target.value;setNewTitle(value);if(!newSlug)setNewSlug(slugify(value));}} placeholder="مثال: طلب هيونداي أكسنت 2026"/></label><label>رابط الفورم بالإنجليزية<input value={newSlug} dir="ltr" maxLength={90} placeholder="accent-2026" onChange={e=>setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,''))}/></label><label>التصميم<select value={presetId?`custom:${presetId}`:newTemplate} onChange={e=>{const v=e.target.value;if(v.startsWith('custom:')){const id=v.slice(7);setPresetId(id);setNewTemplate(savedDesigns.find(t=>t.id===id)?.template||'steps');}else{setPresetId('');setNewTemplate(v as FormTemplate);}}}>{FORM_TEMPLATES.map(t=><option value={t.id} key={t.id}>{t.name}</option>)}{savedDesigns.map(t=><option value={`custom:${t.id}`} key={t.id}>تصميم محفوظ — {t.name}</option>)}</select></label><button type="button" className="primary" disabled={!!busy} onClick={()=>void create()}><Plus size={17}/> إنشاء المسودة</button></div><p className="mlf-hint">مثال الرابط: {window.location.origin}/forms/{newSlug||'accent-2026'}</p></section>}
+      {draft&&can('edit')&&<>
+        <div className="mlf-builder-toolbar marketing-card"><div><h2>محرر الفورم: {draft.title}</h2><small>التعديلات المحفوظة لا تظهر للعميل إلا بعد الضغط على نشر التحديث</small></div><div className="mlf-card-actions"><button className="secondary" onClick={()=>setPreview(previewForm(draft.template,draft.config,draft.title))}><Eye size={17}/> معاينة كاملة</button><button className="secondary" disabled={!!busy} onClick={()=>void save()}><FloppyDisk size={17}/> حفظ المسودة</button>{can('create')&&<button type="button" className="secondary" disabled={!!busy} onClick={()=>void saveAsDesign()}><SquaresFour size={17}/> حفظ في مكتبة التصاميم</button>}{can('publish')&&<button className="primary" disabled={!!busy} onClick={()=>void publish(draft,true)}><PlayCircle size={17}/> {draft.status==='published'?'نشر التحديث':'نشر الفورم'}</button>}</div></div>
+        <FormVisualDesigner key={draft.id} config={draft.config} template={draft.template} onChange={config=>setDraft(prev=>prev?{...prev,config}:prev)}/>
+        <div className="mlf-builder-columns"><div className="mlf-editor">
+          <section className="marketing-card"><h2>بيانات الفورم</h2><div className="mlf-form-grid"><label>الاسم<input value={draft.title} onChange={e=>setDraft({...draft,title:e.target.value})}/></label><label>رمز الرابط<input dir="ltr" disabled={draft.status==='published'} value={draft.slug} onChange={e=>setDraft({...draft,slug:e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,'')})}/></label><label className="wide">وصف مختصر<input value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})}/></label><label>قالب العرض<select value={draft.template} onChange={e=>{const template=e.target.value as FormTemplate;if(template===draft.template)return;if(!window.confirm('تغيير القالب سيعيد توزيع عناصر التصميم داخل كل خطوة. هل تريد المتابعة؟'))return;setDraft({...draft,template,config:{...draft.config,design:createTemplateDesign(template,draft.config.fields)}});}}>{FORM_TEMPLATES.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label></div></section>
+          <section className="marketing-card"><div className="mlf-section-title"><h2>أسئلة الفورم وترتيبها</h2><span>{draft.config.fields.length} سؤال</span></div>{draft.config.fields.map((field,i)=><article key={field.id} className="mlf-field-edit"><div className="mlf-field-top"><strong>السؤال {i+1}</strong><div className="mlf-card-actions"><button title="لأعلى" className="secondary mlf-icon-btn" disabled={i===0} onClick={()=>setFieldOrder(i,-1)}><ArrowUp size={16}/></button><button title="لأسفل" className="secondary mlf-icon-btn" disabled={i===draft.config.fields.length-1} onClick={()=>setFieldOrder(i,1)}><ArrowDown size={16}/></button><button title="حذف السؤال" className="danger mlf-icon-btn" disabled={draft.config.fields.length===1} onClick={()=>setDraft(p=>p?{...p,config:{...p.config,fields:p.config.fields.filter(x=>x.id!==field.id)}}:p)}><Trash size={16}/></button></div></div><div className="mlf-form-grid"><label className="wide">نص السؤال<input value={field.label} onChange={e=>updateField(i,f=>({...f,label:e.target.value}))}/></label><label>نوع الإجابة<select value={field.type} onChange={e=>setFieldType(i,e.target.value as FormField['type'])}><option value="choice">اختيارات</option><option value="text">نص</option><option value="number">رقم</option></select></label><label>مطلوب؟<select value={field.required?'yes':'no'} onChange={e=>updateField(i,f=>({...f,required:e.target.value==='yes'}))}><option value="yes">إلزامي</option><option value="no">اختياري</option></select></label>{field.type==='choice'&&<label className="wide">الاختيارات (كل اختيار في سطر)<textarea rows={3} value={field.options.join('\n')} onChange={e=>updateField(i,f=>({...f,options:e.target.value.split('\n').slice(0,12)}))}/></label>}<label className="wide">شرط ظهور السؤال<select value={field.showIf?`${field.showIf.fieldId}|${field.showIf.equals}`:''} onChange={e=>{const [fieldId,...eq]=e.target.value.split('|');updateField(i,f=>({...f,showIf:fieldId?{fieldId,equals:eq.join('|')}:null}));}}><option value="">دائمًا</option>{draft.config.fields.slice(0,i).filter(f=>f.type==='choice').flatMap(f=>f.options.filter(Boolean).map(o=><option key={`${f.id}-${o}`} value={`${f.id}|${o}`}>لو «{f.label}» = {o}</option>))}</select></label>
+          {field.type==='choice'&&<ConditionalChoicesEditor field={field} fields={draft.config.fields} onChange={patch=>updateField(i,f=>({...f,...patch}))}/>}</div></article>)}<button type="button" className="secondary" disabled={draft.config.fields.length>=14} onClick={()=>setDraft(p=>p?{...p,config:{...p.config,fields:[...p.config.fields,{id:`q_${Math.random().toString(36).slice(2,10)}`,label:'سؤال جديد',type:'choice',options:['الاختيار الأول','الاختيار الثاني'],required:true,showIf:null}]}}:p)}><Plus size={17}/> إضافة سؤال</button></section>
+          <section className="marketing-card"><h2>محتوى وهوية الفورم</h2><div className="mlf-form-grid"><label className="wide">العنوان الترحيبي<input value={draft.config.style.welcome} onChange={e=>setStyle('welcome',e.target.value)}/></label><label className="wide">العنوان أسفل اسم الشركة<input value={draft.config.style.subtitle||'طلب سيارة إلكتروني'} onChange={e=>setStyle('subtitle',e.target.value)}/></label><label>اللون البني<input type="color" value={draft.config.style.brown} onChange={e=>setStyle('brown',e.target.value)}/></label><label>اللون الكريمي<input type="color" value={draft.config.style.cream} onChange={e=>setStyle('cream',e.target.value)}/></label><label className="wide">صورة الغلاف (رابط HTTPS)<input dir="ltr" value={draft.config.style.coverUrl} onChange={e=>setStyle('coverUrl',e.target.value)} placeholder="https://..."/></label><label className="wide">أقصى ارتفاع للغلاف — {draft.config.style.coverHeight||120} بكسل<input type="range" min="64" max="260" step="4" value={draft.config.style.coverHeight||120} onChange={e=>setStyle('coverHeight',Number(e.target.value))}/></label><label className="wide">الشعار (رابط HTTPS أو /logo.png)<input dir="ltr" value={draft.config.style.logoUrl} onChange={e=>setStyle('logoUrl',e.target.value)}/></label><label className="wide">عنوان خطوة التواصل<input value={displayContactTitle(draft.config.style.contactTitle||draft.config.design?.screens.contact?.find(b=>b.kind==='heading')?.text)} onChange={e=>setStyle('contactTitle',e.target.value)}/></label><label>نص زر الإرسال<input value={draft.config.style.actionLabel} onChange={e=>setStyle('actionLabel',e.target.value)}/></label><label>عنوان النجاح<input value={draft.config.style.successTitle} onChange={e=>setStyle('successTitle',e.target.value)}/></label><label className="wide">رسالة نجاح التسجيل<textarea value={draft.config.style.successMessage} onChange={e=>setStyle('successMessage',e.target.value)} rows={2}/></label></div></section>
+          <section className="marketing-card"><h2>بيانات التواصل</h2><div className="mlf-form-grid">
+            <label>المطلوب من العميل<select value={draft.config.contact?.askName===false?'phone':'name-phone'} onChange={e=>setDraft({...draft,config:{...draft.config,contact:{askName:e.target.value==='name-phone'}}})}><option value="name-phone">الاسم ورقم الجوال</option><option value="phone">رقم الجوال فقط</option></select></label>
+            <p className="wide mlf-hint">في الخطوة الأخيرة يظهر رقم الجوال، والاسم عند اختياره، ورابط مستقل لسياسة الخصوصية دون مربع موافقة أو ملاحظات إضافية. موافقة تتبع الإعلانات منفصلة ولا تتغير.</p>
+          </div></section>
+        </div><aside className="mlf-builder-preview"><div className="mlf-preview-header"><h3>معاينة مباشرة</h3><div className="mlf-card-actions"><button className={previewDevice==='phone'?'primary':'secondary'} onClick={()=>setPreviewDevice('phone')} title="موبايل"><DeviceMobile size={17}/></button><button className={previewDevice==='desktop'?'primary':'secondary'} onClick={()=>setPreviewDevice('desktop')} title="كمبيوتر"><Monitor size={17}/></button></div></div><div className={`mlf-embedded-preview ${previewDevice==='desktop'?'wide':''}`}><LeadFormRenderer key={draft.template} preview compact form={previewForm(draft.template,draft.config,draft.title)}/></div></aside></div>
+      </>}
+    </>}
+
+    {tab==='manage'&&<section className="marketing-card"><div className="mlf-section-title"><div><h2>إدارة الفورمات</h2></div><span>{forms.length} فورم</span></div><div className="mlf-table-scroll"><table><thead><tr><th>اسم الفورم</th><th>التصميم</th><th>الحالة</th><th>الزيارات</th><th>الليدات</th><th>رابط النشر والإجراءات</th></tr></thead><tbody>{forms.map(f=><tr key={f.id}><td><strong>{f.title}</strong><small className="mlf-row-note">{f.slug}</small></td><td>{FORM_TEMPLATES.find(t=>t.id===f.template)?.name}</td><td><span className={`mlf-status ${f.status}`}>{statusLabel(f.status)}</span></td><td>{int(f.visits)}</td><td>{int(f.submissions)}</td><td><div className="mlf-card-actions">{can('edit')&&<button title="تعديل" className="secondary" onClick={()=>editForm(f)}><PencilSimple size={16}/></button>}<button title="معاينة" className="secondary" onClick={()=>setPreview(previewForm(f.status==='published'?(f.published_metadata?.template||f.template):f.template,f.status==='published'?(f.published_config||f.config):f.config,f.status==='published'?(f.published_metadata?.title||f.title):f.title))}><Eye size={16}/></button>{f.status==='published'&&<><button title="إنشاء رابط حملة بمصدر معروف" className="secondary" onClick={()=>{setLinkForm(f);setLinkPlatform('meta');setLinkCampaign('');setLinkAdId('');}}><LinkSimple size={16}/> رابط إعلان</button><button title="نسخ الرابط" className="secondary" onClick={()=>void copyLink(f.slug)}><Copy size={16}/></button><a className="mlf-small-link" title="فتح الرابط" target="_blank" rel="noopener noreferrer" href={formLink(f.slug)}><LinkSimple size={16}/></a></>}{can('publish')&&(f.status!=='published'?<button className="primary" onClick={()=>void publish(f)}><PlayCircle size={16}/> نشر</button>:<button className="secondary" onClick={()=>void perform('pause',{id:f.id},'تم إيقاف نشر الفورم')}><PauseCircle size={16}/></button>)}{can('create')&&<button className="secondary" title="نسخ كمسودة جديدة" onClick={()=>{const slug=window.prompt('اكتب رمز الرابط الجديد بالإنجليزية (حروف وأرقام وشرطة)',`${f.slug}-copy`);if(slug)void perform('duplicate',{id:f.id,slug:slug.trim(),title:`${f.title} - نسخة`},'تم نسخ الفورم كمسودة جديدة');}}><Copy size={16}/></button>}{can('publish')&&<button title="أرشفة" className="danger" onClick={()=>{if(window.confirm('أرشفة هذا الفورم وإيقاف رابطه العام؟'))void perform('archive',{id:f.id},'تمت أرشفة الفورم');}}><Trash size={16}/></button>}</div></td></tr>)}{!forms.length&&<tr><td colSpan={6}>لم يتم إنشاء فورمات بعد. ابدأ من مكتبة التصاميم.</td></tr>}</tbody></table></div></section>}
+
+    {tab==='leads'&&can('leads.view')&&<section className="marketing-card"><div className="mlf-section-title"><div><h2>قاعدة بيانات الليدات</h2><p>الطلبات المسجلة من روابط الفورمات المنشورة</p></div><div className="mlf-destructive-actions">{canDeleteLeads&&<button type="button" className="mlf-delete-button" disabled={Boolean(busy)} onClick={()=>void openClearData()}><Trash size={17}/> مسح بيانات التجارب</button>}{can('leads.export')&&<button type="button" className="secondary" disabled={!leads.length} onClick={()=>downloadCsv(leads)}><FileArrowDown size={18}/> تصدير Excel / CSV</button>}</div></div><div className="mlf-filters"><label>الفورم<select value={leadsForm} onChange={e=>setLeadsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option value={f.id} key={f.id}>{f.title}</option>)}</select></label><label>بحث بالاسم أو الجوال<input placeholder="بحث" value={leadsSearch} onChange={e=>setLeadsSearch(e.target.value)}/></label><button type="button" className="secondary" disabled={leadsBusy} onClick={()=>void loadLeads()}><ArrowClockwise size={17}/> تحديث</button></div><div className="mlf-table-scroll"><table><thead><tr><th>تاريخ التسجيل</th><th>اسم العميل</th><th>الجوال</th><th>الفورم</th><th>المصدر</th><th>الحملة</th><th>الإجابات</th><th>CRM</th><th>الشيت</th>{canDeleteLeads&&<th>الإجراءات</th>}</tr></thead><tbody>{leads.map(r=><tr key={r.id}><td>{new Date(r.created_at).toLocaleString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'Asia/Riyadh'})}</td><td>{r.name}</td><td dir="ltr">{r.phone}</td><td>{r.form_title}</td><td>{r.source}</td><td>{r.campaign||'—'}</td><td><button className="mlf-answer-open" type="button" onClick={()=>setAnswersLead(r)}>عرض الإجابات</button></td><td><div className="mlf-crm-cell"><span className={r.crm_status==='failed'?'mlf-crm-failed':''}>{crmStatusLabel[r.crm_status||'not_requested']||'—'}</span>{can('edit')&&['failed','pending','not_requested'].includes(r.crm_status||'not_requested')&&<button type="button" className="mlf-crm-retry" disabled={busy===`crm-${r.id}`} onClick={()=>void retryCrm(r.id)}>{busy===`crm-${r.id}`?'جاري النقل':r.crm_status==='not_requested'?'ترحيل':'إعادة المحاولة'}</button>}</div></td><td>{({sent:'تم الإرسال',pending:'معلق',failed:'فشل الإرسال',not_configured:'غير مربوط'} as Record<string,string>)[r.sheet_status]||r.sheet_status}</td>{canDeleteLeads&&<td><button type="button" className="mlf-delete-button mlf-delete-single" disabled={Boolean(busy)} onClick={()=>void deleteLead(r)} aria-label={`حذف ليد ${r.name}`}><Trash size={16}/>{busy===`delete-${r.id}`?'جاري الحذف':'حذف'}</button></td>}</tr>)}{!leads.length&&<tr><td colSpan={canDeleteLeads?10:9}>لا توجد ليدات مطابقة</td></tr>}</tbody></table></div><small className="mlf-hint">يعرض آخر 2000 ليد مطابق؛ الأرقام في التقارير تشمل كل البيانات المسجلة خلال الفترة المحددة.</small></section>}
+
+    {tab==='reports'&&can('reports.view')&&<>
+      <section className="marketing-card"><div className="mlf-section-title"><h2>التقارير والتحليلات</h2></div><div className="mlf-filters"><label>من تاريخ<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>إلى تاريخ<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><label>الفورم<select value={statsForm} onChange={e=>setStatsForm(e.target.value)}><option value="">كل الفورمات</option>{forms.map(f=><option key={f.id} value={f.id}>{f.title}</option>)}</select></label></div></section>
+      <div className="mlf-kpis"><article className="marketing-card"><Eye size={24}/><small>الزيارات الفريدة</small><strong>{int(totalVisits)}</strong></article><article className="marketing-card"><UsersThree size={24}/><small>الليدات</small><strong>{int(totalLeads)}</strong></article><article className="marketing-card"><TrendUp size={24}/><small>التحويل</small><strong>{pct(totalVisits,totalLeads)}</strong></article></div>
+      <div className="mlf-two"><section className="marketing-card"><h2>الأداء اليومي</h2><StatsLine stats={stats}/></section><section className="marketing-card"><h2>مصادر التسجيل</h2><SourcesTable stats={stats}/></section></div>
+      <section className="marketing-card"><h2>الليدات حسب الحملة والمنصة</h2><div className="mlf-table-scroll"><table><thead><tr><th>اسم الحملة من رابط الإعلان</th><th>المنصة</th><th>الليدات</th></tr></thead><tbody>{stats?.byCampaign.map((r,i)=><tr key={`${r.campaign}-${r.source}-${i}`}><td>{r.campaign}</td><td>{r.source}</td><td>{int(r.submissions)}</td></tr>)}{!stats?.byCampaign.length&&<tr><td colSpan={3}>لإظهار اسم الحملة، استخدم رابطًا يحتوي على utm_campaign من إدارة الفورمات.</td></tr>}</tbody></table></div></section>
+      <section className="marketing-card"><h2>رحلة العميل حسب الخطوات</h2><p className="mlf-hint">عدد الجلسات الفريدة التي وصلت إلى كل سؤال. يمكن أن تظهر زيارات خارج الفترة المحددة إذا بدأ العميل رحلة في فترة أخرى.</p>{stats?.byForm.filter(f=>!statsForm||f.id===statsForm).map(f=><div key={f.id} className="mlf-funnel"><h3>{f.title}</h3>{[...((forms.find(row=>row.id===f.id)?.published_config || forms.find(row=>row.id===f.id)?.config)?.fields||[]).map(x=>({id:x.id,label:x.label})),{id:'contact',label:'بيانات التواصل'}].map(s=>{const reached=stats.byStep.find(e=>e.form_id===f.id&&e.step_id===s.id)?.total||0;return <div className="mlf-funnel-row" key={s.id}><span>{s.label}</span><div><i style={{width:`${Math.min(100,f.visits?100*reached/f.visits:0)}%`}}/></div><b>{int(reached)}</b></div>;})}<div className="mlf-funnel-row"><span>إرسال الطلب</span><div><i style={{width:`${Math.min(100,f.visits?100*f.submissions/f.visits:0)}%`}}/></div><b>{int(f.submissions)}</b></div></div>)}{!stats?.byForm.length&&<p className="mlf-empty">لا توجد بيانات لعرض القمع التحويلي</p>}</section>
+    </>}
+
+    {tab==='sheets'&&can('sheets.manage')&&<SheetMappingPanel forms={forms} configured={Boolean(sheetStatus?.configured)} serviceEmail={sheetStatus?.serviceEmail||''} saving={Boolean(busy)} perform={perform}/>}
+
+    {tab==='settings'&&<>
+      <section className="marketing-card"><h2>إعدادات فورم المنصات</h2><div className="mlf-settings-grid"><div><strong>رابط نشر الفورمات</strong><p>يستخدم نفس دومين المنصة تلقائيًا. العميل لا يحتاج إلى تسجيل دخول.</p><code dir="ltr">{window.location.origin}/forms/...</code></div><div><strong>المعاينة قبل النشر</strong><p>وضع المعاينة لا يحفظ ليدًا حقيقيًا ولا يضيفه إلى الإحصائيات.</p></div><div><strong>الهوية والخط</strong><p>الخط Tajawal، ويمكن تغيير ألوان كل فورم وصورة الغلاف من داخل المحرر.</p><div className="mlf-color-samples"><i style={{background:'#4A211C'}}/><i style={{background:'#F3E8DC'}}/></div></div><div><strong>صلاحيات المستخدمين</strong><p>صلاحيات مستقلة للفورمات، إنشاء، تعديل، نشر، عرض وتصدير الليدات، التقارير، وإعدادات الشيت.</p>{hasPermission(user,'settings.users.view')&&<Link to="/settings?section=users" className="mlf-settings-link"><ShieldCheck size={17}/> إدارة المستخدمين والصلاحيات</Link>}</div></div></section>
+      <section className="marketing-card" aria-label="إعدادات Pixels فورم المنصات">
+        <h3>تتبع الحملات — Pixels فقط</h3>
+        <p>تُستخدم هذه الإعدادات لجميع فورمات MZJ المنشورة والجديدة تلقائيًا. لا يوجد أي ربط مع Conversions API أو Events API. عند فتح الرابط من منصة معروفة، يُطلب من الزائر السماح بالتتبع أولًا، ثم يُرسل PageView وحدث الليد بعد حفظه بنجاح فقط. بيانات العميل وإجاباته لا تُمرر كمعلمات أحداث.</p>
+        {!pixelsLoaded?<p>جاري تحميل إعدادات Pixels...</p>:<div className="mlf-pixel-settings">
+          {([['meta','Meta (Facebook / Instagram)'],['snapchat','Snapchat'],['tiktok','TikTok']] as const).map(([platform,label])=><div key={platform} className="mlf-pixel-platform">
+            <strong>{label}</strong>
+            <label>Pixel ID<input type="text" value={pixels[platform].id} disabled={!can('edit')||pixelBusy} maxLength={50} onChange={e=>updatePixel(platform,{id:e.target.value})} placeholder={`معرف ${label}`}/></label>
+            <label className="mlf-pixel-toggle"><input type="checkbox" checked={pixels[platform].enabled} disabled={!can('edit')||pixelBusy} onChange={e=>updatePixel(platform,{enabled:e.target.checked})}/> تفعيل</label>
+          </div>)}
+          {can('edit')&&<div className="mlf-card-actions"><button className="primary" type="button" disabled={pixelBusy} onClick={()=>void savePixels()}><FloppyDisk size={18}/>{pixelBusy?'جاري الحفظ...':'حفظ إعدادات Pixels'}</button></div>}
+        </div>}
+        <p className="mlf-hint">مهم: التتبع لا يعمل في المعاينة أو زيارات direct أو بدون موافقة الزائر، ولا يؤثر على نظام CRM أو الحملات الحالية. لقياس الحملات استخدم رابط الإعلان من «إدارة الفورمات» مع utm_source الصحيح.</p>
+      </section>
+      <section className="marketing-card"><h3>سياسة الخصوصية</h3><p>كل فورم منشور يوفّر رابط سياسة الخصوصية. يمكن اختيار موافقة صريحة أو رابط مختصر للرد على طلب العميل فقط، ولا ينبغي استخدام الخيار المختصر لأغراض تسويق إضافية بلا مسوغ مستقل.</p><a className="mlf-settings-link" href="/privacy" target="_blank" rel="noopener noreferrer">عرض سياسة الخصوصية <LinkSimple size={17}/></a></section>
+    </>}
+
+    {clearPreview&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)setClearPreview(null);}}><div className="mlf-modal mlf-clear-modal" role="dialog" aria-modal="true" aria-label="تأكيد مسح بيانات فورم المنصات"><div className="mlf-modal-bar"><b><WarningCircle size={19}/> تأكيد مسح بيانات التجارب</b><button type="button" className="secondary" disabled={Boolean(busy)} aria-label="إغلاق" onClick={()=>setClearPreview(null)}><X size={19}/></button></div><div className="mlf-clear-content"><p>سيتم مسح <strong>{clearPreview.formId?(forms.find(f=>f.id===clearPreview.formId)?.title||'الفورم المحدد'):'كل الفورمات'}</strong> من قاعدة بيانات فورم المنصات:</p><div className="mlf-clear-counts"><span><strong>{int(clearPreview.summary.leads)}</strong> ليد</span><span><strong>{int(clearPreview.summary.visits)}</strong> زيارة</span><span><strong>{int(clearPreview.summary.steps)}</strong> خطوة مسجلة</span></div><p className="mlf-clear-warning">تحذير: المسح نهائي ويشمل أي بيانات حقيقية ضمن النطاق المحدد. ستصبح أرقام الداش بورد والتقارير معتمدة فقط على البيانات المتبقية. لن يتم حذف العملاء من CRM أو الصفوف المرسلة إلى Google Sheets، ولن تُحذف الفورمات أو إعدادات Pixels.</p><label>اكتب كلمة <strong>مسح</strong> للتأكيد<input autoFocus value={clearConfirmation} onChange={e=>setClearConfirmation(e.target.value)} placeholder="مسح" disabled={Boolean(busy)} /></label><div className="mlf-clear-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={()=>setClearPreview(null)}>إلغاء</button><button type="button" className="mlf-delete-button" disabled={clearConfirmation.trim()!=='مسح'||Boolean(busy)||!Object.values(clearPreview.summary).some(Boolean)} onClick={()=>void clearData()}><Trash size={17}/>{busy==='clear-data'?'جاري المسح...':'مسح البيانات نهائيًا'}</button></div></div></div></div>}
+
+    {answersLead&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setAnswersLead(null);}}><div className="mlf-modal mlf-answer-modal" role="dialog" aria-modal="true" aria-label="إجابات العميل"><div className="mlf-modal-bar"><b>إجابات العميل — {answersLead.name}</b><button type="button" className="secondary" aria-label="إغلاق" onClick={()=>setAnswersLead(null)}><X size={19}/></button></div><div className="mlf-modal-content"><div className="mlf-answer-list">{readableAnswers(answersLead,forms).map(answer=><div className="mlf-answer-item" key={answer.id}><strong>{answer.label}</strong><span>{answer.value}</span></div>)}{!Object.keys(answersLead.answers||{}).length&&<p>لم تُسجل إجابات إضافية لهذا الطلب.</p>}</div></div></div></div>}
+
+    {linkForm&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setLinkForm(null);}}><div className="mlf-modal mlf-link-modal" role="dialog" aria-modal="true" aria-label="رابط الإعلان"><div className="mlf-modal-bar"><b>رابط إعلان — {linkForm.title}</b><button type="button" className="secondary" aria-label="إغلاق" onClick={()=>setLinkForm(null)}><X size={19}/></button></div><div className="mlf-modal-content mlf-link-content"><p>نفس الفورم، لكن رابط مختلف لكل منصة وحملة علشان نعرف مصدر الليد من غير ربط API بالمنصة.</p><label>المنصة<select value={linkPlatform} onChange={e=>setLinkPlatform(e.target.value)}><option value="meta">Meta (Facebook / Instagram)</option><option value="snapchat">Snapchat</option><option value="tiktok">TikTok</option></select></label><label>اسم الحملة<input value={linkCampaign} onChange={e=>setLinkCampaign(e.target.value)} placeholder="مثال: حملة أكسنت أكتوبر"/></label><label>معرف الإعلان (اختياري)<input value={linkAdId} onChange={e=>setLinkAdId(e.target.value)}/></label><div className="mlf-link-box" dir="ltr">{formLink(linkForm.slug)}?utm_source={linkPlatform}&utm_medium=paid_social&mzj_pixel_source={linkPlatform}{linkCampaign?`&utm_campaign=${encodeURIComponent(linkCampaign)}`:''}{linkAdId?`&ad_id=${encodeURIComponent(linkAdId)}`:''}</div><button className="primary" type="button" onClick={()=>{const url=new URL(formLink(linkForm.slug));url.searchParams.set('utm_source',linkPlatform);url.searchParams.set('utm_medium','paid_social');url.searchParams.set('mzj_pixel_source',linkPlatform);if(linkCampaign)url.searchParams.set('utm_campaign',linkCampaign);if(linkAdId)url.searchParams.set('ad_id',linkAdId);void navigator.clipboard.writeText(url.href).then(()=>{setNotice('تم نسخ رابط الإعلان مع المصدر والحملة');setLinkForm(null);}).catch(()=>setError('تعذر النسخ. انسخ الرابط المعروض يدويًا.'));}}><Copy size={17}/> نسخ رابط الحملة</button></div></div></div>}
+    {preview&&<div className="mlf-modal-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setPreview(null);}}><div className={`mlf-modal ${previewDevice==='desktop'?'desktop':''}`} role="dialog" aria-modal="true" aria-label="معاينة تفاعلية للفورم"><div className="mlf-modal-bar"><b>معاينة تفاعلية — لا يتم حفظ بيانات</b><div className="mlf-card-actions"><button className="secondary" onClick={()=>setPreviewDevice(previewDevice==='phone'?'desktop':'phone')}>{previewDevice==='phone'?<Monitor size={18}/>:<DeviceMobile size={18}/>}</button><button className="secondary" onClick={()=>setPreview(null)} aria-label="إغلاق"><X size={18}/></button></div></div><div className="mlf-modal-content"><LeadFormRenderer key={preview.template+preview.title} preview form={preview}/></div></div></div>}
+  </div>;
+}
+
+const StatsLine=memo(function StatsLine({stats}:{stats:FormStats|null}) {
+  const data=stats?.daily||[];
+  return <div className="mlf-line-chart">{data.length?<ResponsiveContainer width="100%" height={275}><LineChart data={data} margin={{left:0,right:10,top:15,bottom:10}}><CartesianGrid strokeDasharray="3 3" stroke="#e7dbd4"/><XAxis dataKey="date" tick={{fontSize:10}} tickFormatter={v=>v.slice(5)}/><YAxis width={35} tick={{fontSize:10}} allowDecimals={false}/><Tooltip/><Legend/><Line type="monotone" name="زيارات" dataKey="visits" stroke="#4A211C" strokeWidth={2} dot={false}/><Line type="monotone" name="ليدات" dataKey="submissions" stroke="#a07762" strokeWidth={2} dot={false}/></LineChart></ResponsiveContainer>:<p className="mlf-empty">لا توجد زيارات بعد</p>}</div>;
+});
+const SourcesTable=memo(function SourcesTable({stats}:{stats:FormStats|null}){
+  const total=stats?.bySource.reduce((sum,r)=>sum+r.submissions,0)||0;
+  return <div className="mlf-sources">{stats?.bySource.map(row=><div key={row.source}><div><strong>{row.source}</strong><span>{int(row.submissions)} ليد</span></div><div className="mlf-source-track"><i style={{width:`${total?100*row.submissions/total:0}%`}}/></div></div>)}{!stats?.bySource.length&&<p className="mlf-empty">لا توجد مصادر بعد</p>}</div>;
+});

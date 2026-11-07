@@ -5,6 +5,8 @@ import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmMeta } from "../types";
 import { downloadXlsx } from "../xlsx";
+import { useAuth } from "../../auth/AuthContext";
+import { isPlatformAdmin } from "../../systemAccess";
 
 type ReportRow = {
   name: string;
@@ -38,13 +40,18 @@ type ReportSection = {
   summary?: ReportSummary | null;
 };
 type ReportColumn = {
-  key: keyof ReportRow | "customers";
+  key: keyof ReportRow | "customers" | "serial";
   label: string;
   percentage?: boolean;
   action?: boolean;
 };
 
 const emptyFilters = { from: "", to: "", department: "", branch: "", agent: "", callCenter: "", source: "", q: "" };
+
+function currentReportMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
 const summaryCards = {
   marketing: { label: "جودة التسويق", field: "marketingQuality", suffix: "%" },
   total: { label: "إجمالي العملاء", field: "total", suffix: "" },
@@ -114,6 +121,7 @@ function columnsForSection(section: ReportSection): ReportColumn[] {
   ];
   if (section.kind === "agent") {
     return [
+      { key: "serial", label: "مسلسل" },
       { key: "name", label: "المندوب" },
       { key: "department", label: "القسم" },
       { key: "branch", label: "الفرع" },
@@ -122,32 +130,54 @@ function columnsForSection(section: ReportSection): ReportColumn[] {
       { key: "customers", label: "تقارير العملاء", action: true },
     ];
   }
+  if (section.kind === "department") {
+    return [
+      { key: "serial", label: "مسلسل" },
+      { key: "department", label: "القسم" },
+      { key: "branch", label: "الفرع" },
+      ...metricColumns,
+      { key: "salesQuality", label: "جودة القسم / الفرع", percentage: true },
+      { key: "customers", label: "تقارير العملاء", action: true },
+    ];
+  }
   return [
+    { key: "serial", label: "مسلسل" },
     { key: "name", label: section.firstColumn },
     ...metricColumns,
-    { key: "salesQuality", label: section.kind === "department" ? "جودة القسم / الفرع" : "جودة المبيعات", percentage: true },
+    { key: "salesQuality", label: "جودة المبيعات", percentage: true },
+    { key: "customers", label: "تقارير العملاء", action: true },
   ];
 }
 
-function reportCellValue(row: ReportRow, column: ReportColumn) {
+function reportCellValue(row: ReportRow, column: ReportColumn, serial?: number) {
   if (column.action) return "";
+  if (column.key === "serial") return serial ?? 0;
   const value = row[column.key as keyof ReportRow] ?? 0;
   return column.percentage ? `${value}%` : value;
 }
 
 function reportExportRows(section: ReportSection) {
   const columns = columnsForSection(section).filter((column) => !column.action);
-  return section.rows.map((row) => {
+  return section.rows.map((row, index) => {
     const record: Record<string, string | number> = { "القسم بالتقرير": section.title };
-    for (const column of columns) record[column.label] = reportCellValue(row, column);
+    for (const column of columns) record[column.label] = reportCellValue(row, column, index + 1);
     return record;
   });
 }
 
 export function CrmReportsPage() {
+  const { user } = useAuth();
+  const managerIsBranchRestricted = !isPlatformAdmin(user) && (user?.systemAccess?.crm?.roleCode === "branch_manager" || user?.roleCodes.includes("branch_manager"));
+  const managerBranch = managerIsBranchRestricted ? String(user?.systemAccess?.crm?.branchCodes?.[0] || "") : "";
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [filters, setFilters] = useState(emptyFilters);
-  const [selectedMonth, setSelectedMonth] = useState("");
+  const defaultMonth = currentReportMonth();
+  const defaultMonthRange = monthDateRange(defaultMonth)!;
+  const [filters, setFilters] = useState({ ...emptyFilters, from: defaultMonthRange.from, to: defaultMonthRange.to });
+  const [selectedMonth, setSelectedMonth] = useState(defaultMonth);
+  useEffect(() => {
+    if (!managerIsBranchRestricted) return;
+    setFilters((current) => current.branch === managerBranch ? current : { ...current, branch: managerBranch });
+  }, [managerIsBranchRestricted, managerBranch]);
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
@@ -182,7 +212,7 @@ export function CrmReportsPage() {
     setLoading(true);
     setNotice("");
     try {
-      setData(await crmFetch(`/api/crm/reports${queryString(filters)}`));
+      setData(await crmFetch(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1 })}`));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل التقارير");
     } finally {
@@ -194,7 +224,7 @@ export function CrmReportsPage() {
     if (!popup) return;
     setPopupLoading(true);
     try {
-      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: popupPage, detailPageSize: popupPageSize })}`);
+      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: popupPage, detailPageSize: popupPageSize })}`);
       setPopupRows(result.rows || []);
       setPopupTotal(Number(result.total || 0));
     } catch (error) {
@@ -215,19 +245,44 @@ export function CrmReportsPage() {
     setPopupTotal(0);
   }
 
-  const salesUsers = useMemo(() => (meta?.users || []).filter((user) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(user.primary_department_code || "") || (!user.primary_department_code && user.department_codes.some((code) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(code)))), [meta]);
+  const salesUsers = useMemo(() => {
+    const byId = new Map<string, { id: string; full_name: string }>();
+    for (const user of (meta?.users || []).filter((item) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(item.primary_department_code || "") || (!item.primary_department_code && item.department_codes.some((code) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(code))))) {
+      byId.set(user.id, { id: user.id, full_name: user.full_name });
+    }
+    for (const row of data?.agents || []) {
+      const id = String(row.detailValue || "").trim();
+      if (id && !byId.has(id)) byId.set(id, { id, full_name: String(row.name || "مندوب") });
+    }
+    return [...byId.values()].sort((left, right) => left.full_name.localeCompare(right.full_name, "ar"));
+  }, [meta, data?.agents]);
   const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.primary_department_code === "call_center" || (!user.primary_department_code && user.department_codes.includes("call_center"))), [meta]);
+  const selectedAgentIds = useMemo(() => filters.agent.split(",").map((value) => value.trim()).filter(Boolean), [filters.agent]);
+  const selectedAgentNames = useMemo(() => salesUsers.filter((user) => selectedAgentIds.includes(user.id)).map((user) => user.full_name), [salesUsers, selectedAgentIds]);
+  const agentFilterLabel = selectedAgentNames.length === 0 ? "كل المناديب" : selectedAgentNames.length <= 2 ? selectedAgentNames.join("، ") : `${selectedAgentNames.length} مناديب محددين`;
+  const reportBranches = managerIsBranchRestricted
+    ? (meta?.branches || []).filter((item) => item.code === managerBranch)
+    : (meta?.branches || []);
+  const reportBranchValue = managerIsBranchRestricted ? managerBranch : filters.branch;
   const sections: ReportSection[] = [
     { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.digitalSources },
     { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.directSources },
     ...(data?.otherSources?.length ? [{ title: "مصادر أخرى", rows: data.otherSources, firstColumn: "المصدر", description: "مصادر لم يتم تصنيفها بعد كرقمية أو مباشرة.", kind: "source" as const, countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.otherSources }] : []),
-    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم / الفرع", description: "إجمالي حالات المبيعات حسب القسم والفرع.", kind: "department", countLabel: "إجمالي الأقسام والفروع", summary: data?.sectionSummaries?.departments },
+    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم", description: "إجمالي حالات المبيعات حسب القسم والفرع بالمسمّيات المعتمدة.", kind: "department", countLabel: "إجمالي الأقسام والفروع", summary: data?.sectionSummaries?.departments },
     { title: "تقارير المناديب", rows: data?.agents || [], firstColumn: "المندوب", description: "أرقام كل مندوب مبيعات مع فتح تقرير العملاء المرتبطين به.", kind: "agent", countLabel: "إجمالي المناديب", summary: data?.sectionSummaries?.agents },
     { title: "تقرير خدمة العملاء", rows: data?.service ? [data.service] : [], firstColumn: "القسم", description: "متابعة جاري العمل وتم الانتهاء داخل خدمة العملاء.", kind: "service" },
   ];
 
   function setFilter(key: keyof typeof emptyFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleAgentFilter(agentId: string) {
+    setFilters((current) => {
+      const selected = current.agent.split(",").map((value) => value.trim()).filter(Boolean);
+      const next = selected.includes(agentId) ? selected.filter((id) => id !== agentId) : [...selected, agentId];
+      return { ...current, agent: next.join(",") };
+    });
   }
 
   function setReportMonth(value: string) {
@@ -242,8 +297,10 @@ export function CrmReportsPage() {
   }
 
   function clearReportFilters() {
-    setSelectedMonth("");
-    setFilters(emptyFilters);
+    const month = currentReportMonth();
+    const range = monthDateRange(month)!;
+    setSelectedMonth(month);
+    setFilters({ ...emptyFilters, branch: managerBranch, from: range.from, to: range.to });
   }
 
   function exportAll() {
@@ -257,7 +314,7 @@ export function CrmReportsPage() {
     const sectionHtml = sections.map((section) => {
       const columns = columnsForSection(section).filter((column) => !column.action);
       return `<section><h2>${htmlEscape(section.title)}</h2><table><thead><tr>${columns.map((column) => `<th>${htmlEscape(column.label)}</th>`).join("")}</tr></thead><tbody>
-      ${section.rows.map((row) => `<tr>${columns.map((column) => `<td>${htmlEscape(reportCellValue(row, column))}</td>`).join("")}</tr>`).join("")}
+      ${section.rows.map((row, index) => `<tr>${columns.map((column) => `<td>${htmlEscape(reportCellValue(row, column, index + 1))}</td>`).join("")}</tr>`).join("")}
       </tbody></table></section>`;
     }).join("");
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقارير CRM</title><style>body{font-family:Tajawal,Arial;padding:22px;color:#38231d}h1{margin-bottom:4px}h2{margin-top:26px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dbc8bd;padding:7px;text-align:center}th{background:#f5e8df}section{break-inside:avoid}</style></head><body><h1>تقارير CRM</h1><p>الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}</p>${sectionHtml}<script>window.onload=()=>window.print()</script></body></html>`);
@@ -279,7 +336,7 @@ export function CrmReportsPage() {
       let page = 1;
       let total = 0;
       do {
-        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: page, detailPageSize: 200 })}`);
+        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, dashboardPeriod: 1, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: page, detailPageSize: 200 })}`);
         const pageRows = result.rows || [];
         allRows.push(...pageRows);
         total = Number(result.total || 0);
@@ -332,7 +389,7 @@ export function CrmReportsPage() {
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
-            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>المبيعات حسب تاريخ كل عملية بيع، وباقي الحالات حسب آخر تحديث</small></div></div>
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>المبيعات حسب تاريخ البيع، و«غير مؤهل» حسب تاريخ انتقال الحالة، وباقي العملاء السابقين يظلون ضمن التقرير</small></div></div>
             <div className="crm-report-filter-fields three-columns">
               <label><span>اختيار شهر</span><input type="month" value={selectedMonth} onChange={(event) => setReportMonth(event.target.value)} /></label>
               <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setCustomReportDate("from", event.target.value)} /></label>
@@ -343,15 +400,15 @@ export function CrmReportsPage() {
             <div className="crm-report-filter-block-head"><span><Buildings size={19} /></span><div><strong>القسم والفرع</strong><small>حدد نطاق الإدارة أو الموقع</small></div></div>
             <div className="crm-report-filter-fields two-columns">
               <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="wholesale">قسم الجملة</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
-              <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+              <label><span>الفرع</span><select value={reportBranchValue} disabled={managerIsBranchRestricted} onChange={(event) => setFilter("branch", event.target.value)}>{managerIsBranchRestricted ? (!managerBranch ? <option value="">لا يوجد فرع مسموح</option> : null) : <option value="">كل الفروع</option>}{reportBranches.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
             </div>
           </section>
           <section className="crm-report-filter-block wide">
             <div className="crm-report-filter-block-head"><span><UserFocus size={19} /></span><div><strong>المسؤول والمصدر</strong><small>المندوب والكول سنتر ومصدر العميل</small></div></div>
             <div className="crm-report-filter-fields three-columns">
-              <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilter("agent", event.target.value)}><option value="">كل المناديب</option>{salesUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
+              <div className="crm-report-agent-multi-filter"><span>المندوب</span><details className="crm-report-agent-multi-select"><summary title={selectedAgentNames.join("، ") || "كل المناديب"}>{agentFilterLabel}</summary><div className="crm-report-agent-multi-options"><label className={selectedAgentIds.length === 0 ? "selected" : ""}><input type="checkbox" checked={selectedAgentIds.length === 0} onChange={() => setFilter("agent", "")} /><span>كل المناديب</span></label>{salesUsers.map((item) => { const checked = selectedAgentIds.includes(item.id); return <label key={item.id} className={checked ? "selected" : ""}><input type="checkbox" checked={checked} onChange={() => toggleAgentFilter(item.id)} /><span>{item.full_name}</span></label>; })}</div></details></div>
               <label><span>الكول سنتر</span><select value={filters.callCenter} onChange={(event) => setFilter("callCenter", event.target.value)}><option value="">كل مناديب الكول سنتر</option>{callCenterUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
-              <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
+              <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).filter((item) => !["manual", "manual_entry", "manual-entry"].includes(String(item.code || "").toLowerCase())).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
             </div>
           </section>
           <section className="crm-report-filter-block search-block">
@@ -382,10 +439,11 @@ export function CrmReportsPage() {
               <table className="crm-table reports">
                 <thead><tr>{columnsForSection(section).map((column) => <th key={`${section.title}-${String(column.key)}`}>{column.label}</th>)}</tr></thead>
                 <tbody>
-                  {section.rows.map((row) => (
+                  {section.rows.map((row, index) => (
                     <tr key={`${section.title}-${row.detailValue || row.name}`}>
                       {columnsForSection(section).map((column) => {
                         if (column.action) return <td key={String(column.key)}><button className="crm-table-button" onClick={() => openPopup(row)}><Users size={16} />تقارير العملاء</button></td>;
+                        if (column.key === "serial") return <td key={String(column.key)}>{index + 1}</td>;
                         if (column.key === "name") return <td key={String(column.key)}><strong className="crm-report-row-name">{row.name}</strong></td>;
                         if (column.percentage) return <td key={String(column.key)}><span className={`crm-quality-pill${column.key === "marketingQuality" ? "" : " sales"}`}>{row[column.key as keyof ReportRow] ?? 0}%</span></td>;
                         return <td key={String(column.key)}>{row[column.key as keyof ReportRow] ?? 0}</td>;

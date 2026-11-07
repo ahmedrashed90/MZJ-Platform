@@ -31,8 +31,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by m.department_code,m.status_label
       `,
       sql`select * from crm.report_quality_settings where id='default'`,
-      sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled from crm.crm_runtime_settings where id='default'`,
-      sql`select * from crm.integration_endpoints order by display_name`,
+      sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled,tracking_final_delivery_welcome_enabled from crm.crm_runtime_settings where id='default'`,
+      sql`
+        select source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,
+          templates_sync_url,inbound_webhook_url,health_url,secret_name,is_active,updated_by,updated_at,
+          (nullif(trim(coalesce(mersal_token,'')),'') is not null) as mersal_token_configured
+        from crm.integration_endpoints
+        order by display_name
+      `,
       sql`select code,name,is_active,sort_order from core.branches order by sort_order,name`,
       sql`
         select s.*,
@@ -59,6 +65,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
             'priority',m.priority,
             'is_active',m.is_active,
             'assignment_count',m.assignment_count,
+            'allocation_percentage',m.allocation_percentage,
+            'weighted_assignment_count',m.weighted_assignment_count,
             'last_assigned_at',m.last_assigned_at
           ) order by m.priority,u.full_name) filter (where m.user_id is not null),'[]'::json) as members
         from crm.assignment_rules r
@@ -80,16 +88,41 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql`
         select u.id::text,u.full_name,u.employee_no,u.is_active,u.can_receive_leads,
-          coalesce(array_agg(distinct d.code) filter (where d.code is not null),'{}') as department_codes,
-          coalesce(array_agg(distinct d.name) filter (where d.name is not null),'{}') as departments,
-          coalesce(array_agg(distinct b.code) filter (where b.code is not null),'{}') as branch_codes,
-          coalesce(array_agg(distinct b.name) filter (where b.name is not null),'{}') as branches
+          case when exists(select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+            then coalesce(crm_departments.codes,'{}'::text[]) else coalesce(global_departments.codes,'{}'::text[]) end as department_codes,
+          case when exists(select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+            then coalesce(crm_departments.names,'{}'::text[]) else coalesce(global_departments.names,'{}'::text[]) end as departments,
+          case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+            then coalesce(crm_branches.codes,'{}'::text[]) else coalesce(global_branches.codes,'{}'::text[]) end as branch_codes,
+          case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+            then coalesce(crm_branches.names,'{}'::text[]) else coalesce(global_branches.names,'{}'::text[]) end as branches
         from core.users u
-        left join core.user_departments ud on ud.user_id=u.id
-        left join core.departments d on d.id=ud.department_id
-        left join core.user_branches ub on ub.user_id=u.id
-        left join core.branches b on b.id=ub.branch_id
-        group by u.id
+        left join lateral (
+          select array_agg(d.code order by usd.is_primary desc,d.created_at,d.code) as codes,
+            array_agg(d.name order by usd.is_primary desc,d.created_at,d.code) as names
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm'
+        ) crm_departments on true
+        left join lateral (
+          select array_agg(distinct d.code) as codes,array_agg(distinct d.name) as names
+          from core.user_departments ud
+          join core.departments d on d.id=ud.department_id and d.is_active=true
+          where ud.user_id=u.id
+        ) global_departments on true
+        left join lateral (
+          select array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name) as codes,
+            array_agg(b.name order by usb.is_primary desc,b.sort_order,b.name) as names
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+        ) crm_branches on true
+        left join lateral (
+          select array_agg(distinct b.code) as codes,array_agg(distinct b.name) as names
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+        ) global_branches on true
         order by u.full_name
       `,
       sql`
@@ -102,10 +135,31 @@ export default async function handler(request: VercelRequest, response: VercelRe
       canManageBulkReallocation ? listCashReallocationAgents() : Promise.resolve([]),
     ]);
 
+    const assignmentUserById = new Map((assignmentUsers as any[]).map((row: any) => [row.id, row]));
     const rules = (assignmentRules as any[]).map((rule) => {
-      const activeMembers = (rule.members || []).filter((member: any) => member.is_active);
-      const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
-      const next = activeMembers.length ? activeMembers[(currentIndex + 1 + activeMembers.length) % activeMembers.length] : null;
+      const branchCode = clean(rule.branch_code);
+      const activeMembers = (rule.members || []).filter((member: any) => {
+        if (!member.is_active) return false;
+        const assignmentUser = assignmentUserById.get(member.user_id) as any;
+        if (!assignmentUser?.is_active || !assignmentUser?.can_receive_leads) return false;
+        if (!(assignmentUser.department_codes || []).includes(rule.department_code)) return false;
+        if (branchCode && !(assignmentUser.branch_codes || []).includes(branchCode)) return false;
+        return true;
+      });
+      let next: any = null;
+      if (rule.assignment_mode === "percentage") {
+        const weightedMembers = activeMembers.filter((member: any) => Number(member.allocation_percentage || 0) > 0);
+        const totalWeight = weightedMembers.reduce((sum: number, member: any) => sum + Number(member.allocation_percentage || 0), 0);
+        const totalAssigned = weightedMembers.reduce((sum: number, member: any) => sum + Number(member.weighted_assignment_count || 0), 0);
+        next = weightedMembers.slice().sort((left: any, right: any) => {
+          const leftDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(left.allocation_percentage || 0) / totalWeight) - Number(left.weighted_assignment_count || 0) : 0;
+          const rightDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(right.allocation_percentage || 0) / totalWeight) - Number(right.weighted_assignment_count || 0) : 0;
+          return rightDeficit - leftDeficit || Number(left.priority || 0) - Number(right.priority || 0) || String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar");
+        })[0] || null;
+      } else {
+        const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
+        next = activeMembers.length ? activeMembers[(currentIndex + 1 + activeMembers.length) % activeMembers.length] : null;
+      }
       return { ...rule, next_user_id: next?.user_id || null, next_user_name: next?.full_name || null };
     });
 
@@ -115,7 +169,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       templates,
       mappings,
       quality: quality[0],
-      automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false },
+      automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false, tracking_final_delivery_welcome_enabled: false },
       endpoints,
       branches,
       sources,
@@ -335,9 +389,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       update crm.crm_runtime_settings set
         cash_total_customers_template_enabled=${body.cashTotalCustomersEnabled === true},
         finance_call_center_template_enabled=${body.financeCallCenterEnabled === true},
+        tracking_final_delivery_welcome_enabled=${body.trackingFinalDeliveryWelcomeEnabled === true},
+        updated_by=${user.id}::uuid,
         updated_at=now()
       where id='default'
-      returning cash_total_customers_template_enabled,finance_call_center_template_enabled
+      returning cash_total_customers_template_enabled,finance_call_center_template_enabled,tracking_final_delivery_welcome_enabled
     `;
     await audit(user, "crm_automatic_template_settings_saved", "crm_runtime_settings", "default", row);
     return response.status(200).json({ ok: true, row, message: "تم حفظ إعدادات الإرسال التلقائي" });
@@ -435,19 +491,26 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const mediaSendUrl = clean(body.mediaSendUrl) || textSendUrl;
     const templatesSyncUrl = clean(body.templatesSyncUrl);
     const inboundWebhookUrl = clean(body.inboundWebhookUrl || body.webhookUrl);
+    const mersalToken = ["whatsapp", "mersal"].includes(sourceCode) ? clean(body.mersalToken) : "";
+    const endpointSecretName = ["whatsapp", "mersal"].includes(sourceCode)
+      ? "MZJ_GATEWAY_SECRET"
+      : clean(body.secretName);
     const [row] = await sql<any[]>`
       insert into crm.integration_endpoints(
         source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,templates_sync_url,inbound_webhook_url,
-        health_url,secret_name,is_active,updated_by,updated_at
+        health_url,secret_name,mersal_token,is_active,updated_by,updated_at
       ) values (
         ${sourceCode},${clean(body.displayName)||sourceCode},${textSendUrl||null},${inboundWebhookUrl||null},${textSendUrl||null},${templateSendUrl||null},
-        ${mediaSendUrl||null},${templatesSyncUrl||null},${inboundWebhookUrl||null},${clean(body.healthUrl)||null},${clean(body.secretName)||null},${body.isActive!==false},${user.id}::uuid,now()
+        ${mediaSendUrl||null},${templatesSyncUrl||null},${inboundWebhookUrl||null},${clean(body.healthUrl)||null},${endpointSecretName||null},${mersalToken||null},${body.isActive!==false},${user.id}::uuid,now()
       )
       on conflict (source_code) do update set display_name=excluded.display_name,send_url=excluded.send_url,webhook_url=excluded.webhook_url,
         text_send_url=excluded.text_send_url,template_send_url=excluded.template_send_url,media_send_url=excluded.media_send_url,
         templates_sync_url=excluded.templates_sync_url,inbound_webhook_url=excluded.inbound_webhook_url,health_url=excluded.health_url,
-        secret_name=excluded.secret_name,is_active=excluded.is_active,updated_by=excluded.updated_by,updated_at=now()
-      returning *
+        secret_name=excluded.secret_name,
+        mersal_token=case when excluded.mersal_token is not null then excluded.mersal_token else crm.integration_endpoints.mersal_token end,
+        is_active=excluded.is_active,updated_by=excluded.updated_by,updated_at=now()
+      returning source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,templates_sync_url,inbound_webhook_url,
+        health_url,secret_name,is_active,updated_by,updated_at,(nullif(trim(coalesce(mersal_token,'')),'') is not null) as mersal_token_configured
     `;
     return response.status(200).json({ ok: true, row });
   }
@@ -463,31 +526,155 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await sql`update crm.assignment_rules set is_active=false,updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
       return response.status(200).json({ ok: true });
     }
+
     const name = clean(body.name);
     const departmentCode = clean(body.departmentCode);
-    const memberIds = stringList(body.memberIds);
+    const memberIds = [...new Set(stringList(body.memberIds))];
+    const branchCodes = [...new Set(stringList(body.branchCodes ?? (body.branchCode ? [body.branchCode] : [])))];
+    const sourceCodes = [...new Set(stringList(body.sourceCodes))];
+    const assignmentMode = clean(body.assignmentMode) === "percentage" ? "percentage" : "round_robin";
+    const rawMemberPercentages = body.memberPercentages && typeof body.memberPercentages === "object" && !Array.isArray(body.memberPercentages) ? body.memberPercentages as Record<string, unknown> : {};
+    const memberPercentageById = new Map(memberIds.map((memberId) => [memberId, Number(rawMemberPercentages[memberId] || 0)]));
     if (!name || !departmentCode) return response.status(400).json({ ok: false, error: "اسم القاعدة والقسم مطلوبان" });
+    if (!branchCodes.length) return response.status(400).json({ ok: false, error: "اختر فرعًا واحدًا على الأقل لقاعدة التوزيع" });
     if (!memberIds.length) return response.status(400).json({ ok: false, error: "اختار موظفًا واحدًا على الأقل في قاعدة التوزيع" });
-    const sourceCodes = stringList(body.sourceCodes);
-    const [rule] = id
-      ? await sql<any[]>`
-          update crm.assignment_rules set name=${name},department_code=${departmentCode},branch_code=${clean(body.branchCode)||null},source_codes=${sourceCodes},assignment_mode='round_robin',prevent_consecutive=${body.preventConsecutive!==false},sort_order=${Number(body.sortOrder||0)},is_active=${body.isActive!==false},updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text
-        `
-      : await sql<any[]>`
-          insert into crm.assignment_rules(name,department_code,branch_code,source_codes,assignment_mode,prevent_consecutive,sort_order,is_active,created_by,updated_by)
-          values (${name},${departmentCode},${clean(body.branchCode)||null},${sourceCodes},'round_robin',${body.preventConsecutive!==false},${Number(body.sortOrder||0)},${body.isActive!==false},${user.id}::uuid,${user.id}::uuid) returning *,id::text
-        `;
-    await sql`delete from crm.assignment_rule_members where rule_id=${rule.id}::uuid and not (user_id = any(${memberIds}::uuid[]))`;
-    for (let index = 0; index < memberIds.length; index += 1) {
-      const memberId = memberIds[index];
-      await sql`
-        insert into crm.assignment_rule_members(rule_id,user_id,priority,is_active,updated_at)
-        values (${rule.id}::uuid,${memberId}::uuid,${(index+1)*10},true,now())
-        on conflict (rule_id,user_id) do update set priority=excluded.priority,is_active=true,updated_at=now()
-      `;
+
+    const validBranches = await sql<any[]>`
+      select code,name
+      from core.branches
+      where is_active=true and code=any(${branchCodes}::text[])
+    `;
+    const validBranchByCode = new Map<string, any>(validBranches.map((row: any) => [row.code, row]));
+    const invalidBranch = branchCodes.find((code) => !validBranchByCode.has(code));
+    if (invalidBranch) return response.status(400).json({ ok: false, error: "يوجد فرع غير صالح ضمن فروع قاعدة التوزيع" });
+
+    const selectedUsers = await sql<any[]>`
+      select u.id::text,u.full_name,u.is_active,u.can_receive_leads,
+        case when exists(select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+          then coalesce(crm_departments.codes,'{}'::text[]) else coalesce(global_departments.codes,'{}'::text[]) end as department_codes,
+        case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+          then coalesce(crm_branches.codes,'{}'::text[]) else coalesce(global_branches.codes,'{}'::text[]) end as branch_codes
+      from core.users u
+      left join lateral (
+        select array_agg(d.code order by usd.is_primary desc,d.created_at,d.code) as codes
+        from core.user_system_departments usd
+        join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+        where usd.user_id=u.id and usd.system_code='crm'
+      ) crm_departments on true
+      left join lateral (
+        select array_agg(distinct d.code) as codes
+        from core.user_departments ud
+        join core.departments d on d.id=ud.department_id and d.is_active=true
+        where ud.user_id=u.id
+      ) global_departments on true
+      left join lateral (
+        select array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name) as codes
+        from core.user_system_branches usb
+        join core.branches b on b.id=usb.branch_id and b.is_active=true
+        where usb.user_id=u.id and usb.system_code='crm'
+      ) crm_branches on true
+      left join lateral (
+        select array_agg(distinct b.code) as codes
+        from core.user_branches ub
+        join core.branches b on b.id=ub.branch_id and b.is_active=true
+        where ub.user_id=u.id
+      ) global_branches on true
+      where u.id=any(${memberIds}::uuid[])
+    `;
+    const selectedUserById = new Map<string, any>(selectedUsers.map((row: any) => [row.id, row]));
+    const eligibleMemberIdsByBranch = new Map<string, string[]>();
+    for (const branchCode of branchCodes) {
+      const eligibleIds = memberIds.filter((memberId) => {
+        const assignmentUser = selectedUserById.get(memberId) as any;
+        return Boolean(
+          assignmentUser?.is_active
+          && assignmentUser?.can_receive_leads
+          && (assignmentUser.department_codes || []).includes(departmentCode)
+          && (assignmentUser.branch_codes || []).includes(branchCode)
+        );
+      });
+      if (!eligibleIds.length) {
+        const branchName = validBranchByCode.get(branchCode)?.name || branchCode;
+        return response.status(400).json({ ok: false, error: `اختر مندوبًا مؤهلًا واحدًا على الأقل لفرع ${branchName}` });
+      }
+      if (assignmentMode === "percentage") {
+        const invalidPercentageMember = eligibleIds.find((memberId) => {
+          const value = Number(memberPercentageById.get(memberId) || 0);
+          return !Number.isFinite(value) || value < 0 || value > 100;
+        });
+        if (invalidPercentageMember) {
+          const invalidUser = selectedUserById.get(invalidPercentageMember) as any;
+          return response.status(400).json({ ok: false, error: `اكتب نسبة صحيحة من 0 إلى 100 للمندوب ${invalidUser?.full_name || "المحدد"}` });
+        }
+        const totalPercentage = eligibleIds.reduce((sum, memberId) => sum + Number(memberPercentageById.get(memberId) || 0), 0);
+        if (Math.abs(totalPercentage - 100) > 0.01) {
+          const branchName = validBranchByCode.get(branchCode)?.name || branchCode;
+          return response.status(400).json({ ok: false, error: `مجموع نسب المناديب في ${branchName} يجب أن يساوي 100% (الحالي ${totalPercentage.toFixed(2)}%)` });
+        }
+      }
+      eligibleMemberIdsByBranch.set(branchCode, eligibleIds);
     }
-    await audit(user, "assignment_rule_saved", "assignment_rule", rule.id, { ...rule, memberIds });
-    return response.status(200).json({ ok: true, row: rule });
+
+    const eligibleAcrossSelectedBranches = new Set([...eligibleMemberIdsByBranch.values()].flat());
+    const invalidMemberId = memberIds.find((memberId) => !eligibleAcrossSelectedBranches.has(memberId));
+    if (invalidMemberId) {
+      const invalidUser = selectedUserById.get(invalidMemberId) as any;
+      return response.status(400).json({ ok: false, error: `${invalidUser?.full_name || "أحد الموظفين"} غير مؤهل للقسم أو الفروع المختارة` });
+    }
+
+    let orderedBranchCodes = branchCodes;
+    let existingRule: any = null;
+    if (id) {
+      [existingRule] = await sql<any[]>`select id::text,branch_code,assignment_mode from crm.assignment_rules where id=${id}::uuid limit 1`;
+      if (!existingRule) return response.status(404).json({ ok: false, error: "قاعدة التوزيع غير موجودة" });
+      if (existingRule.branch_code && branchCodes.includes(existingRule.branch_code)) {
+        orderedBranchCodes = [existingRule.branch_code, ...branchCodes.filter((code) => code !== existingRule.branch_code)];
+      }
+    }
+
+    const savedRows = await sql.begin(async (tx: any) => {
+      const rows: any[] = [];
+      for (let branchIndex = 0; branchIndex < orderedBranchCodes.length; branchIndex += 1) {
+        const branchCode = orderedBranchCodes[branchIndex];
+        const eligibleMemberIds = eligibleMemberIdsByBranch.get(branchCode) || [];
+        const [rule] = id && branchIndex === 0
+          ? await tx<any[]>`
+              update crm.assignment_rules
+              set name=${name},department_code=${departmentCode},branch_code=${branchCode},source_codes=${sourceCodes},assignment_mode=${assignmentMode},prevent_consecutive=${assignmentMode === "percentage" ? false : body.preventConsecutive!==false},sort_order=${Number(body.sortOrder||0)},is_active=${body.isActive!==false},updated_by=${user.id}::uuid,updated_at=now()
+              where id=${id}::uuid
+              returning *,id::text
+            `
+          : await tx<any[]>`
+              insert into crm.assignment_rules(name,department_code,branch_code,source_codes,assignment_mode,prevent_consecutive,sort_order,is_active,created_by,updated_by)
+              values (${name},${departmentCode},${branchCode},${sourceCodes},${assignmentMode},${assignmentMode === "percentage" ? false : body.preventConsecutive!==false},${Number(body.sortOrder||0)},${body.isActive!==false},${user.id}::uuid,${user.id}::uuid)
+              returning *,id::text
+            `;
+
+        if (id && branchIndex === 0 && existingRule?.branch_code !== branchCode) {
+          await tx`delete from crm.assignment_state where pool_key=${`rule:${rule.id}`}`;
+        }
+        await tx`delete from crm.assignment_rule_members where rule_id=${rule.id}::uuid and not (user_id = any(${eligibleMemberIds}::uuid[]))`;
+        for (let memberIndex = 0; memberIndex < eligibleMemberIds.length; memberIndex += 1) {
+          const memberId = eligibleMemberIds[memberIndex];
+          const allocationPercentage = assignmentMode === "percentage" ? Number(memberPercentageById.get(memberId) || 0) : 0;
+          await tx`
+            insert into crm.assignment_rule_members(rule_id,user_id,priority,is_active,allocation_percentage,weighted_assignment_count,updated_at)
+            values (${rule.id}::uuid,${memberId}::uuid,${(memberIndex+1)*10},true,${allocationPercentage},0,now())
+            on conflict (rule_id,user_id) do update set priority=excluded.priority,is_active=true,allocation_percentage=excluded.allocation_percentage,weighted_assignment_count=0,updated_at=now()
+          `;
+        }
+        if (assignmentMode === "percentage" || existingRule?.assignment_mode === "percentage") {
+          await tx`delete from crm.assignment_state where pool_key=${`rule:${rule.id}`}`;
+        }
+        rows.push({ ...rule, memberIds: eligibleMemberIds, assignmentMode, memberPercentages: Object.fromEntries(eligibleMemberIds.map((memberId) => [memberId, Number(memberPercentageById.get(memberId) || 0)])) });
+      }
+      return rows;
+    });
+
+    for (const rule of savedRows) {
+      await audit(user, "assignment_rule_saved", "assignment_rule", rule.id, rule);
+    }
+    return response.status(200).json({ ok: true, row: savedRows[0], rows: savedRows });
   }
 
   if (section === "assignment_member") {

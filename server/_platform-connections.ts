@@ -7,8 +7,9 @@ import {
   normalizeYouTubePublishSettings,
   type YouTubePublishSettings,
 } from "../shared/youtube-publishing.js";
+import { googleAdsDiscover, type GoogleAdsAccount } from "./_google-ads-api.js";
 
-export type PlatformProvider = "meta" | "tiktok" | "youtube";
+export type PlatformProvider = "meta" | "tiktok" | "youtube" | "google_ads";
 type Sql = ReturnType<typeof import("./_db.js").getSql>;
 
 type ConnectionRow = {
@@ -95,7 +96,7 @@ function assertScopes(granted: string[], required: string[], providerName: strin
 }
 function providerFrom(value: unknown): PlatformProvider {
   const provider = clean(value).toLowerCase();
-  if (provider === "meta" || provider === "tiktok" || provider === "youtube") return provider;
+  if (provider === "meta" || provider === "tiktok" || provider === "youtube" || provider === "google_ads") return provider;
   throw new Error("المنصة المطلوبة غير مدعومة");
 }
 function stateHash(value: string) { return crypto.createHash("sha256").update(value).digest("hex"); }
@@ -180,7 +181,8 @@ function requestOrigin(request: VercelRequest) {
 function callbackUrl(provider: PlatformProvider, request: VercelRequest) {
   const explicit = provider === "meta" ? clean(process.env.META_REDIRECT_URI)
     : provider === "tiktok" ? clean(process.env.TIKTOK_REDIRECT_URI)
-      : clean(process.env.YOUTUBE_REDIRECT_URI);
+      : provider === "google_ads" ? clean(process.env.GOOGLE_ADS_REDIRECT_URI)
+        : clean(process.env.YOUTUBE_REDIRECT_URI);
   return explicit ? safePublicUrl(explicit, "OAuth Redirect URI").toString() : `${requestOrigin(request)}/api/marketing/platform-connections/callback/${provider}`;
 }
 function providerConfig(provider: PlatformProvider, request: VercelRequest) {
@@ -190,19 +192,21 @@ function providerConfig(provider: PlatformProvider, request: VercelRequest) {
     ? [["META_APP_ID", process.env.META_APP_ID], ["META_APP_SECRET", process.env.META_APP_SECRET], ["META_CONFIG_ID", process.env.META_CONFIG_ID]]
     : provider === "tiktok"
       ? [["TIKTOK_CLIENT_KEY", process.env.TIKTOK_CLIENT_KEY], ["TIKTOK_CLIENT_SECRET", process.env.TIKTOK_CLIENT_SECRET]]
-      : [["YOUTUBE_CLIENT_ID", process.env.YOUTUBE_CLIENT_ID], ["YOUTUBE_CLIENT_SECRET", process.env.YOUTUBE_CLIENT_SECRET]];
+      : provider === "google_ads"
+        ? [["GOOGLE_ADS_CLIENT_ID", process.env.GOOGLE_ADS_CLIENT_ID], ["GOOGLE_ADS_CLIENT_SECRET", process.env.GOOGLE_ADS_CLIENT_SECRET]]
+        : [["YOUTUBE_CLIENT_ID", process.env.YOUTUBE_CLIENT_ID], ["YOUTUBE_CLIENT_SECRET", process.env.YOUTUBE_CLIENT_SECRET]];
   const missing = required.filter(([, value]) => !clean(value)).map(([name]) => name);
   if (!encryptionConfigured) missing.push("MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY (32+ chars)");
   let redirectUri = "";
   try { redirectUri = callbackUrl(provider, request); }
   catch {
-    missing.push(provider === "meta" ? "META_REDIRECT_URI / MZJ_PUBLIC_BASE_URL" : provider === "tiktok" ? "TIKTOK_REDIRECT_URI / MZJ_PUBLIC_BASE_URL" : "YOUTUBE_REDIRECT_URI / MZJ_PUBLIC_BASE_URL");
+    missing.push(provider === "meta" ? "META_REDIRECT_URI / MZJ_PUBLIC_BASE_URL" : provider === "tiktok" ? "TIKTOK_REDIRECT_URI / MZJ_PUBLIC_BASE_URL" : provider === "google_ads" ? "GOOGLE_ADS_REDIRECT_URI / MZJ_PUBLIC_BASE_URL" : "YOUTUBE_REDIRECT_URI / MZJ_PUBLIC_BASE_URL");
   }
   return { configured: missing.length === 0, missing: [...new Set(missing)], redirectUri };
 }
 function ensureProviderConfigured(provider: PlatformProvider, request: VercelRequest) {
   const config = providerConfig(provider, request);
-  if (!config.configured) throw new Error(`إعداد ${provider === "meta" ? "Meta" : provider === "tiktok" ? "TikTok" : "YouTube"} غير مكتمل: ${config.missing.join("، ")}`);
+  if (!config.configured) throw new Error(`إعداد ${provider === "meta" ? "Meta" : provider === "tiktok" ? "TikTok" : provider === "google_ads" ? "Google Ads" : "YouTube"} غير مكتمل: ${config.missing.join("، ")}`);
   return config;
 }
 
@@ -248,9 +252,11 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
   const instagram = byPlatform.get("instagram");
   const tiktok = byPlatform.get("tiktok");
   const youtube = byPlatform.get("youtube");
+  const googleAds = byPlatform.get("google_ads");
   const metaConfig = providerConfig("meta", request);
   const tiktokConfig = providerConfig("tiktok", request);
   const youtubeConfig = providerConfig("youtube", request);
+  const googleAdsConfig = providerConfig("google_ads", request);
   const facebookPublic = facebook ? publicPlatformConnection(facebook) : null;
   const instagramPublic = instagram ? publicPlatformConnection(instagram) : null;
   const metaConnected = Boolean(facebook?.connected);
@@ -315,6 +321,36 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
         assets: { tiktok: tiktok ? publicPlatformConnection(tiktok) : null },
       },
       {
+        provider: "google_ads",
+        title: "Google Ads",
+        configured: googleAdsConfig.configured,
+        missingConfiguration: googleAdsConfig.missing,
+        redirectUri: googleAdsConfig.redirectUri,
+        connected: Boolean(googleAds?.connected),
+        status: providerStatus(googleAds),
+        state: clean(googleAds?.state) || "idle",
+        accountName: clean(googleAds?.account_name),
+        accountId: clean(googleAds?.account_id),
+        secondaryName: "حساب Google موحد مع YouTube عند اختيار نفس البريد",
+        secondaryId: "",
+        avatarUrl: "",
+        tokenStored: Boolean(googleAds && publicPlatformConnection(googleAds).tokenStored),
+        scopes: array(googleAds?.scopes).map(clean).filter(Boolean),
+        tokenExpiresAtIso: dateIso(googleAds?.token_expires_at),
+        lastVerifiedAtIso: dateIso(googleAds?.last_verified_at),
+        connectedAtIso: dateIso(googleAds?.connected_at),
+        updatedAtIso: dateIso(googleAds?.updated_at),
+        lastError: clean(googleAds?.last_error),
+        requiresSelection: false,
+        availablePages: [],
+        assets: { google_ads: googleAds ? publicPlatformConnection(googleAds) : null },
+        adAccounts: array(object(googleAds?.metadata).accounts),
+        selectedAccountIds: array(object(googleAds?.metadata).selectedAccountIds),
+        discoveryWarnings: array(object(googleAds?.metadata).warnings),
+        youtubeConnected: Boolean(youtube?.connected),
+        youtubeChannel: clean(youtube?.account_name),
+      },
+      {
         provider: "youtube",
         title: "YouTube",
         configured: youtubeConfig.configured,
@@ -357,12 +393,13 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
 function metaVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 function metaScopes() {
   const required = [
-    "public_profile","pages_show_list","pages_read_engagement","pages_read_user_content","pages_manage_posts","pages_manage_metadata",
+    "public_profile","pages_show_list","pages_read_engagement","pages_read_user_content","pages_manage_posts","pages_manage_metadata","read_insights",
     "instagram_basic","instagram_content_publish","instagram_manage_comments","instagram_manage_insights",
   ];
   return [...new Set([...parseScopes(process.env.META_SCOPES || ""), ...required])];
 }
 function tiktokScopes() { return parseScopes(process.env.TIKTOK_SCOPES || "user.info.basic,video.upload,video.publish"); }
+function tiktokRequiredScopes() { return ["user.info.basic", "video.upload", "video.publish"]; }
 const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
 const YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
 const YOUTUBE_PLAYLIST_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
@@ -409,10 +446,10 @@ export async function startPlatformOAuth(sql: Sql, user: SessionUser, request: V
     authorizationUrl = url.toString();
   } else {
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.set("client_id", clean(process.env.YOUTUBE_CLIENT_ID));
+    url.searchParams.set("client_id", clean(provider === "google_ads" ? process.env.GOOGLE_ADS_CLIENT_ID : process.env.YOUTUBE_CLIENT_ID));
     url.searchParams.set("redirect_uri", config.redirectUri);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", youtubeScopes().join(" "));
+    url.searchParams.set("scope", provider === "google_ads" ? "openid email https://www.googleapis.com/auth/adwords" : youtubeScopes().join(" "));
     url.searchParams.set("state", state);
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("include_granted_scopes", "true");
@@ -612,14 +649,48 @@ async function refreshTikTokToken(refreshToken: string) {
 async function loadTikTokUser(accessToken: string, scopes: string[]) {
   const fields = ["open_id", "union_id", "avatar_url", "display_name"];
   if (scopes.includes("user.info.profile")) fields.push("username", "profile_deep_link");
+  if (scopes.includes("user.info.stats")) fields.push("follower_count");
   const url = new URL("https://open.tiktokapis.com/v2/user/info/");
   url.searchParams.set("fields", fields.join(","));
-  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(9000) });
   if (payload?.error && clean(payload.error.code) && clean(payload.error.code) !== "ok") throw new Error(clean(payload.error.message || payload.error.code));
   const profile = payload?.data?.user;
   if (!profile?.open_id) throw new Error("تعذر قراءة بيانات حساب TikTok");
   return profile;
 }
+export async function tiktokProfileFollowersOverview(sql: Sql) {
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='tiktok' limit 1`;
+  if (!row?.connected || !row.access_token_encrypted) return { connected: false, accountName: '', followers: null as number | null, statsAvailable: false };
+  let scopes = array(row.scopes).map(clean);
+  const overview = { connected: true, accountName: clean(row.account_name), followers: null as number | null, statsAvailable: scopes.includes('user.info.stats') };
+  if (!overview.statsAvailable) return overview;
+  try {
+    let accessToken = decryptPlatformToken(row.access_token_encrypted);
+    if (tokenNearExpiry(row.token_expires_at)) {
+      if (!row.refresh_token_encrypted) return overview;
+      const originalRefresh = decryptPlatformToken(row.refresh_token_encrypted);
+      const refreshed = await refreshTikTokToken(originalRefresh);
+      accessToken = clean(refreshed.access_token);
+      if (!accessToken) return overview;
+      scopes = parseScopes(refreshed.scope || scopes.join(','));
+      const newRefresh = clean(refreshed.refresh_token) || originalRefresh;
+      await sql`update marketing.platform_connections set access_token_encrypted=${encryptPlatformToken(accessToken)},
+        refresh_token_encrypted=${encryptPlatformToken(newRefresh)},scopes=${sql.json(dbJson(scopes))},
+        token_expires_at=${addSeconds(refreshed.expires_in) || row.token_expires_at},
+        refresh_token_expires_at=${addSeconds(refreshed.refresh_expires_in) || row.refresh_token_expires_at},updated_at=now()
+        where platform='tiktok' and access_token_encrypted=${row.access_token_encrypted}`;
+    }
+    if (!scopes.includes('user.info.stats')) return { ...overview, statsAvailable: false };
+    const profile = await loadTikTokUser(accessToken, scopes);
+    const count = Number(profile.follower_count);
+    return { ...overview, accountName: clean(profile.display_name) || overview.accountName,
+      followers: Number.isSafeInteger(count) && count >= 0 && profile.follower_count != null ? count : null };
+  } catch {
+    // A follower lookup failure must not block the other connected providers.
+    return overview;
+  }
+}
+
 async function saveTikTokConnection(sql: Sql, user: SessionUser, token: any, profile: any, existing?: ConnectionRow) {
   const scopes = parseScopes(token.scope || array(existing?.scopes).join(","));
   const tokenExpiresAt = addSeconds(token.expires_in) || existing?.token_expires_at || null;
@@ -634,7 +705,7 @@ async function completeTikTokCallback(sql: Sql, user: SessionUser, code: string,
   const config = ensureProviderConfigured("tiktok", request);
   const token = await exchangeTikTokToken(code, config.redirectUri);
   const scopes = parseScopes(token.scope);
-  assertScopes(scopes, tiktokScopes(), "TikTok");
+  assertScopes(scopes, tiktokRequiredScopes(), "TikTok");
   const profile = await loadTikTokUser(clean(token.access_token), scopes);
   await saveTikTokConnection(sql, user, token, profile);
   await recordEvent(sql, user, "tiktok", "connected", "success", clean(profile.display_name), { openId: clean(profile.open_id), scopes });
@@ -740,7 +811,7 @@ async function loadYouTubeChannel(accessToken: string) {
   const url = new URL("https://www.googleapis.com/youtube/v3/channels");
   url.searchParams.set("part", "id,snippet");
   url.searchParams.set("mine", "true");
-  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  const payload = await fetchJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(9000) });
   const channel = array(payload.items)[0];
   if (!channel?.id) throw new Error("الحساب المحدد لا يحتوي على قناة YouTube");
   return channel;
@@ -771,6 +842,105 @@ async function completeYouTubeCallback(sql: Sql, user: SessionUser, code: string
   return { status: "connected", message: "تم ربط قناة YouTube بنجاح", accountName: clean(channel.snippet?.title) };
 }
 
+
+const GOOGLE_ADWORDS_SCOPE = "https://www.googleapis.com/auth/adwords";
+async function googleAdsTokenExchange(params: Record<string, string>) {
+  return fetchJson("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({
+      client_id: clean(process.env.GOOGLE_ADS_CLIENT_ID),
+      client_secret: clean(process.env.GOOGLE_ADS_CLIENT_SECRET), ...params,
+    }),
+  });
+}
+async function googleAdsIdentity(accessToken: string) {
+  const data = await fetchJson("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
+  const email = clean(data.email).toLowerCase();
+  const subject = clean(data.sub);
+  if (!email || !subject || data.email_verified !== true) throw new Error("تعذر التحقق من هوية حساب Google المختار. فعّل صلاحية email.");
+  return { email, subject };
+}
+function storedGoogleAccounts(value: unknown): GoogleAdsAccount[] {
+  return array(value).filter(item => item && /^[0-9]{10}$/.test(clean(item.id))) as GoogleAdsAccount[];
+}
+async function persistGoogleAdsDiscovery(sql: Sql, data: { accounts: GoogleAdsAccount[]; warnings: string[] }) {
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='google_ads' and connected=true`;
+  if (!row) throw new Error("Google Ads غير مرتبط");
+  const metadata = object(row.metadata);
+  const previous = array(metadata.selectedAccountIds).map(clean);
+  const allowed = data.accounts.filter(item => !item.manager).map(item => item.id);
+  const selected = previous.length ? previous.filter(id => allowed.includes(id)) : allowed;
+  await sql`update marketing.platform_connections
+    set metadata=${sql.json(dbJson({ ...metadata, accounts: data.accounts, selectedAccountIds: selected, warnings: data.warnings }))},updated_at=now(),last_verified_at=now(),last_error=null,status='connected',state='ready'
+    where platform='google_ads' and connected=true`;
+}
+
+async function completeGoogleAdsCallback(sql: Sql, user: SessionUser, code: string, request: VercelRequest) {
+  const config = ensureProviderConfigured("google_ads", request);
+  const token = await googleAdsTokenExchange({ code, grant_type: "authorization_code", redirect_uri: config.redirectUri });
+  const scopes = parseScopes(token.scope);
+  assertScopes(scopes, [GOOGLE_ADWORDS_SCOPE], "Google Ads");
+  const accessToken = clean(token.access_token);
+  const identity = await googleAdsIdentity(accessToken);
+  const [existing] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='google_ads'`;
+  const sameAccount = clean(object(existing?.metadata).googleSubject) === identity.subject;
+  const previousRefresh = sameAccount && existing?.refresh_token_encrypted ? decryptPlatformToken(existing.refresh_token_encrypted) : "";
+  const refreshToken = clean(token.refresh_token || previousRefresh);
+  if (!refreshToken) throw new Error("لم يرجع Google Refresh Token لحساب الإعلانات. أعد الربط مع الموافقة على الوصول دون اتصال.");
+  const discovered = await googleAdsDiscover(accessToken);
+  const previousSelection = sameAccount ? array(object(existing?.metadata).selectedAccountIds).map(clean) : [];
+  const selectedAccountIds = previousSelection.length
+    ? previousSelection.filter(id => discovered.accounts.some(account => account.id === id && !account.manager))
+    : discovered.accounts.filter(account => !account.manager).map(account => account.id);
+  const metadata = { googleSubject: identity.subject, email: identity.email, accounts: discovered.accounts,
+    selectedAccountIds, warnings: discovered.warnings };
+  await sql`insert into marketing.platform_connections (
+      platform,connected,status,state,source,account_id,account_name,scopes,metadata,
+      access_token_encrypted,refresh_token_encrypted,token_expires_at,last_verified_at,last_error,connected_at,updated_at,connected_by,updated_by
+    ) values ('google_ads',true,'connected','ready','oauth-google-ads',${identity.subject},${identity.email},
+      ${sql.json(dbJson(scopes))},${sql.json(dbJson(metadata))},${encryptPlatformToken(accessToken)},
+      ${encryptPlatformToken(refreshToken)},${addSeconds(token.expires_in)},now(),null,now(),now(),${user.id}::uuid,${user.id}::uuid)
+    on conflict(platform) do update set connected=true,status='connected',state='ready',source='oauth-google-ads',
+      account_id=excluded.account_id,account_name=excluded.account_name,scopes=excluded.scopes,metadata=excluded.metadata,
+      access_token_encrypted=excluded.access_token_encrypted,refresh_token_encrypted=excluded.refresh_token_encrypted,
+      token_expires_at=excluded.token_expires_at,last_verified_at=now(),last_error=null,
+      connected_at=coalesce(marketing.platform_connections.connected_at,now()),disconnected_at=null,updated_at=now(),
+      connected_by=excluded.connected_by,updated_by=excluded.updated_by`;
+  await recordEvent(sql, user, "google_ads", "connected", "success", identity.email,
+    { accountIds: discovered.accounts.filter(account => !account.manager).map(account => account.id) });
+  return { status: "connected", message: `تم ربط Google Ads للحساب ${identity.email}. وجدنا ${selectedAccountIds.length} حساب إعلاني جاهز للمتابعة، دون المساس بربط YouTube.`, accountName: identity.email };
+}
+
+export async function getGoogleAdsAccessToken(sql: Sql) {
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='google_ads' and connected=true`;
+  if (!row || !row.refresh_token_encrypted) throw new Error("اربط Google Ads من إعدادات التسويق أولًا.");
+  assertScopes(array(row.scopes).map(clean), [GOOGLE_ADWORDS_SCOPE], "Google Ads");
+  let accessToken = row.access_token_encrypted ? decryptPlatformToken(row.access_token_encrypted) : "";
+  if (tokenNearExpiry(row.token_expires_at, 5)) {
+    const refresh = await googleAdsTokenExchange({ grant_type: "refresh_token", refresh_token: decryptPlatformToken(row.refresh_token_encrypted) });
+    accessToken = clean(refresh.access_token);
+    if (!accessToken) throw new Error("تعذر تجديد Google Ads OAuth. أعد ربط حساب Google.");
+    await sql`update marketing.platform_connections set access_token_encrypted=${encryptPlatformToken(accessToken)},
+      token_expires_at=${addSeconds(refresh.expires_in)},last_verified_at=now(),last_error=null,updated_at=now()
+      where platform='google_ads'`;
+  }
+  const metadata = object(row.metadata);
+  return { accessToken, accounts: storedGoogleAccounts(metadata.accounts), selectedAccountIds: array(metadata.selectedAccountIds).map(clean) };
+}
+
+export async function saveGoogleAdsAccountSelection(sql: Sql, user: SessionUser, requested: unknown) {
+  if (!Array.isArray(requested)) throw new Error("اختر الحسابات الإعلانية المطلوبة");
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='google_ads' and connected=true`;
+  if (!row) throw new Error("Google Ads غير مرتبط");
+  const metadata = object(row.metadata);
+  const allowed = storedGoogleAccounts(metadata.accounts).filter(item => !item.manager).map(item => item.id);
+  const ids = [...new Set(requested.map(clean))];
+  if (ids.some(id => !allowed.includes(id))) throw new Error("الحساب الإعلاني المحدد غير تابع لحساب Google المرتبط");
+  await sql`update marketing.platform_connections set metadata=${sql.json(dbJson({ ...metadata, selectedAccountIds: ids }))},
+    updated_at=now(),updated_by=${user.id}::uuid where platform='google_ads'`;
+  await recordEvent(sql, user, "google_ads", "accounts_selected", "success", clean(row.account_name), { accountIds: ids });
+  return { ok: true, selectedAccountIds: ids, message: "تم حفظ الحسابات الإعلانية المختارة دون تغيير ربط YouTube" };
+}
+
 export async function completePlatformOAuth(sql: Sql, user: SessionUser, request: VercelRequest, providerValue: unknown) {
   const provider = providerFrom(providerValue);
   const state = clean(request.query.state);
@@ -785,6 +955,7 @@ export async function completePlatformOAuth(sql: Sql, user: SessionUser, request
   try {
     const result = provider === "meta" ? await completeMetaCallback(sql, user, code, request)
       : provider === "tiktok" ? await completeTikTokCallback(sql, user, code, request)
+        : provider === "google_ads" ? await completeGoogleAdsCallback(sql, user, code, request)
         : await completeYouTubeCallback(sql, user, code, request);
     return { provider, returnOrigin: oauthState.return_origin, returnPath: oauthState.return_path, ...result };
   } catch (error: any) {
@@ -882,11 +1053,18 @@ export async function validatePlatformConnection(sql: Sql, user: SessionUser, re
         refreshToken = clean(token.refresh_token || refreshToken);
       }
       const scopes = parseScopes(token.scope || array(row.scopes).join(","));
-      assertScopes(scopes, tiktokScopes(), "TikTok");
+      assertScopes(scopes, tiktokRequiredScopes(), "TikTok");
       const profile = await loadTikTokUser(accessToken, scopes);
       await saveTikTokConnection(sql, user, { ...token, scope: scopes.join(","), access_token: accessToken, refresh_token: refreshToken }, profile, row);
       await recordEvent(sql, user, "tiktok", "validated", "success", clean(profile.display_name), { openId: clean(profile.open_id) });
       return { ok: true, message: "تم التحقق من TikTok وتجديد التوكن عند الحاجة" };
+    }
+    if (provider === "google_ads") {
+      const { accessToken } = await getGoogleAdsAccessToken(sql);
+      const accountList = await googleAdsDiscover(accessToken);
+      await persistGoogleAdsDiscovery(sql, accountList);
+      await recordEvent(sql, user, "google_ads", "validated", "success", undefined, { accounts: accountList.accounts.length });
+      return { ok: true, message: `تم فحص Google Ads وتحديث ${accountList.accounts.length} حساب إعلاني` };
     }
     const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='youtube'`;
     if (!row?.connected || !row.access_token_encrypted) throw new Error("YouTube غير مربوطة");

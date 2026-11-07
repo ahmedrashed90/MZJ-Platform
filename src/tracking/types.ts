@@ -63,6 +63,12 @@ export type TrackingOrderRow = {
   total_incl_vat?: number | string | null;
   advance_paid?: number | string | null;
   registration_fee?: number | string | null;
+  package_name?: string | null;
+  package_group?: string | null;
+  package_price_before_tax?: number | string | null;
+  package_tax_value?: number | string | null;
+  package_total_incl_vat?: number | string | null;
+  package_cash_discount_percent?: number | string | null;
   vehicles_count: number;
   completed_stages: number;
   total_stages: number;
@@ -120,6 +126,12 @@ export type PublicTrackingOrder = {
   total_incl_vat?: number | string | null;
   advance_paid?: number | string | null;
   registration_fee?: number | string | null;
+  package_name?: string | null;
+  package_group?: string | null;
+  package_price_before_tax?: number | string | null;
+  package_tax_value?: number | string | null;
+  package_total_incl_vat?: number | string | null;
+  package_cash_discount_percent?: number | string | null;
   status: TrackingStatus;
   is_archived?: boolean;
   is_cancelled?: boolean;

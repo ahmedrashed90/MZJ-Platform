@@ -5,6 +5,8 @@ import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
 
+const MANUAL_LEAD_SOURCE_CODE = "branch";
+
 function boundedInt(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
@@ -120,7 +122,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const { serviceKey, departmentCode, branchCode, paymentType } = owner;
     const [duplicate] = await sql<any[]>`select id::text,customer_name from crm.leads where phone_normalized=${phoneNormalized} and is_deleted=false limit 1`;
     const approvalStatus = duplicate ? "pending" : "approved";
-    const sourceCode = clean(body.sourceCode || "branch");
+    const sourceCode = MANUAL_LEAD_SOURCE_CODE;
     const sourceName = await resolveSourceName(sourceCode);
     const assignedTo = user.id;
     const callCenterTo = null;
@@ -175,7 +177,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const paymentType = clean(row.payment_type) || paymentTypeForService(serviceKey);
       const assignedTo = clean(row.requested_assigned_to) || clean(row.requested_by);
       const callCenterTo = null;
-      const sourceCode = clean(body.sourceCode || row.source_code || "branch");
+      const sourceCode = MANUAL_LEAD_SOURCE_CODE;
       const sourceName = await resolveSourceName(sourceCode);
       const [duplicate] = await sql<any[]>`
         select id::text,customer_name from crm.leads
@@ -235,14 +237,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const [lead] = await sql<any[]>`
       update crm.leads set
         customer_name=coalesce(nullif(${row.customer_name},''),customer_name),phone=${row.phone},phone_normalized=${row.phone_normalized},
-        source_history=coalesce(source_history,'[]'::jsonb) || ${sql.json([{ source: row.source_code, at: new Date().toISOString() }])}::jsonb,
+        source_history=coalesce(source_history,'[]'::jsonb) || ${sql.json([{ source: MANUAL_LEAD_SOURCE_CODE, at: new Date().toISOString() }])}::jsonb,
         car_name=coalesce(nullif(${row.car_name},''),car_name),car_category=coalesce(nullif(${row.car_category},''),car_category),car_model=coalesce(nullif(${row.car_model},''),car_model),color=coalesce(nullif(${row.color},''),color),finance_type=coalesce(nullif(${row.finance_type},''),finance_type),location=coalesce(nullif(${row.location},''),location),
         registered_at=coalesce(${row.registered_at}::timestamptz,registered_at),notes=concat_ws(E'\n',notes,${row.notes || null}::text),
         assigned_to=coalesce(${clean(body.assignedTo) || row.requested_assigned_to}::uuid,assigned_to),
         updated_by=${user.id}::uuid,updated_at=now()
       where id=${targetId}::uuid returning id::text
     `;
-    await sql`update crm.manual_lead_requests set approval_status='approved',approval_note=${clean(body.note) || null},reviewed_by=${user.id}::uuid,reviewed_at=now(),created_lead_id=${targetId}::uuid,updated_at=now() where id=${id}::uuid`;
+    await sql`update crm.manual_lead_requests set source_code=${MANUAL_LEAD_SOURCE_CODE},approval_status='approved',approval_note=${clean(body.note) || null},reviewed_by=${user.id}::uuid,reviewed_at=now(),created_lead_id=${targetId}::uuid,updated_at=now() where id=${id}::uuid`;
     await attachLeadToContactAndOpenRequest({ leadId: targetId, actor: user, classificationMethod: "manual_duplicate" });
     await sql`insert into crm.lead_events(lead_id,event_type,actor_id,actor_name,note,details) values (${targetId}::uuid,'manual_duplicate_approved',${user.id}::uuid,${user.fullName},'تمت الموافقة وتحديث العميل الأصلي بدون تكرار',${sql.json({ requestId: id })})`;
     await audit(user, "manual_duplicate_approved", "manual_lead_request", id, { targetId });

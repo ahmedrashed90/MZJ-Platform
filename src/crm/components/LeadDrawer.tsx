@@ -53,12 +53,6 @@ const fallbackFinanceOptions = [
   { value: "realEstate", label: "عقاري 65%" },
 ];
 
-const databaseDepartmentOptions = [
-  { value: "cash_sales", label: "مبيعات الكاش", serviceKey: "cash" as ServiceKey },
-  { value: "finance_sales", label: "مبيعات التمويل", serviceKey: "finance" as ServiceKey },
-  { value: "customer_service", label: "خدمة العملاء", serviceKey: "service" as ServiceKey },
-];
-
 const fallbackFields: CrmCustomerField[] = [
   { id: "status_label", field_key: "status_label", label: "حالة العميل", field_type: "status", sort_order: 10, department_keys: [], is_active: true, is_required: true, include_in_completion: true, options: [], is_system: true, is_locked: true },
   { id: "follow_up_at", field_key: "follow_up_at", label: "تاريخ المتابعة", field_type: "date", sort_order: 20, department_keys: [], is_active: true, is_required: false, include_in_completion: false, options: [], is_system: true, is_locked: false },
@@ -66,7 +60,7 @@ const fallbackFields: CrmCustomerField[] = [
   { id: "department_code", field_key: "department_code", label: "القسم", field_type: "department", sort_order: 40, department_keys: [], is_active: true, is_required: true, include_in_completion: true, options: [], is_system: true, is_locked: true },
   { id: "department_transfer", field_key: "department_transfer", label: "تحويل لقسم آخر", field_type: "transfer", sort_order: 50, department_keys: [], is_active: true, is_required: false, include_in_completion: false, options: [], is_system: true, is_locked: true },
   { id: "customer_name", field_key: "customer_name", label: "اسم العميل", field_type: "text", sort_order: 60, department_keys: [], is_active: true, is_required: true, include_in_completion: true, options: [], is_system: true, is_locked: true },
-  { id: "phone", field_key: "phone", label: "رقم الجوال", field_type: "phone", sort_order: 70, department_keys: [], is_active: true, is_required: true, include_in_completion: true, options: [], is_system: true, is_locked: true },
+  { id: "phone", field_key: "phone", label: "رقم الجوال", field_type: "phone", sort_order: 70, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: true },
   { id: "age", field_key: "age", label: "العمر", field_type: "number", sort_order: 80, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "salary", field_key: "salary", label: "الراتب", field_type: "number", sort_order: 90, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: true },
   { id: "obligation", field_key: "obligation", label: "الالتزام إن وجد", field_type: "number", sort_order: 100, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: true },
@@ -82,6 +76,26 @@ const fallbackFields: CrmCustomerField[] = [
 
 function value(input: unknown) {
   return input == null ? "" : String(input);
+}
+
+function isWholesaleDepartmentCode(input: unknown) {
+  const code = value(input).trim().toLowerCase();
+  return code === "wholesale" || code === "wholesale_sales" || code.includes("wholesale") || code.includes("جملة");
+}
+
+function isWholesaleBranch(branch: { code?: unknown; name?: unknown }) {
+  const code = value(branch.code).trim().toLowerCase();
+  const name = value(branch.name).trim().toLowerCase();
+  return ["wholesale", "wholesale_sales", "jumla", "jomla", "aljumla"].includes(code)
+    || code.includes("wholesale")
+    || code.includes("jumla")
+    || name.includes("الجملة");
+}
+
+function userMatchesDepartment(user: { department_codes?: string[] }, departmentCode: string) {
+  const codes = Array.isArray(user.department_codes) ? user.department_codes : [];
+  if (isWholesaleDepartmentCode(departmentCode)) return codes.some((code) => isWholesaleDepartmentCode(code));
+  return codes.includes(departmentCode);
 }
 
 function comparableValue(input: unknown) {
@@ -139,7 +153,7 @@ function departmentCodeFor(key: ServiceKey) {
 }
 
 function branchCodeFor(key: ServiceKey) {
-  if (key === "finance") return "online";
+  if (key === "finance") return "";
   if (key === "service") return "customer_service";
   return "";
 }
@@ -310,13 +324,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
     try {
-      let id = preferredId;
-      if (!id) {
-        const result = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`);
-        id = result.rows[0]?.id || "";
-        setConversationId(id);
-        setConversationChannel(result.rows[0]?.channel_code || "");
-      }
+      const resolved = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`);
+      const resolvedId = resolved.rows[0]?.id || "";
+      const id = resolvedId || preferredId;
+      setConversationId(id);
+      setConversationChannel(resolved.rows[0]?.channel_code || "");
       if (id) {
         const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
@@ -355,16 +367,39 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     .filter((item) => item.value !== "تم البيع" || form?.values.status_label === "تم البيع")
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department, form?.values.status_label]);
 
+  const databaseDepartmentOptions = useMemo(() => {
+    const currentDepartmentCode = value(form?.departmentCode || lead?.department_code).trim().toLowerCase();
+    const configuredCodes = new Set((meta?.users || []).flatMap((user) => user.department_codes || []).map((code) => value(code).trim().toLowerCase()).filter(Boolean));
+    const configuredWholesaleCode = configuredCodes.has("wholesale")
+      ? "wholesale"
+      : configuredCodes.has("wholesale_sales")
+        ? "wholesale_sales"
+        : [...configuredCodes].find((code) => isWholesaleDepartmentCode(code));
+    const wholesaleCode = isWholesaleDepartmentCode(currentDepartmentCode)
+      ? currentDepartmentCode
+      : configuredWholesaleCode || "wholesale";
+    return [
+      { value: "cash_sales", label: "مبيعات الكاش", serviceKey: "cash" as ServiceKey },
+      { value: "finance_sales", label: "مبيعات التمويل", serviceKey: "finance" as ServiceKey },
+      { value: wholesaleCode, label: "قسم الجملة", serviceKey: "cash" as ServiceKey },
+      { value: "customer_service", label: "خدمة العملاء", serviceKey: "service" as ServiceKey },
+    ];
+  }, [meta?.users, form?.departmentCode, lead?.department_code]);
+
   const editableBranches = useMemo(() => {
     const branches = meta?.branches || [];
     const departmentCode = form?.departmentCode || departmentCodeFor(department);
     const userBranchCodes = new Set((meta?.users || [])
-      .filter((user) => user.department_codes.includes(departmentCode))
+      .filter((user) => userMatchesDepartment(user, departmentCode))
       .flatMap((user) => user.branch_codes || []));
     const currentBranch = form?.branchCode || "";
     const matching = branches.filter((branch) => {
+      if (isWholesaleDepartmentCode(departmentCode)) {
+        if (userBranchCodes.size) return isWholesaleBranch(branch) || userBranchCodes.has(branch.code) || branch.code === currentBranch;
+        return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
+      }
       if (userBranchCodes.size) return userBranchCodes.has(branch.code) || branch.code === currentBranch;
-      if (department === "finance") return branch.code === "online" || branch.code === currentBranch;
+      if (department === "finance") return branch.code !== "online" && branch.code !== "customer_service" || branch.code === currentBranch;
       if (department === "service") return branch.code === "customer_service" || branch.code === currentBranch;
       return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
     });
@@ -373,7 +408,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   const editableAgents = useMemo(() => {
     const departmentCode = form?.departmentCode || departmentCodeFor(department);
-    const matching = (meta?.users || []).filter((user) => user.department_codes.includes(departmentCode));
+    const matching = (meta?.users || []).filter((user) => userMatchesDepartment(user, departmentCode));
     const current = (meta?.users || []).find((user) => user.id === form?.assignedTo);
     return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
   }, [meta?.users, form?.departmentCode, form?.assignedTo, department]);
@@ -510,8 +545,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       values: {
         ...current.values,
         department_code: departmentCodeFor(next),
-        status_label: "عميل جديد",
-        follow_up_at: "",
+        // Department transfer never changes the customer's existing status.
+        status_label: current.values.status_label,
+        follow_up_at: current.values.follow_up_at,
         finance_type: next === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
       },
     };
@@ -522,22 +558,27 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       if (!current) return current;
       const option = databaseDepartmentOptions.find((item) => item.value === nextDepartmentCode) || databaseDepartmentOptions[0];
       const nextServiceKey = option.serviceKey;
-      const nextStatuses = (meta?.statuses || [])
-        .filter((item) => item.department_code === nextServiceKey && item.is_active !== false)
-        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-      const statusStillValid = nextStatuses.some((item) => item.value === current.values.status_label);
-      const departmentUsers = (meta?.users || []).filter((user) => user.department_codes.includes(nextDepartmentCode));
+      // Status belongs to the customer, not to the destination department's
+      // list of status options. Keep even statuses not configured there.
+      const departmentUsers = (meta?.users || []).filter((user) => userMatchesDepartment(user, nextDepartmentCode));
       const allowedBranchCodes = new Set(departmentUsers.flatMap((user) => user.branch_codes || []));
       const candidateBranches = (meta?.branches || []).filter((branch) => {
-        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code);
-        if (nextServiceKey === "finance") return branch.code === "online";
-        if (nextServiceKey === "service") return branch.code === "customer_service";
-        return !["online", "customer_service"].includes(branch.code);
+        if (isWholesaleDepartmentCode(nextDepartmentCode)) {
+          if (allowedBranchCodes.size) return isWholesaleBranch(branch) || allowedBranchCodes.has(branch.code) || branch.code === current.branchCode;
+          return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
+        }
+        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code) || branch.code === current.branchCode;
+        if (nextServiceKey === "finance") return branch.code !== "online" && branch.code !== "customer_service" || branch.code === current.branchCode;
+        if (nextServiceKey === "service") return branch.code === "customer_service" || branch.code === current.branchCode;
+        return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
       });
       const currentBranchIsValid = candidateBranches.some((branch) => branch.code === current.branchCode);
+      const wholesaleBranch = candidateBranches.find(isWholesaleBranch);
       const nextBranchCode = currentBranchIsValid
         ? current.branchCode
-        : branchCodeFor(nextServiceKey) || candidateBranches[0]?.code || "";
+        : isWholesaleDepartmentCode(nextDepartmentCode)
+          ? wholesaleBranch?.code || (candidateBranches.length === 1 ? candidateBranches[0].code : "")
+          : branchCodeFor(nextServiceKey) || "";
       const currentAgentIsValid = departmentUsers.some((user) => user.id === current.assignedTo);
       return {
         ...current,
@@ -549,8 +590,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         values: {
           ...current.values,
           department_code: nextDepartmentCode,
-          status_label: statusStillValid ? current.values.status_label : (nextStatuses.find((item) => item.value === "عميل جديد")?.value || nextStatuses[0]?.value || "عميل جديد"),
-          follow_up_at: statusStillValid && isPostponed(current.values.status_label) ? current.values.follow_up_at : "",
+          status_label: current.values.status_label,
+          follow_up_at: current.values.follow_up_at,
           finance_type: nextServiceKey === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
         },
       };
@@ -560,6 +601,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   async function saveLead() {
     const currentLead = lead;
     if (!currentLead) return;
+    if (!showConversation && isWholesaleDepartmentCode(activeForm.departmentCode) && !activeForm.branchCode) {
+      setNotice("اختر فرع قسم الجملة قبل حفظ بيانات العميل");
+      return;
+    }
     setSaving(true);
     setNotice("");
     try {
@@ -617,7 +662,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       }
 
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
-      setForm((current) => current ? { ...current, values: { ...current.values, notes: value(result.row.notes) } } : current);
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          notes: value(result.row.notes),
+          sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : current.values.sold_at,
+          sold_quantity: value(result.row.sold_quantity || current.values.sold_quantity || 1),
+        },
+      } : current);
+      if (showSalesHistory) await loadSalesHistory(result.row.id, true);
       setNoteDraft("");
       onSaved(result.row);
       setNotice("تم حفظ بيانات العميل");
@@ -819,8 +873,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   function renderField(field: CrmCustomerField) {
     const currentValue = fieldValue(field);
     const label = <span>{field.label}{field.is_required ? <b className="crm-required-mark"> *</b> : null}</span>;
-    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
-    if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
+    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{currentValue && !statuses.some((status) => status.value === currentValue) ? <option value={currentValue}>{currentValue}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
+    if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} disabled={showConversation} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
     if (field.field_type === "department") return <label key={field.id}>{label}<input value={departmentLabel(activeForm.departmentCode)} readOnly /></label>;
     if (field.field_type === "transfer") return <label key={field.id}>{label}<select value={activeForm.serviceKey} onChange={(event) => setField(field, event.target.value)}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>;
     if (field.field_type === "textarea" && field.field_key === "notes") return <label key={field.id} className="crm-field-wide crm-notes-field">{label}{currentValue ? <div className="crm-notes-history">{currentValue}</div> : <div className="crm-notes-history empty">لا توجد ملاحظات محفوظة</div>}<textarea rows={4} value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="اكتب ملاحظة جديدة، وسيتم حفظها بتاريخ اليوم عند الضغط على حفظ بيانات العميل" /></label>;
@@ -924,7 +978,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
                 <div className="crm-database-edit-routing-grid">
                   <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-                  <label><span>الفرع</span><select value={activeForm.branchCode} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">بدون فرع</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
+                  <label><span>الفرع</span><select value={activeForm.branchCode} required={isWholesaleDepartmentCode(activeForm.departmentCode)} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="" disabled={isWholesaleDepartmentCode(activeForm.departmentCode)}>{isWholesaleDepartmentCode(activeForm.departmentCode) ? "اختر فرع قسم الجملة" : "بدون فرع"}</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
                   <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
                   <label><span>الحالة</span><select value={activeForm.values.status_label} disabled={activeForm.values.status_label === "تم البيع"} onChange={(event) => {
                     const nextStatus = event.target.value;
@@ -938,6 +992,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                       },
                     } : current);
                   }}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
+                  {activeForm.values.status_label === "تم البيع" ? <label><span>تاريخ تم البيع</span><input type="date" required value={activeForm.values.sold_at} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_at: event.target.value } } : current)} /></label> : null}
                   <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
                   <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
                 </div>

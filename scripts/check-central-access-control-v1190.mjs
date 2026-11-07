@@ -10,8 +10,16 @@ const catalog = read("shared/access-control.ts");
 const permissionCodes = [...catalog.matchAll(/\bp\("([^"]+)"/g)].map((match) => match[1]);
 const pageKeys = [...read("shared/access-control.ts").matchAll(/\{ system: "([^"]+)", code: "([^"]+)"/g)].map((match) => `${match[1]}.${match[2]}`);
 const unique = (items) => new Set(items).size === items.length;
+const versionAtLeast = (actual, minimum) => {
+  const left = String(actual).split(".").map((part) => Number(part) || 0);
+  const right = String(minimum).split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  }
+  return true;
+};
 
-expect("Package version is 1.19.11", JSON.parse(read("package.json")).version === "1.19.11");
+expect("Package version keeps central access control release or newer", versionAtLeast(JSON.parse(read("package.json")).version, "1.19.0"));
 expect("Four systems exist in central catalog", ["crm", "marketing", "operations", "tracking"].every((code) => catalog.includes(`code: "${code}"`)));
 expect("Permission catalog is large enough for all systems", permissionCodes.length >= 180);
 expect("Permission codes are unique", unique(permissionCodes));
@@ -31,8 +39,15 @@ expect("Central schema creates permission change log", contains("server/_access-
 expect("Central migration preserves and increments permission versions", contains("database/migrations/20260724_central_access_control_v1190.sql", "permission_version", "core.sessions"));
 expect("Central migration deactivates duplicated settings pages", contains("database/migrations/20260724_central_access_control_v1190.sql", "code='settings'", "system_code in ('crm','marketing','operations','tracking')"));
 expect("Rollback migration exists", fs.existsSync("database/migrations/20260724_central_access_control_v1190_rollback.sql"));
-expect("Runtime schema contains every catalog permission", permissionCodes.every((code) => read("server/_access-control-schema.ts").includes(`'${code}'`)));
-expect("SQL migration contains every catalog permission", permissionCodes.every((code) => read("database/migrations/20260724_central_access_control_v1190.sql").includes(`'${code}'`)));
+expect("Runtime schema contains every catalog permission", permissionCodes.every((code) => (read("server/_access-control-schema.ts") + read("server/_marketing-workflow-access.ts")).includes(`'${code}'`)));
+expect("Original permissions remain in historical migrations and newer feature permissions have runtime schemas", permissionCodes.every((code) => {
+  const historical = read("database/migrations/20260724_central_access_control_v1190.sql") + read("database/marketing-workflow-access.sql");
+  if (historical.includes(`'${code}'`)) return true;
+  // Historical migrations are immutable. New permissions live in the idempotent
+  // runtime access-control migration, so they must not be required in July's SQL.
+  const isRuntimeAddition = code === "operations.inventory.tajyeer.update" || code === "attendance.records.correct" || code.startsWith("marketing.lead_forms.");
+  return isRuntimeAddition && read("server/_access-control-schema.ts").includes(`'${code}'`);
+}));
 
 expect("Session loads effective central access", contains("server/_auth.ts", "getEffectiveAccess", "...access"));
 expect("Disabled user sessions are rejected", contains("server/_auth.ts", "is_active", "core.sessions"));
@@ -64,6 +79,9 @@ expect("User access can be copied from another user", contains("src/access-contr
 expect("Individual overrides can be reset to role templates", contains("src/access-control/UsersPermissionsPanel.tsx", "resetToRoleTemplates", "إعادة ضبط لقوالب الأدوار"));
 expect("User editor previews final role and override permissions", contains("src/access-control/UsersPermissionsPanel.tsx", "previewPermissions", "inheritedPermissions", "deniedPermissions"));
 expect("Primary branch and department are explicit per system", contains("src/access-control/UsersPermissionsPanel.tsx", "primaryBranchId", "primaryDepartmentId", "الفرع الأساسي", "القسم الأساسي") && contains("server/access-control.ts", "primary_branch_id", "primary_department_id"));
+expect("Archive is a dedicated user state while real branch history is preserved", contains("server/_access-control-schema.ts", "is_archived boolean not null default false", "archived_at", "archived_by") && contains("server/access-control.ts", "isArchived", "const branchIds = array(config.branchIds)") && contains("src/access-control/UsersPermissionsPanel.tsx", 'value="__archive__"', "toggleArchiveBranch", "الأرشيف"));
+expect("Archive option is available in Operations and CRM allowed and primary branch controls", contains("src/access-control/UsersPermissionsPanel.tsx", 'systemTab === "operations" || systemTab === "crm"', 'checked={form.isArchived}', 'setPrimaryBranch(event.target.value)'));
+expect("Archived users are excluded from active CRM KPI attendance dimensions but retained in historical sales reports", contains("server/crm/meta.ts", "coalesce(u.is_archived,false)=false") && contains("server/crm/kpi.ts", "coalesce(u.is_archived,false)=false") && contains("server/attendance.ts", "coalesce(u.is_archived,false)=false") && contains("server/crm/reports.ts", "historicalAgentIds", "reportHistoricalIdentity"));
 expect("Users can be filtered by role system branch and department", contains("src/access-control/UsersPermissionsPanel.tsx", "filterRoleId", "filterSystemCode", "filterBranchId", "filterDepartmentId"));
 expect("User list shows last access change and actor", contains("server/access-control.ts", "last_access_change_at", "last_access_changed_by") && contains("src/access-control/UsersPermissionsPanel.tsx", "آخر تعديل"));
 expect("Old CRM admin route redirects to central settings", contains("src/App.tsx", 'path="admin" element={<Navigate to="/settings?section=crm" replace />}'));
@@ -74,7 +92,7 @@ expect("Integrations are protected by gateway secrets", contains("server/integra
 expect("Automation scheduler is protected by a secret", contains("server/internal/automation-job.ts", "AUTOMATION_SCHEDULER_SECRET", "safeSecretEquals"));
 expect("ERPNext webhook is protected by a key", contains("server/integrations/erpnext-sales-order.ts", "ERPNEXT_WEBHOOK_KEY", "safeSecretEquals"));
 
-expect("CRM lists are filtered in SQL by scope", contains("server/crm/leads.ts", "scope.includeAssigned", "scope.departmentCodes", "scope.branchCodes"));
+expect("CRM lists are filtered in SQL by current branch scope", contains("server/crm/leads.ts", "crmLeadScopeSql(sql, scope)", "currentCrmLeadBranchSql(sql)") && contains("server/_crm-utils.ts", "scope.includeAssigned", "scope.departmentCodes", "scope.branchCodes", "scope.branchRestricted", "core.user_system_branches"));
 expect("CRM data review has exact permission checks", contains("server/crm/data-review.ts", "crm.data_review.execute", "crm.data_review.view"));
 expect("CRM data review applies server-side scope", contains("server/crm/data-review.ts", "scope.callCenterOnly", "l.department_code=any(${scope.departmentCodes}"));
 expect("CRM data review locks rows before correction", contains("server/crm/data-review.ts", "for update"));
@@ -99,7 +117,7 @@ expect("Marketing settings have read-only mode", contains("src/marketing/compone
 expect("Operations queries use per-system scope", contains("server/operations/index.ts", 'getSystemAccess(user, "operations")', "dataScope"));
 expect("Operations stages have exact permissions", contains("server/_api-permissions.ts", "operations.request.receive_order", "operations.request.send_car", "operations.request.receive_car", "operations.request.finish_order"));
 expect("Operations VIN changes use an exact sensitive permission", permissionCodes.includes("operations.vehicle.vin.update") && contains("server/operations/index.ts", "operations.vehicle.vin.update", "لا توجد لديك صلاحية تعديل رقم الهيكل") && contains("src/operations/pages/VehicleManagementPage.tsx", "canEditVin"));
-expect("Operations completion requires its exact permission and remains creator-only", contains("server/operations/index.ts", 'nextStatus === "completed"', 'hasPermission(user, "operations.request.finish_order") && row.requested_by === user.id'));
+expect("Operations completion requires its exact permission and allows the system manager override", contains("server/operations/index.ts", 'nextStatus === "completed"', 'hasPermission(user, "operations.request.finish_order") && (row.requested_by === user.id || hasPermission(user, "platform.superadmin"))'));
 expect("Operations request deletion has no creator or admin bypass", contains("server/operations/index.ts", 'if (!hasPermission(user, "operations.transfer.delete"))') && excludes("server/operations/index.ts", 'r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")'));
 expect("Operations request cancellation has no creator or admin bypass", contains("server/operations/index.ts", 'if (!hasPermission(user, "operations.transfer.cancel"))') && excludes("server/operations/index.ts", 'r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")'));
 expect("Operations API maps delete and cancel to exact permissions", contains("server/_api-permissions.ts", 'delete: "operations.transfer.delete"', 'cancel: "operations.transfer.cancel"'));

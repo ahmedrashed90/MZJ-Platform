@@ -1,21 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, requireCrmUser, userScope, crmLeadScopeSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
-function canAccessLead(user: any, lead: any) {
-  const scope = userScope(user);
-  return scope.all
-    || lead.assigned_to === user.id
-    || lead.call_center_assigned_to === user.id
-    || (scope.departmentCodes.includes(lead.department_code) && (!scope.branchCodes.length || scope.branchCodes.includes(lead.branch_code)));
-}
-
-async function loadLead(id: string) {
+async function loadLead(id: string, user: any) {
   const sql = getSql();
+  const scope = userScope(user);
+  const visible = crmLeadScopeSql(sql, scope);
   const [lead] = await sql<any[]>`
     select l.*,l.id::text,l.assigned_to::text,l.call_center_assigned_to::text
     from crm.leads l
-    where l.id=${id}::uuid and l.is_deleted=false
+    where l.id=${id}::uuid and l.is_deleted=false and ${visible}
   `;
   return lead;
 }
@@ -23,9 +17,8 @@ async function loadLead(id: string) {
 async function listHistory(request: VercelRequest, response: VercelResponse, user: any) {
   const leadId = clean(request.query.leadId || request.query.id);
   if (!leadId) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
-  const lead = await loadLead(leadId);
+  const lead = await loadLead(leadId, user);
   if (!lead) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
-  if (!canAccessLead(user, lead)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لعرض سجل مبيعات هذا العميل" });
 
   const sql = getSql();
   const rows = await sql<any[]>`

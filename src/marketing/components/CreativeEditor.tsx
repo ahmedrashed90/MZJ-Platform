@@ -43,6 +43,7 @@ export function newCreativeDraft(): CreativeDraft {
   return {
     tempId: uid(),
     creativeTypeId: "",
+    name: "",
     quantity: 1,
     cars: [],
     contentAssignments: [],
@@ -107,6 +108,8 @@ export function CreativeEditor({
   carsModalLevel = 1,
   autoLinkSingleContentUser = false,
   showTaskFlowSummary = false,
+  showNameField = false,
+  showQuantity = true,
 }: {
   value: CreativeDraft;
   meta: MarketingMeta;
@@ -117,6 +120,8 @@ export function CreativeEditor({
   carsModalLevel?: number;
   autoLinkSingleContentUser?: boolean;
   showTaskFlowSummary?: boolean;
+  showNameField?: boolean;
+  showQuantity?: boolean;
 }) {
   const [carsOpen, setCarsOpen] = useState(false);
   const [carSearch, setCarSearch] = useState("");
@@ -271,7 +276,7 @@ export function CreativeEditor({
         <button type="button" className="icon-danger" onClick={onDelete}><Trash size={18} /></button>
       </header>
 
-      <div className="marketing-form-grid compact">
+      <div className={`marketing-form-grid compact${showNameField && !showQuantity ? " marketing-creative-name-grid" : ""}`}>
         <label>
           <span>نوع الكرييتيف</span>
           <select
@@ -282,7 +287,16 @@ export function CreativeEditor({
             {meta.creativeTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
-        <label>
+        {showNameField && value.creativeTypeId ? <label>
+          <span>اسم الكرييتيف</span>
+          <input
+            value={value.name}
+            maxLength={160}
+            placeholder="اكتب اسم الكرييتيف الذي سيظهر في التاسكات والنشر"
+            onChange={(event) => patch({ name: event.target.value })}
+          />
+        </label> : null}
+        {showQuantity ? <label>
           <span>العدد</span>
           <input
             type="number"
@@ -290,7 +304,7 @@ export function CreativeEditor({
             value={value.quantity}
             onChange={(event) => patch({ quantity: Math.max(1, Number(event.target.value) || 1) })}
           />
-        </label>
+        </label> : null}
       </div>
 
       {showTaskFlowSummary ? (

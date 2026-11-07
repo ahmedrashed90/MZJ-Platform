@@ -1,12 +1,20 @@
 import type { VercelRequest,VercelResponse } from "@vercel/node";
-import { clean,parseBody,requireCrmUser,userScope } from "../_crm-utils.js";
+import { clean,parseBody,requireCrmUser,userScope,crmLeadScopeSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { buildMediaStorageKey,createDownloadUrl,createUploadUrl,mediaStorageConfigured } from "../_media-storage.js";
 
 function allowedType(value:unknown){const raw=clean(value).toLowerCase();const type=raw==="file"?"document":raw==="voice"?"audio":raw;return ["image","audio","video","document"].includes(type)?type:"";}
 async function canAccessConversation(user:any,conversationId:string){
-  const sql=getSql();const scope=userScope(user);const [row]=await sql<any[]>`select c.id::text,c.assigned_to::text,c.call_center_assigned_to::text,c.department_code,c.branch_code from crm.conversations c where c.id=${conversationId}::uuid`;
-  if(!row)return false;if(scope.all)return true;return row.assigned_to===user.id||row.call_center_assigned_to===user.id||(scope.departmentCodes.includes(row.department_code)&&(!scope.branchCodes.length||scope.branchCodes.includes(row.branch_code)));
+  const sql=getSql();const scope=userScope(user);
+  const leadScope=crmLeadScopeSql(sql,scope);
+  const [row]=await sql<any[]>`
+    select c.id::text,
+      (case when l.id is not null then ${leadScope}
+       else (${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
+         or (${scope.branchRestricted}::boolean and c.branch_code=any(${scope.branchCodes}::text[]))) end) as can_view
+    from crm.conversations c left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
+    where c.id=${conversationId}::uuid`;
+  return Boolean(row?.can_view);
 }
 export default async function handler(request:VercelRequest,response:VercelResponse){
   const user=await requireCrmUser(request,response);if(!user)return;

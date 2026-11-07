@@ -1,13 +1,18 @@
+import { consolidatedCampaignReport, saveCampaignReportManager } from '../_marketing-campaign-report.js';
+import { handleMarketingWorkflow, assertWorkflowFileAccess, workflowScheduleFiles, assertLegacyMarketingTarget, runDueWorkflowPublications } from './workflow.js';
+import { assertMarketingWorkflowReady } from '../_marketing-workflow-schema.js';
+import { isTerminalApproval } from '../../shared/marketing-workflow.js';
+import { W } from '../../shared/marketing-workflow-labels.js';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { getSql } from "../_db.js";
 import { requireUser, requestIp, type SessionUser } from "../_auth.js";
 import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
 import { getSystemAccess } from "../_access-control.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
-import { completePhotographyRequest } from "../operations/index.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
-import { ensureOperationsSchema } from "../_operations-schema.js";
-import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
+import { buildMarketingStorageKey, copyMediaObject, createDeleteUrl, createDownloadUrl, createUploadUrl, headMediaObject, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
 import {
   decryptPlatformToken,
@@ -19,7 +24,29 @@ import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.
 import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { publishInstagramContent } from "../_instagram-publisher.js";
-import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
+import { publishFacebookReel, publishFacebookVideoStory } from "../_facebook-video-publisher.js";
+import { getZohoFileInfo, getZohoRuntime } from "../_zoho-workdrive.js";
+import {
+  createGoogleDriveResumableUpload,
+  createGoogleDriveUploadTicket,
+  deleteGoogleDriveFile,
+  ensureGoogleDriveFolder,
+  findGoogleDriveUploadedFile,
+  getGoogleDriveFileInfo,
+  googleDriveFolderUrl,
+  googleDrivePathWithinRoot,
+  googleDriveTicketHash,
+  listGoogleDriveFolder,
+  openGoogleDriveFile,
+  verifyGoogleDriveUploadedFile,
+} from "../_google-drive-storage.js";
+import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delivery.js";
+import { autoRefreshExternalMetaMetrics, refreshExternalMetaMetrics, syncMetaEngagement } from "../_marketing-meta-sync.js";
+import { metaAdsData, saveMetaAdsCampaignManager } from "../_marketing-meta-ads.js";
+import { googleAdsData, createPausedGoogleAdsSearchCampaign, changeGoogleAdsCampaignStatus } from "../_marketing-google-ads.js";
+import { marketingSocialAccountsOverview } from "../_marketing-social-accounts.js";
+import { bulkPublishConfigured, scheduleBulkPublishTikTok } from "../_marketing-bulkpublish.js";
+import { tiktokAdsData, linkTikTokAdsToken, disconnectTikTokAds, changeTikTokAdsCampaignStatus, createPausedTikTokAdsCampaign, tiktokAdsBuilderOptions, createPausedTikTokAdsAdGroup, createPausedTikTokAdsAd } from "../_marketing-tiktok-ads.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -122,26 +149,198 @@ async function requireTaskTemplateUploadAccess(sql: ReturnType<typeof getSql>, u
   return task;
 }
 
+const FIRST_FILE_EXECUTION_DEPARTMENTS = new Set([
+  "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+  "قسم التصوير", "التصوير", "تصوير", "photography", "shooting",
+  "قسم التصميم", "التصميم", "تصميم", "design",
+]);
+const REJECTABLE_EXECUTION_DEPARTMENTS = new Set([
+  "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+  "قسم التصميم", "التصميم", "تصميم", "design",
+]);
+function normalizedMarketingDepartment(value: unknown) {
+  return clean(value).toLowerCase().replace(/\s+/g, " ");
+}
+function isFirstFileExecutionDepartment(value: unknown) {
+  return FIRST_FILE_EXECUTION_DEPARTMENTS.has(normalizedMarketingDepartment(value));
+}
+function isRejectableExecutionDepartment(value: unknown) {
+  return REJECTABLE_EXECUTION_DEPARTMENTS.has(normalizedMarketingDepartment(value));
+}
+async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!taskId) throw new Error("رقم التاسك مطلوب");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.status,t.source_type,t.source_id::text,t.assigned_to::text,
+      d.name as department_name,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task || task.task_kind !== "execution" || !isFirstFileExecutionDepartment(task.department_name)) throw new Error("الملف الأول متاح فقط لتاسكات المونتاج والتصوير والتصميم");
+  if (task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
+  if (task.status === "completed") throw new Error("التاسك منتهي ولا يمكن تعديل الملف الأول");
+  if (task.status === "rejected") throw new Error("التاسك مرفوض ولا يمكن تعديل الملف الأول");
+  if (task.assigned_to !== user.id && !canViewAllTasks(user)) throw new Error("الملف الأول متاح لمسؤول التاسك فقط");
+  if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف الأول");
+  return task;
+}
+
 async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
   if (!taskId) throw new Error("رقم التاسك مطلوب");
   const [task] = await sql<any[]>`
-    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,
+    select t.id::text,t.task_kind,t.status,t.source_type,t.source_id::text,t.assigned_to::text,
       t.approved_template_data,tt.status as template_status
     from marketing.tasks t
     left join marketing.task_templates tt on tt.id=t.task_template_id
     where t.id=${taskId}::uuid and t.is_deleted=false
   `;
   if (!task) throw new Error("التاسك غير موجود");
+  if(task.approved_template_data?.workflowLineId)throw new Error(W.immutable);
   const isManualPublish = task.task_kind === "manual_publish";
   const permission = isManualPublish ? "marketing.publish_prep.manage" : "marketing.task.final_file.upload";
   if (!hasPermission(user, permission)) throw new Error(isManualPublish ? "لا توجد صلاحية لإنشاء نشر يدوي" : "لا توجد صلاحية لرفع الملف النهائي");
   if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  if (task.task_kind === "execution" && task.status === "rejected") throw new Error("التاسك مرفوض ولا يمكن رفع ملفات جديدة عليه");
   if (task.task_kind === "execution" && task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
   if (!isManualPublish && task.task_kind !== "execution") throw new Error("رفع الملف النهائي غير متاح لهذا النوع من التاسكات");
   return task;
 }
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
+
+type MarketingStorageContext = {
+  sourceType: string;
+  sourceId: string;
+  sourceCode?: string;
+  sourceName?: string;
+  creativeId?: string;
+  creativeCode?: string;
+  creativeName?: string;
+  taskId?: string;
+  taskCode?: string;
+  taskName?: string;
+};
+
+async function marketingStorageContext(sql: ReturnType<typeof getSql>, sourceTypeValue: string, sourceIdValue: string, taskIdValue = ""): Promise<MarketingStorageContext> {
+  const sourceType = clean(sourceTypeValue);
+  const sourceId = clean(sourceIdValue);
+  const taskId = clean(taskIdValue);
+  if (taskId) {
+    const [row] = await sql<any[]>`
+      select
+        t.source_type,
+        t.source_id::text,
+        t.creative_id::text,
+        t.title as task_name,
+        tt.task_no as task_code,
+        c.instance_code as creative_code,
+        coalesce(nullif(c.name,''),nullif(c.creative_type,'')) as creative_name,
+        case when t.source_type='campaign' then cam.campaign_code else ag.month_key end as source_code,
+        coalesce(cam.name,ag.name) as source_name
+      from marketing.tasks t
+      left join marketing.task_templates tt on tt.id=t.task_template_id
+      left join marketing.creatives c on c.id=t.creative_id
+      left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+      left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+      where t.id=${taskId}::uuid
+      limit 1
+    `;
+    if (row) {
+      return {
+        sourceType: clean(row.source_type) || sourceType || "marketing",
+        sourceId: clean(row.source_id) || sourceId,
+        sourceCode: clean(row.source_code),
+        sourceName: clean(row.source_name),
+        creativeId: clean(row.creative_id),
+        creativeCode: clean(row.creative_code),
+        creativeName: clean(row.creative_name),
+        taskId,
+        taskCode: clean(row.task_code),
+        taskName: clean(row.task_name),
+      };
+    }
+  }
+  if (sourceId && sourceType === "campaign") {
+    const [row] = await sql<any[]>`select campaign_code as source_code,name as source_name from marketing.campaigns where id=${sourceId}::uuid limit 1`;
+    if (row) return { sourceType, sourceId, sourceCode: clean(row.source_code), sourceName: clean(row.source_name), taskId: taskId || undefined };
+  }
+  if (sourceId && sourceType === "agenda") {
+    const [row] = await sql<any[]>`select month_key as source_code,name as source_name from marketing.agendas where id=${sourceId}::uuid limit 1`;
+    if (row) return { sourceType, sourceId, sourceCode: clean(row.source_code), sourceName: clean(row.source_name), taskId: taskId || undefined };
+  }
+  return { sourceType: sourceType || "marketing", sourceId, taskId: taskId || undefined };
+}
+
+async function observedCreativeSequenceFloor(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  const [row] = await tx<any[]>`
+    select greatest(
+      coalesce((
+        select max(nullif(substring(c.instance_code from '([0-9]+)$'),'')::bigint)
+        from marketing.creatives c
+        where ((${sourceType}='campaign' and c.campaign_id=${sourceId}::uuid)
+          or (${sourceType}='agenda' and c.agenda_id=${sourceId}::uuid))
+      ),0),
+      coalesce((
+        select max(nullif(substring(a.after_data->>'instanceCode' from '([0-9]+)$'),'')::bigint)
+        from audit.activity_log a
+        where a.system_code='marketing'
+          and a.action='creative_deleted'
+          and a.entity_type=${sourceType}
+          and a.entity_id=${sourceId}
+      ),0)
+    )::bigint + 1 as value
+  `;
+  return Math.max(1, Number(row?.value || 1));
+}
+
+async function observedTaskBatchFloor(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  const [row] = await tx<any[]>`
+    select coalesce(max(nullif(substring(tt.task_no from '_TPL_([0-9]+)_[0-9]+$'),'')::bigint),0)::bigint + 1 as value
+    from marketing.task_templates tt
+    where tt.source_type=${sourceType} and tt.source_id=${sourceId}::uuid
+  `;
+  return Math.max(1, Number(row?.value || 1));
+}
+
+async function allocateMarketingEntitySequence(
+  tx: any,
+  sourceType: "campaign" | "agenda",
+  sourceId: string,
+  kind: "creative" | "task",
+) {
+  const observed = kind === "creative"
+    ? await observedCreativeSequenceFloor(tx, sourceType, sourceId)
+    : await observedTaskBatchFloor(tx, sourceType, sourceId);
+  if (kind === "creative") {
+    const [row] = await tx<any[]>`
+      insert into marketing.entity_sequences(source_type,source_id,next_creative_index,next_task_batch,updated_at)
+      values(${sourceType},${sourceId}::uuid,${observed + 1},1,now())
+      on conflict(source_type,source_id) do update set
+        next_creative_index=greatest(marketing.entity_sequences.next_creative_index,${observed}) + 1,
+        updated_at=now()
+      returning next_creative_index - 1 as value
+    `;
+    return Math.max(1, Number(row?.value || observed));
+  }
+  const [row] = await tx<any[]>`
+    insert into marketing.entity_sequences(source_type,source_id,next_creative_index,next_task_batch,updated_at)
+    values(${sourceType},${sourceId}::uuid,1,${observed + 1},now())
+    on conflict(source_type,source_id) do update set
+      next_task_batch=greatest(marketing.entity_sequences.next_task_batch,${observed}) + 1,
+      updated_at=now()
+    returning next_task_batch - 1 as value
+  `;
+  return Math.max(1, Number(row?.value || observed));
+}
+
+async function allocateCreativeIndex(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  return allocateMarketingEntitySequence(tx, sourceType, sourceId, "creative");
+}
+
+async function allocateTaskBatch(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  return allocateMarketingEntitySequence(tx, sourceType, sourceId, "task");
+}
 function zohoFinalFileName(originalName: unknown, sourceType: unknown, sourceId: unknown, taskId: unknown, groupId: unknown, orderIndex: number) {
   const raw=(clean(originalName)||`file-${orderIndex+1}`).replace(/[\/\\\u0000-\u001f]/g,"-");
   const dot=raw.lastIndexOf(".");
@@ -156,11 +355,12 @@ async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: 
   await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data,ip_address) values (${user.id}::uuid,'marketing',${action},${entityType},${entityId},${beforeData ? sql.json(dbJson(beforeData)) : null},${afterData ? sql.json(dbJson(afterData)) : null},${ip || null})`;
 }
 
-async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
+async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser, synchronize = true) {
   // Keep marketing metadata mirrored without crashing when an older database
   // contains the same marketing name under a different legacy ID. Existing
   // metadata wins until the user edits it, while missing canonical IDs are
   // inserted only when their normalized name is not already represented.
+  if (synchronize) {
   await sql`
     update marketing.departments md
     set name=d.name,is_active=d.is_active,updated_at=greatest(md.updated_at,d.updated_at)
@@ -185,6 +385,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     on conflict(id) do update set name=excluded.name,is_active=excluded.is_active,updated_at=greatest(marketing.departments.updated_at,excluded.updated_at)
   `;
 
+  }
   // Recover the single canonical content department ID. Older data can keep the
   // user membership on the correct department while the is_content flag points
   // to another row. Prefer the established content department name only as a
@@ -212,7 +413,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     limit 1
   `;
   const contentDepartmentIdValue=clean(contentDepartment?.id);
-  if(contentDepartmentIdValue){
+  if(contentDepartmentIdValue && synchronize){
     await sql`
       update marketing.departments
       set is_content=(id=${contentDepartmentIdValue}::uuid),updated_at=case when is_content is distinct from (id=${contentDepartmentIdValue}::uuid) then now() else updated_at end
@@ -224,6 +425,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
       from core.users u
       where u.is_active=true
+        and coalesce(u.is_archived,false)=false
         and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
       order by u.full_name
     `,
@@ -239,13 +441,13 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       from marketing.departments d
       join core.departments cd on cd.id=d.id and cd.system_code='marketing'
       left join core.user_system_departments usd on usd.department_id=d.id and usd.system_code='marketing'
-      left join core.users u on u.id=usd.user_id and u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
+      left join core.users u on u.id=usd.user_id and u.is_active=true and coalesce(u.is_archived,false)=false and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
       where d.is_active=true and cd.is_active=true
       group by d.id,cd.name,cd.is_active
       order by d.is_content desc,cd.name
     `,
     sql<any[]>`select a.id::text,a.department_id::text,cd.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join core.departments cd on cd.id=a.department_id and cd.system_code='marketing' where a.is_active=true order by cd.name,a.sort_order,a.created_at`,
-    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
+    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,coalesce(c.supported_publish_formats,'[]'::jsonb) as supported_publish_formats,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
     sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
     sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
     sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
@@ -253,6 +455,41 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
   ]);
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
   return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicPlatformConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
+}
+
+async function createFunnel(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.campaign.create") && !hasPermission(user, "marketing.campaign.edit")) {
+    throw new Error("لا توجد صلاحية لإضافة Funnel جديد");
+  }
+  const name = clean(body.name).replace(/\s+/g, " ");
+  if (!name) throw new Error("اكتب اسم Funnel الجديد");
+  if (name.length > 100) throw new Error("اسم Funnel يجب ألا يزيد عن 100 حرف");
+
+  const [existing] = await sql<any[]>`
+    select id::text,name,active
+    from marketing.funnels
+    where lower(btrim(name))=lower(${name})
+    order by active desc,created_at
+    limit 1
+  `;
+  if (existing) {
+    const [funnel] = await sql<any[]>`
+      update marketing.funnels
+      set active=true,source=coalesce(nullif(source,''),'campaign_budget')
+      where id=${existing.id}::uuid
+      returning id::text,name
+    `;
+    return { ok: true, id: funnel.id, funnel, message: "تم اختيار Funnel الموجود بالفعل" };
+  }
+
+  const [funnel] = await sql<any[]>`
+    insert into marketing.funnels(name,active,source)
+    values(${name},true,'campaign_budget')
+    on conflict(name) do update
+    set active=true,source=coalesce(nullif(marketing.funnels.source,''),'campaign_budget')
+    returning id::text,name
+  `;
+  return { ok: true, id: funnel.id, funnel, message: "تمت إضافة Funnel بنجاح" };
 }
 
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
@@ -264,6 +501,7 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved,
       coalesce(req.active_requests,0)::int as active_transfer_requests,
+      coalesce(req.active_request_details,'[]'::json) as active_request_details,
       coalesce(ms.content_usage,'[]'::jsonb) as content_usage
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
@@ -275,50 +513,27 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
       order by va.cycle_no desc limit 1
     ) a on true
     left join lateral (
-      select count(*)::int as active_requests
+      select count(*)::int as active_requests,
+        coalesce(json_agg(json_build_object(
+          'requestId',r.id::text,
+          'requestNo',r.request_no,
+          'requestKind',r.request_kind,
+          'status',r.status,
+          'requestedAt',r.requested_at,
+          'requestedByName',r.requested_by_name,
+          'sourceLocationName',request_source.name,
+          'destinationLocationName',request_destination.name
+        ) order by r.requested_at desc),'[]'::json) as active_request_details
       from operations.transfer_request_vehicles rv
       join operations.transfer_requests r on r.id=rv.transfer_request_id
+      left join operations.locations request_source on request_source.id=r.source_location_id
+      left join operations.locations request_destination on request_destination.id=r.destination_location_id
       where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
     ) req on true
     left join marketing.stock_vehicle_state ms on ms.vehicle_id=v.id
     where v.is_deleted=false and v.archived_at is null and coalesce(v.is_inventory_active,true)=true
     order by v.car_name,v.statement,v.exterior_color,v.interior_color,v.vin
   `;
-}
-
-async function allocateCampaignCode(tx: any, campaignTypeId: string, requestedCode?: string | null) {
-  const [type] = await tx<any[]>`select * from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true for update`;
-  if (!type) throw new Error("نوع الحملة غير موجود");
-
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const base = `${safeCode(type.code_prefix || type.short_code)}-${year}-${month}-`;
-  const requested = clean(requestedCode);
-
-  if (requested && requested.startsWith(base)) {
-    const [duplicate] = await tx<any[]>`select 1 from marketing.campaigns where campaign_code=${requested} limit 1`;
-    if (!duplicate) {
-      const requestedSequence = Number(requested.slice(base.length));
-      if (Number.isInteger(requestedSequence) && requestedSequence > Number(type.sequence_value || 0)) {
-        await tx`update marketing.campaign_types set sequence_value=${requestedSequence},updated_at=now() where id=${campaignTypeId}::uuid`;
-      }
-      return requested;
-    }
-  }
-
-  const [existing] = await tx<any[]>`
-    select coalesce(max((substring(campaign_code from '([0-9]+)$'))::int),0)::int as max_sequence
-    from marketing.campaigns
-    where campaign_code like ${`${base}%`}
-  `;
-  const sequence = Math.max(Number(type.sequence_value || 0), Number(existing?.max_sequence || 0)) + 1;
-  await tx`update marketing.campaign_types set sequence_value=${sequence},updated_at=now() where id=${campaignTypeId}::uuid`;
-  return `${base}${String(sequence).padStart(3, "0")}`;
-}
-
-async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: string) {
-  return sql.begin(async (tx) => allocateCampaignCode(tx, campaignTypeId));
 }
 
 function contentDepartmentId(meta: { contentDepartmentId?: string; departments: any[] }) { return clean(meta.contentDepartmentId || meta.departments.find((item) => item.is_content)?.id); }
@@ -409,10 +624,26 @@ function normalizedWindowsFolderPath(value: unknown) {
 function repairedExecutionFolders(value: unknown) {
   const folders = objectValue(value);
   if (!folders.linked) return folders;
+  const type = clean(folders.type);
+  if (type === "google_drive") {
+    const rawFolderId = clean(folders.rawFolderId);
+    const outputFolderId = clean(folders.outputFolderId);
+    const userOutputFolderId = clean(folders.userOutputFolderId) || outputFolderId;
+    return {
+      ...folders,
+      version: 5,
+      type: "google_drive",
+      rawFolderUrl: clean(folders.rawFolderUrl) || googleDriveFolderUrl(rawFolderId),
+      outputFolderUrl: clean(folders.outputFolderUrl) || googleDriveFolderUrl(outputFolderId),
+      userOutputFolderUrl: clean(folders.userOutputFolderUrl) || googleDriveFolderUrl(userOutputFolderId),
+      rawWindowsPath: "",
+      outputWindowsPath: "",
+      userOutputWindowsPath: "",
+    };
+  }
+
   const driveLetter = clean(folders.driveLetter) || "Z:";
   const roots = [folders.rawRoot, folders.rootPath, folders.basePath, "/var/www/mzj-raw"];
-  // Translate the exact filesystem paths returned by the RAW server first. The
-  // deterministic path is only a compatibility fallback for older task rows.
   const rawWindowsPath = raidrivePathFromServerPath(folders.rawServerPath, driveLetter, roots)
     || normalizedWindowsFolderPath(folders.rawWindowsPath)
     || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "01-RAW"]);
@@ -425,6 +656,7 @@ function repairedExecutionFolders(value: unknown) {
   return {
     ...folders,
     version: 4,
+    type: type || "raidrive_sftp",
     rawWindowsPath,
     outputWindowsPath,
     userOutputWindowsPath: userOutputWindowsPath || outputWindowsPath,
@@ -460,14 +692,54 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || serverUsers.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestUser.folderName || requestUser.name));
   if (!serverUser) return null;
 
-  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
   const monthKey = clean(result.monthKey || request.monthKey);
   const campaignCode = clean(result.campaignCode || request.campaignCode);
   const campaignFolderName = clean(result.campaignFolderName || request.campaignFolderName || request.campaignDisplayName || campaignCode);
   const creativeFolderName = clean(serverCreative.folderName || requestCreative.folderName || requestCreative.name);
   const userFolderName = clean(serverUser.folderName || requestUser.folderName || requestUser.name);
-  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
+  const subFolders = objectValue(serverCreative.subFolders);
 
+  const googleDriveResult = clean(result.storageProvider || result.type) === "google-drive"
+    || clean(serverCreative.storageProvider || serverCreative.type) === "google-drive"
+    || Boolean(clean(serverCreative.rawFolderId));
+  if (googleDriveResult) {
+    const rawFolderId = clean(serverCreative.rawFolderId);
+    const outputFolderId = clean(serverCreative.outputFolderId);
+    const userOutputFolderId = clean(serverUser.folderId || serverUser.outputFolderId) || outputFolderId;
+    const rawFolderUrl = clean(serverCreative.rawFolderUrl || subFolders.raw) || googleDriveFolderUrl(rawFolderId);
+    const outputFolderUrl = clean(serverCreative.outputFolderUrl || subFolders.output) || googleDriveFolderUrl(outputFolderId);
+    const userOutputFolderUrl = clean(serverUser.outputFolderUrl || serverUser.folderUrl) || googleDriveFolderUrl(userOutputFolderId);
+    if (!rawFolderId || !userOutputFolderId || !rawFolderUrl || !userOutputFolderUrl) return null;
+    return {
+      linked: true,
+      version: 5,
+      type: "google_drive",
+      storageProvider: "google-drive",
+      monthKey,
+      campaignCode,
+      campaignFolderName,
+      creativeFolderName,
+      userFolderName,
+      creativeInstanceId: clean(serverCreative.creativeInstanceId || requestCreative.creativeInstanceId),
+      assignedUserId: assignedTo,
+      rootFolderId: clean(result.rootFolderId),
+      monthFolderId: clean(result.monthFolderId),
+      campaignFolderId: clean(result.campaignFolderId),
+      creativeFolderId: clean(serverCreative.folderId || serverCreative.creativeFolderId),
+      rawFolderId,
+      outputFolderId,
+      userOutputFolderId,
+      rawFolderUrl,
+      outputFolderUrl,
+      userOutputFolderUrl,
+      rawWindowsPath: "",
+      outputWindowsPath: "",
+      userOutputWindowsPath: "",
+    };
+  }
+
+  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
+  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
   const campaignServerPath = firstText(result, ["campaignFolderPath", "folderPath", "campaignPath"])
     || joinServerPath(firstText(result, ["rawRoot", "rootPath", "basePath"]) || request.remoteRoot || request.rawRoot, monthKey, campaignFolderName);
   const creativeServerPath = firstText(serverCreative, ["folderPath", "creativeFolderPath", "path"])
@@ -478,11 +750,6 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || joinServerPath(creativeServerPath, "02-OUTPUT");
   const userOutputServerPath = firstText(serverUser, ["folderPath", "outputFolderPath", "path"])
     || joinServerPath(outputServerPath, userFolderName);
-
-  // The RAW server's folderPath values are authoritative because they contain
-  // its exact safeName output. Translate those paths to the RaiDrive mount; do
-  // not guess folder names from the form, which makes Explorer fall back to
-  // Documents when the guessed directory does not exist.
   const explicitRawWindowsPath = firstText(serverCreative, ["rawWindowsPath", "windowsRawPath"]);
   const explicitOutputWindowsPath = firstText(serverCreative, ["outputWindowsPath", "windowsOutputPath"]);
   const explicitUserOutputWindowsPath = firstText(serverUser, ["userOutputWindowsPath", "outputWindowsPath", "windowsPath"]);
@@ -497,7 +764,6 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]);
   if (!rawWindowsPath || !userOutputWindowsPath) return null;
 
-  const subFolders = objectValue(serverCreative.subFolders);
   return {
     linked: true,
     version: 4,
@@ -522,13 +788,471 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
   };
 }
 
-async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
+
+async function googleDriveTaskUploadParent(sql:ReturnType<typeof getSql>,taskId:string){
+  const id=clean(taskId);
+  if(!id)return"";
+  const[task]=await sql<any[]>`select execution_folders from marketing.tasks where id=${id}::uuid and is_deleted=false`;
+  const folders=repairedExecutionFolders(task?.execution_folders);
+  if(clean(folders.type)!=="google_drive")return"";
+  return clean(folders.userOutputFolderId||folders.outputFolderId||folders.creativeFolderId);
+}
+
+type TaskFolderKind = "raw" | "output";
+
+function taskFolderKind(value: unknown): TaskFolderKind {
+  return clean(value) === "raw" ? "raw" : "output";
+}
+
+async function taskFolderContext(sql:ReturnType<typeof getSql>,user:SessionUser,taskIdValue:string,kindValue:unknown){
+  const taskId=clean(taskIdValue);
+  if(!taskId)throw new Error("رقم التاسك مطلوب");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.title,t.task_kind,t.assigned_to::text,t.paired_content_user_id::text,t.execution_folders,
+      u.full_name as assigned_name,d.name as department_name,c.name as creative_name,coalesce(cam.name,ag.name) as source_name
+    from marketing.tasks t
+    left join core.users u on u.id=t.assigned_to
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if(!task)throw new Error("التاسك غير موجود");
+  if(task.task_kind!=="execution")throw new Error("فولدرات التنفيذ متاحة للتاسكات التنفيذية فقط");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لعرض فولدرات هذا التاسك");
+  const folders=repairedExecutionFolders(task.execution_folders);
+  if(clean(folders.type)!=="google_drive")throw new Error("فولدرات Google Drive غير مرتبطة بهذا التاسك");
+  const kind=taskFolderKind(kindValue);
+  const rootFolderId=kind==="raw"
+    ? clean(folders.rawFolderId)
+    : clean(folders.userOutputFolderId||folders.outputFolderId);
+  if(!rootFolderId)throw new Error("فولدر التنفيذ غير موجود");
+  const canManageRaw=canViewAllTasks(user)
+    || hasPermission(user,"marketing.campaign.create")
+    || hasPermission(user,"marketing.campaign.edit")
+    || hasPermission(user,"marketing.agenda.create")
+    || hasPermission(user,"marketing.agenda.edit");
+  const canManageOutput=(task.assigned_to===user.id||canViewAllTasks(user))&&hasPermission(user,"marketing.task.final_file.upload");
+  return{
+    task,folders,kind,rootFolderId,
+    canUpload:kind==="raw"?canManageRaw:canManageOutput,
+    canDelete:kind==="raw"?canManageRaw:canManageOutput,
+  };
+}
+
+async function taskFolderData(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser){
+  const taskId=clean(request.query.taskId);
+  const context=await taskFolderContext(sql,user,taskId,request.query.kind);
+  const requestedFolderId=clean(request.query.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,requestedFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const items=await listGoogleDriveFolder(sql,requestedFolderId);
+  const fileIds=items.filter((item)=>!item.isFolder).map((item)=>item.id);
+  const managedRows=fileIds.length?await sql<any[]>`
+    select distinct external_id from marketing.files
+    where task_id=${taskId}::uuid and status='ready' and external_id in ${sql(fileIds)}
+  `:[];
+  const managed=new Set(managedRows.map((row:any)=>clean(row.external_id)).filter(Boolean));
+  return{
+    ok:true,
+    task:{
+      id:context.task.id,
+      title:context.task.title,
+      sourceName:context.task.source_name,
+      creativeName:context.task.creative_name,
+      departmentName:context.task.department_name,
+      assignedName:context.task.assigned_name,
+    },
+    kind:context.kind,
+    rootFolderId:context.rootFolderId,
+    currentFolderId:requestedFolderId,
+    breadcrumbs:path.map((item:any,index:number)=>({id:item.id,name:index===0?(context.kind==="raw"?"فولدر الخام":"فولدر التسليم"):item.name})),
+    permissions:{canUpload:context.canUpload,canDelete:context.canDelete},
+    items:items.map((item)=>({...item,managedByTask:managed.has(item.id),canDelete:context.canDelete&&!item.isFolder&&!managed.has(item.id)})),
+  };
+}
+
+function taskFolderRelativeDirectoryParts(value:unknown){
+  const relative=clean(value).replace(/\\/g,"/");
+  if(!relative)return[];
+  const parts=relative.split("/").map((part)=>clean(part)).filter(Boolean);
+  if(parts.length>40)throw new Error("مسار الفولدر أعمق من الحد المسموح");
+  if(parts.some((part)=>part==="."||part===".."))throw new Error("مسار الفولدر غير صالح");
+  return parts.slice(0,-1);
+}
+
+async function resolveTaskFolderUploadParent(
+  sql:ReturnType<typeof getSql>,
+  input:{taskId:string;kind:"raw"|"output";baseFolderId:string;relativePath?:unknown},
+){
+  let parentFolderId=input.baseFolderId;
+  for(const segment of taskFolderRelativeDirectoryParts(input.relativePath)){
+    const folder=await ensureGoogleDriveFolder(sql,{
+      parentId:parentFolderId,
+      name:segment,
+      appProperties:{mzjTaskId:input.taskId,mzjTaskFolderKind:input.kind,mzjManaged:"task-folder-upload"},
+    });
+    const folderId=clean(folder.id);
+    if(!folderId)throw new Error("تعذر إنشاء فولدر الرفع على Google Drive");
+    parentFolderId=folderId;
+  }
+  return parentFolderId;
+}
+
+async function prepareTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canUpload)throw new Error("لا توجد صلاحية لرفع ملفات داخل هذا الفولدر");
+  const baseFolderId=clean(body.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,baseFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const parentFolderId=await resolveTaskFolderUploadParent(sql,{
+    taskId,
+    kind:context.kind,
+    baseFolderId,
+    relativePath:body.relativePath,
+  });
+  const fileName=clean(body.fileName)||"file.bin";
+  const mimeType=clean(body.mimeType)||"application/octet-stream";
+  const fileSize=Math.max(0,numberValue(body.fileSize));
+  if(fileSize<=0)throw new Error("لا يمكن رفع ملف فارغ");
+  const token=createGoogleDriveUploadTicket();
+  const verificationKey=`task-folder-${taskId}-${token.slice(0,18)}`;
+  const transfer=await createGoogleDriveResumableUpload(sql,{
+    fileId:verificationKey,
+    fileName,
+    mimeType,
+    fileSize,
+    category:`execution-${context.kind}`,
+    storageKey:`marketing/task-folder/${taskId}/${context.kind}/${token}/${fileName}`,
+    parentFolderId,
+  });
+  return{ok:true,uploadUrl:transfer.uploadUrl,storageProvider:"google-drive",folderId:parentFolderId,verificationKey};
+}
+
+async function verifyTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canUpload)throw new Error("لا توجد صلاحية لرفع ملفات داخل هذا الفولدر");
+  const parentFolderId=clean(body.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,parentFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const verificationKey=clean(body.verificationKey);
+  if(!verificationKey||!verificationKey.startsWith(`task-folder-${taskId}-`))throw new Error("بيانات تأكيد رفع الملف غير مكتملة");
+  const expectedSize=Math.max(0,numberValue(body.fileSize));
+  const info=await verifyGoogleDriveUploadedFile(sql,{fileId:verificationKey,expectedSize:expectedSize||null});
+  const parents=Array.isArray(info.parents)?info.parents.map(clean).filter(Boolean):[];
+  if(!parents.includes(parentFolderId))throw new Error("تم رفع الملف خارج الفولدر المطلوب");
+  return{ok:true,fileId:clean(info.id),fileName:clean(info.name)||clean(body.fileName)||"file",folderId:parentFolderId};
+}
+
+async function deleteTaskFolderItem(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),fileId=clean(body.fileId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canDelete)throw new Error("لا توجد صلاحية لمسح ملفات هذا الفولدر");
+  if(!fileId||fileId===context.rootFolderId)throw new Error("الملف المطلوب غير صالح");
+  const path=await googleDrivePathWithinRoot(sql,fileId,context.rootFolderId);
+  if(!path?.length)throw new Error("الملف خارج نطاق التاسك");
+  const info=await getGoogleDriveFileInfo(sql,fileId);
+  if(clean(info.mimeType)==="application/vnd.google-apps.folder")throw new Error("مسح الفولدرات من داخل التاسك غير متاح");
+  const[managed]=await sql<any[]>`select 1 from marketing.files where task_id=${taskId}::uuid and external_id=${fileId} and status='ready' limit 1`;
+  if(managed)throw new Error("هذا الملف مرتبط بالملف الأول أو النهائي. امسحه من مكانه المخصص داخل التاسك");
+  await deleteGoogleDriveFile(sql,fileId);
+  return{ok:true,message:"تم مسح الملف"};
+}
+
+async function streamTaskFolderFile(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser,response:VercelResponse){
+  const taskId=clean(request.query.taskId),fileId=clean(request.query.fileId);
+  const context=await taskFolderContext(sql,user,taskId,request.query.kind);
+  if(!fileId)throw new Error("الملف غير محدد");
+  const path=await googleDrivePathWithinRoot(sql,fileId,context.rootFolderId);
+  if(!path?.length)throw new Error("الملف خارج نطاق التاسك");
+  const info=await getGoogleDriveFileInfo(sql,fileId);
+  if(clean(info.mimeType)==="application/vnd.google-apps.folder")throw new Error("العنصر المطلوب فولدر وليس ملفًا");
+  const upstream=await openGoogleDriveFile(sql,fileId,'application/octet-stream,*/*');
+  return pipeMarketingFileResponse(response,upstream,{original_name:clean(info.name)||"file",mime_type:clean(info.mimeType)},true,"Google Drive");
+}
+
+type TaskFolderArchiveEntry={
+  id:string;
+  path:string;
+  mimeType:string;
+  size:number;
+  modifiedTime:string|null;
+  isFolder:boolean;
+};
+
+type ZipCentralEntry={
+  name:Buffer;
+  crc:number;
+  size:bigint;
+  offset:bigint;
+  modifiedTime:string|null;
+  isFolder:boolean;
+};
+
+const ZIP_UINT32_MAX=0xffffffffn;
+const ZIP_UINT16_MAX=0xffff;
+const ZIP_CRC_TABLE=(()=>{
+  const table=new Uint32Array(256);
+  for(let index=0;index<256;index+=1){
+    let value=index;
+    for(let bit=0;bit<8;bit+=1)value=(value&1)!==0?0xedb88320^(value>>>1):value>>>1;
+    table[index]=value>>>0;
+  }
+  return table;
+})();
+
+function taskFolderArchiveSegment(value:unknown,fallback="folder"){
+  return(clean(value)||fallback)
+    .replace(/[\u0000-\u001f]/g," ")
+    .replace(/[\\/:*?"<>|]+/g,"-")
+    .replace(/\s+/g," ")
+    .trim()
+    .slice(0,180)||fallback;
+}
+
+function zipCrc32Update(crc:number,chunk:Buffer){
+  let value=crc>>>0;
+  for(const byte of chunk)value=(ZIP_CRC_TABLE[(value^byte)&0xff]^(value>>>8))>>>0;
+  return value;
+}
+
+function zipDosDateTime(value:string|null){
+  const parsed=value?new Date(value):new Date();
+  const date=Number.isNaN(parsed.getTime())?new Date():parsed;
+  const year=Math.min(2107,Math.max(1980,date.getFullYear()));
+  const month=date.getMonth()+1;
+  const day=Math.max(1,date.getDate());
+  const dosTime=((date.getHours()&31)<<11)|((date.getMinutes()&63)<<5)|(Math.floor(date.getSeconds()/2)&31);
+  const dosDate=(((year-1980)&127)<<9)|((month&15)<<5)|(day&31);
+  return{dosTime,dosDate};
+}
+
+function zip64Extra(values:bigint[]){
+  if(!values.length)return Buffer.alloc(0);
+  const extra=Buffer.alloc(4+values.length*8);
+  extra.writeUInt16LE(0x0001,0);
+  extra.writeUInt16LE(values.length*8,2);
+  values.forEach((value,index)=>extra.writeBigUInt64LE(value,4+index*8));
+  return extra;
+}
+
+async function writeTaskFolderZipChunk(response:VercelResponse,chunk:Buffer){
+  if(response.writableEnded||response.destroyed)throw new Error("تم إيقاف تحميل الفولدر");
+  if(response.write(chunk))return;
+  await new Promise<void>((resolve)=>response.once("drain",resolve));
+}
+
+async function collectTaskFolderArchiveEntries(
+  sql:ReturnType<typeof getSql>,
+  folderId:string,
+  prefix:string,
+  entries:TaskFolderArchiveEntry[],
+  visited:Set<string>,
+  depth=0,
+){
+  if(depth>40)throw new Error("هيكل الفولدر أعمق من الحد المسموح");
+  if(visited.has(folderId))throw new Error("تم اكتشاف تكرار غير صالح داخل هيكل الفولدر");
+  visited.add(folderId);
+  const items=await listGoogleDriveFolder(sql,folderId);
+  for(const item of items){
+    if(entries.length>=20000)throw new Error("الفولدر يحتوي على عدد ملفات أكبر من الحد المسموح للتحميل دفعة واحدة");
+    const segment=taskFolderArchiveSegment(item.name,item.isFolder?"Folder":"file");
+    const itemPath=`${prefix}/${segment}`;
+    entries.push({
+      id:item.id,
+      path:item.isFolder?`${itemPath}/`:itemPath,
+      mimeType:item.mimeType,
+      size:item.size,
+      modifiedTime:item.modifiedTime||item.createdTime,
+      isFolder:item.isFolder,
+    });
+    if(item.isFolder)await collectTaskFolderArchiveEntries(sql,item.id,itemPath,entries,visited,depth+1);
+  }
+  visited.delete(folderId);
+}
+
+async function streamTaskFolderZip(
+  sql:ReturnType<typeof getSql>,
+  response:VercelResponse,
+  archiveName:string,
+  entries:TaskFolderArchiveEntry[],
+){
+  response.status(200);
+  response.setHeader("Cache-Control","private, no-store");
+  response.setHeader("Content-Type","application/zip");
+  response.setHeader("Content-Disposition",marketingFileDisposition(`${archiveName}.zip`,true));
+  response.setHeader("X-Content-Type-Options","nosniff");
+
+  const central:ZipCentralEntry[]=[];
+  let offset=0n;
+
+  const write=async(chunk:Buffer)=>{
+    await writeTaskFolderZipChunk(response,chunk);
+    offset+=BigInt(chunk.length);
+  };
+
+  for(const entry of entries){
+    const name=Buffer.from(entry.path,"utf8");
+    const localOffset=offset;
+    const {dosTime,dosDate}=zipDosDateTime(entry.modifiedTime);
+    const expectedSize=BigInt(Math.max(0,Number(entry.size||0)));
+    const needsZip64Size=!entry.isFolder&&expectedSize>=ZIP_UINT32_MAX;
+    const flags=entry.isFolder?0x0800:0x0808;
+    const extra=needsZip64Size?zip64Extra([expectedSize,expectedSize]):Buffer.alloc(0);
+    const header=Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50,0);
+    header.writeUInt16LE(needsZip64Size?45:20,4);
+    header.writeUInt16LE(flags,6);
+    header.writeUInt16LE(0,8);
+    header.writeUInt16LE(dosTime,10);
+    header.writeUInt16LE(dosDate,12);
+    header.writeUInt32LE(0,14);
+    header.writeUInt32LE(needsZip64Size?0xffffffff:0,18);
+    header.writeUInt32LE(needsZip64Size?0xffffffff:0,22);
+    header.writeUInt16LE(name.length,26);
+    header.writeUInt16LE(extra.length,28);
+    await write(Buffer.concat([header,name,extra]));
+
+    if(entry.isFolder){
+      central.push({name,crc:0,size:0n,offset:localOffset,modifiedTime:entry.modifiedTime,isFolder:true});
+      continue;
+    }
+
+    const upstream=await openGoogleDriveFile(sql,entry.id,"application/octet-stream,*/*");
+    if(!upstream.ok){
+      const message=clean(await upstream.text().catch(()=>""));
+      throw new Error(message||`تعذر تنزيل "${entry.path}" من Google Drive (${upstream.status})`);
+    }
+    if(!upstream.body)throw new Error(`Google Drive لم يرجع محتوى "${entry.path}"`);
+    let crc=0xffffffff;
+    let size=0n;
+    for await(const part of Readable.fromWeb(upstream.body as any)){
+      const chunk=Buffer.isBuffer(part)?part:Buffer.from(part as Uint8Array);
+      crc=zipCrc32Update(crc,chunk);
+      size+=BigInt(chunk.length);
+      await write(chunk);
+    }
+    crc=(crc^0xffffffff)>>>0;
+    const zip64=size>=ZIP_UINT32_MAX;
+    const descriptor=Buffer.alloc(zip64?24:16);
+    descriptor.writeUInt32LE(0x08074b50,0);
+    descriptor.writeUInt32LE(crc,4);
+    if(zip64){
+      descriptor.writeBigUInt64LE(size,8);
+      descriptor.writeBigUInt64LE(size,16);
+    }else{
+      descriptor.writeUInt32LE(Number(size),8);
+      descriptor.writeUInt32LE(Number(size),12);
+    }
+    await write(descriptor);
+    central.push({name,crc,size,offset:localOffset,modifiedTime:entry.modifiedTime,isFolder:false});
+  }
+
+  const centralOffset=offset;
+  let archiveNeedsZip64=false;
+  for(const entry of central){
+    const {dosTime,dosDate}=zipDosDateTime(entry.modifiedTime);
+    const needsZip64Size=entry.size>=ZIP_UINT32_MAX;
+    const needsZip64Offset=entry.offset>=ZIP_UINT32_MAX;
+    const zip64Values:bigint[]=[];
+    if(needsZip64Size)zip64Values.push(entry.size,entry.size);
+    if(needsZip64Offset)zip64Values.push(entry.offset);
+    const extra=zip64Extra(zip64Values);
+    archiveNeedsZip64=archiveNeedsZip64||needsZip64Size||needsZip64Offset;
+    const header=Buffer.alloc(46);
+    header.writeUInt32LE(0x02014b50,0);
+    header.writeUInt16LE(45,4);
+    header.writeUInt16LE((needsZip64Size||needsZip64Offset)?45:20,6);
+    header.writeUInt16LE(entry.isFolder?0x0800:0x0808,8);
+    header.writeUInt16LE(0,10);
+    header.writeUInt16LE(dosTime,12);
+    header.writeUInt16LE(dosDate,14);
+    header.writeUInt32LE(entry.crc>>>0,16);
+    header.writeUInt32LE(needsZip64Size?0xffffffff:Number(entry.size),20);
+    header.writeUInt32LE(needsZip64Size?0xffffffff:Number(entry.size),24);
+    header.writeUInt16LE(entry.name.length,28);
+    header.writeUInt16LE(extra.length,30);
+    header.writeUInt16LE(0,32);
+    header.writeUInt16LE(0,34);
+    header.writeUInt16LE(0,36);
+    header.writeUInt32LE(entry.isFolder?0x10:0,38);
+    header.writeUInt32LE(needsZip64Offset?0xffffffff:Number(entry.offset),42);
+    await write(Buffer.concat([header,entry.name,extra]));
+  }
+
+  const centralSize=offset-centralOffset;
+  const count=central.length;
+  archiveNeedsZip64=archiveNeedsZip64||count>ZIP_UINT16_MAX||centralOffset>=ZIP_UINT32_MAX||centralSize>=ZIP_UINT32_MAX;
+
+  if(archiveNeedsZip64){
+    const zip64Offset=offset;
+    const eocd64=Buffer.alloc(56);
+    eocd64.writeUInt32LE(0x06064b50,0);
+    eocd64.writeBigUInt64LE(44n,4);
+    eocd64.writeUInt16LE(45,12);
+    eocd64.writeUInt16LE(45,14);
+    eocd64.writeUInt32LE(0,16);
+    eocd64.writeUInt32LE(0,20);
+    eocd64.writeBigUInt64LE(BigInt(count),24);
+    eocd64.writeBigUInt64LE(BigInt(count),32);
+    eocd64.writeBigUInt64LE(centralSize,40);
+    eocd64.writeBigUInt64LE(centralOffset,48);
+    await write(eocd64);
+
+    const locator=Buffer.alloc(20);
+    locator.writeUInt32LE(0x07064b50,0);
+    locator.writeUInt32LE(0,4);
+    locator.writeBigUInt64LE(zip64Offset,8);
+    locator.writeUInt32LE(1,16);
+    await write(locator);
+  }
+
+  const eocd=Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50,0);
+  eocd.writeUInt16LE(0,4);
+  eocd.writeUInt16LE(0,6);
+  eocd.writeUInt16LE(archiveNeedsZip64?0xffff:count,8);
+  eocd.writeUInt16LE(archiveNeedsZip64?0xffff:count,10);
+  eocd.writeUInt32LE(archiveNeedsZip64?0xffffffff:Number(centralSize),12);
+  eocd.writeUInt32LE(archiveNeedsZip64?0xffffffff:Number(centralOffset),16);
+  eocd.writeUInt16LE(0,20);
+  await writeTaskFolderZipChunk(response,eocd);
+  response.end();
+  return response;
+}
+
+async function streamTaskFolderArchive(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser,response:VercelResponse){
+  const taskId=clean(request.query.taskId);
+  const context=await taskFolderContext(sql,user,taskId,request.query.kind);
+  const folderId=clean(request.query.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,folderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const info=await getGoogleDriveFileInfo(sql,folderId);
+  if(clean(info.mimeType)!=="application/vnd.google-apps.folder")throw new Error("العنصر المطلوب ليس فولدر");
+  const rootName=taskFolderArchiveSegment(info.name,context.kind==="raw"?"RAW":"OUTPUT");
+  const entries:TaskFolderArchiveEntry[]=[{
+    id:folderId,
+    path:`${rootName}/`,
+    mimeType:"application/vnd.google-apps.folder",
+    size:0,
+    modifiedTime:clean(info.modifiedTime)||null,
+    isFolder:true,
+  }];
+  await collectTaskFolderArchiveEntries(sql,folderId,rootName,entries,new Set<string>());
+  return streamTaskFolderZip(sql,response,rootName,entries);
+}
+
+async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
   const templates = new Map<string, string>();
+  const taskBatch = await allocateTaskBatch(tx, input.sourceType, input.sourceId);
   let templateIndex = 0;
   for (const content of input.contentAssignments) {
     const contentUserId = clean(content.userId); if (!contentUserId) continue;
     templateIndex += 1;
-    const taskNo = `${safeCode(input.sourceCode || input.sourceName)}_${input.sourceId.slice(0,8).toUpperCase()}_TPL_${input.creativeIndex}_${templateIndex}`;
+    const taskNo = `${safeCode(input.sourceCode || input.sourceName)}_${input.sourceId.slice(0,8).toUpperCase()}_TPL_${taskBatch}_${templateIndex}`;
     const [template] = await tx<any[]>`
       insert into marketing.task_templates(source_type,source_id,creative_id,content_user_id,task_no,status,progress,due_on,department_note,template_data)
       values (${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,${contentUserId}::uuid,${taskNo},'not_started',0,${isoDate(content.dueOn)},${clean(content.note)||null},${tx.json(dbJson({ sourceName: input.sourceName, sourceCode: input.sourceCode, creativeName: input.creativeName, creativeType: input.creativeType, requiredFromContent: input.requiredFromContent || "" }))})
@@ -586,266 +1310,6 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
   if (unlinkedContentUser) throw new Error(`يجب ربط كل Task Template بتاسك تنفيذي داخل ${input.creativeName}`);
 }
 
-async function createCampaignInTransaction(
-  tx: any,
-  body: Record<string, any>,
-  user: SessionUser,
-  contentId: string,
-  options: { preserveRequestedCode?: boolean } = {},
-) {
-  const campaignTypeId = clean(body.campaignTypeId); const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd);
-  if (!campaignTypeId || !name || !start || !end) throw new Error("بيانات الحملة الأساسية غير مكتملة");
-  const requestedCode = clean(body.campaignCode);
-  let code = requestedCode && options.preserveRequestedCode
-    ? requestedCode
-    : await allocateCampaignCode(tx, campaignTypeId, requestedCode);
-  let campaign: any = null;
-  for (let attempt = 0; attempt < 3 && !campaign; attempt += 1) {
-    [campaign] = await tx<any[]>`
-      insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
-      select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(dbJson({ ...body, campaignCode: code }))},0,${user.id}::uuid
-      from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid and ct.is_active=true
-      on conflict(campaign_code) do nothing
-      returning id::text,campaign_code,name
-    `;
-    if (!campaign) {
-      if (options.preserveRequestedCode && requestedCode) throw new Error("كود الحملة موجود بالفعل داخل النظام الجديد");
-      code = await allocateCampaignCode(tx, campaignTypeId);
-    }
-  }
-  if (!campaign) throw new Error("تعذر إنشاء كود حملة فريد. أعد المحاولة مرة أخرى");
-  const creativeMap = new Map<string, string>();
-  let creativeIndex = 0;
-  for (const rawCreative of arrayValue(body.creatives)) {
-    creativeIndex += 1;
-    const creativeTypeId = clean(rawCreative.creativeTypeId);
-    const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
-    if (!creativeType) continue;
-    const tempId = clean(rawCreative.tempId || rawCreative.id || `creative-${creativeIndex}`);
-    const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
-    const [creative] = await tx<any[]>`
-      insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
-      values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
-    `;
-    creativeMap.set(tempId, creative.id);
-    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
-  }
-  for (const budget of arrayValue(body.budgets)) {
-    const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
-      ? arrayValue<string>(budget.creativeTempIds)
-      : [clean(budget.creativeTempId)].filter(Boolean);
-    const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
-      const creativeId = creativeMap.get(clean(tempId));
-      return creativeId ? [creativeId] : [];
-    }))];
-    if (!creativeIds.length) continue;
-    const amounts = arrayValue(budget.platformAmounts)
-      .map((item: any) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
-      .filter((item: any) => item.platformId);
-    const total = amounts.reduce((sum, item: any) => sum + item.amount, 0);
-    const [budgetItem] = await tx<any[]>`
-      insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
-      values(
-        ${campaign.id}::uuid,
-        ${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},
-        ${creativeIds.length === 1 ? tx`${creativeIds[0]}::uuid` : null},
-        ${Math.max(1,numberValue(budget.adsCount,1))},
-        ${clean(budget.contentGoal)||null},
-        ${clean(budget.expectedGoal)||null},
-        ${tx.json(dbJson(amounts))},
-        ${total}
-      ) returning id::text
-    `;
-    for (const creativeId of creativeIds) {
-      await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${budgetItem.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
-    }
-  }
-  for (const item of arrayValue(body.schedule)) {
-    const requestedCreativeIds = arrayValue<string>(item.creativeTempIds).length
-      ? arrayValue<string>(item.creativeTempIds)
-      : [clean(item.creativeTempId)].filter(Boolean);
-    const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
-      const creativeId = creativeMap.get(clean(tempId));
-      return creativeId ? [creativeId] : [];
-    }))];
-    const publishDate = isoDate(item.date);
-    if (!creativeIds.length || !publishDate) continue;
-    for (const creativeId of creativeIds) {
-      const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creativeId}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
-      const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
-      for (const scheduleTask of scheduleTasks) {
-        const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
-        for (const platform of arrayValue(item.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
-          await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${publishDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
-        }
-      }
-    }
-  }
-  await audit(tx as any,user,"campaign_created","campaign",campaign.id,{ code,name },undefined,undefined);
-  return { ok: true, id: campaign.id, code, message: "تم إنشاء الحملة والتاسكات" };
-}
-
-async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
-  const meta = await marketingMeta(sql, user);
-  const contentId = contentDepartmentId(meta);
-  return sql.begin((tx) => createCampaignInTransaction(tx, body, user, contentId));
-}
-
-function datesBetween(start: string, end: string) {
-  const output: string[] = []; const date = new Date(`${start}T00:00:00Z`); const last = new Date(`${end}T00:00:00Z`);
-  while (date <= last && output.length < 370) { output.push(date.toISOString().slice(0,10)); date.setUTCDate(date.getUTCDate()+1); }
-  return output;
-}
-
-async function createAgendaInTransaction(tx: any, body: Record<string, any>, user: SessionUser, contentId: string) {
-  const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd); const monthKey = clean(body.monthKey);
-  if (!name || !start || !end || !monthKey) throw new Error("بيانات الأجندة الأساسية غير مكتملة");
-  const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(dbJson(body))},0,${user.id}::uuid) returning id::text`;
-  let creativeIndex = 0;
-  for (const day of arrayValue(body.days)) {
-    const dayDate = isoDate(day.date); if (!dayDate) continue;
-    for (const rawCreative of arrayValue(day.creatives)) {
-      const quantity = Math.max(1,numberValue(rawCreative.quantity,1));
-      for (let instance=0; instance<quantity; instance += 1) {
-        creativeIndex += 1;
-        const creativeTypeId = clean(rawCreative.creativeTypeId);
-        const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
-        if (!creativeType) continue;
-        const contentAssignmentMap = new Map<string, any>();
-        for (const assignment of arrayValue(rawCreative.contentAssignments)) {
-          const userId = clean(assignment.userId);
-          if (!userId) continue;
-          contentAssignmentMap.set(userId, { ...assignment, userId });
-        }
-        const contentAssignments = [...contentAssignmentMap.values()];
-        const contentUserIds = contentAssignments.map((item: any) => clean(item.userId)).filter(Boolean);
-        if (!contentUserIds.length) throw new Error(`اختر يوزر قسم المحتوى للكرييتيف ${creativeType.name}`);
-
-        const normalizeExecutionAssignments = (assignments: any[]) => {
-          const assignmentMap = new Map<string, any>();
-          for (const assignment of arrayValue(assignments)) {
-            const userId = clean(assignment.userId);
-            if (!userId) continue;
-            const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
-            const existing = assignmentMap.get(userId);
-            assignmentMap.set(userId, {
-              ...(existing || assignment),
-              ...assignment,
-              userId,
-              contentUserIds: [...new Set([...(existing?.contentUserIds || []), ...linked])],
-            });
-          }
-          return [...assignmentMap.values()];
-        };
-        const primaryAssignments = normalizeExecutionAssignments(rawCreative.primaryAssignments);
-        const optionalAssignments = arrayValue(rawCreative.optionalAssignments).map((group: any) => ({
-          ...group,
-          assignments: normalizeExecutionAssignments(group.assignments),
-        }));
-        const executionAssignments = [
-          ...primaryAssignments,
-          ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments)),
-        ];
-        if (!executionAssignments.length) throw new Error(`اختر يوزرًا تنفيذيًا للكرييتيف ${creativeType.name}`);
-        const coveredContentUsers = new Set(executionAssignments.flatMap((assignment: any) => arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)));
-        const missingContentUsers = contentUserIds.filter((id: string) => !coveredContentUsers.has(id));
-        if (missingContentUsers.length && executionAssignments.length === 1) {
-          executionAssignments[0].contentUserIds = [...new Set([...arrayValue<string>(executionAssignments[0].contentUserIds).map(clean).filter(Boolean), ...missingContentUsers])];
-        } else if (missingContentUsers.length) {
-          throw new Error(`كل Task Template يجب ربطه بتاسك تنفيذي داخل ${creativeType.name}`);
-        }
-        const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
-        const [creative] = await tx<any[]>`
-          insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
-          values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
-        `;
-        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:`${dayDate}__${clean(rawCreative.tempId)}__${instance + 1}` });
-        const templatesWithoutExecution = await tx<any[]>`
-          select tt.id::text
-          from marketing.task_templates tt
-          where tt.creative_id=${creative.id}::uuid
-            and not exists (
-              select 1 from marketing.tasks execution_task
-              where execution_task.task_template_id=tt.id
-                and execution_task.task_kind='execution'
-                and execution_task.is_deleted=false
-            )
-        `;
-        if (templatesWithoutExecution.length) throw new Error(`كل Task Template يجب أن يكون معه تاسك تنفيذي داخل ${creativeType.name}`);
-        const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
-        const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
-        for (const scheduleTask of scheduleTasks) {
-          const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
-          for (const platform of arrayValue(rawCreative.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
-            await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'agenda',${agenda.id}::uuid,${creative.id}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${dayDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
-          }
-        }
-      }
-    }
-  }
-  await audit(tx as any,user,"agenda_created","agenda",agenda.id,{ name,monthKey },undefined,undefined);
-  return { ok:true,id:agenda.id,message:"تم إنشاء الأجندة والتاسكات" };
-}
-
-async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
-  const meta = await marketingMeta(sql, user);
-  const contentId = contentDepartmentId(meta);
-  return sql.begin((tx) => createAgendaInTransaction(tx, body, user, contentId));
-}
-
-async function importFreshMarketingBundle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
-  if (!hasPermission(user, "marketing.campaign.create") || !hasPermission(user, "marketing.agenda.create")) {
-    throw new Error("لا توجد صلاحية لإنشاء الحملة والأجندة");
-  }
-  if (clean(body.format) !== "mzj-marketing-fresh-import" || numberValue(body.version) !== 1) {
-    throw new Error("ملف النقل غير معتمد");
-  }
-  const migrationKey = clean(body.migrationKey);
-  if (!migrationKey || migrationKey.length > 180) throw new Error("مفتاح عملية النقل غير صحيح");
-  const campaigns = arrayValue<Record<string, any>>(body.campaigns);
-  const agendas = arrayValue<Record<string, any>>(body.agendas);
-  if (!campaigns.length && !agendas.length) throw new Error("ملف النقل لا يحتوي على حملة أو أجندة");
-
-  const meta = await marketingMeta(sql, user);
-  const contentId = contentDepartmentId(meta);
-  return sql.begin(async (tx) => {
-    const [existing] = await tx<any[]>`
-      select details
-      from marketing.data_migrations
-      where migration_key=${migrationKey}
-      for update
-    `;
-    if (existing) {
-      return { ok: true, alreadyApplied: true, message: "تم تنفيذ عملية النقل دي قبل كده", details: existing.details || {} };
-    }
-
-    const createdCampaigns: any[] = [];
-    const createdAgendas: any[] = [];
-    for (const campaign of campaigns) {
-      createdCampaigns.push(await createCampaignInTransaction(tx, campaign, user, contentId, { preserveRequestedCode: true }));
-    }
-    for (const agenda of agendas) {
-      createdAgendas.push(await createAgendaInTransaction(tx, agenda, user, contentId));
-    }
-    const details = {
-      source: body.source || null,
-      campaigns: createdCampaigns.map((item) => ({ id: item.id, code: item.code })),
-      agendas: createdAgendas.map((item) => ({ id: item.id })),
-      importedBy: user.id,
-    };
-    await tx`
-      insert into marketing.data_migrations(migration_key,details)
-      values(${migrationKey},${tx.json(dbJson(details))})
-    `;
-    return {
-      ok: true,
-      alreadyApplied: false,
-      message: "تم إنشاء الحملة والأجندة وتوليد التاسكات من البداية",
-      details,
-    };
-  });
-}
-
 type EntityCreativeScheduleInput = {
   id?: string;
   date?: string;
@@ -861,6 +1325,11 @@ type EntityCreativeBudgetInput = {
   platformAmounts?: Array<{ platformId?: string; amount?: number }>;
 };
 
+type CampaignBudgetInput = EntityCreativeBudgetInput & {
+  creativeIds?: string[];
+  creativeId?: string;
+};
+
 function creativeTaskFlowSnapshot(value: any) {
   return JSON.stringify(dbJson({
     creativeTypeId: clean(value?.creativeTypeId || value?.creative_type_id),
@@ -869,6 +1338,63 @@ function creativeTaskFlowSnapshot(value: any) {
     contentAssignments: arrayValue(value?.contentAssignments ?? value?.content_assignments),
     primaryAssignments: arrayValue(value?.primaryAssignments ?? value?.primary_assignments),
     optionalAssignments: arrayValue(value?.optionalAssignments ?? value?.optional_assignments),
+  }));
+}
+
+function creativeBudgetSnapshot(value: unknown) {
+  const rows = arrayValue<any>(value)
+    .map((item) => ({
+      id: clean(item?.id),
+      funnelId: clean(item?.funnelId ?? item?.funnel_id),
+      adsCount: Math.max(1, numberValue(item?.adsCount ?? item?.ads_count, 1)),
+      contentGoal: clean(item?.contentGoal ?? item?.content_goal),
+      expectedGoal: clean(item?.expectedGoal ?? item?.expected_goal),
+      platformAmounts: arrayValue<any>(item?.platformAmounts ?? item?.platform_amounts)
+        .map((part) => ({
+          platformId: clean(part?.platformId ?? part?.platform_id),
+          amount: Math.max(0, numberValue(part?.amount)),
+        }))
+        .filter((part) => part.platformId)
+        .sort((left, right) => left.platformId.localeCompare(right.platformId)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id) || JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return JSON.stringify(dbJson(rows));
+}
+
+function creativeScheduleSnapshot(value: unknown) {
+  const signatures = arrayValue<any>(value).flatMap((item) => {
+    const date = isoDate(item?.date ?? item?.publish_date);
+    const platforms = arrayValue<any>(item?.platforms)
+      .map((platform) => ({
+        platformId: clean(platform?.platformId ?? platform?.platform_id),
+        postTypeIds: [...new Set(arrayValue<string>(platform?.postTypeIds ?? platform?.post_type_ids).map(clean).filter(Boolean))].sort(),
+      }))
+      .filter((platform) => platform.platformId && platform.postTypeIds.length)
+      .sort((left, right) => left.platformId.localeCompare(right.platformId));
+    if (!date || !platforms.length) return [];
+    return [`${date}|${platforms.map((platform) => `${platform.platformId}:${platform.postTypeIds.join(",")}`).join("|")}`];
+  });
+  return JSON.stringify([...new Set(signatures)].sort());
+}
+
+function groupedScheduleSnapshotRows(rows: any[]) {
+  const groups = new Map<string, { date: string; platforms: Map<string, Set<string>> }>();
+  for (const row of rows) {
+    const date = isoDate(row?.publish_date);
+    const groupKey = `${date}|${clean(row?.group_id || row?.id)}`;
+    if (!date || !clean(row?.platform_id) || !clean(row?.post_type_id)) continue;
+    if (!groups.has(groupKey)) groups.set(groupKey, { date, platforms: new Map() });
+    const group = groups.get(groupKey)!;
+    const platformId = clean(row.platform_id);
+    if (!group.platforms.has(platformId)) group.platforms.set(platformId, new Set());
+    group.platforms.get(platformId)!.add(clean(row.post_type_id));
+  }
+  return [...groups.values()].map((group) => ({
+    date: group.date,
+    platforms: [...group.platforms.entries()].map(([platformId, postTypeIds]) => ({
+      platformId,
+      postTypeIds: [...postTypeIds],
+    })),
   }));
 }
 
@@ -905,6 +1431,121 @@ async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: s
     `;
     await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${created.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
   }
+}
+
+async function saveCampaignBudgets(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, any>,
+  user: SessionUser,
+) {
+  if (!hasPermission(user, "marketing.campaign.edit")) throw new Error("لا توجد صلاحية لتعديل ميزانية الحملة");
+  const campaignId = clean(body.campaignId || body.id);
+  if (!campaignId) throw new Error("رقم الحملة مطلوب");
+  await assertMarketingEntityAccess(sql, user, "campaign", campaignId);
+
+  const rawBudgets = arrayValue<CampaignBudgetInput>(body.budgets);
+  if (rawBudgets.length > 100) throw new Error("عدد بنود الميزانية يتجاوز الحد المسموح");
+
+  const budgets = rawBudgets.map((budget, index) => {
+    const creativeIds = [...new Set(
+      (arrayValue<string>(budget.creativeIds).length
+        ? arrayValue<string>(budget.creativeIds)
+        : [clean(budget.creativeId)].filter(Boolean))
+        .map(clean)
+        .filter(Boolean),
+    )];
+    const amountMap = new Map<string, number>();
+    for (const part of arrayValue(budget.platformAmounts)) {
+      const platformId = clean(part?.platformId);
+      if (!platformId) continue;
+      amountMap.set(platformId, Math.max(0, numberValue(part?.amount)));
+    }
+    const platformAmounts = [...amountMap.entries()].map(([platformId, amount]) => ({ platformId, amount }));
+    const funnelId = clean(budget.funnelId);
+    if (!funnelId) throw new Error(`اختر Funnel داخل بند الميزانية ${index + 1}`);
+    if (!creativeIds.length) throw new Error(`اختر كرييتيفًا واحدًا على الأقل داخل بند الميزانية ${index + 1}`);
+    if (!platformAmounts.length) throw new Error(`حدد منصة واحدة على الأقل داخل بند الميزانية ${index + 1}`);
+    return {
+      funnelId,
+      creativeIds,
+      adsCount: Math.max(1, numberValue(budget.adsCount, 1)),
+      contentGoal: clean(budget.contentGoal),
+      expectedGoal: clean(budget.expectedGoal),
+      platformAmounts,
+      total: platformAmounts.reduce((sum, part) => sum + part.amount, 0),
+    };
+  });
+
+  return sql.begin(async (tx) => {
+    const [campaign] = await tx<any[]>`
+      select id::text,name
+      from marketing.campaigns
+      where id=${campaignId}::uuid and is_deleted=false
+      for update
+    `;
+    if (!campaign) throw new Error("الحملة غير موجودة");
+
+    const funnelIds = [...new Set(budgets.map((item) => item.funnelId))];
+    if (funnelIds.length) {
+      const validFunnels = await tx<any[]>`
+        select id::text from marketing.funnels
+        where id in ${tx(funnelIds)} and active=true
+      `;
+      if (validFunnels.length !== funnelIds.length) throw new Error("يوجد Funnel غير متاح داخل الميزانية");
+    }
+
+    const creativeIds = [...new Set(budgets.flatMap((item) => item.creativeIds))];
+    if (creativeIds.length) {
+      const validCreatives = await tx<any[]>`
+        select id::text from marketing.creatives
+        where campaign_id=${campaignId}::uuid and id in ${tx(creativeIds)}
+      `;
+      if (validCreatives.length !== creativeIds.length) throw new Error("يوجد كرييتيف غير تابع لهذه الحملة داخل الميزانية");
+    }
+
+    const platformIds = [...new Set(budgets.flatMap((item) => item.platformAmounts.map((part) => part.platformId)))];
+    if (platformIds.length) {
+      const validPlatforms = await tx<any[]>`
+        select id::text from marketing.platforms
+        where id in ${tx(platformIds)} and is_active=true
+      `;
+      if (validPlatforms.length !== platformIds.length) throw new Error("يوجد منصة غير متاحة داخل الميزانية");
+    }
+
+    await tx`delete from marketing.budget_items where campaign_id=${campaignId}::uuid`;
+    for (const budget of budgets) {
+      const [created] = await tx<any[]>`
+        insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+        values(
+          ${campaignId}::uuid,
+          ${budget.funnelId}::uuid,
+          ${budget.creativeIds.length === 1 ? tx`${budget.creativeIds[0]}::uuid` : null},
+          ${budget.adsCount},
+          ${budget.contentGoal || null},
+          ${budget.expectedGoal || null},
+          ${tx.json(dbJson(budget.platformAmounts))},
+          ${budget.total}
+        )
+        returning id::text
+      `;
+      for (const creativeId of budget.creativeIds) {
+        await tx`
+          insert into marketing.budget_item_creatives(budget_item_id,creative_id)
+          values(${created.id}::uuid,${creativeId}::uuid)
+          on conflict do nothing
+        `;
+      }
+    }
+
+    return {
+      ok: true,
+      id: campaignId,
+      campaignId,
+      budgetCount: budgets.length,
+      total: budgets.reduce((sum, item) => sum + item.total, 0),
+      message: budgets.length ? "تم حفظ ميزانية الحملة" : "تم حذف ميزانية الحملة",
+    };
+  });
 }
 
 async function replaceCreativeSchedule(tx: any, input: {
@@ -1008,6 +1649,9 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
   await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
   const creativeTypeId = clean(rawCreative.creativeTypeId);
   if (!creativeTypeId) throw new Error("اختر نوع الكرييتيف");
+  const requestedCreativeName = clean(rawCreative.name);
+  if (sourceType === 'campaign' && !requestedCreativeName) throw new Error("اكتب اسم الكرييتيف");
+  if (requestedCreativeName.length > 160) throw new Error("اسم الكرييتيف يجب ألا يزيد عن 160 حرف");
   const budgetInputs = arrayValue<EntityCreativeBudgetInput>(body.budgets);
   const scheduleInputs = arrayValue<EntityCreativeScheduleInput>(body.schedule);
   if (sourceType === 'campaign' && !budgetInputs.length) throw new Error("أضف ميزانية للكرييتيف");
@@ -1038,10 +1682,13 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
       where c.id=${creativeTypeId}::uuid and c.is_active=true
     `;
     if (!creativeType) throw new Error("نوع الكرييتيف غير موجود");
+    const creativeName = sourceType === 'campaign' ? requestedCreativeName : creativeType.name;
 
     const saveSingle = async (existingId: string | null) => {
       let targetId = existingId || '';
       let taskFlowChanged = true;
+      let budgetsChanged = sourceType === 'campaign';
+      let scheduleChanged = true;
       let previousTemplates: any[] = [];
       let creativeIndex = 1;
       if (existingId) {
@@ -1055,7 +1702,39 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
         if (!existing) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
         const [published] = await tx<any[]>`select 1 from marketing.publish_schedule where creative_id=${existingId}::uuid and status='published' limit 1`;
         if (published) throw new Error("لا يمكن تعديل كرييتيف تم نشره");
+        const currentBudgets = sourceType === 'campaign'
+          ? await tx<any[]>`
+              select distinct
+                b.id::text,
+                b.funnel_id::text,
+                b.ads_count,
+                b.content_goal,
+                b.expected_goal,
+                b.platform_amounts
+              from marketing.budget_items b
+              left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+              where b.campaign_id=${sourceId}::uuid
+                and (bic.creative_id=${existingId}::uuid or b.creative_id=${existingId}::uuid)
+              order by b.id::text
+            `
+          : [];
+        const currentScheduleRows = await tx<any[]>`
+          select
+            s.id::text,
+            s.group_id::text,
+            s.publish_date::text,
+            s.platform_id::text,
+            s.post_type_id::text
+          from marketing.publish_schedule s
+          where s.source_type=${sourceType}
+            and s.source_id=${sourceId}::uuid
+            and s.creative_id=${existingId}::uuid
+          order by s.publish_date,s.group_id,s.platform_id,s.post_type_id,s.id
+        `;
         taskFlowChanged = creativeTaskFlowSnapshot(existing) !== creativeTaskFlowSnapshot(rawCreative);
+        budgetsChanged = sourceType === 'campaign' && creativeBudgetSnapshot(currentBudgets) !== creativeBudgetSnapshot(budgetInputs);
+        scheduleChanged = taskFlowChanged
+          || creativeScheduleSnapshot(groupedScheduleSnapshotRows(currentScheduleRows)) !== creativeScheduleSnapshot(scheduleInputs);
         if (taskFlowChanged) {
           const [started] = await tx<any[]>`
             select 1 from marketing.tasks
@@ -1065,37 +1744,40 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           `;
           if (started) throw new Error("بدأ تنفيذ هذا الكرييتيف؛ يمكن تعديل الميزانية وجدول النشر فقط دون تغيير بيانات التكليف");
           previousTemplates = await tx<any[]>`
-            select distinct on (content_user_id) *,id::text,content_user_id::text,file_id::text
-            from marketing.task_templates
-            where creative_id=${existingId}::uuid
-            order by content_user_id,created_at desc,id desc
+            select distinct on (tt.content_user_id)
+              tt.id::text as id,
+              tt.content_user_id::text as content_user_id,
+              tt.file_id::text as file_id,
+              tt.status,
+              tt.template_data,
+              tt.approved_data
+            from marketing.task_templates tt
+            where tt.creative_id=${existingId}::uuid
+            order by tt.content_user_id,tt.created_at desc,tt.id desc
           `;
           await tx`update marketing.tasks set is_deleted=true,updated_at=now() where creative_id=${existingId}::uuid and is_deleted=false`;
         }
         await tx`
           update marketing.creatives set
             creative_type=${creativeType.name},creative_type_id=${creativeTypeId}::uuid,
-            quantity=${Math.max(1, numberValue(rawCreative.quantity, 1))},
-            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeType.name},
+            quantity=${sourceType === 'campaign' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
+            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeName},
             primary_department_id=${creativeType.primary_department_id},cars=${tx.json(dbJson(arrayValue(rawCreative.cars)))},
             content_assignments=${tx.json(dbJson(contentAssignments))},primary_assignments=${tx.json(dbJson(primaryAssignments))},
             optional_assignments=${tx.json(dbJson(optionalAssignments))},platform_assignments=${tx.json(dbJson(arrayValue(rawCreative.platforms)))},
             notes=${tx.json(dbJson(rawCreative.notes || {}))},updated_at=now()
           where id=${existingId}::uuid
         `;
-        const [sequence] = await tx<any[]>`select count(*)::int + 1000 as value from marketing.task_templates where source_type=${sourceType} and source_id=${sourceId}::uuid`;
-        creativeIndex = Number(sequence?.value || 1001);
       } else {
-        const [sequence] = await tx<any[]>`select count(*)::int + 1 as value from marketing.creatives where (${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid)`;
-        creativeIndex = Number(sequence?.value || 1);
+        creativeIndex = await allocateCreativeIndex(tx, sourceType, sourceId);
         const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,'0')}`;
         const [created] = await tx<any[]>`
           insert into marketing.creatives(campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
           values(
             ${sourceType === 'campaign' ? tx`${sourceId}::uuid` : null},
             ${sourceType === 'agenda' ? tx`${sourceId}::uuid` : null},
-            ${creativeType.name},${creativeTypeId}::uuid,${sourceType === 'agenda' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
-            'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},
+            ${creativeType.name},${creativeTypeId}::uuid,1,
+            'required',${instanceCode},${creativeName},${creativeType.primary_department_id},
             ${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},
             ${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}
           ) returning id::text
@@ -1111,8 +1793,7 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           sourceCode: entity.code || entity.name,
           sourceName: entity.name,
           creativeId: targetId,
-          creativeIndex,
-          creativeName: creativeType.name,
+          creativeName,
           creativeType: creativeType.name,
           contentDepartmentId: contentId,
           contentAssignments,
@@ -1124,11 +1805,15 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
         if (existingId) await promoteCreativeRevisionForReview(tx, targetId, previousTemplates, user);
       }
 
-      if (sourceType === 'campaign') await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
-      await replaceCreativeSchedule(tx, {
-        sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
-        schedule:scheduleInputs,
-      });
+      if (sourceType === 'campaign' && (!existingId || budgetsChanged)) {
+        await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
+      }
+      if (!existingId || scheduleChanged) {
+        await replaceCreativeSchedule(tx, {
+          sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
+          schedule:scheduleInputs,
+        });
+      }
       return targetId;
     };
 
@@ -1140,8 +1825,75 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
       ids.push(await saveSingle(creativeId || null));
     }
     await recalculateProgress(tx, sourceType, sourceId);
-    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name },undefined,undefined);
+    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name,creativeName },undefined,undefined);
     return { ok:true,id:sourceId,creativeIds:ids,message:creativeId ? "تم تعديل الكرييتيف وإنشاء مراجعة التكليف عند الحاجة" : "تمت إضافة الكرييتيف والتاسكات المرتبطة" };
+  });
+}
+
+async function deleteEntityCreative(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const sourceType = clean(body.sourceType) as "campaign" | "agenda";
+  const sourceId = clean(body.sourceId || body.id);
+  const creativeId = clean(body.creativeId);
+  if (!['campaign','agenda'].includes(sourceType) || !sourceId || !creativeId) throw new Error("بيانات الكرييتيف غير مكتملة");
+  const permission = sourceType === 'campaign' ? 'marketing.campaign.edit' : 'marketing.agenda.edit';
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لمسح الكرييتيف");
+  await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
+
+  return sql.begin(async (tx) => {
+    const [creative] = await tx<any[]>`
+      select c.id::text,c.name,c.instance_code,c.creative_type
+      from marketing.creatives c
+      where c.id=${creativeId}::uuid
+        and ((${sourceType}='campaign' and c.campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and c.agenda_id=${sourceId}::uuid))
+      for update
+    `;
+    if (!creative) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
+
+    const [published] = await tx<any[]>`
+      select 1
+      from marketing.publish_schedule s
+      where s.creative_id=${creativeId}::uuid
+        and (s.status='published' or s.published_at is not null)
+      limit 1
+    `;
+    if (published) throw new Error("لا يمكن مسح كرييتيف تم نشره بالفعل");
+
+    const affectedBudgets = sourceType === 'campaign'
+      ? await tx<any[]>`
+          select distinct b.id::text
+          from marketing.budget_items b
+          left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+          where b.campaign_id=${sourceId}::uuid
+            and (bic.creative_id=${creativeId}::uuid or b.creative_id=${creativeId}::uuid)
+        `
+      : [];
+
+    await tx`delete from marketing.creatives where id=${creativeId}::uuid`;
+
+    for (const item of affectedBudgets) {
+      const [remaining] = await tx<any[]>`
+        select bic.creative_id::text as creative_id
+        from marketing.budget_item_creatives bic
+        where bic.budget_item_id=${item.id}::uuid
+        order by bic.created_at,bic.creative_id
+        limit 1
+      `;
+      if (!remaining) await tx`delete from marketing.budget_items where id=${item.id}::uuid`;
+      else await tx`update marketing.budget_items set creative_id=${remaining.creative_id}::uuid where id=${item.id}::uuid`;
+    }
+
+    await recalculateProgress(tx, sourceType, sourceId);
+    await audit(
+      tx as any,
+      user,
+      'creative_deleted',
+      sourceType,
+      sourceId,
+      { creativeId, creativeName: clean(creative.name || creative.creative_type), instanceCode: clean(creative.instance_code) },
+      undefined,
+      undefined,
+    );
+    return { ok: true, id: sourceId, creativeId, message: "تم مسح الكرييتيف والبيانات التشغيلية المرتبطة به" };
   });
 }
 
@@ -1150,6 +1902,7 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
   const rows = await sql<any[]>`
     select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
     from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
+      and not (t.task_kind='execution' and t.status='rejected')
     group by coalesce(t.department_id::text,'content')
   `;
   const [completion] = await sql<any[]>`
@@ -1161,6 +1914,7 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
       )::int as ready
     from marketing.tasks t
     where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
+      and not (t.task_kind='execution' and t.status='rejected')
   `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
   const readyForPublishing = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.ready || 0);
@@ -1223,6 +1977,8 @@ async function dashboardVersion(sql: ReturnType<typeof getSql>) {
       coalesce((select max(updated_at) from marketing.task_templates),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.campaigns),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.agendas),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.creatives),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.creative_types),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.user_colors),'epoch'::timestamptz)
     )::text as version
   `;
@@ -1266,7 +2022,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.completed_at,t.completed_by::text,t.note,
       done_by.full_name as completed_by_name,t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
       t.paired_content_user_id::text,cu.full_name as content_user_name,cuc.color as content_user_color,
-      d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
+      d.id::text as department_id,d.name as department_name,c.name as creative_name,ct.name as creative_type_name,c.instance_code,
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
       f.id::text as final_file_id,f.original_name as final_file_name,
       (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or ${canViewAllTasks(user)}=true) as can_complete_task
@@ -1276,6 +2032,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     left join marketing.user_colors auc on auc.user_id=t.assigned_to
     left join marketing.user_colors cuc on cuc.user_id=t.paired_content_user_id
     left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.creative_types ct on ct.id=c.creative_type_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
@@ -1303,8 +2060,8 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
   return {
     ok:true,
     version,
-    required:tasks.filter((task)=>!task.received_at && task.status!=='completed'),
-    received:tasks.filter((task)=>task.received_at && task.status!=='completed'),
+    required:tasks.filter((task)=>!task.received_at && task.status!=='completed' && !(task.task_kind==='execution' && task.status==='rejected')),
+    received:tasks.filter((task)=>task.received_at && task.status!=='completed' && !(task.task_kind==='execution' && task.status==='rejected')),
     completed,
     entities,
     permissions:user.permissions.filter((code)=>code.startsWith("marketing.")),
@@ -1336,11 +2093,11 @@ async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
       (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false and t.task_kind in ('task_template','execution')),
       a.result_file_id::text,coalesce(jsonb_array_length(a.links),0)::int
     from marketing.agendas a
-    where ${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
+    where a.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
       or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and (
         t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
         or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}))
-      ))
+      )))
     order by created_at desc
   `;
   return { ok:true,rows };
@@ -1399,10 +2156,25 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,cam.campaign_date,cam.campaign_type,cam.objective,cam.required_from_content,
       coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
       tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
+      first_file.id as first_file_id,first_file.original_name as first_file_name,first_file.mime_type as first_file_mime_type,first_file.file_size as first_file_size,
+      coalesce(first_files.file_count,case when first_file.id is null then 0 else 1 end)::int as first_file_count,coalesce(first_files.files,'[]'::jsonb) as first_files,
       coalesce(fm.primary_name,ff.original_name) as final_file_name,coalesce(fm.file_count,case when ff.id is null then 0 else 1 end)::int as final_file_count,coalesce(fm.files,'[]'::jsonb) as final_files,done_by.full_name as completed_by_name
     from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join core.users done_by on done_by.id=t.completed_by left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id
+    left join lateral (
+      select f.id::text,f.original_name,f.mime_type,f.file_size
+      from marketing.files f
+      where f.task_id=t.id and f.category='first-file' and f.status='ready'
+      order by f.created_at asc,f.id asc
+      limit 1
+    ) first_file on true
+    left join lateral (
+      select count(*)::int as file_count,
+        jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size) order by f.created_at,f.id) as files
+      from marketing.files f
+      where f.task_id=t.id and f.category='first-file' and f.status='ready'
+    ) first_files on true
     left join lateral (
       select count(*)::int as file_count,min(f.original_name) filter(where f.order_index=0) as primary_name,
         jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size,'orderIndex',f.order_index) order by f.order_index,f.created_at) as files
@@ -1432,8 +2204,12 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canViewFeedback:hasPermission(user,"marketing.task_template.view_feedback") || task.assigned_to===user.id || task.paired_content_user_id===user.id,
       canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
+      canRejectTask:task.task_kind==="execution" && isRejectableExecutionDepartment(task.department_name) && task.status!=="completed" && task.status!=="rejected" && hasPermission(user,"marketing.assignment_action.execute"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
       canDownloadFile:hasPermission(user,"marketing.file.download"),
+      showFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name),
+      canUploadFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.task.final_file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
+      canDeleteFirstFile:Boolean(task.first_file_id) && task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.task.final_file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
       canCompleteTask:task.assigned_to===user.id || task.paired_content_user_id===user.id || canViewAllTasks(user),
     }
   };
@@ -1539,8 +2315,33 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
   }
 }
 
-async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
-async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
+async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any,user:SessionUser){
+  if(!hasPermission(user,"settings.marketing.manage"))throw new Error(W.denied);
+  await assertMarketingWorkflowReady(sql);
+  const actionId=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name);
+  const terminal=isTerminalApproval(name),percentage=terminal?100:numberValue(body.percentage);
+  if(!departmentId||!name||percentage<0||percentage>100)throw new Error(W.requiredFields);
+  return sql.begin(async tx=>{
+    await tx`select id from marketing.departments where id=${departmentId}::uuid for update`;
+    const [sum]=await tx<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions
+      where department_id=${departmentId}::uuid and is_active=true and is_final_approval=false
+      and (${actionId}='' or id<>nullif(${actionId},'')::uuid)`;
+    if(!terminal&&Number(sum?.total||0)+percentage>100.001)throw new Error(W.percentageExceeded);
+    const[row]=actionId?await tx<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},
+      admin_only=${terminal||bool(body.adminOnly)},is_final_approval=${terminal},sort_order=${numberValue(body.sortOrder)},updated_at=now()
+      where id=${actionId}::uuid returning *,id::text`
+      :await tx<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,is_final_approval,sort_order)
+      values(${departmentId}::uuid,${name},${percentage},${terminal||bool(body.adminOnly)},${terminal},${numberValue(body.sortOrder)}) returning *,id::text`;
+    return{ok:true,row,message:W.saved};
+  });
+}
+const CREATIVE_SUPPORTED_PUBLISH_FORMATS:MarketingPublishFormat[]=['story','reel','photo_post','carousel','video','short'];
+function creativeSupportedPublishFormats(value:unknown):MarketingPublishFormat[]{
+  const allowed=new Set<MarketingPublishFormat>(CREATIVE_SUPPORTED_PUBLISH_FORMATS);
+  return [...new Set(arrayValue<string>(value).map((item)=>clean(item) as MarketingPublishFormat).filter((item)=>allowed.has(item)))];
+}
+async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId),supportedPublishFormats=creativeSupportedPublishFormats(body.supportedPublishFormats);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,supported_publish_formats=${sql.json(dbJson(supportedPublishFormats))},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id,supported_publish_formats) values(${name},${shortCode},${departmentId}::uuid,${sql.json(dbJson(supportedPublishFormats))}) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
+
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
 async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
 async function packageSettings(sql:ReturnType<typeof getSql>){
@@ -1579,9 +2380,11 @@ async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUs
   if(!category)throw new Error("التصنيف المحدد غير موجود");
   if(!salesType)throw new Error("نوع المبيعات المحدد غير موجود");
   const features=arrayValue(body.careFeatures).map(clean).filter(Boolean);
+  const insurance=bool(body.insurance);
+  const insuranceDescription=insurance?clean(body.insuranceDescription):"";
   const[row]=id
-    ?await sql<any[]>`update marketing.packages set name=${name},category=${category.name},category_id=${categoryId}::uuid,sales_type=${salesType.name},sales_type_id=${salesTypeId}::uuid,price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text,category_id::text,sales_type_id::text`
-    :await sql<any[]>`insert into marketing.packages(name,category,category_id,sales_type,sales_type_id,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category.name},${categoryId}::uuid,${salesType.name},${salesTypeId}::uuid,${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text,category_id::text,sales_type_id::text`;
+    ?await sql<any[]>`update marketing.packages set name=${name},category=${category.name},category_id=${categoryId}::uuid,sales_type=${salesType.name},sales_type_id=${salesTypeId}::uuid,price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${insurance},insurance_description=${insuranceDescription||null},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text,category_id::text,sales_type_id::text`
+    :await sql<any[]>`insert into marketing.packages(name,category,category_id,sales_type,sales_type_id,price,cash_discount,registration_fees,insurance,insurance_description,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category.name},${categoryId}::uuid,${salesType.name},${salesTypeId}::uuid,${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${insurance},${insuranceDescription||null},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text,category_id::text,sales_type_id::text`;
   return{ok:true,row,message:"تم حفظ الباقة"};
 }
 async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const entity=clean(body.entity),id=clean(body.id);if((entity==='package_category'||entity==='package_sales_type')&&!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='package_category'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and category_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف التصنيف لأنه مستخدم داخل باقات حالية");}if(entity==='package_sales_type'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and sales_type_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف نوع المبيعات لأنه مستخدم داخل باقات حالية");}if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages",package_category:"marketing.package_categories",package_sales_type:"marketing.package_sales_types"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
@@ -1613,8 +2416,8 @@ async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
     await sql.begin(async tx=>{
       await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,'unapproved',${note},${tx.json(dbJson(template))},${tx.json({status:'not_started',fileId:null})},${user.id}::uuid,${user.fullName})`;
       await tx`update marketing.task_templates set status='not_started',progress=0,admin_note=${note},template_data='{}'::jsonb,approved_data='{}'::jsonb,file_id=null,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
-      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,completed_by=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false`;
-      await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false)`;
+      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,completed_by=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false and not (task_kind='execution' and status='rejected')`;
+      await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false and status<>'rejected')`;
     });
     await recalculateProgress(sql,template.source_type,template.source_id);
     return{ok:true,message:"تم إلغاء اعتماد Task Template وإعادة التاسكات إلى انتظار الرفع"};
@@ -1639,6 +2442,7 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,t.status as task_status,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
   if(!record)throw new Error("الإجراء أو التاسك غير موجود");
   if(record.task_status==='completed')throw new Error("التاسك منتهي ولا يمكن تعديل إجراءاته");
+  if(record.task_status==='rejected')throw new Error("التاسك مرفوض ولا يمكن تعديل إجراءاته");
   if(record.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
   const actionPermission=record.admin_only?"marketing.assignment_action.admin":"marketing.assignment_action.execute";
   if(!hasPermission(user,actionPermission))throw new Error(record.admin_only?"هذا الإجراء يحتاج صلاحية إجراء إداري":"لا توجد صلاحية لتنفيذ إجراء التكليف");
@@ -1649,6 +2453,28 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await sql`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'ready_to_complete' when ${progress}>0 then 'in_progress' when received_at is not null then 'received' else 'required' end,completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
+}
+async function rejectTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  if(!taskId)throw new Error("رقم التاسك مطلوب");
+  if(!hasPermission(user,"marketing.assignment_action.execute"))throw new Error("لا توجد صلاحية لرفض التاسك");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.status,t.assigned_to::text,
+      d.name as department_name,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if(!task)throw new Error("التاسك غير موجود");
+  if(task.task_kind!=="execution"||!isRejectableExecutionDepartment(task.department_name))throw new Error("رفض التاسك متاح فقط لتاسكات قسم التصميم أو قسم المونتاج");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفض هذا التاسك");
+  if(task.status==='completed')throw new Error("التاسك منتهي ولا يمكن رفضه");
+  if(task.status==='rejected')return{ok:true,message:"التاسك مرفوض بالفعل"};
+  if(task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
+  await sql`update marketing.tasks set status='rejected',progress=0,completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم رفض التاسك وإزالته من جاهزية المطلوب"};
 }
 async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId);
@@ -1665,6 +2491,7 @@ async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionU
   const assignedUser=task.assigned_to===user.id || task.paired_content_user_id===user.id;
   if(!assignedUser&&!canViewAllTasks(user))throw new Error("لا توجد صلاحية لإنهاء هذا التاسك");
   if(task.status==='completed')return{ok:true,message:"التاسك موجود بالفعل ضمن التاسكات المنتهية"};
+  if(task.status==='rejected')throw new Error("التاسك مرفوض ولا يمكن إنهاؤه");
   if(!task.received_at)throw new Error("يجب استلام التاسك أولًا");
   if(numberValue(task.progress)<100)throw new Error("لا يمكن إنهاء التاسك قبل وصول نسبة الإنجاز إلى 100%");
   await sql`update marketing.tasks set status='completed',completed_at=now(),completed_by=${user.id}::uuid,updated_at=now() where id=${taskId}::uuid`;
@@ -1697,15 +2524,14 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     orderIndex:index,
   }));
   if(!requested.length)throw new Error("اختر الملف النهائي أولًا");
-  if(requested.length>30)throw new Error("الحد الأقصى 30 صورة داخل مجموعة النشر الواحدة");
+  if(requested.length>30)throw new Error("الحد الأقصى 30 ملفًا داخل مجموعة الرفع الواحدة");
   const isVideo=(item:any)=>item.mimeType.startsWith('video/')||/\.(mp4|mov|m4v|webm)$/i.test(item.name);
   const isImage=(item:any)=>item.mimeType.startsWith('image/')||/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(item.name);
-  if(requested.some((item)=>!isVideo(item)&&!isImage(item)))throw new Error("الملف النهائي يجب أن يكون صورة أو فيديو");
   const videoCount=requested.filter(isVideo).length;
-  if(videoCount&&requested.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. الصور يمكن رفعها ككاروسيل مرتب");
+  const mediaOnly=requested.every((item)=>isVideo(item)||isImage(item));
   if(requested.some((item)=>item.size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
-  if(requested.some((item)=>item.size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
   if(task.task_kind==='manual_publish'){
+    if(!mediaOnly)throw new Error("ملفات النشر اليدوي يجب أن تكون صورًا أو فيديو");
     const expected=arrayValue<any>(task.approved_template_data?.manualFiles);
     const sameFiles=expected.length===requested.length&&expected.every((item:any,index:number)=>{
       const actual=requested[index];
@@ -1715,117 +2541,114 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     });
     if(expected.length&&!sameFiles)throw new Error("الملفات المختارة لا تطابق ملفات النشر اليدوي المحفوظة. أعد إنشاء التجهيز بالملفات الحالية");
   }
-  const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
-  const runtime=await getZohoRuntime(sql);
+
+  const mediaKind=mediaOnly?(requested.length>1?'carousel':videoCount?'video':'image'):'file';
+  await sql`delete from marketing.google_drive_upload_tickets where expires_at<now()`;
+  const[group]=await sql<any[]>`
+    insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
+    values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',false,${user.id}::uuid)
+    returning id::text
+  `;
   const uploads:any[]=[];
-  await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
-  const group=await sql.begin(async tx=>{
-    const[groupRow]=await tx<any[]>`
-      insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
-      values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',false,${user.id}::uuid)
-      returning id::text
-    `;
+  const storageContext=await marketingStorageContext(sql,task.source_type,task.source_id,taskId);
+  const driveParentFolderId=await googleDriveTaskUploadParent(sql,taskId);
+  try{
     for(const item of requested){
-      const[file]=await tx<any[]>`
+      const storageKey=buildMarketingStorageKey({
+        ...storageContext,
+        category:'final-file',
+        fileName:item.name,
+      });
+      const[file]=await sql<any[]>`
         insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
-        values(${`zoho:${groupRow.id}:${globalThis.crypto.randomUUID()}`},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'zoho',${groupRow.id}::uuid,${item.orderIndex})
+        values(${storageKey},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'google-drive',${group.id}::uuid,${item.orderIndex})
         returning id::text
       `;
-      const ticket=createOpaqueTicket(),uploadId=`proxy-${globalThis.crypto.randomUUID()}`;
-      const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,groupRow.id,item.orderIndex);
-      await tx`
-        insert into marketing.zoho_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,file_name,mime_type,file_size,parent_folder_id,upload_id,status,expires_at,created_by)
-        values(${ticketHash(ticket)},${file.id}::uuid,${groupRow.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${runtime.rootFolderId},${uploadId},'prepared',now()+interval '2 hours',${user.id}::uuid)
+      const ticket=createGoogleDriveUploadTicket();
+      const transfer=await createGoogleDriveResumableUpload(sql,{
+        fileId:file.id,
+        fileName:item.name,
+        mimeType:item.mimeType,
+        fileSize:item.size,
+        category:'final-file',
+        storageKey,
+        parentFolderId:driveParentFolderId||undefined,
+      });
+      await sql`
+        insert into marketing.google_drive_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,status,expires_at,created_by)
+        values(${googleDriveTicketHash(ticket)},${file.id}::uuid,${group.id}::uuid,${taskId}::uuid,'prepared',now()+interval '7 days',${user.id}::uuid)
       `;
       uploads.push({
         ticket,
         fileId:file.id,
         orderIndex:item.orderIndex,
         originalFileName:item.name,
-        fileName:zohoFileName,
+        fileName:item.name,
         mimeType:item.mimeType,
         fileSize:item.size,
+        uploadStrategy:'resumable',
+        uploadUrl:transfer.uploadUrl,
       });
     }
-    return groupRow;
-  });
+  }catch(error:any){
+    const message=clean(error?.message)||"تعذر تجهيز رفع الملف النهائي";
+    await sql.begin(async tx=>{
+      await tx`update marketing.google_drive_upload_tickets set status='failed',completed_at=now() where final_media_group_id=${group.id}::uuid and status in ('prepared','uploading')`;
+      await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where final_media_group_id=${group.id}::uuid and status='uploading'`;
+      await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${group.id}::uuid`;
+    }).catch(()=>undefined);
+    throw error;
+  }
   return{ok:true,groupId:group.id,mediaKind,uploads};
 }
 
-function cleanUploadBase64(value:unknown){
-  return clean(value).replace(/^data:[^;]+;base64,/,"").replace(/\s+/g,"");
-}
-
-async function uploadFinalFileProxy(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  const ticket=clean(body.ticket);
-  if(!ticket)throw new Error("بيانات رفع Zoho غير مكتملة");
+async function finalUploadTicket(sql:ReturnType<typeof getSql>,ticket:string,user:SessionUser){
   const[row]=await sql<any[]>`
-    select z.*,z.file_id::text,z.final_media_group_id::text,z.task_id::text,z.created_by::text
-    from marketing.zoho_upload_tickets z
-    where z.ticket_hash=${ticketHash(ticket)} and z.expires_at>now() and z.status in ('prepared','uploading')
+    select g.*,g.file_id::text,g.final_media_group_id::text,g.task_id::text,g.created_by::text,
+      f.original_name,f.mime_type,f.file_size,f.storage_key,f.storage_provider
+    from marketing.google_drive_upload_tickets g
+    join marketing.files f on f.id=g.file_id
+    where g.ticket_hash=${googleDriveTicketHash(ticket)} and g.expires_at>now() and g.status in ('prepared','uploading')
   `;
   if(!row)throw new Error("جلسة رفع الملف منتهية أو غير صالحة");
   await requireFinalFileUploadAccess(sql,user,row.task_id);
   if(row.created_by!==user.id&&!canViewAllTasks(user))throw new Error("جلسة الرفع لا تخص هذا المستخدم");
+  if(clean(row.storage_provider)!=='google-drive')throw new Error("جلسة الرفع الحالية ليست جلسة Google Drive");
+  return row;
+}
 
-  const base64=cleanUploadBase64(body.fileData||body.base64);
-  if(!base64)throw new Error("بيانات الملف المرفوع غير موجودة");
-  let buffer:Buffer;
-  try{buffer=Buffer.from(base64,'base64');}catch{throw new Error("تعذر قراءة بيانات الملف المرفوع");}
-  if(!buffer.length)throw new Error("الملف المرفوع فارغ");
-  const expectedSize=Number(row.file_size||0);
-  if(expectedSize&&Math.abs(buffer.length-expectedSize)>Math.max(1024,Math.ceil(expectedSize*0.01)))throw new Error("حجم الملف المرفوع لا يطابق الملف المحدد");
+async function deleteFinalUploadStaging(storageKey:string){
+  const key=clean(storageKey);
+  if(!key||key.startsWith('zoho:')||!mediaStorageConfigured())return;
+  const response=await fetch(createDeleteUrl(key,900),{method:'DELETE'});
+  if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف المؤقت القديم (${response.status})`);
+}
 
-  const runtime=await getZohoRuntime(sql);
-  const uploadBytes=new Uint8Array(buffer.byteLength);
-  uploadBytes.set(buffer);
-  const blob=new Blob([uploadBytes],{type:clean(row.mime_type)||clean(body.mimeType)||'application/octet-stream'});
-  const form=new FormData();
-  form.append('filename',clean(row.file_name)||clean(body.fileName)||'file');
-  form.append('override-name-exist','false');
-  form.append('parent_id',clean(row.parent_folder_id)||runtime.rootFolderId);
-  form.append('content',blob,clean(row.file_name)||clean(body.fileName)||'file');
-  await sql`update marketing.zoho_upload_tickets set status='uploading' where ticket_hash=${ticketHash(ticket)}`;
-
-  const response=await fetch(`${runtime.apiDomain}/workdrive/api/v1/upload`,{
-    method:'POST',
-    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/vnd.api+json'},
-    body:form,
-  });
-  const text=await response.text();
-  let payload:any={};
-  try{payload=text?JSON.parse(text):{};}catch{payload={raw:text};}
-  if(!response.ok||payload?.errors){
-    const first=Array.isArray(payload?.errors)?payload.errors[0]:payload?.error;
-    const message=clean(first?.title||first?.detail||first||payload?.message)||`تعذر رفع الملف إلى Zoho (${response.status})`;
-    await sql.begin(async tx=>{
-      await tx`update marketing.zoho_upload_tickets set status='failed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
-      await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where id=${row.file_id}::uuid`;
-      await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${row.final_media_group_id}::uuid`;
-    });
-    throw new Error(message);
-  }
-
-  const parsed=parseZohoUploadResult(payload);
-  if(!parsed.resourceId)throw new Error("Zoho لم يرجع معرف الملف بعد اكتمال الرفع");
-  let fileInfo:any={};
-  try{fileInfo=await getZohoFileInfo(sql,parsed.resourceId);}catch{fileInfo={};}
-  const externalUrl=clean(fileInfo.permalink||parsed.permalink)||null;
-  const finalName=clean(fileInfo.fileName||parsed.fileName||row.file_name);
+async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const ticket=clean(body.ticket),externalId=clean(body.externalId);
+  if(!ticket)throw new Error("بيانات تأكيد رفع Google Drive غير مكتملة");
+  const row=await finalUploadTicket(sql,ticket,user);
+  const info=await verifyGoogleDriveUploadedFile(sql,{externalId:externalId||undefined,fileId:row.file_id,expectedSize:Number(row.file_size||0)});
+  const resolvedExternalId=clean(info.id);
+  if(!resolvedExternalId)throw new Error("تعذر تحديد ملف Google Drive بعد اكتمال الرفع");
+  const parents=Array.isArray(info.parents)?info.parents:[];
+  const externalUrl=clean(info.webViewLink||info.webContentLink)||null;
+  const finalName=clean(info.name)||clean(row.original_name);
   await sql.begin(async tx=>{
     await tx`
       update marketing.files
-      set status='ready',storage_provider='zoho',external_id=${parsed.resourceId},external_parent_id=${clean(fileInfo.parentId||parsed.parentId||row.parent_folder_id)},external_url=${externalUrl},original_name=${finalName||row.file_name},upload_error=null,updated_at=now()
+      set status='ready',storage_provider='google-drive',external_id=${resolvedExternalId},external_parent_id=${clean(parents[0])||null},
+          external_url=${externalUrl},original_name=${finalName},upload_error=null,updated_at=now()
       where id=${row.file_id}::uuid
     `;
-    await tx`update marketing.zoho_upload_tickets set status='completed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
+    await tx`update marketing.google_drive_upload_tickets set status='completed',completed_at=now() where ticket_hash=${googleDriveTicketHash(ticket)}`;
     const[counts]=await tx<any[]>`
       select count(*)::int as total,count(*) filter(where status='ready')::int as ready
       from marketing.files where final_media_group_id=${row.final_media_group_id}::uuid
     `;
     if(Number(counts?.total||0)>0&&Number(counts?.total||0)===Number(counts?.ready||0))await tx`update marketing.final_media_groups set status='ready',updated_at=now() where id=${row.final_media_group_id}::uuid`;
   });
-  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:parsed.resourceId,fileName:finalName};
+  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:resolvedExternalId,fileName:finalName};
 }
 
 async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -1835,11 +2658,17 @@ async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Ses
   if(!group)throw new Error("مجموعة الرفع غير موجودة");
   await requireFinalFileUploadAccess(sql,user,group.task_id);
   if(group.created_by!==user.id&&!canViewAllTasks(user))throw new Error("لا توجد صلاحية لإلغاء هذه العملية");
+  const staged=await sql<{storage_key:string}[]>`
+    select storage_key from marketing.files
+    where final_media_group_id=${groupId}::uuid and storage_provider='r2' and status in ('uploading','failed','cancelled')
+  `;
   await sql.begin(async tx=>{
     await tx`update marketing.zoho_upload_tickets set status='cancelled',completed_at=now() where final_media_group_id=${groupId}::uuid and status in ('prepared','uploading')`;
+    await tx`update marketing.google_drive_upload_tickets set status='cancelled',completed_at=now() where final_media_group_id=${groupId}::uuid and status in ('prepared','uploading')`;
     await tx`update marketing.files set status='cancelled',upload_error='تم إلغاء الرفع بواسطة المستخدم',updated_at=now() where final_media_group_id=${groupId}::uuid and status='uploading'`;
     await tx`update marketing.final_media_groups set status='cancelled',is_active=false,updated_at=now() where id=${groupId}::uuid`;
   });
+  await Promise.all(staged.map((item)=>deleteFinalUploadStaging(item.storage_key).catch(()=>undefined)));
   return{ok:true,message:"تم إلغاء رفع الملف النهائي"};
 }
 
@@ -1858,7 +2687,7 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     where final_media_group_id=${groupId}::uuid
     order by order_index,created_at,id
   `;
-  if(!files.length||files.some((file:any)=>file.status!=='ready'||!clean(file.external_id)))throw new Error("لم يكتمل رفع كل الملفات إلى Zoho WorkDrive");
+  if(!files.length||files.some((file:any)=>file.status!=='ready'||!clean(file.external_id)))throw new Error("لم يكتمل رفع كل الملفات إلى Google Drive");
   if(files.length!==Number(group.file_count||0))throw new Error("عدد الملفات المرفوعة لا يطابق مجموعة النشر");
   const firstFileId=clean(files[0]?.id);
   await sql.begin(async tx=>{
@@ -1873,58 +2702,369 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     }
   });
   await recalculateProgress(sql,task.source_type,task.source_id);
-  return{ok:true,message:files.length>1?`تم رفع ${files.length} صور نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
+  return{ok:true,message:files.length>1?`تم رفع ${files.length} ملفات نهائية بالترتيب على Google Drive`:`تم رفع الملف النهائي على Google Drive`,groupId,files};
 }
 
 async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;
   if(!category)throw new Error("نوع الملف مطلوب");
   if(category==="task-template")await requireTaskTemplateUploadAccess(sql,user,taskId);
   else if(category==="final-file")await requireFinalFileUploadAccess(sql,user,taskId);
+  else if(category==="first-file"){
+    await requireFirstFileUploadAccess(sql,user,taskId);
+    const[count]=await sql<any[]>`select count(*)::int as count from marketing.files where task_id=${taskId}::uuid and category='first-file' and status in ('uploading','ready')`;
+    if(Number(count?.count||0)>=30)throw new Error("الحد الأقصى 30 ملفًا أوليًا لكل تكليف");
+  }
   else{
     if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");
     if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");
     if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
   }
-  const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});
+  const storageContext=await marketingStorageContext(sql,sourceType,sourceId,taskId);
+  const storageKey=buildMarketingStorageKey({...storageContext,category,fileName});
+
+  if(category==='first-file'||category==='final-file'){
+    const driveParentFolderId=await googleDriveTaskUploadParent(sql,taskId);
+    const[file]=await sql<any[]>`
+      insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider)
+      values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid,'google-drive')
+      returning *,id::text
+    `;
+    try{
+      const transfer=await createGoogleDriveResumableUpload(sql,{
+        fileId:file.id,
+        fileName,
+        mimeType,
+        fileSize:Number(fileSize||0),
+        category,
+        storageKey,
+        parentFolderId:driveParentFolderId||undefined,
+      });
+      return{ok:true,fileId:file.id,storageKey,storageProvider:'google-drive',uploadUrl:transfer.uploadUrl};
+    }catch(error){
+      await sql`delete from marketing.files where id=${file.id}::uuid and status='uploading'`.catch(()=>undefined);
+      throw error;
+    }
+  }
+
+  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;
-  return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};
+  return{ok:true,fileId:file.id,storageKey,storageProvider:'r2',uploadUrl:createUploadUrl(storageKey,900)};
 }
 
 async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const fileId=clean(body.fileId);
-  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text,storage_provider,file_size from marketing.files where id=${fileId}::uuid`;
   if(!file)throw new Error("الملف غير موجود");
   if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لتحديث الملف");
   if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
   else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="first-file")await requireFirstFileUploadAccess(sql,user,file.task_id);
   else{
     if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
     if(file.task_id&&!await canAccessMarketingTask(sql,user,file.task_id))throw new Error("التاسك خارج نطاق بياناتك");
     if(file.source_id&&!file.task_id)await assertMarketingEntityAccess(sql,user,clean(file.source_type),file.source_id);
   }
+
+  if(clean(file.storage_provider)==='google-drive'){
+    const externalId=clean(body.externalId);
+    const info=await verifyGoogleDriveUploadedFile(sql,{externalId:externalId||undefined,fileId,expectedSize:Number(file.file_size||0)});
+    const resolvedExternalId=clean(info.id);
+    if(!resolvedExternalId)throw new Error("تعذر تحديد ملف Google Drive بعد اكتمال الرفع");
+    const parents=Array.isArray(info.parents)?info.parents:[];
+    const rows=await sql<any[]>`
+      update marketing.files
+      set status='ready',external_id=${resolvedExternalId},external_parent_id=${clean(parents[0])||null},external_url=${clean(info.webViewLink||info.webContentLink)||null},updated_at=now()
+      where id=${fileId}::uuid and status='uploading'
+      returning id::text
+    `;
+    if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
+    return{ok:true,message:"تم حفظ الملف"};
+  }
+
   const rows=await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and status='uploading' returning id::text`;
   if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
-async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
+
+async function cancelFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const fileId=clean(body.fileId);
+  if(!fileId)throw new Error("الملف غير محدد");
+  const[file]=await sql<any[]>`
+    select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text,storage_provider,external_id
+    from marketing.files where id=${fileId}::uuid
+  `;
+  if(!file)return{ok:true,message:"تم إلغاء الرفع"};
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لإلغاء رفع الملف");
+  if(file.category==="first-file")await requireFirstFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
+  else if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لإلغاء رفع الملف");
+  if(file.status==='ready')return{ok:true,message:"تم حفظ الملف مسبقًا"};
+
+  if(clean(file.storage_provider)==='google-drive'){
+    const externalId=clean(file.external_id);
+    if(externalId)await deleteGoogleDriveFile(sql,externalId).catch(()=>undefined);
+    else{
+      const driveFile=await findGoogleDriveUploadedFile(sql,fileId).catch(()=>null);
+      if(clean(driveFile?.id))await deleteGoogleDriveFile(sql,clean(driveFile.id)).catch(()=>undefined);
+    }
+  }else if(clean(file.storage_provider)!=='zoho'&&clean(file.storage_provider)!=='google-drive'){
+    const[row]=await sql<any[]>`select storage_key from marketing.files where id=${fileId}::uuid`;
+    const storageKey=clean(row?.storage_key);
+    if(storageKey&&mediaStorageConfigured())await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'}).catch(()=>undefined);
+  }
+  await sql`delete from marketing.files where id=${fileId}::uuid and status<>'ready'`;
+  return{ok:true,message:"تم إلغاء الرفع"};
+}
+
+async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const fileId=clean(body.fileId);
+  if(!fileId)throw new Error("الملف الأول غير محدد");
+  const[file]=await sql<any[]>`select id::text,task_id::text,storage_key,storage_provider,external_id,status,uploaded_by::text from marketing.files where id=${fileId}::uuid and category='first-file'`;
+  if(!file||file.status!=="ready"||!file.task_id)throw new Error("الملف الأول غير موجود");
+  await requireFirstFileUploadAccess(sql,user,file.task_id);
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    if(clean(file.external_id))await deleteGoogleDriveFile(sql,clean(file.external_id));
+  }else if(provider!=='zoho'){
+    const storageKey=clean(file.storage_key);
+    if(storageKey&&mediaStorageConfigured()){
+      const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
+      if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف الأول من التخزين (${response.status})`);
+    }
+  }
+  await sql`delete from marketing.files where id=${fileId}::uuid and category='first-file'`;
+  return{ok:true,message:"تم مسح الملف الأولي"};
+}
+
+type MarketingR2MigrationPlan = {
+  fileId: string;
+  oldKey: string;
+  newKey?: string;
+  originalName: string;
+  category: string;
+  matched: boolean;
+  reason?: string;
+};
+
+async function legacyMarketingR2Rows(sql:ReturnType<typeof getSql>,limit:number){
+  return sql<any[]>`
+    select
+      f.id::text as file_id,
+      f.storage_key,
+      f.original_name,
+      f.mime_type,
+      f.file_size,
+      f.category,
+      f.source_type as file_source_type,
+      f.source_id::text as file_source_id,
+      f.task_id::text as file_task_id,
+      f.created_at,
+      t.id::text as resolved_task_id,
+      coalesce(t.source_type,f.source_type) as resolved_source_type,
+      coalesce(t.source_id,f.source_id)::text as resolved_source_id,
+      t.title as task_name,
+      tt.task_no as task_code,
+      t.creative_id::text as creative_id,
+      c.instance_code as creative_code,
+      coalesce(nullif(c.name,''),nullif(c.creative_type,'')) as creative_name,
+      case when coalesce(t.source_type,f.source_type)='campaign' then cam.campaign_code else ag.month_key end as source_code,
+      coalesce(cam.name,ag.name) as source_name
+    from marketing.files f
+    left join marketing.tasks t on t.id=f.task_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on coalesce(t.source_type,f.source_type)='campaign' and cam.id=coalesce(t.source_id,f.source_id)
+    left join marketing.agendas ag on coalesce(t.source_type,f.source_type)='agenda' and ag.id=coalesce(t.source_id,f.source_id)
+    where f.storage_provider='r2'
+      and f.status='ready'
+      and f.storage_key like 'marketing/%'
+      and f.storage_key !~ '/(01-FIRST-FILE|02-FINAL-FILE|03-TASK-TEMPLATE|04-CAMPAIGN-RESULT|05-[^/]+)/'
+    order by case
+      when coalesce(t.source_type,f.source_type) in ('campaign','agenda')
+        and coalesce(t.source_id,f.source_id) is not null
+        and coalesce(cam.name,ag.name) is not null
+        and (f.task_id is null or t.id is not null)
+      then 0 else 1 end,
+      f.created_at,f.id
+    limit ${limit}
+  `;
+}
+
+async function legacyMarketingR2Count(sql:ReturnType<typeof getSql>){
+  const[row]=await sql<any[]>`
+    select count(*)::int as count
+    from marketing.files f
+    where f.storage_provider='r2'
+      and f.status='ready'
+      and f.storage_key like 'marketing/%'
+      and f.storage_key !~ '/(01-FIRST-FILE|02-FINAL-FILE|03-TASK-TEMPLATE|04-CAMPAIGN-RESULT|05-[^/]+)/'
+  `;
+  return Number(row?.count||0);
+}
+
+function marketingR2MigrationPlan(row:any):MarketingR2MigrationPlan{
+  const fileId=clean(row.file_id),oldKey=clean(row.storage_key),originalName=clean(row.original_name)||'file',category=clean(row.category)||'file';
+  const sourceType=clean(row.resolved_source_type),sourceId=clean(row.resolved_source_id),sourceName=clean(row.source_name);
+  if(!fileId||!oldKey)return{fileId,oldKey,originalName,category,matched:false,reason:'بيانات الملف الأساسية ناقصة'};
+  if(!['campaign','agenda'].includes(sourceType)||!sourceId||!sourceName)return{fileId,oldKey,originalName,category,matched:false,reason:'تعذر مطابقة الملف مع الحملة أو الأجندة'};
+  if(clean(row.file_task_id)&&!clean(row.resolved_task_id))return{fileId,oldKey,originalName,category,matched:false,reason:'التاسك المرتبط بالملف غير موجود'};
+  const newKey=buildMarketingStorageKey({
+    category,
+    sourceType,
+    sourceId,
+    sourceCode:clean(row.source_code),
+    sourceName,
+    creativeId:clean(row.creative_id),
+    creativeCode:clean(row.creative_code),
+    creativeName:clean(row.creative_name),
+    taskId:clean(row.resolved_task_id),
+    taskCode:clean(row.task_code),
+    taskName:clean(row.task_name),
+    fileName:originalName,
+    createdAt:row.created_at,
+    uniqueId:fileId,
+  });
+  return{fileId,oldKey,newKey,originalName,category,matched:Boolean(newKey&&newKey!==oldKey),reason:newKey===oldKey?'المسار منظم بالفعل':undefined};
+}
+
+async function deleteMarketingR2Object(storageKey:string){
+  const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
+  if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف المسار القديم من R2 (${response.status})`);
+}
+
+async function applyMarketingR2MigrationPlan(sql:ReturnType<typeof getSql>,plan:MarketingR2MigrationPlan,row:any){
+  if(!plan.matched||!plan.newKey)return{...plan,status:'unmatched'};
+  const source=await headMediaObject(plan.oldKey);
+  if(!source.exists)return{...plan,status:'missing_source',reason:'الملف غير موجود فعليًا في R2 ولم يتم تعديل قاعدة البيانات'};
+  const expectedSize=source.size>0?source.size:Number(row?.file_size||0);
+  const destination=await headMediaObject(plan.newKey);
+  if(destination.exists&&expectedSize>0&&destination.size!==expectedSize){
+    return{...plan,status:'conflict',reason:'المسار الجديد موجود بحجم مختلف؛ لم يتم لمس الملف القديم'};
+  }
+  if(!destination.exists)await copyMediaObject(plan.oldKey,plan.newKey);
+  const verified=await headMediaObject(plan.newKey);
+  if(!verified.exists||(expectedSize>0&&verified.size!==expectedSize)){
+    if(verified.exists)await deleteMarketingR2Object(plan.newKey).catch(()=>undefined);
+    return{...plan,status:'verification_failed',reason:'فشل التحقق من النسخة الجديدة؛ لم يتم تعديل قاعدة البيانات'};
+  }
+  const updated=await sql<any[]>`
+    update marketing.files
+    set storage_key=${plan.newKey},updated_at=now()
+    where id=${plan.fileId}::uuid and storage_provider='r2' and storage_key=${plan.oldKey}
+    returning id::text
+  `;
+  if(!updated.length)return{...plan,status:'changed_concurrently',reason:'تغير سجل الملف أثناء النقل؛ لم يتم حذف المسار القديم'};
+  try{
+    await deleteMarketingR2Object(plan.oldKey);
+  }catch(error:any){
+    try{await sql`update marketing.files set storage_key=${plan.oldKey},updated_at=now() where id=${plan.fileId}::uuid and storage_key=${plan.newKey}`;}catch{}
+    return{...plan,status:'cleanup_failed',reason:clean(error?.message)||'تعذر حذف المسار القديم وتمت إعادة مرجع قاعدة البيانات للمسار القديم'};
+  }
+  return{...plan,status:'migrated',sourceSize:source.size,verifiedSize:verified.size,fileSize:Number(row?.file_size||0),expectedSize};
+}
+
+async function migrateMarketingR2StorageNames(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,'platform.superadmin'))throw new Error('ترحيل مسارات R2 القديمة متاح لمدير النظام فقط');
+  if(!mediaStorageConfigured())throw new Error('تخزين الملفات R2 غير مضبوط في المنصة');
+  const mode=clean(body.mode)==='apply'?'apply':'preview';
+  const limit=Math.max(1,Math.min(mode==='apply'?50:200,Math.trunc(numberValue(body.limit,mode==='apply'?25:100))||1));
+  const totalBefore=await legacyMarketingR2Count(sql);
+  const rows=await legacyMarketingR2Rows(sql,limit);
+  const plans=rows.map(marketingR2MigrationPlan);
+  if(mode==='preview'){
+    return{ok:true,mode,total:totalBefore,matched:plans.filter((item)=>item.matched).length,unmatched:plans.filter((item)=>!item.matched).length,plans};
+  }
+  const results:any[]=[];
+  for(let index=0;index<rows.length;index+=1){
+    const plan=plans[index];
+    if(!plan.matched){results.push({...plan,status:'unmatched'});continue;}
+    try{results.push(await applyMarketingR2MigrationPlan(sql,plan,rows[index]));}
+    catch(error:any){results.push({...plan,status:'failed',reason:clean(error?.message)||'تعذر نقل الملف'});}
+  }
+  const remaining=await legacyMarketingR2Count(sql);
+  const migrated=results.filter((item)=>item.status==='migrated').length;
+  const failed=results.filter((item)=>!['migrated','unmatched'].includes(item.status)).length;
+  const unmatched=results.filter((item)=>item.status==='unmatched').length;
+  if(remaining===0){
+    await sql`
+      insert into marketing.data_migrations(migration_key,applied_at,details)
+      values('marketing-r2-readable-paths-v1',now(),${sql.json(dbJson({completed:true,migratedAt:new Date().toISOString()}))})
+      on conflict(migration_key) do update set applied_at=excluded.applied_at,details=excluded.details
+    `;
+  }
+  return{ok:true,mode,totalBefore,processed:results.length,migrated,unmatched,failed,remaining,done:remaining===0,results};
+}
+
+async function downloadableMarketingFile(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
   const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;
   if(!file)throw new Error("الملف غير موجود");
+  if(String(file.category).startsWith("workflow-")){await assertWorkflowFileAccess(sql,file,user);return file;}
   if(!hasPermission(user,"marketing.file.view_others")){
     const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;
     if(!allowed)throw new Error("الملف خارج نطاق بياناتك");
   }
-  if(clean(file.storage_provider)==='zoho'){
-    if(!clean(file.external_id))throw new Error("معرف ملف Zoho غير موجود");
-    const info=await getZohoFileInfo(sql,clean(file.external_id));
-    const url=clean(info.permalink||file.external_url||info.downloadUrl);
-    if(!url)throw new Error("Zoho لم يرجع رابط فتح للملف");
-    return{ok:true,url,file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'zoho'}};
-  }
-  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
-  return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
+  return file;
 }
+function marketingFileDisposition(fileName:unknown,forceDownload=false){
+  const original=clean(fileName)||"file";
+  const fallback=original.replace(/[^\x20-\x7E]/g,"_").replace(/["\\\r\n]/g,"_")||"file";
+  const mode=forceDownload?"attachment":"inline";
+  return `${mode}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(original)}`;
+}
+async function pipeMarketingFileResponse(response:VercelResponse,upstream:Response,file:any,forceDownload:boolean,providerLabel:string){
+  if(!upstream.ok){
+    const message=clean(await upstream.text().catch(()=>''));
+    throw new Error(message||`تعذر تنزيل ملف ${providerLabel} (${upstream.status})`);
+  }
+  const contentType=clean(upstream.headers.get('content-type')).split(';')[0].trim().toLowerCase();
+  if(contentType.includes('application/json')||contentType.includes('text/html')){
+    throw new Error(`${providerLabel} لم يرجع محتوى الملف الفعلي`);
+  }
+  if(!upstream.body)throw new Error(`${providerLabel} لم يرجع محتوى الملف`);
+  const mimeType=clean(file.mime_type)||contentType||'application/octet-stream';
+  const contentLength=clean(upstream.headers.get('content-length'));
+  response.status(200);
+  response.setHeader("Cache-Control","private, no-store");
+  response.setHeader("Content-Type",mimeType);
+  response.setHeader("Content-Disposition",marketingFileDisposition(file.original_name,forceDownload));
+  if(contentLength)response.setHeader("Content-Length",contentLength);
+  await pipeline(Readable.fromWeb(upstream.body as any),response);
+  return response;
+}
+async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser,response:VercelResponse,forceDownload=false){
+  const file=await downloadableMarketingFile(sql,id,user);
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    const externalId=clean(file.external_id);
+    if(!externalId)throw new Error("معرف ملف Google Drive غير موجود");
+    const upstream=await openGoogleDriveFile(sql,externalId,'application/octet-stream,*/*');
+    return pipeMarketingFileResponse(response,upstream,file,forceDownload,"Google Drive");
+  }
+  if(provider!=='zoho'){
+    if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
+    const url=createDownloadUrl(clean(file.storage_key),900);
+    if(!url)throw new Error("تعذر تجهيز رابط الملف");
+    if(!forceDownload){
+      response.setHeader("Cache-Control","private, no-store");
+      return response.redirect(302,url);
+    }
+    const upstream=await fetch(url,{redirect:'follow',headers:{Accept:'application/octet-stream,*/*'}});
+    return pipeMarketingFileResponse(response,upstream,file,true,"R2");
+  }
+  const externalId=clean(file.external_id);
+  if(!externalId)throw new Error("معرف ملف Zoho غير موجود");
+  const runtime=await getZohoRuntime(sql);
+  const info=await getZohoFileInfo(sql,externalId);
+  const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
+  const upstream=await fetch(downloadUrl,{
+    redirect:'follow',
+    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
+  });
+  return pipeMarketingFileResponse(response,upstream,file,forceDownload,"Zoho");
+}
+
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
@@ -1963,6 +3103,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(error_data.publish_errors,'[]'::jsonb) as publish_errors,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
       c.name as creative_name,
+      c.creative_type_id::text as creative_type_id,
       c.instance_code,
       coalesce(cam.name,ag.name,case when t.source_type='manual' then 'نشر يدوي' end) as source_name,
       t.progress::float,
@@ -2136,10 +3277,21 @@ async function normalizePublishScheduleRequest(sql:ReturnType<typeof getSql>,bod
   return{publishDate,normalizedPlatforms,combinations,youtubeOptions};
 }
 
+async function assertCreativePublishFormats(sql:ReturnType<typeof getSql>,creativeTypeId:string,combinations:PublishScheduleCombination[]){
+  if(!creativeTypeId)return;
+  const[creativeType]=await sql<any[]>`select coalesce(supported_publish_formats,'[]'::jsonb) as supported_publish_formats from marketing.creative_types where id=${creativeTypeId}::uuid and is_active=true`;
+  if(!creativeType)return;
+  const supported=creativeSupportedPublishFormats(creativeType.supported_publish_formats);
+  if(!supported.length)return;
+  const unsupported=[...new Set(combinations.map((item)=>item.publishFormat).filter((format)=>!supported.includes(format)))];
+  if(unsupported.length)throw new Error("نوع النشر المختار غير مدعوم لهذا الكرييتيف. عدّل الأنواع من إعدادات التسويق أو اختر نوعًا مدعومًا");
+}
+
 async function activePublishTask(sql:ReturnType<typeof getSql>,taskId:string,allowedKinds:string[]){
   const[task]=await sql<any[]>`
-    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text,c.creative_type_id::text
     from marketing.tasks t
+    join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     where t.id=${taskId}::uuid and t.task_kind in ${sql(allowedKinds)} and t.is_deleted=false and t.publish_prep_removed_at is null
@@ -2210,7 +3362,6 @@ function validateManualPublishFiles(files:any[],combinations:PublishScheduleComb
   const videoCount=files.filter(isVideo).length;
   if(videoCount&&files.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. بوست الصور والستوري يدعمان عدة صور بالترتيب");
   if(files.some((item)=>item.file_size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
-  if(files.some((item)=>item.file_size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
   for(const item of combinations){
     assertPublishMedia(item.platformCode,item.publishFormat,files);
     if(item.platformCode==='instagram'&&['photo_post','carousel','post'].includes(item.publishFormat)&&files.length>10){
@@ -2223,12 +3374,15 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
   const id=clean(body.id),requestedTaskId=clean(body.taskId);
   const[current]=id?await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by updated_at desc,created_at desc limit 1`:[];
+  if(current?.publish_options?.workflowProductId)throw new Error(W.immutable);
   const taskId=requestedTaskId||clean(current?.task_id);
   if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
   const publishTask=await activePublishTask(sql,taskId,['execution','manual_publish']);
   if(!publishTask)throw new Error("تجهيز النشر المرتبط غير موجود أو لم يعد متاحًا");
+  if(publishTask.approved_template_data?.workflowLineId)throw new Error(W.immutable);
   await assertPublishEntryAccess(sql,user,publishTask);
   const request=await normalizePublishScheduleRequest(sql,body);
+  await assertCreativePublishFormats(sql,clean(publishTask.creative_type_id),request.combinations);
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   const caption=clean(body.caption),hashtags=clean(body.hashtags);
@@ -2247,6 +3401,7 @@ async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,u
   const creativeTypeId=clean(body.creativeTypeId);
   if(!creativeTypeId)throw new Error("اختر نوع الكرييتيف من قائمة الكرييتيفات");
   const request=await normalizePublishScheduleRequest(sql,body);
+  await assertCreativePublishFormats(sql,creativeTypeId,request.combinations);
   const files=manualPublishFileDescriptors(body.files);
   validateManualPublishFiles(files,request.combinations);
   const caption=clean(body.caption),hashtags=clean(body.hashtags);
@@ -2389,22 +3544,11 @@ async function graphFileRequest(path:string,token:string,file:{bytes:Uint8Array;
   return payload;
 }
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
-async function uploadFacebookHostedVideo(uploadUrl:string,token:string,mediaUrl:string,kind:string){
-  const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});
-  const payload=await response.json().catch(()=>({}));
-  if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو ${kind} على Facebook (${response.status})`);
-  return payload;
-}
-async function publishFacebookReel(pageId:string,token:string,mediaUrl:string,caption:string){
-  const start=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'start'});
-  const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
-  if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع Reel على Facebook");
-  const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Reel');
-  const publish=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'finish',video_id:videoId,video_state:'PUBLISHED',description:caption});
-  return{start,upload,publish,video_id:videoId};
-}
+function looksImage(file:any){return /image|jpe?g|png|webp|gif|heic|heif/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
 function assertPublishMedia(platform:string,format:MarketingPublishFormat,files:any[]){
-  const videos=files.filter(looksVideo),images=files.filter((file:any)=>!looksVideo(file));
+  const unsupported=files.filter((file:any)=>!looksVideo(file)&&!looksImage(file));
+  if(unsupported.length)throw new Error("النشر على المنصات يدعم الصور والفيديو فقط. استخدم الملف العام داخل التاسك للمراجعة أو التسليم");
+  const videos=files.filter(looksVideo),images=files.filter(looksImage);
   if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
   if(publishFormatRequiresVideo(format)&&(files.length!==1||videos.length!==1))throw new Error("نوع النشر المحدد يتطلب ملف فيديو واحدًا فقط");
   if(publishFormatRequiresImages(format)&&videos.length)throw new Error("نوع النشر المحدد يقبل صورًا فقط");
@@ -2420,6 +3564,8 @@ function youtubeOptionsForFormat(options:any,format:MarketingPublishFormat){
   return{...options,description:marker.test(`${title} ${description}`)?description:[description,'#Shorts'].filter(Boolean).join("\n\n")};
 }
 async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule:any){
+  const workflowFiles=await workflowScheduleFiles(sql,schedule);
+  if(workflowFiles!==null)return workflowFiles;
   if(clean(schedule.final_media_group_id)){
     const[group]=await sql<any[]>`select file_count,status from marketing.final_media_groups where id=${schedule.final_media_group_id}::uuid`;
     const files=await sql<any[]>`
@@ -2427,7 +3573,7 @@ async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule
       where final_media_group_id=${schedule.final_media_group_id}::uuid and status='ready'
       order by order_index,created_at,id
     `;
-    if(!group||group.status!=='ready'||files.length!==Number(group.file_count||0))throw new Error("لم يكتمل رفع كل ملفات النشر إلى Zoho WorkDrive");
+    if(!group||group.status!=='ready'||files.length!==Number(group.file_count||0))throw new Error("لم يكتمل رفع كل ملفات النشر إلى Google Drive");
     if(files.length)return files;
   }
   if(!clean(schedule.final_file_id))return[];
@@ -2435,7 +3581,12 @@ async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule
   return file?[file]:[];
 }
 async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
-  if(clean(file.storage_provider)==='zoho'){
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    if(!clean(file.external_id))throw new Error(`معرف ملف Google Drive ${clean(file.original_name)||''} غير موجود`);
+    return createGoogleDriveMediaDeliveryUrl(file,7200);
+  }
+  if(provider==='zoho'){
     if(!clean(file.external_id))throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
     const info=await getZohoFileInfo(sql,clean(file.external_id));
     const url=clean(info.downloadUrl||info.permalink||file.external_url);
@@ -2445,6 +3596,7 @@ async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
   if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
   return createDownloadUrl(file.storage_key,7200);
 }
+
 function detectImageMime(bytes:Uint8Array){
   if(bytes.length>=8&&bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47&&bytes[4]===0x0d&&bytes[5]===0x0a&&bytes[6]===0x1a&&bytes[7]===0x0a)return'image/png';
   if(bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return'image/jpeg';
@@ -2453,44 +3605,81 @@ function detectImageMime(bytes:Uint8Array){
   return'';
 }
 async function finalMediaBinary(sql:ReturnType<typeof getSql>,file:any){
-  if(clean(file.storage_provider)!=='zoho')throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
-  const externalId=clean(file.external_id);
-  if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
-  const runtime=await getZohoRuntime(sql);
-  const info=await getZohoFileInfo(sql,externalId);
-  const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
-  const response=await fetch(downloadUrl,{
-    redirect:'follow',
-    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
-  });
+  const provider=clean(file.storage_provider);
+  let response:Response;
+  let externalId=clean(file.external_id);
+  let providerLabel='Zoho';
+  if(provider==='google-drive'){
+    if(!externalId)throw new Error(`معرف ملف Google Drive ${clean(file.original_name)||''} غير موجود`);
+    response=await openGoogleDriveFile(sql,externalId,'application/octet-stream,*/*');
+    providerLabel='Google Drive';
+  }else if(provider==='zoho'){
+    if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
+    const runtime=await getZohoRuntime(sql);
+    const info=await getZohoFileInfo(sql,externalId);
+    const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
+    response=await fetch(downloadUrl,{
+      redirect:'follow',
+      headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
+    });
+  }else{
+    throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
+  }
   if(!response.ok){
     const message=clean(await response.text().catch(()=>''));
-    throw new Error(message||`تعذر تنزيل ملف Zoho ${clean(file.original_name)||''} (${response.status})`);
+    throw new Error(message||`تعذر تنزيل ملف ${providerLabel} ${clean(file.original_name)||''} (${response.status})`);
   }
   const contentType=clean(response.headers.get('content-type')).split(';')[0].trim().toLowerCase();
   if(contentType.includes('application/json')||contentType.includes('text/html')){
-    throw new Error(`Zoho لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}. أعد ربط Zoho بعد قبول صلاحية تنزيل الملفات`);
+    throw new Error(`${providerLabel} لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}`);
   }
   const arrayBuffer=await response.arrayBuffer();
   const bytes=new Uint8Array(arrayBuffer);
-  if(!bytes.byteLength)throw new Error(`ملف Zoho ${clean(file.original_name)||''} فارغ`);
+  if(!bytes.byteLength)throw new Error(`ملف ${providerLabel} ${clean(file.original_name)||''} فارغ`);
   const detectedMimeType=detectImageMime(bytes);
   if(!detectedMimeType){
     const signature=Array.from(bytes.slice(0,12)).map(value=>value.toString(16).padStart(2,'0')).join(' ');
-    throw new Error(`محتوى ملف Zoho ${clean(file.original_name)||''} ليس صورة فعلية صالحة للنشر (نوع الاستجابة: ${contentType||'غير معروف'}، بصمة البداية: ${signature||'فارغة'})`);
+    throw new Error(`محتوى ملف ${providerLabel} ${clean(file.original_name)||''} ليس صورة فعلية صالحة للنشر (نوع الاستجابة: ${contentType||'غير معروف'}، بصمة البداية: ${signature||'فارغة'})`);
   }
   const storedMimeType=clean(file.mime_type).toLowerCase();
   const mimeType=contentType.startsWith('image/')?contentType:(detectedMimeType||storedMimeType);
   return{bytes,mimeType,fileName:clean(file.original_name)||`image-${externalId}`};
 }
+
+async function validateWorkflowPublication(sql:ReturnType<typeof getSql>,schedule:any){
+  const files=await finalMediaFilesForSchedule(sql,schedule);
+  if(!files.length)throw new Error(W.incompleteFiles);
+  const format=normalizeMarketingPublishFormat(schedule.publish_options?.format||schedule.post_type_name);
+  assertPublishMedia(clean(schedule.platform_code),format,files);
+  if(schedule.platform_code==='tiktok') {
+    if(!bulkPublishConfigured())throw new Error('النشر المجدول على TikTok يحتاج BULKPUBLISH_API_KEY في إعدادات Vercel');
+    if(format==='story')throw new Error('TikTok لا يدعم نشر Story مباشرًا عبر BulkPublish؛ اختر فيديو أو منشور صور');
+    if(files.length>35 || (files.some(looksVideo)&&files.length!==1))throw new Error('TikTok يقبل فيديو واحدًا أو من 1 إلى 35 صورة في المنشور');
+    return;
+  }
+  const [connection]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
+  if(!connection?.connected)throw new Error(W.connectionMissing);
+  if(schedule.platform_code==='facebook'){
+    const token=decryptPlatformToken(connection.page_access_token_encrypted||connection.access_token_encrypted||connection.user_access_token_encrypted);
+    if(!clean(connection.page_id)||!token)throw new Error(W.connectionMissing);
+  }else if(schedule.platform_code==='instagram'){
+    const token=decryptPlatformToken(connection.page_access_token_encrypted||connection.access_token_encrypted||connection.user_access_token_encrypted);
+    if(!clean(connection.ig_user_id||connection.account_id)||!token)throw new Error(W.connectionMissing);
+  }else if(schedule.platform_code==='youtube'){
+    const options=normalizeYouTubePublishOptions(schedule.publish_options?.youtube,await getYouTubePublishSettings(sql),{title:schedule.caption});
+    if(!clean(options.title)||options.title.length>100)throw new Error(W.youtubeTitleInvalid);
+  }
+}
+
 async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
   if(!clean(schedule.publish_date))throw new Error("ميعاد النشر غير موجود");
   if(!clean(schedule.platform_code))throw new Error("منصة النشر غير محددة");
   if(!clean(schedule.post_type_name))throw new Error(`نوع النشر غير محدد لمنصة ${schedule.platform_name||schedule.platform_code}`);
   if(!clean(schedule.caption))throw new Error("الكابشن غير موجود");
   if(!clean(schedule.hashtags))throw new Error("الهاشتاج غير موجود");
-  const[conn]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
-  if(!conn||!conn.connected)throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
+  const isBulkPublishTikTok=schedule.platform_code==='tiktok';
+  const [conn]=isBulkPublishTikTok?[]:await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
+  if(!isBulkPublishTikTok&&(!conn||!conn.connected))throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
   const files=await finalMediaFilesForSchedule(sql,schedule);
   if(!files.length)throw new Error("الملف النهائي غير موجود");
   const publishOptions=objectValue(schedule.publish_options);
@@ -2499,18 +3688,25 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),multipleImages=files.length>1;
   let result:any;
 
+  if(isBulkPublishTikTok){
+    if(publishFormat==='story')throw new Error('TikTok لا يدعم Story مباشرًا عبر BulkPublish؛ اختر فيديو أو منشور صور');
+    if(files.length>35 || (files.some(looksVideo)&&files.length!==1))throw new Error('TikTok يقبل فيديو واحدًا أو من 1 إلى 35 صورة');
+    const approvedMedia=[];
+    for(const approved of files)approvedMedia.push({fileName:clean(approved.original_name),mimeType:clean(approved.mime_type),fileUrl:await finalMediaDeliveryUrl(sql,approved)});
+    result=await scheduleBulkPublishTikTok({date:isoDate(schedule.publish_date),time:clean(publishOptions.publishTime)||'20:00',caption:clean(schedule.caption),hashtags:clean(schedule.hashtags),files:approvedMedia});
+    const scheduledResult={...result,publishFormat,postTypeName:clean(schedule.post_type_name)};
+    await sql.begin(async tx=>{
+      await tx`update marketing.publish_schedule set status='scheduled',publish_result=${tx.json(dbJson(scheduledResult))},updated_at=now() where id=${schedule.id}::uuid and status='processing'`;
+      await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by) values(${schedule.id}::uuid,'tiktok','scheduled',${tx.json(dbJson(scheduledResult))},${user.id}::uuid)`;
+    });
+    return scheduledResult;
+  }
   if(schedule.platform_code==='facebook'){
     const pageId=clean(conn.page_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
     if(publishFormat==='story'){
       if(looksVideo(file)){
-        const mediaUrl=await finalMediaDeliveryUrl(sql,file);
-        const start=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'start'});
-        const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
-        if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع فيديو Story على Facebook");
-        const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Story');
-        const publish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
-        result={start,upload,publish,video_id:videoId};
+        result=await publishFacebookVideoStory(sql,{pageId,token,file});
       }else{
         const stories=[];
         for(const storyFile of files){
@@ -2524,7 +3720,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
         result={stories,publish:stories[0]?.publish,id:clean(stories[0]?.publish?.id),batchCount:stories.length};
       }
     }else if(publishFormat==='reel'||publishFormat==='short'){
-      result=await publishFacebookReel(pageId,token,await finalMediaDeliveryUrl(sql,file),caption);
+      result=await publishFacebookReel(sql,{pageId,token,file,caption});
     }else if(publishFormat==='video'){
       result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:await finalMediaDeliveryUrl(sql,file),description:caption});
     }else if(publishFormat==='photo_post'||publishFormat==='carousel'||multipleImages){
@@ -2599,6 +3795,7 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
       )fallback_task on true
       where s.id=${id}::uuid
     `;
+    if(schedule?.publish_options?.workflowProductId){results.push({id,ok:false,error:W.immutable});continue;}
     if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود",platformName:"منصة غير معروفة",postTypeName:""});continue;}
     try{
       if(schedule.publish_prep_removed_at)throw new Error("تم مسح تجهيز النشر من القائمة ولا يمكن نشره");
@@ -2619,7 +3816,32 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
 async function saveResultFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع ملف النتائج");const sourceType=clean(body.sourceType),id=clean(body.id),fileId=clean(body.fileId);await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ ملف النتائج"};}
 async function saveLinks(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),permission=sourceType==='agenda'?"marketing.agenda.edit":"marketing.campaign.edit";if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لتعديل الروابط");const id=clean(body.id),links=arrayValue(body.links).filter((item:any)=>clean(item.platform)&&clean(item.url));await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ روابط الحملة"};}
 async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.campaign.archive"))throw new Error("لا توجد صلاحية لأرشفة الحملة");const sourceType=clean(body.sourceType),id=clean(body.id);await assertMarketingEntityAccess(sql,user,sourceType,id);const[entity]=sourceType==='agenda'?await sql<any[]>`select result_file_id::text,links from marketing.agendas where id=${id}::uuid`:await sql<any[]>`select result_file_id::text,links from marketing.campaigns where id=${id}::uuid`;if(!entity)throw new Error("السجل غير موجود");const missing=[];if(!entity.result_file_id)missing.push("ملف نتائج الحملة");if(!arrayValue(entity.links).length)missing.push("روابط الحملة");if(missing.length)throw new Error(`لا يمكن أرشفة الحملة. الناقص: ${missing.join(" + ")}`);if(sourceType==='agenda')await sql`update marketing.agendas set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تمت الأرشفة"};}
-async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),id=clean(body.id);const permission=sourceType==='agenda'?'marketing.agenda.delete':'marketing.campaign.delete';if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لمسح السجل");await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
+async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const sourceType=clean(body.sourceType),id=clean(body.id);
+  if(!['agenda','campaign'].includes(sourceType))throw new Error('نوع الجدول غير صحيح');
+  const permission=sourceType==='agenda'?'marketing.agenda.delete':'marketing.campaign.delete';
+  const marketingAdmin=marketingAccess(user).roleCode==='marketing_admin';
+  if(!(hasPermission(user,'platform.superadmin')||(marketingAdmin&&hasPermission(user,'settings.marketing.manage'))) || !hasPermission(user,permission))throw new Error('لا توجد صلاحية لمسح السجل');
+  await assertMarketingEntityAccess(sql,user,sourceType,id);
+  return sql.begin(async tx=>{
+    if(sourceType==='agenda'){
+      const [linked]=await tx<any[]>`select 1 where exists(select 1 from marketing.creatives where agenda_id=${id}::uuid)
+        or exists(select 1 from marketing.tasks where agenda_id=${id}::uuid)
+        or exists(select 1 from marketing.task_templates where source_type='agenda' and source_id=${id}::uuid)
+        or exists(select 1 from marketing.publish_schedule where source_type='agenda' and source_id=${id}::uuid) limit 1`;
+      if(linked){
+        // Hard deleting a legacy agenda cascades into its creatives and tasks.
+        // Preserve those records for historical reports, but remove the agenda
+        // from the active marketing lists.
+        await tx`update marketing.agendas set status='archived',archived_at=coalesce(archived_at,now()),
+          archived_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+        return{ok:true,message:'تم حذف الأجندة من القوائم مع الاحتفاظ بالسجلات التاريخية المرتبطة'};
+      }
+      await tx`delete from marketing.agendas where id=${id}::uuid`;
+    }else await tx`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;
+    return{ok:true,message:'تم المسح'};
+  });
+}
 
 async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
@@ -2734,151 +3956,37 @@ async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
   return{ok:true,rows};
 }
 
-async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,request:VercelRequest){
-  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
-  const value=(type:string)=>parts.find((part)=>part.type===type)?.value||'';
-  const todayKey=`${value('year')}-${value('month')}-${value('day')}`;
-  const from=isoDate(request.query.from)||todayKey;
-  const to=isoDate(request.query.to)||from;
-  const departmentId=clean(request.query.departmentId);
-  const requestedUserId=clean(request.query.userId);
-  const userId=hasPermission(user,"marketing.attendance.manage")?requestedUserId:user.id;
-  const status=clean(request.query.status);
-  const [settings]=await sql<any[]>`select * from marketing.attendance_settings where singleton=true`;
-  const today=await sql<any[]>`
-    select u.id::text,u.full_name,
-      string_agg(distinct d.name,'، ' order by d.name) as department_name,
-      r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status,
-      coalesce(max(p.last_activity_at)>now()-interval '5 minutes',false) as online,
-      max(p.last_activity_at) as last_activity_at,
-      max(p.last_activity_type) as last_activity_type
-    from core.users u
-    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    join marketing.departments d on d.id=du.department_id and d.is_active=true
-    left join marketing.attendance_records r on r.user_id=u.id and r.attendance_date=(now() at time zone 'Asia/Riyadh')::date
-    left join marketing.presence_status p on p.user_id=u.id
-    where u.is_active=true and (${hasPermission(user,"marketing.attendance.manage")} or u.id=${user.id}::uuid)
-    group by u.id,u.full_name,r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status
-    order by u.full_name`;
-  const reportUsers=await sql<any[]>`
-    select u.id::text,u.full_name,u.email,string_agg(distinct d.name,'، ' order by d.name) as department_name
-    from core.users u
-    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    join marketing.departments d on d.id=du.department_id and d.is_active=true
-    where u.is_active=true
-      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
-      and (${userId}='' or u.id=${userId||null}::uuid)
-    group by u.id,u.full_name,u.email
-    order by u.full_name`;
-  const rawRows=await sql<any[]>`
-    select r.*,r.id::text,r.user_id::text,r.attendance_date::text as attendance_date,u.full_name,
-      string_agg(distinct d.name,'، ' order by d.name) as department_name
-    from marketing.attendance_records r
-    join core.users u on u.id=r.user_id
-    left join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    left join marketing.departments d on d.id=du.department_id
-    where r.attendance_date between ${from}::date and ${to}::date
-      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
-      and (${userId}='' or u.id=${userId||null}::uuid)
-    group by r.id,u.id,u.full_name
-    order by r.attendance_date desc,u.full_name`;
-  const [effective]=await sql<any[]>`
-    select min(r.attendance_date)::text as effective_from
-    from marketing.attendance_records r
-    where r.attendance_date between ${from}::date and ${to}::date
-      and exists(select 1 from core.user_system_departments du where du.user_id=r.user_id and du.system_code='marketing')`;
-  const effectiveFrom=clean(effective?.effective_from);
-  const reportDays=effectiveFrom?datesBetween(effectiveFrom>from?effectiveFrom:from,to):[];
-  const recordsByUserDay=new Map<string,any>();
-  for(const row of rawRows)recordsByUserDay.set(`${row.user_id}:${clean(row.attendance_date).slice(0,10)}`,row);
-  let summary=reportUsers.map((employee:any)=>{
-    const records=reportDays.map((day)=>recordsByUserDay.get(`${employee.id}:${day}`)).filter(Boolean);
-    const present=records.length;
-    const absent=Math.max(0,reportDays.length-present);
-    const lateCount=records.filter((row:any)=>numberValue(row.delay_minutes)>0).length;
-    const lateTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.delay_minutes),0);
-    const noCheckout=records.filter((row:any)=>row.check_in&&!row.check_out).length;
-    const workTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.work_minutes),0);
-    const employeeStatus=lateCount?'late':present&&noCheckout?'no_checkout':present&&absent?'partial':present?'present':'absent';
-    return{user_id:employee.id,full_name:employee.full_name,email:employee.email,department_name:employee.department_name,status:employeeStatus,present,absent,late_count:lateCount,late_total:lateTotal,no_checkout:noCheckout,work_total:workTotal};
-  });
-  if(status==='present')summary=summary.filter((row:any)=>row.present>0);
-  if(status==='late')summary=summary.filter((row:any)=>row.late_count>0);
-  if(status==='absent')summary=summary.filter((row:any)=>row.absent>0);
-  if(status==='no_checkout')summary=summary.filter((row:any)=>row.no_checkout>0);
-  const includedUsers=new Set(summary.map((row:any)=>row.user_id));
-  const rows:any[]=[];
-  for(const employee of reportUsers){
-    if(!includedUsers.has(employee.id))continue;
-    for(const day of reportDays){
-      const record=recordsByUserDay.get(`${employee.id}:${day}`);
-      if(status==='absent'){
-        if(!record)rows.push({id:`${employee.id}:${day}`,user_id:employee.id,attendance_date:day,full_name:employee.full_name,department_name:employee.department_name,status:'absent',check_in:null,check_out:null,delay_minutes:0,work_minutes:0});
-        continue;
-      }
-      if(!record)continue;
-      if(status==='late'&&numberValue(record.delay_minutes)<=0)continue;
-      if(status==='no_checkout'&&(!record.check_in||record.check_out))continue;
-      rows.push({...record,status:record.check_in&&!record.check_out?'no_checkout':numberValue(record.delay_minutes)>0?'late':'present'});
-    }
-  }
-  rows.sort((a,b)=>String(b.attendance_date).localeCompare(String(a.attendance_date))||String(a.full_name).localeCompare(String(b.full_name),'ar'));
-  const totals=summary.reduce((acc:any,row:any)=>({present:acc.present+row.present,absent:acc.absent+row.absent,lateCount:acc.lateCount+row.late_count,lateTotal:acc.lateTotal+row.late_total,noCheckout:acc.noCheckout+row.no_checkout,workTotal:acc.workTotal+row.work_total}),{present:0,absent:0,lateCount:0,lateTotal:0,noCheckout:0,workTotal:0});
-  const [mine]=await sql<any[]>`select *,id::text from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date`;
-  return{ok:true,settings:settings||{},today,rows,summary,totals,effectiveFrom,mine:mine||null,canManage:hasPermission(user,"marketing.attendance.manage")};
-}
-async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  const action=clean(body.attendanceAction);
-  if(action==='ping'){
-    await sql`insert into marketing.presence_status(user_id,online,last_activity_at,last_activity_type,updated_at) values(${user.id}::uuid,true,now(),${clean(body.activityType)||'فتح سيستم التسويق'},now()) on conflict(user_id) do update set online=true,last_activity_at=now(),last_activity_type=excluded.last_activity_type,updated_at=now()`;
-    return{ok:true};
-  }
-  if(action==='save_settings'){
-    if(!hasPermission(user,"marketing.attendance.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الدوام");
-    await sql`update marketing.attendance_settings set work_start=${clean(body.workStart)}::time,work_end=${clean(body.workEnd)}::time,grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},updated_by=${user.id}::uuid,updated_at=now() where singleton=true`;
-    return{ok:true,message:"تم حفظ إعدادات الدوام"};
-  }
-  if(action==='check_in'){
-    const [row]=await sql<any[]>`
-      with settings as(select work_start,grace_minutes from marketing.attendance_settings where singleton=true), calculated as(
-        select greatest(0,floor(extract(epoch from (((now() at time zone 'Asia/Riyadh')::time)-(work_start+(grace_minutes||' minutes')::interval)))/60))::int as delay_minutes from settings
-      )
-      insert into marketing.attendance_records(user_id,attendance_date,check_in,delay_minutes,status)
-      select ${user.id}::uuid,(now() at time zone 'Asia/Riyadh')::date,now(),delay_minutes,case when delay_minutes>0 then 'late' else 'present' end from calculated
-      on conflict(user_id,attendance_date) do update set
-        check_in=coalesce(marketing.attendance_records.check_in,excluded.check_in),
-        delay_minutes=case when marketing.attendance_records.check_in is null then excluded.delay_minutes else marketing.attendance_records.delay_minutes end,
-        status=case when marketing.attendance_records.check_in is null then excluded.status else marketing.attendance_records.status end,
-        updated_at=now()
-      returning *,id::text`;
-    return{ok:true,row,message:"تم تسجيل الحضور"};
-  }
-  if(action==='check_out'){
-    const [row]=await sql<any[]>`update marketing.attendance_records set check_out=now(),work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60))::int,status=case when status='late' then 'late' else 'present' end,updated_at=now() where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date and check_in is not null returning *,id::text`;
-    if(!row)throw new Error("يجب تسجيل الحضور أولًا");
-    return{ok:true,row,message:"تم تسجيل الانصراف"};
-  }
-  throw new Error("إجراء الحضور غير صحيح");
-}
-
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
-  const requestAccessFilter=marketingAccess(user).dataScope==="all"||hasPermission(user,"marketing.photo_request.complete")?sql`true`:sql`r.requested_by=${user.id}::uuid`;
+  const canCompletePhotoRequest=hasPermission(user,"marketing.photo_request.complete");
+  const canDeletePhotoRequest=hasPermission(user,"marketing.photo_request.create");
+  const requestAccessFilter=marketingAccess(user).dataScope==="all"||canCompletePhotoRequest?sql`true`:sql`r.requested_by=${user.id}::uuid`;
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
       select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.photography_date,r.note,r.cancelled_at,
-        sl.name as source_location_name,dl.name as destination_location_name,
-        (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
+        coalesce((
+          select string_agg(source_names.name,'، ' order by source_names.name)
+          from (
+            select distinct source_location.name
+            from operations.transfer_request_vehicles source_rv
+            join operations.locations source_location on source_location.id=source_rv.source_location_id
+            where source_rv.transfer_request_id=r.id
+          ) source_names
+        ),sl.name) as source_location_name,dl.name as destination_location_name,
+        (${canCompletePhotoRequest}=true and r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
+        (${canDeletePhotoRequest}=true and r.requested_by=${user.id}::uuid and (r.status='created' or r.cancelled_at is not null)) as can_delete,
         coalesce((
           select json_agg(json_build_object(
             'vehicleId',v.id::text,
             'vin',v.vin,
             'carName',v.car_name,
             'statement',v.statement,
+            'sourceLocationName',vehicle_source_location.name,
             'note',rv.item_note
           ) order by v.vin)
           from operations.transfer_request_vehicles rv
           join operations.vehicles v on v.id=rv.vehicle_id
+          left join operations.locations vehicle_source_location on vehicle_source_location.id=rv.source_location_id
           where rv.transfer_request_id=r.id
         ),'[]'::json) as vehicles,
         coalesce((
@@ -2901,7 +4009,7 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
     `,
     sql<any[]>`select id::text,code,name,branch_code from operations.locations where is_active=true order by sort_order,name`,
   ]);
-  return{ok:true,cars,requests,locations};
+  return{ok:true,cars,requests,locations,canViewOperationsTransfers:hasPermission(user,"system.operations.access") && hasPermission(user,"operations.transfers.view")};
 }
 
 async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2913,6 +4021,104 @@ async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user
     if(rows.length!==vehicleIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
     await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)} and coalesce(photographed,false)=false`;
     return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA-u-nu-latn")} سيارة إلى تم التصوير`};
+  });
+}
+
+async function deleteMarketingPhotoRequest(sql:ReturnType<typeof getSql>,requestIdValue:string,user:SessionUser){
+  if(!hasPermission(user,"marketing.photo_request.create"))throw new Error("لا توجد صلاحية لحذف طلب التصوير");
+  const requestId=clean(requestIdValue);
+  if(!requestId)throw new Error("طلب التصوير غير محدد");
+  return sql.begin(async tx=>{
+    const[request]=await tx<any[]>`
+      select r.*,r.id::text
+      from operations.transfer_requests r
+      where r.id=${requestId}::uuid and r.request_kind='photography' and r.is_deleted=false
+      for update
+    `;
+    if(!request)throw new Error("طلب التصوير غير موجود");
+    if(String(request.requested_by)!==String(user.id))throw new Error("لا توجد صلاحية لحذف طلب تصوير أنشأه مستخدم آخر");
+    const cancelledRequest=Boolean(request.cancelled_at);
+    if(!cancelledRequest){
+      const[events]=await tx<{count:number}[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${requestId}::uuid and action<>'created'`;
+      if(request.status!=="created"||Number(events?.count||0)>0)throw new Error("لا يمكن حذف طلب التصوير بعد بدء التنفيذ");
+    }
+    const items=await tx<any[]>`
+      select rv.vehicle_id::text,v.vin
+      from operations.transfer_request_vehicles rv
+      join operations.vehicles v on v.id=rv.vehicle_id
+      where rv.transfer_request_id=${requestId}::uuid
+      order by v.vin
+    `;
+    await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where id=${requestId}::uuid`;
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.transfer_request_events(transfer_request_id,stage,action,actor_id,actor_name,actor_role,actor_branch,before_data)
+          values(${requestId}::uuid,${request.status},'deleted',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${eventTx.json(dbJson({request,items}))})
+        `;
+      });
+    }catch(eventError){console.error("Marketing photo request delete event failed",{requestId,eventError});}
+    return{ok:true,message:cancelledRequest?"تم حذف طلب التصوير الملغي":"تم حذف طلب التصوير"};
+  });
+}
+
+async function completeMarketingPhotoRequest(sql:ReturnType<typeof getSql>,requestIdValue:string,user:SessionUser,note=""){
+  if(!hasPermission(user,"marketing.photo_request.complete"))throw new Error("لا توجد صلاحية لإنهاء طلب التصوير");
+  const requestId=clean(requestIdValue);
+  if(!requestId)throw new Error("طلب التصوير غير محدد");
+  return sql.begin(async tx=>{
+    const[request]=await tx<any[]>`
+      select r.*,r.id::text
+      from operations.transfer_requests r
+      where r.id=${requestId}::uuid and r.request_kind='photography' and r.is_deleted=false
+      for update
+    `;
+    if(!request)throw new Error("طلب التصوير غير موجود");
+    if(request.cancelled_at)throw new Error("طلب التصوير ملغي");
+    if(String(request.requested_by)!==String(user.id))throw new Error("لا توجد صلاحية لإنهاء طلب تصوير أنشأه مستخدم آخر");
+    if(request.status!=="vehicle_received")throw new Error("لا يمكن إنهاء طلب التصوير قبل اكتمال مرحلة استلام السيارة");
+
+    const items=await tx<any[]>`
+      select v.id::text,v.vin
+      from operations.transfer_request_vehicles rv
+      join operations.vehicles v on v.id=rv.vehicle_id
+      where rv.transfer_request_id=${requestId}::uuid
+      order by v.vin
+    `;
+    if(!items.length)throw new Error("طلب التصوير لا يحتوي على سيارات صالحة");
+
+    const vehicleIds=items.map((item)=>item.id);
+    await tx`
+      update operations.vehicles
+      set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1
+      where id in ${tx(vehicleIds)}
+    `;
+    await tx`
+      update operations.transfer_requests
+      set status='completed',completed_at=now(),updated_at=now(),version=version+1
+      where id=${requestId}::uuid
+    `;
+
+    const actorRole=user.roles[0]||"مستخدم التسويق";
+    const actorBranch=user.branches[0]||null;
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data)
+          values(${requestId}::uuid,'completed','stage_completed',${clean(note)||null},${user.id}::uuid,${user.fullName},${actorRole},${actorBranch},${eventTx.json(dbJson(request))},${eventTx.json(dbJson({status:'completed'}))})
+        `;
+      });
+    }catch(eventError){console.error("Marketing photo request stage event failed",{requestId,eventError});}
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata)
+          values('operations.request.completed','transfer_request',${requestId},'transfer_request',${requestId},${user.id}::uuid,${user.fullName},${request.source_branch_code||null},${request.destination_branch_code||null},'تحديث طلب التصوير',${request.request_no},${eventTx.json(dbJson({requestKind:'photography',status:'completed'}))})
+        `;
+      });
+    }catch(outboxError){console.error("Marketing photo request outbox failed",{requestId,outboxError});}
+
+    return{ok:true,message:"تم إنهاء طلب التصوير"};
   });
 }
 
@@ -2928,22 +4134,36 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
   return sql.begin(async tx=>{
     const[destination]=await tx<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
     if(!destination)throw new Error("المكان المستهدف غير صحيح");
-    const cars:any[]=[];
-    for(const item of vehicles){
-      const[v]=await tx<any[]>`
-        select v.*,v.id::text,l.code as location_code,l.branch_code
-        from operations.vehicles v left join operations.locations l on l.id=v.location_id
-        where v.id=${item.vehicleId}::uuid and v.is_deleted=false and v.archived_at is null
-        for update of v
-      `;
-      if(!v)throw new Error("إحدى السيارات غير موجودة");
-      if(String(v.location_id)===destinationLocationId)throw new Error(`السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
-      const[active]=await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${item.vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
-      if(active)throw new Error(`السيارة ${v.vin} مرتبطة بطلب نشط ${active.request_no}`);
-      cars.push({...v,itemNote:item.note});
+    // Lock all selected VINs in a stable order, then check the same active-request
+    // rule used by the Operations transfer system. This also supports large selections.
+    const lockedCars=await tx<any[]>`
+      select v.*,v.id::text as vehicle_id_text,l.code as location_code,l.branch_code
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id in ${tx(uniqueIds)} and v.is_deleted=false and v.archived_at is null
+      order by v.id
+      for update of v
+    `;
+    const vehicleById=new Map(lockedCars.map((car:any)=>[String(car.vehicle_id_text),car]));
+    if(vehicleById.size!==uniqueIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
+    const conflicts=await tx<any[]>`
+      select distinct on (rv.vehicle_id) rv.vehicle_id::text as vehicle_id,
+        r.request_no,r.request_kind,r.status
+      from operations.transfer_request_vehicles rv
+      join operations.transfer_requests r on r.id=rv.transfer_request_id
+      where rv.vehicle_id in ${tx(uniqueIds)}
+        and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
+      order by rv.vehicle_id,r.requested_at desc
+    `;
+    if(conflicts.length){
+      const active=conflicts[0];
+      const conflictCar=vehicleById.get(String(active.vehicle_id));
+      const kind=active.request_kind==='photography'?'طلب تصوير':'طلب نقل';
+      throw new Error(`السيارة ${conflictCar?.vin||''} مرتبطة بـ${kind} نشط رقم ${active.request_no}، ولا يمكن إضافتها حتى إغلاق الطلب في النظام المختص`);
     }
+    const cars:any[]=vehicles.map((item:any)=>({...vehicleById.get(item.vehicleId),itemNote:item.note}));
     const source=cars[0];
-    if(cars.some((vehicle)=>String(vehicle.location_id)!==String(source.location_id)))throw new Error("يجب أن تكون كل سيارات طلب التصوير في المكان المصدر نفسه");
+    const sourceLocationIds=[...new Set(cars.map((vehicle)=>String(vehicle.location_id||"")).filter(Boolean))];
     const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
     const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;
     const[request]=await tx<any[]>`
@@ -2952,46 +4172,385 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
       returning *,id::text
     `;
     for(const car of cars)await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${car.id}::uuid,${car.location_id},${car.status_code},${car.itemNote||null})`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,vehicles}))})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,sourceLocationIds,vehicles}))})`;
     return{ok:true,request,message:"تم إنشاء طلب التصوير"};
   });
 }
 
 
 
+type SubscriptionBillingCycle = "monthly" | "annual";
+type SubscriptionPricingModel = "fixed" | "per_unit" | "usage";
+
+function subscriptionBillingCycle(value: unknown): SubscriptionBillingCycle {
+  const cycle = clean(value);
+  if (cycle === "monthly" || cycle === "annual") return cycle;
+  throw new Error("نوع الاشتراك يجب أن يكون شهري أو سنوي");
+}
+
+function subscriptionPricingModel(value: unknown): SubscriptionPricingModel {
+  const model = clean(value);
+  if (model === "fixed" || model === "per_unit" || model === "usage") return model;
+  throw new Error("طريقة احتساب الاشتراك غير صحيحة");
+}
+
+function subscriptionDate(value: unknown, label: string) {
+  const date = clean(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${label} غير صحيح`);
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw new Error(`${label} غير صحيح`);
+  return date;
+}
+
+function optionalSubscriptionNumber(value: unknown) {
+  if (value === null || value === undefined || clean(value) === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error("القيمة الرقمية غير صحيحة");
+  return parsed;
+}
+
+function requiredSubscriptionAmount(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error("قيمة الاشتراك غير صحيحة");
+  return parsed;
+}
+
+function normalizeSubscriptionPayload(body: Record<string, any>) {
+  const serviceName = clean(body.serviceName).replace(/\s+/g, " ");
+  if (!serviceName) throw new Error("اكتب اسم الخدمة");
+  if (serviceName.length > 160) throw new Error("اسم الخدمة طويل جدًا");
+  const billingCycle = subscriptionBillingCycle(body.billingCycle);
+  const pricingModel = subscriptionPricingModel(body.pricingModel);
+  const amount = requiredSubscriptionAmount(body.amount);
+  const unitPrice = optionalSubscriptionNumber(body.unitPrice);
+  const usageQuantity = optionalSubscriptionNumber(body.usageQuantity);
+  const usageLimit = optionalSubscriptionNumber(body.usageLimit);
+  const usageUnit = clean(body.usageUnit).slice(0, 80) || null;
+  const startDate = subscriptionDate(body.startDate, "تاريخ بداية الاشتراك");
+  const renewalDate = subscriptionDate(body.renewalDate, "تاريخ التجديد");
+  if (renewalDate <= startDate) throw new Error("تاريخ التجديد يجب أن يكون بعد تاريخ بداية الاشتراك");
+  if (pricingModel === "per_unit" && unitPrice === null) throw new Error("اكتب سعر وحدة الاستخدام");
+  if (pricingModel !== "fixed" && !usageUnit) throw new Error("اختر أو اكتب وحدة الاستخدام");
+  return {
+    serviceName,
+    billingCycle,
+    pricingModel,
+    amount,
+    unitPrice,
+    usageQuantity,
+    usageLimit,
+    usageUnit,
+    startDate,
+    renewalDate,
+    currency: "SAR",
+    notes: clean(body.notes).slice(0, 1000) || null,
+  };
+}
+
+async function subscriptionsData(sql: ReturnType<typeof getSql>, user: SessionUser, requireManage = false) {
+  if (requireManage) {
+    if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  } else if (!hasPermission(user, "marketing.subscriptions.view") && !hasPermission(user, "marketing.subscriptions.manage")) {
+    throw new Error("لا توجد صلاحية لمشاهدة الاشتراكات");
+  }
+  const rows = await sql<any[]>`
+    select
+      s.id::text,
+      s.service_name,
+      s.billing_cycle,
+      s.pricing_model,
+      s.amount::float,
+      s.unit_price::float,
+      s.usage_quantity::float,
+      s.usage_limit::float,
+      s.usage_unit,
+      s.currency,
+      s.start_date::text,
+      s.renewal_date::text,
+      s.notes,
+      s.created_at,
+      s.updated_at,
+      case
+        when s.pricing_model='per_unit' and s.unit_price is not null and s.usage_quantity is not null
+          then round((s.unit_price*s.usage_quantity)::numeric,2)
+        else s.amount
+      end::float as effective_amount,
+      (s.renewal_date-current_date)::int as days_remaining,
+      (s.renewal_date<current_date) as is_expired,
+      coalesce((select count(*)::int from marketing.subscription_renewals r where r.subscription_id=s.id),0) as renewal_count
+    from marketing.subscriptions s
+    where s.is_active=true
+    order by s.renewal_date asc,s.service_name asc,s.created_at asc
+  `;
+  const activeCount = rows.filter((row) => !row.is_expired).length;
+  const expiringSoonCount = rows.filter((row) => Number(row.days_remaining) >= 0 && Number(row.days_remaining) <= 30).length;
+  const expiredCount = rows.filter((row) => Boolean(row.is_expired)).length;
+  const monthlyEquivalentCost = (row: any) => {
+    const amount = Number(row.effective_amount || 0);
+    return row.billing_cycle === "annual" ? amount / 12 : amount;
+  };
+  const totalCurrentCost = rows.reduce((total, row) => total + monthlyEquivalentCost(row), 0);
+  const usageBasedCost = rows.filter((row) => row.pricing_model === "usage").reduce((total, row) => total + monthlyEquivalentCost(row), 0);
+  return {
+    ok: true,
+    rows,
+    stats: { activeCount, expiringSoonCount, expiredCount, totalCurrentCost, usageBasedCost },
+    permissions: {
+      canRenew: hasPermission(user, "marketing.subscriptions.renew"),
+      canManage: hasPermission(user, "marketing.subscriptions.manage"),
+    },
+  };
+}
+
+async function subscriptionHistory(sql: ReturnType<typeof getSql>, id: string, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.view") && !hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لمشاهدة الاشتراكات");
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const [subscription] = await sql<any[]>`select id::text,service_name from marketing.subscriptions where id=${id}::uuid`;
+  if (!subscription) throw new Error("الاشتراك غير موجود");
+  const rows = await sql<any[]>`
+    select r.id::text,r.previous_start_date::text,r.previous_renewal_date::text,r.actual_renewal_date::text,r.next_renewal_date::text,
+      r.billing_cycle,r.pricing_model,r.amount::float,r.unit_price::float,r.usage_quantity::float,r.usage_limit::float,r.usage_unit,r.currency,r.note,
+      r.created_at,u.full_name as renewed_by_name
+    from marketing.subscription_renewals r
+    left join core.users u on u.id=r.renewed_by
+    where r.subscription_id=${id}::uuid
+    order by r.created_at desc
+  `;
+  return { ok: true, subscription, rows };
+}
+
+async function saveSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  const input = normalizeSubscriptionPayload(body);
+  const id = clean(body.id);
+  if (id) {
+    const [row] = await sql<any[]>`
+      update marketing.subscriptions
+      set service_name=${input.serviceName},billing_cycle=${input.billingCycle},pricing_model=${input.pricingModel},amount=${input.amount},
+        unit_price=${input.unitPrice},usage_quantity=${input.usageQuantity},usage_limit=${input.usageLimit},usage_unit=${input.usageUnit},currency=${input.currency},
+        start_date=${input.startDate}::date,renewal_date=${input.renewalDate}::date,notes=${input.notes},updated_by=${user.id}::uuid,updated_at=now()
+      where id=${id}::uuid and is_active=true
+      returning id::text,service_name
+    `;
+    if (!row) throw new Error("الاشتراك غير موجود");
+    return { ok: true, id: row.id, message: "تم حفظ تعديل الاشتراك" };
+  }
+  const [row] = await sql<any[]>`
+    insert into marketing.subscriptions(service_name,billing_cycle,pricing_model,amount,unit_price,usage_quantity,usage_limit,usage_unit,currency,start_date,renewal_date,notes,created_by,updated_by)
+    values(${input.serviceName},${input.billingCycle},${input.pricingModel},${input.amount},${input.unitPrice},${input.usageQuantity},${input.usageLimit},${input.usageUnit},${input.currency},${input.startDate}::date,${input.renewalDate}::date,${input.notes},${user.id}::uuid,${user.id}::uuid)
+    returning id::text,service_name
+  `;
+  return { ok: true, id: row.id, message: "تمت إضافة الاشتراك بنجاح" };
+}
+
+async function deleteSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.manage")) throw new Error("لا توجد صلاحية لإدارة الاشتراكات");
+  const id = clean(body.id);
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const [row] = await sql<any[]>`
+    update marketing.subscriptions set is_active=false,updated_by=${user.id}::uuid,updated_at=now()
+    where id=${id}::uuid and is_active=true
+    returning id::text,service_name
+  `;
+  if (!row) throw new Error("الاشتراك غير موجود");
+  return { ok: true, id: row.id, message: "تم إيقاف الاشتراك" };
+}
+
+async function renewSubscription(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.subscriptions.renew")) throw new Error("لا توجد صلاحية لتجديد الاشتراكات");
+  const id = clean(body.id);
+  if (!id) throw new Error("الاشتراك غير محدد");
+  const actualRenewalDate = subscriptionDate(body.actualRenewalDate, "تاريخ التجديد الفعلي");
+  const nextRenewalDate = subscriptionDate(body.nextRenewalDate, "تاريخ التجديد القادم");
+  if (nextRenewalDate <= actualRenewalDate) throw new Error("تاريخ التجديد القادم يجب أن يكون بعد تاريخ التجديد الفعلي");
+  return sql.begin(async (tx) => {
+    const [current] = await tx<any[]>`
+      select id::text,service_name,billing_cycle,pricing_model,amount::float,unit_price::float,usage_quantity::float,usage_limit::float,usage_unit,currency,start_date::text,renewal_date::text
+      from marketing.subscriptions
+      where id=${id}::uuid and is_active=true
+      for update
+    `;
+    if (!current) throw new Error("الاشتراك غير موجود");
+    const amount = body.amount === undefined || body.amount === null || clean(body.amount) === "" ? Number(current.amount || 0) : requiredSubscriptionAmount(body.amount);
+    const unitPrice = body.unitPrice === undefined ? (current.unit_price ?? null) : optionalSubscriptionNumber(body.unitPrice);
+    const usageQuantity = body.usageQuantity === undefined ? (current.usage_quantity ?? null) : optionalSubscriptionNumber(body.usageQuantity);
+    const usageLimit = body.usageLimit === undefined ? (current.usage_limit ?? null) : optionalSubscriptionNumber(body.usageLimit);
+    const usageUnit = body.usageUnit === undefined ? (clean(current.usage_unit) || null) : (clean(body.usageUnit).slice(0,80) || null);
+    if (current.pricing_model === "per_unit" && unitPrice === null) throw new Error("اكتب سعر وحدة الاستخدام");
+    if (current.pricing_model !== "fixed" && !usageUnit) throw new Error("وحدة الاستخدام مطلوبة");
+    await tx`
+      insert into marketing.subscription_renewals(subscription_id,previous_start_date,previous_renewal_date,actual_renewal_date,next_renewal_date,billing_cycle,pricing_model,amount,unit_price,usage_quantity,usage_limit,usage_unit,currency,note,renewed_by)
+      values(${id}::uuid,${current.start_date}::date,${current.renewal_date}::date,${actualRenewalDate}::date,${nextRenewalDate}::date,${current.billing_cycle},${current.pricing_model},${amount},${unitPrice},${usageQuantity},${usageLimit},${usageUnit},${current.currency || 'SAR'},${clean(body.note).slice(0,1000)||null},${user.id}::uuid)
+    `;
+    await tx`
+      update marketing.subscriptions
+      set start_date=${actualRenewalDate}::date,renewal_date=${nextRenewalDate}::date,amount=${amount},unit_price=${unitPrice},usage_quantity=${usageQuantity},usage_limit=${usageLimit},usage_unit=${usageUnit},updated_by=${user.id}::uuid,updated_at=now()
+      where id=${id}::uuid
+    `;
+    return { ok: true, id, message: "تم تجديد الاشتراك وتحديث تاريخ التجديد" };
+  });
+}
+
+
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
-function rawApiToken(){
-  const configured=clean(process.env.MZJ_RAW_API_TOKEN||process.env.MZJ_RAW_SECRET||process.env.RAW_API_TOKEN);
-  if(configured)return configured;
-  if(clean(process.env.MZJ_RAW_ALLOW_LEGACY_TOKEN).toLowerCase()==='false')return'';
-  return'MZJ_RAW_SECRET_2026_CHANGE_ME';
+async function createRawFolders(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.campaign.create")&&!hasPermission(user,"marketing.agenda.create")&&!hasPermission(user,"marketing.campaign.edit")&&!hasPermission(user,"marketing.agenda.edit"))throw new Error("لا توجد صلاحية لإنشاء فولدرات الخام");
+  const payload=objectValue(body.payload||body);
+  const monthKey=clean(payload.monthKey);
+  const campaignCode=clean(payload.campaignCode);
+  const campaignFolderName=clean(payload.campaignFolderName||payload.campaignDisplayName||campaignCode);
+  const creatives=arrayValue<Record<string,any>>(payload.creatives);
+  if(!monthKey)throw new Error("شهر الحملة أو الأجندة غير محدد");
+  if(!campaignFolderName)throw new Error("اسم فولدر الحملة أو الأجندة غير محدد");
+  if(!creatives.length)throw new Error("لا توجد تاسكات لإنشاء فولدراتها");
+
+  const monthFolder=await ensureGoogleDriveFolder(sql,{name:monthKey,appProperties:{mzjKind:"month",mzjMonthKey:monthKey}});
+  const campaignFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(monthFolder.id),name:campaignFolderName,appProperties:{mzjKind:"source",mzjCode:campaignCode||monthKey}});
+  const rawFolders:Record<string,any>={};
+
+  for(const creative of creatives){
+    const creativeInstanceId=clean(creative.creativeInstanceId||creative.id||creative.folderName||creative.name);
+    const creativeFolderName=clean(creative.folderName||creative.name||creativeInstanceId)||"Task";
+    const creativeFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(campaignFolder.id),name:creativeFolderName,appProperties:{mzjKind:"task",mzjInstance:creativeInstanceId.slice(0,120)}});
+    const rawFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(creativeFolder.id),name:"01-RAW",appProperties:{mzjKind:"raw"}});
+    const outputFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(creativeFolder.id),name:"02-OUTPUT",appProperties:{mzjKind:"output"}});
+    const users:Record<string,any>={};
+    for(const rawUser of arrayValue<Record<string,any>>(creative.users)){
+      const uid=clean(rawUser.uid||rawUser.id);
+      if(!uid)continue;
+      const name=clean(rawUser.name||rawUser.fullName||rawUser.full_name||uid);
+      const userFolderName=clean(rawUser.folderName||name||uid);
+      const userFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(outputFolder.id),name:userFolderName,appProperties:{mzjKind:"user-output",mzjUserId:uid.slice(0,120)}});
+      users[uid]={
+        uid,
+        name,
+        folderName:userFolderName,
+        folderId:clean(userFolder.id),
+        outputFolderId:clean(userFolder.id),
+        folderUrl:clean(userFolder.webViewLink)||googleDriveFolderUrl(userFolder.id),
+        outputFolderUrl:clean(userFolder.webViewLink)||googleDriveFolderUrl(userFolder.id),
+      };
+    }
+    const key=creativeInstanceId||creativeFolderName;
+    rawFolders[key]={
+      name:clean(creative.name)||creativeFolderName,
+      folderName:creativeFolderName,
+      creativeInstanceId,
+      creativeIndex:numberValue(creative.creativeIndex)||null,
+      storageProvider:"google-drive",
+      type:"google_drive",
+      folderId:clean(creativeFolder.id),
+      creativeFolderId:clean(creativeFolder.id),
+      folderUrl:clean(creativeFolder.webViewLink)||googleDriveFolderUrl(creativeFolder.id),
+      rawFolderId:clean(rawFolder.id),
+      outputFolderId:clean(outputFolder.id),
+      rawFolderUrl:clean(rawFolder.webViewLink)||googleDriveFolderUrl(rawFolder.id),
+      outputFolderUrl:clean(outputFolder.webViewLink)||googleDriveFolderUrl(outputFolder.id),
+      subFolders:{
+        raw:clean(rawFolder.webViewLink)||googleDriveFolderUrl(rawFolder.id),
+        output:clean(outputFolder.webViewLink)||googleDriveFolderUrl(outputFolder.id),
+      },
+      users,
+    };
+  }
+
+  const rootFolderId=clean(Array.isArray(monthFolder.parents)?monthFolder.parents[0]:"");
+  return{
+    ok:true,
+    message:"تم إنشاء فولدرات الخام والتسليم على Google Drive وربطها بالتاسكات",
+    storageProvider:"google-drive",
+    type:"google-drive",
+    monthKey,
+    campaignCode,
+    campaignFolderName,
+    rootFolderId,
+    monthFolderId:clean(monthFolder.id),
+    campaignFolderId:clean(campaignFolder.id),
+    campaignFolderPath:`${monthKey}/${campaignFolderName}`,
+    folderPath:`${monthKey}/${campaignFolderName}`,
+    campaignPath:`${monthKey}/${campaignFolderName}`,
+    campaignFolderUrl:clean(campaignFolder.webViewLink)||googleDriveFolderUrl(campaignFolder.id),
+    rawFolders,
+  };
 }
-async function createRawFolders(body:any){
-  const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';
-  const token=rawApiToken();
-  if(!token)throw new Error("بيانات ربط سيرفر فولدرات الخام غير مكتملة");
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),30000);
-  try{
-    const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token,authorization:`Bearer ${token}`},body:JSON.stringify(body.payload||body),signal:controller.signal});
-    const payload=await response.json().catch(()=>({}));
-    if(!response.ok||payload.ok===false)throw new Error(payload.message||payload.error||`تعذر إنشاء فولدرات الخام (${response.status})`);
-    return payload;
-  }catch(error:any){
-    if(error?.name==='AbortError')throw new Error("انتهت مهلة الاتصال بسيرفر فولدرات الخام");
-    throw error;
-  }finally{clearTimeout(timeout);}
+
+/** Protected scheduled publisher. Shares the exact native platform engine and authorization
+ * path used by the interactive marketing action; no independent publisher or spending. */
+export async function runMarketingScheduledPublishing() {
+  const sql = getSql();
+  return runDueWorkflowPublications(sql, {
+    meta: marketingMeta,
+    streamFile: streamMarketingFileDownload,
+    publishItem: publishScheduleItem,
+    youtubeDefaults: getYouTubePublishSettings,
+    legacyDatabase: databaseRows,
+    validatePublishItem: validateWorkflowPublication,
+  });
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
+  // Server timing is emitted only for slow, safe GET reads. No user IDs,
+  // tokens, payloads or query parameters are logged.
+  const monitoredResource = String(request.query.resource || "");
+  if (request.method === "GET" && ["engagement", "meta_ads", "google_ads", "tiktok_ads", "tiktok_ads_builder", "campaign_report"].includes(monitoredResource)) {
+    const started = Date.now();
+    response.once("finish", () => {
+      const elapsed = Date.now() - started;
+      if (elapsed >= 2500) console.warn(`[MZJ slow marketing GET] ${monitoredResource}: ${elapsed} ms`);
+    });
+  }
   try {
-    await ensureAccessControlSchema(); await ensureOperationsSchema(); await ensureMarketingSchema();
+    // The engagement page updates current Meta counts on open. This action
+    // uses tables already deployed by the normal marketing flow; do not run
+    // all marketing/operations migrations during each lightweight refresh.
+    const initialBody = request.method === "POST" ? bodyObject(request) : {};
+    if (initialBody.action === "refresh_meta_engagement_metrics" && initialBody.automatic === true) {
+      const user = await requireUser(request, response); if (!user) return;
+      if (!canUseMarketing(user) || !hasPermission(user, "marketing.engagement.refresh")) {
+        return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتحديث تفاعل Meta" });
+      }
+      const sql = getSql();
+      const [schema] = await sql<any[]>`
+        select to_regclass('marketing.meta_external_posts') is not null as posts_ready,
+               to_regclass('marketing.platform_connections') is not null as connections_ready
+      `;
+      if (!schema?.posts_ready || !schema?.connections_ready) {
+        return response.status(503).json({ ok: false, error: "قاعدة بيانات تفاعل Meta غير مهيأة" });
+      }
+      return response.status(200).json(await autoRefreshExternalMetaMetrics(sql, arrayValue<string>(initialBody.ids).map(clean).filter(Boolean)));
+    }
+    await ensureAccessControlSchema();
+    // Operations DDL belongs to the operations/bootstrap lifecycle, not
+    // to any Marketing page load. Operations is already initialized by the
+    // platform and retains its independent migration implementation.
+    // Page reads are strictly read-only: never enqueue ALTER TABLE behind
+    // active imports/cron syncs. Writes keep the existing migration guard.
+    const workflowRequest = clean(request.query.resource).startsWith('work_') || clean(initialBody.action).startsWith('work_');
+    if (request.method !== 'GET' && !workflowRequest) {
+      await ensureMarketingSchema();
+    }
     const user = await requireUser(request,response); if(!user)return;
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
+    const workflowServices = {
+      meta:marketingMeta,streamFile:streamMarketingFileDownload,publishItem:publishScheduleItem,
+      youtubeDefaults:getYouTubePublishSettings,legacyDatabase:databaseRows,validatePublishItem:validateWorkflowPublication,
+    };
+    if (workflowRequest && request.method === 'GET' && resource !== 'work_file') {
+      // Ordinary workflow reads are guaranteed not to wait behind PostgreSQL
+      // AccessExclusiveLock indefinitely. No schema DDL runs on page loads.
+      const handled = await sql.begin(async tx => {
+        await tx`set transaction read only`;
+        await tx`set local lock_timeout = '3s'`;
+        await tx`set local statement_timeout = '15s'`;
+        return handleMarketingWorkflow(request,response,tx as unknown as typeof sql,user,workflowServices);
+      });
+      if (handled) return;
+    } else if (await handleMarketingWorkflow(request,response,sql,user,workflowServices)) return;
+
     if(request.method==='GET'){
       if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create')||hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.agenda.edit'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
@@ -3003,25 +4562,90 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
-      if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
+      if(resource==='campaign_report'){
+        if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتقرير الحملات'});
+        const canRefreshReport=hasPermission(user,'marketing.engagement.refresh');
+        const fresh=clean(request.query.refresh)==='true';
+        if(fresh&&!canRefreshReport)return response.status(403).json({ok:false,error:'لا توجد صلاحية لتحديث بيانات الحملات مباشرة'});
+        return response.status(200).json({...await consolidatedCampaignReport(sql,request.query.dateFrom,request.query.dateTo,fresh),
+          canRefreshReport,canEditManager:hasPermission(user,'marketing.campaign.edit')||canRefreshReport||hasPermission(user,'settings.marketing.manage')||hasPermission(user,'platform.superadmin')});
+      }
+      if(resource==='meta_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Meta'});return response.status(200).json(await metaAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
+      if(resource==='google_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات Google'});return response.status(200).json(await googleAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo));}
+      if(resource==='social_accounts_overview'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض الحسابات'});return response.status(200).json(await marketingSocialAccountsOverview(sql,request.query));}
+      if(resource==='tiktok_ads'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض إعلانات TikTok'});return response.status(200).json(await tiktokAdsData(sql,request.query.preset,request.query.accountId,request.query.dateFrom,request.query.dateTo,request.query.refresh));}
+      if(resource==='tiktok_ads_builder'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء إعلانات TikTok'});return response.status(200).json(await tiktokAdsBuilderOptions(sql,{accountId:request.query.accountId,campaignId:request.query.campaignId}));}
+      if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql,request.query.view);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
-      if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
+      if(resource==='subscriptions')return response.status(200).json(await subscriptionsData(sql,user));
+      if(resource==='subscription_settings')return response.status(200).json(await subscriptionsData(sql,user,true));
+      if(resource==='subscription_history')return response.status(200).json(await subscriptionHistory(sql,clean(request.query.id),user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
-      if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id),user));
-      if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
+      if(resource==='task_folder')return response.status(200).json(await taskFolderData(sql,request,user));
+      if(resource==='task_folder_file')return streamTaskFolderFile(sql,request,user,response);
+      if(resource==='task_folder_archive')return streamTaskFolderArchive(sql,request,user,response);
+      if(resource==='file'){const downloadQuery=Array.isArray(request.query.download)?request.query.download[0]:request.query.download;return streamMarketingFileDownload(sql,clean(request.query.id),user,response,bool(downloadQuery));}
+      if(resource==='campaign_code')return response.status(410).json({ok:false,error:W.retiredCreation});
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
     }
     if(request.method!=='POST')return response.status(405).json({ok:false,error:"Method not allowed"});
     const body=bodyObject(request),action=clean(body.action); let result:any;
-    if(action==='create_campaign')result=await createCampaign(sql,body,user);
-    else if(action==='create_agenda')result=await createAgenda(sql,body,user);
-    else if(action==='import_fresh_marketing_bundle')result=await importFreshMarketingBundle(sql,body,user);
+    if(['create_campaign','create_agenda','import_fresh_marketing_bundle'].includes(action))return response.status(410).json({ok:false,error:W.retiredCreation});
+    await assertLegacyMarketingTarget(sql,body);
+    if(action==='tiktok_ads_link'){
+      if(!hasPermission(user,'marketing.campaign.edit'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإدارة ربط TikTok Ads'});
+      result=await linkTikTokAdsToken(sql,user.id,body);
+    }
+    else if(action==='tiktok_ads_disconnect'){
+      if(!hasPermission(user,'marketing.campaign.edit'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لفصل TikTok Ads'});
+      result=await disconnectTikTokAds(sql);
+    }
+    else if(action==='tiktok_ads_campaign_status'){
+      if(!hasPermission(user,'marketing.campaign.edit'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتغيير حالة حملات TikTok Ads'});
+      result=await changeTikTokAdsCampaignStatus(sql,body);
+    }
+    else if(action==='tiktok_ads_create_campaign'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء حملات TikTok Ads'});
+      result=await createPausedTikTokAdsCampaign(sql,body);
+    }
+    else if(action==='tiktok_ads_create_adgroup'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء مجموعات TikTok Ads'});
+      result=await createPausedTikTokAdsAdGroup(sql,body);
+    }
+    else if(action==='tiktok_ads_create_ad'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء إعلانات TikTok Ads'});
+      result=await createPausedTikTokAdsAd(sql,body);
+    }
+    else if(action==='google_ads_create_search'){
+      if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لإنشاء حملات Google Ads'});
+      result=await createPausedGoogleAdsSearchCampaign(sql,body);
+    }
+    else if(action==='google_ads_campaign_status'){
+      if(!hasPermission(user,'marketing.campaign.edit'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لتغيير حالة الحملة الإعلانية'});
+      result=await changeGoogleAdsCampaignStatus(sql,body);
+    }
+    else if(action==='save_campaign_report_manager'){
+      if (!hasPermission(user,'marketing.engagement.view') ||
+        !['marketing.campaign.edit','marketing.engagement.refresh','settings.marketing.manage','platform.superadmin'].some(permission => hasPermission(user,permission)))
+        return response.status(403).json({ok:false,error:'لا توجد صلاحية لتعديل مدير الحملة'});
+      result=await saveCampaignReportManager(sql,{platform:body.platform,accountId:body.accountId,
+        campaignId:body.campaignId,managerName:body.managerName,updatedBy:user.id});
+    }
+    else if(action==='save_meta_ads_campaign_manager'){
+      if (!hasPermission(user,'marketing.engagement.view') || (!hasPermission(user,'marketing.engagement.refresh') && !hasPermission(user,'marketing.campaign.edit'))) {
+        return response.status(403).json({ok:false,error:'لا توجد صلاحية لتعديل مدير الحملة الإعلانية'});
+      }
+      result=await saveMetaAdsCampaignManager(sql,{accountId:body.accountId,campaignId:body.campaignId,managerName:body.managerName,updatedBy:user.id});
+    }
+    else if(action==='create_funnel')result=await createFunnel(sql,body,user);
     else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);
+    else if(action==='delete_entity_creative')result=await deleteEntityCreative(sql,body,user);
+    else if(action==='save_campaign_budgets')result=await saveCampaignBudgets(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);
-    else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);
+    else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body,user);
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
     else if(action==='save_campaign_type')result=await saveCampaignType(sql,body);
     else if(action==='save_platform')result=await savePlatform(sql,body);
@@ -3032,21 +4656,29 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='upload_template')result=await uploadTemplate(sql,body,user);
     else if(action==='review_template')result=await reviewTemplate(sql,body,user);
     else if(action==='toggle_task_action')result=await toggleTaskAction(sql,body,user);
+    else if(action==='reject_task')result=await rejectTask(sql,body,user);
     else if(action==='complete_task')result=await completeTask(sql,body,user);
     else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
     else if(action==='prepare_final_upload')result=await prepareFinalUpload(sql,body,user);
-    else if(action==='upload_final_file_proxy')result=await uploadFinalFileProxy(sql,body,user);
+    else if(action==='commit_final_file_upload')result=await commitFinalFileUpload(sql,body,user);
     else if(action==='cancel_final_upload')result=await cancelFinalUpload(sql,body,user);
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
+    else if(action==='prepare_task_folder_upload')result=await prepareTaskFolderUpload(sql,body,user);
+    else if(action==='verify_task_folder_upload')result=await verifyTaskFolderUpload(sql,body,user);
+    else if(action==='delete_task_folder_item')result=await deleteTaskFolderItem(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
+    else if(action==='cancel_file_upload')result=await cancelFileUpload(sql,body,user);
+    else if(action==='delete_first_file')result=await deleteFirstFile(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
     else if(action==='discard_manual_publish_entry')result=await discardManualPublishEntry(sql,body,user);
     else if(action==='remove_publish_prep_entry')result=await removePublishPrepEntry(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
+    else if(action==='sync_meta_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لمزامنة Meta');result=await syncMetaEngagement(sql);}
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
+    else if(action==='refresh_meta_engagement_metrics'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل Meta');result=await refreshExternalMetaMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
     else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
     else if(action==='manage_engagement_item'){
       if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لإدارة تفاعل النشر');
@@ -3057,15 +4689,30 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_links')result=await saveLinks(sql,body,user);
     else if(action==='archive_entity')result=await archiveEntity(sql,body,user);
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
-    else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='delete_photo_request')result=await deleteMarketingPhotoRequest(sql,clean(body.id),user);
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
-    else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
+    else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
+    else if(action==='save_subscription')result=await saveSubscription(sql,body,user);
+    else if(action==='delete_subscription')result=await deleteSubscription(sql,body,user);
+    else if(action==='renew_subscription')result=await renewSubscription(sql,body,user);
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
-    else if(action==='create_raw_folders')result=await createRawFolders(body);
+    else if(action==='migrate_r2_storage_names')result=await migrateMarketingR2StorageNames(sql,body,user);
+    else if(action==='create_raw_folders')result=await createRawFolders(sql,body,user);
     else throw new Error("الإجراء غير مدعوم");
     await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);
     await emitMarketingNotification(user, action, body, result).catch((error) => console.error("Marketing notification failed", error));
     return response.status(200).json(result);
-  } catch(error:any){console.error('Marketing API failed',error);const message=clean(error?.message)||"تعذر تنفيذ العملية";const status=/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;return response.status(status).json({ok:false,error:message});}
+  } catch(error:any){
+    console.error('Marketing API failed', { code: error?.code, message: error?.message, resource: clean(request.query.resource) || null });
+    const message=clean(error?.message)||"تعذر تنفيذ العملية";
+    const databaseWait = ['55P03', '57014', '53300', 'MARKETING_MIGRATION_BUSY'].includes(String(error?.code || ''));
+    const status=error?.code==='MARKETING_SCHEMA_NOT_READY'?503:error?.code==='MARKETING_SCHEMA_UPGRADE_REQUIRED'?409:databaseWait?503:/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;
+    if (status===503) response.setHeader('Retry-After','2');
+    return response.status(status).json({
+      ok:false,
+      code: databaseWait ? 'MARKETING_DB_BUSY' : ['MARKETING_SCHEMA_NOT_READY','MARKETING_SCHEMA_UPGRADE_REQUIRED'].includes(String(error?.code)) ? error.code : undefined,
+      error: databaseWait ? 'تعذر الوصول إلى بيانات التسويق بسبب انشغال قاعدة البيانات مؤقتًا.' : message,
+    });
+  }
 }

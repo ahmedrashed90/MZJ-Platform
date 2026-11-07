@@ -15,13 +15,14 @@ type PackageForm = {
   cashDiscount: number;
   registrationFees: boolean;
   insurance: boolean;
+  insuranceDescription: string;
   issuanceFees: boolean;
   careText: string;
   deliveryHome: boolean;
   deliveryRegion: boolean;
 };
 
-const emptyForm: PackageForm = { id: "", name: "", categoryId: "", salesTypeId: "", price: 0, cashDiscount: 0, registrationFees: false, insurance: false, issuanceFees: false, careText: "", deliveryHome: false, deliveryRegion: false };
+const emptyForm: PackageForm = { id: "", name: "", categoryId: "", salesTypeId: "", price: 0, cashDiscount: 0, registrationFees: false, insurance: false, insuranceDescription: "", issuanceFees: false, careText: "", deliveryHome: false, deliveryRegion: false };
 
 function escapeHtml(value: unknown) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[character] || character));
@@ -95,6 +96,7 @@ export function PackagesPage() {
       cashDiscount: Number(row.cash_discount),
       registrationFees: row.registration_fees,
       insurance: row.insurance,
+      insuranceDescription: String(row.insurance_description || ""),
       issuanceFees: row.issuance_fees,
       careText: Array.isArray(row.care_features) ? row.care_features.join("\n") : "",
       deliveryHome: row.delivery_home,
@@ -124,7 +126,7 @@ export function PackagesPage() {
     const cards = filtered.map((row) => {
       const features = [
         row.registration_fees ? "رسوم التسجيل" : "",
-        row.insurance ? "التأمين" : "",
+        row.insurance ? `التأمين${row.insurance_description ? ` — ${row.insurance_description}` : ""}` : "",
         row.issuance_fees ? "رسوم الإصدار" : "",
         row.delivery_home ? "توصيل إلى باب البيت" : "",
         row.delivery_region ? "توصيل إلى المنطقة" : "",
@@ -155,7 +157,8 @@ export function PackagesPage() {
             <label><span>قيمة الباقة (ر.س)</span><input type="number" min={0} value={form.price} onChange={(event) => setForm({ ...form, price: Number(event.target.value) || 0 })} /></label>
             <label><span>خصم نقدي (%)</span><input type="number" min={0} max={100} value={form.cashDiscount} onChange={(event) => setForm({ ...form, cashDiscount: Number(event.target.value) || 0 })} /></label>
           </div>
-          <div className="marketing-package-options"><label><input type="checkbox" checked={form.registrationFees} onChange={(event) => setForm({ ...form, registrationFees: event.target.checked })} /><span>رسوم التسجيل</span></label><label><input type="checkbox" checked={form.insurance} onChange={(event) => setForm({ ...form, insurance: event.target.checked })} /><span>التأمين</span></label><label><input type="checkbox" checked={form.issuanceFees} onChange={(event) => setForm({ ...form, issuanceFees: event.target.checked })} /><span>رسوم الإصدار</span></label><label><input type="checkbox" checked={form.deliveryHome} onChange={(event) => setForm({ ...form, deliveryHome: event.target.checked })} /><span>إلى باب البيت</span></label><label><input type="checkbox" checked={form.deliveryRegion} onChange={(event) => setForm({ ...form, deliveryRegion: event.target.checked })} /><span>إلى المنطقة</span></label></div>
+          <div className="marketing-package-options"><label><input type="checkbox" checked={form.registrationFees} onChange={(event) => setForm({ ...form, registrationFees: event.target.checked })} /><span>رسوم التسجيل</span></label><label><input type="checkbox" checked={form.insurance} onChange={(event) => setForm({ ...form, insurance: event.target.checked, insuranceDescription: event.target.checked ? form.insuranceDescription : "" })} /><span>التأمين</span></label><label><input type="checkbox" checked={form.issuanceFees} onChange={(event) => setForm({ ...form, issuanceFees: event.target.checked })} /><span>رسوم الإصدار</span></label><label><input type="checkbox" checked={form.deliveryHome} onChange={(event) => setForm({ ...form, deliveryHome: event.target.checked })} /><span>إلى باب البيت</span></label><label><input type="checkbox" checked={form.deliveryRegion} onChange={(event) => setForm({ ...form, deliveryRegion: event.target.checked })} /><span>إلى المنطقة</span></label></div>
+          {form.insurance ? <label className="marketing-insurance-description"><span>وصف التأمين</span><textarea rows={3} value={form.insuranceDescription} onChange={(event) => setForm({ ...form, insuranceDescription: event.target.value })} placeholder="مثال: سنة ضد الغير - يتحمل العميل فرق السعر إذا زاد عن 2,000 ريال" /></label> : null}
           <label><span>العناية بالسيارة — كل ميزة في سطر</span><textarea rows={7} value={form.careText} onChange={(event) => setForm({ ...form, careText: event.target.value })} /></label>
           <div className="marketing-inline-actions"><button type="button" className="primary" disabled={busy} onClick={() => void save()}>{form.id ? <PencilSimple size={18} /> : <Plus size={18} />}{form.id ? "حفظ تعديلات الباقة" : "إنشاء الباقة"}</button>{form.id ? <button type="button" className="secondary" onClick={() => setForm({ ...emptyForm, categoryId: settings.categories[0]?.id || "", salesTypeId: settings.salesTypes[0]?.id || "" })}>إلغاء التعديل</button> : null}</div>
         </section>
@@ -166,7 +169,7 @@ export function PackagesPage() {
             <h3>{row.name}</h3>
             <strong className="marketing-package-price">{Number(row.price).toLocaleString("ar-SA-u-nu-latn")} <small>ر.س</small></strong>
             <p>خصم نقدي {Number(row.cash_discount).toLocaleString("ar-SA-u-nu-latn")}%</p>
-            <ul>{row.registration_fees ? <li>رسوم التسجيل</li> : null}{row.insurance ? <li>التأمين</li> : null}{row.issuance_fees ? <li>رسوم الإصدار</li> : null}{row.delivery_home ? <li>إلى باب البيت</li> : null}{row.delivery_region ? <li>إلى المنطقة</li> : null}{Array.isArray(row.care_features) ? row.care_features.map((item: string) => <li key={item}>{item}</li>) : null}</ul>
+            <ul>{row.registration_fees ? <li>رسوم التسجيل</li> : null}{row.insurance ? <li className="marketing-package-insurance"><span>التأمين</span>{row.insurance_description ? <small>{row.insurance_description}</small> : null}</li> : null}{row.issuance_fees ? <li>رسوم الإصدار</li> : null}{row.delivery_home ? <li>إلى باب البيت</li> : null}{row.delivery_region ? <li>إلى المنطقة</li> : null}{Array.isArray(row.care_features) ? row.care_features.map((item: string) => <li key={item}>{item}</li>) : null}</ul>
           </article>)}
           {!filtered.length ? <div className="marketing-empty"><Package size={34} />لا توجد باقات مطابقة.</div> : null}
         </section>

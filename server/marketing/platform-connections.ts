@@ -11,6 +11,7 @@ import {
   listPlatformConnections,
   loadYouTubePublishOptions,
   saveYouTubePublishSettings,
+  saveGoogleAdsAccountSelection,
   selectMetaPage,
   startPlatformOAuth,
   validatePlatformConnection,
@@ -41,9 +42,18 @@ function popupHtml(result: { provider: PlatformProvider; returnOrigin: string; r
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
+  if (request.method === "GET" && !clean(request.query.provider)) {
+    const started = Date.now();
+    response.once("finish", () => {
+      const elapsed = Date.now() - started;
+      if (elapsed >= 2500) console.warn(`[MZJ slow platform connections GET] ${elapsed} ms`);
+    });
+  }
   try {
     await ensureAccessControlSchema();
-    await ensureMarketingSchema();
+    // The first OAuth/write operation may upgrade provider tables, but a
+    // routine provider STATUS read must not obtain locks for migrations.
+    if (request.method !== "GET" || clean(request.query.provider)) await ensureMarketingSchema();
     const providerFromRoute = clean(request.query.provider);
     const user = providerFromRoute ? await getSessionUser(request) : await requireUser(request, response);
     if (!user) {
@@ -74,6 +84,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (action === "cancel_oauth_draft") return response.status(200).json(await cancelPlatformConnectionDraft(sql, user, body.provider));
     if (action === "validate") return response.status(200).json(await validatePlatformConnection(sql, user, request, body.provider));
     if (action === "disconnect") return response.status(200).json(await disconnectPlatformConnection(sql, user, body.provider));
+    if (action === "save_google_ads_accounts") return response.status(200).json(await saveGoogleAdsAccountSelection(sql, user, body.accountIds));
     if (action === "youtube_publish_options") return response.status(200).json(await loadYouTubePublishOptions(sql));
     if (action === "save_youtube_publish_settings") return response.status(200).json(await saveYouTubePublishSettings(sql, user, body.settings));
     return response.status(400).json({ ok: false, error: "الإجراء غير مدعوم" });

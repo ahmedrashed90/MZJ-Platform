@@ -210,7 +210,7 @@ insert into crm.customer_field_definitions(
 ('department_code','القسم','department',40,'{}'::text[],true,true,true,'[]'::jsonb,true,true),
 ('department_transfer','تحويل لقسم آخر','transfer',50,'{}'::text[],true,false,false,'[]'::jsonb,true,true),
 ('customer_name','اسم العميل','text',60,'{}'::text[],true,true,true,'[]'::jsonb,true,true),
-('phone','رقم الجوال','phone',70,'{}'::text[],true,true,true,'[]'::jsonb,true,true),
+('phone','رقم الجوال','phone',70,'{}'::text[],true,false,true,'[]'::jsonb,true,true),
 ('age','العمر','number',80,'{}'::text[],true,false,true,'[]'::jsonb,true,false),
 ('salary','الراتب','number',90,'{}'::text[],true,false,true,'[]'::jsonb,true,true),
 ('obligation','الالتزام إن وجد','number',100,'{}'::text[],true,false,true,'[]'::jsonb,true,true),

@@ -4,6 +4,9 @@ import { useAuth } from "../../auth/AuthContext";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import { downloadXlsx } from "../xlsx";
+import { hasPermission } from "../../systemAccess";
+import { CrmSheetLeadsImport } from "../components/CrmSheetLeadsImport";
 import type { CrmMeta } from "../types";
 
 const initialForm = {
@@ -22,7 +25,7 @@ const initialForm = {
 
 export function CrmManualLeadsPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<"add" | "list">("add");
+  const [tab, setTab] = useState<"add" | "list" | "lead">("add");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState("");
@@ -61,6 +64,7 @@ export function CrmManualLeadsPage() {
     }
   }
 
+  const canImportSheetLeads = hasPermission(user, "platform.superadmin");
   const currentUserService = user?.departmentCodes.includes("finance_sales") ? "finance" : user?.departmentCodes.includes("customer_service") ? "service" : user?.departmentCodes.includes("cash_sales") ? "cash" : "";
   const activeServiceKey = editingId ? form.serviceKey : currentUserService;
   const approvalAgents = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
@@ -99,7 +103,7 @@ export function CrmManualLeadsPage() {
     setForm({
       customerName: row.customer_name || "",
       phone: row.phone || "",
-      sourceCode: row.source_code || "branch",
+      sourceCode: "branch",
       serviceKey: row.service_key || (row.payment_type === "تمويل" ? "finance" : row.payment_type === "خدمة عملاء" ? "service" : "cash"),
       carName: row.car_name || "",
       carCategory: row.car_category || "",
@@ -142,15 +146,20 @@ export function CrmManualLeadsPage() {
 
   return (
     <div className="crm-page crm-manual-leads-page">
-      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
-        <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
-      </button></div>
+      {tab !== "lead" ? <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
+        <ArrowClockwise size={18} />{tab === "add" ? "تفريغ الحقول" : "تحديث"}
+      </button></div> : null}
 
       <div className="crm-department-tabs crm-inner-page-tabs">
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button>
+        {canImportSheetLeads ? <button className={tab === "lead" ? "active" : ""} onClick={() => setTab("lead")}><PlusCircle size={18} />إضافة ليد</button> : null}
         <button className={tab === "list" ? "active" : ""} onClick={() => { setTab("list"); void loadRows(); }}><UsersThree size={18} />عرض العملاء المسجلة</button>
       </div>
 
+      {canImportSheetLeads && tab === "add" && !editingId ? <div className="crm-form-actions crm-import-export-actions">
+        <button type="button" className="crm-secondary-button" onClick={() => downloadXlsx("MZJ-CRM-Leads-Template.xlsx", [{ "Full Name": "", "Phone Number": "", "Source": "السوق المفتوح" }], "إضافة العملاء", ["Full Name", "Phone Number", "Source"])}>تصدير قالب إضافة العملاء</button>
+        <button type="button" className="crm-secondary-button" onClick={() => setTab("lead")}>استيراد العملاء</button>
+      </div> : null}
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
       {tab === "add" ? (
@@ -159,7 +168,7 @@ export function CrmManualLeadsPage() {
           <div className="crm-form-grid crm-manual-form-grid">
             <label><span>اسم العميل</span><input value={form.customerName} onChange={(event) => set("customerName", event.target.value)} /></label>
             <label><span>رقم الجوال</span><input value={form.phone} onChange={(event) => set("phone", event.target.value)} placeholder="05xxxxxxxx" /></label>
-            <label><span>المصدر</span><select value={form.sourceCode} onChange={(event) => set("sourceCode", event.target.value)}>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>
+            <label><span>المصدر</span><select value="branch" disabled><option value="branch">{sourceLabel("branch")}</option></select></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(event) => set("carName", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الفئة</span><input value={form.carCategory} onChange={(event) => set("carCategory", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الموديل</span><input value={form.carModel} onChange={(event) => set("carModel", event.target.value)} placeholder="اختياري" /></label>
@@ -174,6 +183,8 @@ export function CrmManualLeadsPage() {
           </div>
         </section>
       ) : null}
+
+      {tab === "lead" && canImportSheetLeads ? <CrmSheetLeadsImport sourceNames={(meta?.sources || []).map(source => source.name)} /> : null}
 
       {tab === "list" ? (
         <section className="crm-panel crm-list-panel crm-manual-list-panel">

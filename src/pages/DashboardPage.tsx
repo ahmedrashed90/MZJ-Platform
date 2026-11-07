@@ -55,7 +55,7 @@ const MAIN_DASHBOARD_WIDGETS = [
   { id: "kpi:no-answer", label: "لم يتم الرد" },
   { id: "kpi:sold", label: "تم البيع" },
   { id: "analytics:new-customers", label: "العملاء الجدد" },
-  { id: "analytics:recent-conversations", label: "آخر المحادثات" },
+  { id: "analytics:representatives", label: "المناديب" },
   { id: "analytics:distribution", label: "توزيع العملاء حسب القسم" },
   { id: "summary:departments", label: "ملخص الإدارات" },
 ] as const;
@@ -78,7 +78,7 @@ const OPERATION_DASHBOARD_WIDGET_IDS = [
 
 const DEFAULT_DASHBOARD_WIDGET_ORDER = [...DEFAULT_MAIN_WIDGET_ORDER, ...OPERATION_DASHBOARD_WIDGET_IDS];
 
-const DASHBOARD_LAYOUT_STORAGE_VERSION = "v3";
+const DASHBOARD_LAYOUT_STORAGE_VERSION = "v4";
 type StoredDashboardLayout = { widgetOrder: string[]; hiddenMainWidgets: string[]; updatedAt: number };
 
 function normalizeDashboardWidgetOrder(value: unknown) {
@@ -86,7 +86,8 @@ function normalizeDashboardWidgetOrder(value: unknown) {
   const next: string[] = [];
   if (Array.isArray(value)) {
     for (const item of value) {
-      const id = String(item || "").trim();
+      const oldId = String(item || "").trim();
+      const id = oldId === "analytics:recent-conversations" ? "analytics:representatives" : oldId;
       if (allowed.has(id) && !next.includes(id)) next.push(id);
     }
   }
@@ -289,7 +290,7 @@ function KpiCard({
       <div className="kpi-copy">
         <h3>{title}</h3>
         <Value value={value} className="kpi-value" />
-        <span className="data-source">من قاعدة البيانات</span>
+        <span className="data-source">خلال الفترة المختارة</span>
       </div>
     </button>
   );
@@ -413,27 +414,40 @@ function riyadhDateKey(value: unknown) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
-function riyadhWeekStartKey() {
-  const todayKey = riyadhDateKey(new Date());
-  const [year, month, day] = todayKey.split("-").map(Number);
-  if (!year || !month || !day) return "";
-  const riyadhNoonAsUtc = new Date(Date.UTC(year, month - 1, day, 9));
-  const daysSinceMonday = (riyadhNoonAsUtc.getUTCDay() + 6) % 7;
-  riyadhNoonAsUtc.setUTCDate(riyadhNoonAsUtc.getUTCDate() - daysSinceMonday);
-  return riyadhNoonAsUtc.toISOString().slice(0, 10);
-}
-
 function isToday(value: unknown) {
   return riyadhDateKey(value) === riyadhDateKey(new Date());
 }
 
+function dashboardMonthRange(month: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
 function defaultDashboardRange() {
-  return { from: riyadhDateKey(new Date(Date.now() - 6 * 86400000)), to: riyadhDateKey(new Date()) };
+  // Calendar month in Saudi time, including its last day (not only days elapsed).
+  return dashboardMonthRange(riyadhDateKey(new Date()).slice(0, 7))!;
+}
+
+function dashboardRangeIsMonthly(range: { from: string; to: string }) {
+  if (!/^\d{4}-\d{2}-01$/.test(range.from) || range.to.slice(0, 7) !== range.from.slice(0, 7)) return false;
+  const lastDay = new Date(Date.UTC(Number(range.from.slice(0,4)), Number(range.from.slice(5,7)), 0)).getUTCDate();
+  return Number(range.to.slice(-2)) === lastDay;
+}
+
+function dashboardRangeIsWeekly(range: { from: string; to: string }) {
+  const start = Date.parse(`${range.from}T00:00:00Z`);
+  const end = Date.parse(`${range.to}T00:00:00Z`);
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start <= 6 * 86400000;
 }
 
 function dashboardRangeLabel(range: { from: string; to: string }) {
-  const defaultRange = defaultDashboardRange();
-  if (range.from === defaultRange.from && range.to === defaultRange.to) return "آخر 7 أيام";
+  if (dashboardRangeIsMonthly(range)) {
+    const [year, month] = range.from.slice(0, 7).split("-").map(Number);
+    return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", { month: "long", year: "numeric", timeZone: "Asia/Riyadh" })
+      .format(new Date(Date.UTC(year, month - 1, 15)));
+  }
   return `${range.from} — ${range.to}`;
 }
 
@@ -516,27 +530,36 @@ export function DashboardPage() {
       { name: "مبيعات الكاش", value: current.crm.cashSales ?? 0 },
       { name: "مبيعات التمويل", value: current.crm.financeSales ?? 0 },
       { name: "خدمة العملاء", value: current.crm.customerService ?? 0 },
+      { name: "غير مصنف", value: current.crm.otherCustomers ?? 0 },
     ].filter((item) => item.value > 0);
   }, [current]);
 
   const open = (title: string, rows: NonNullable<DetailPayload["rows"]>, subtitle?: string) => setDetails({ title, rows, subtitle });
 
-  async function allVisibleCrmLeads() {
+  async function allVisibleCrmLeads(salesInRange = false) {
     const departments = ["cash", "finance", "service"] as const;
     const results = await Promise.all(departments.map((department) => {
-      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1" });
+      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1", ...(salesInRange ? { salesInRange: "1" } : { dateBasis: "platform_dashboard" }) });
       return crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?${params.toString()}`);
     }));
+    // Match the platform headline's registration-period cohort and canonical phone key.
+    // Historical sales facts remain independent of this cohort.
+    const sorted = results.flatMap((result) => result.leads || []).sort((a, b) =>
+      String(b.registered_at || b.created_at || '').localeCompare(String(a.registered_at || a.created_at || '')));
     const unique = new Map<string, CrmLead>();
-    results.flatMap((result) => result.leads || []).forEach((lead) => unique.set(lead.id, lead));
+    for (const lead of sorted) {
+      const key = String(lead.phone_normalized || '').trim()
+        || String(lead.phone || '').replace(/\D/g, '') || lead.id;
+      if (!unique.has(key)) unique.set(key, lead);
+    }
     return [...unique.values()];
   }
 
-  async function openCrmList(title: string, subtitle: string, predicate: (lead: CrmLead) => boolean) {
+  async function openCrmList(title: string, subtitle: string, predicate: (lead: CrmLead) => boolean, salesInRange = false) {
     const requestId = ++detailsRequestId.current;
     setDetails({ title, subtitle, loading: true, leads: [] });
     try {
-      const leads = (await allVisibleCrmLeads()).filter(predicate);
+      const leads = (await allVisibleCrmLeads(salesInRange)).filter(predicate);
       if (detailsRequestId.current !== requestId) return;
       setDetails({ title, subtitle, leads: leads.map((lead) => ({ lead, department: dashboardDepartment(lead) })) });
     } catch (failure) {
@@ -547,9 +570,9 @@ export function DashboardPage() {
 
   async function openTrackingList(title: string, status: TrackingStatus) {
     const requestId = ++detailsRequestId.current;
-    setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
+    setDetails({ title, subtitle: "طلبات الفترة المختارة حسب الحالة", loading: true, trackingOrders: [] });
     try {
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false })}`);
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false, from: appliedRange.from, to: appliedRange.to })}`);
       if (detailsRequestId.current !== requestId) return;
       const trackingOrders = [...(payload.orders || [])].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
       setDetails({ title, subtitle: "اضغط على أي طلب لفتح تفاصيله داخل الداش بورد", trackingOrders });
@@ -598,6 +621,8 @@ export function DashboardPage() {
   const marketing = current?.marketing;
   const tracking = current?.tracking;
   const operations = current?.operations;
+  const agencyUnderDelivery = operations?.locations.find((location) => location.key === "agency")?.underDelivery ?? 0;
+  const dashboardActualTotal = operations?.inventory.actualTotal == null ? null : Math.max(0, operations.inventory.actualTotal - agencyUnderDelivery);
   const rangeInvalid = !draftRange.from || !draftRange.to || draftRange.from > draftRange.to;
 
   function applyDashboardRange() {
@@ -728,13 +753,14 @@ export function DashboardPage() {
                 <CalendarBlank size={19} /> {dashboardRangeLabel(appliedRange)}
               </button>
               {dateOpen ? <div className="dashboard-date-popover">
-                <header><strong>مدة بيانات الداش بورد</strong><span>اختر تاريخ البداية والنهاية</span></header>
+                <header><strong>مدة بيانات الداش بورد</strong><span>الشهر الميلادي كاملًا افتراضيًا، ويمكنك اختيار شهر آخر أو تحديد فترة مخصصة.</span></header>
+                <label className="dashboard-month-picker"><span>اختيار شهر</span><input type="month" value={dashboardRangeIsMonthly(draftRange) ? draftRange.from.slice(0, 7) : ""} onChange={(event) => { const range = dashboardMonthRange(event.target.value); if (range) setDraftRange(range); }} /></label>
                 <div className="dashboard-date-fields">
                   <label><span>من تاريخ</span><input type="date" value={draftRange.from} max={draftRange.to || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, from: event.target.value }))} /></label>
                   <label><span>إلى تاريخ</span><input type="date" value={draftRange.to} min={draftRange.from || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, to: event.target.value }))} /></label>
                 </div>
                 {rangeInvalid ? <p>تأكد أن تاريخ البداية يسبق تاريخ النهاية.</p> : null}
-                <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>آخر 7 أيام</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
+                <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>الشهر الحالي</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
               </div> : null}
             </div>
         </div>
@@ -753,10 +779,10 @@ export function DashboardPage() {
         ) : null}
 
         <DashboardUnifiedGrid order={effectiveWidgetOrder}>
-          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />)}
+          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("العملاء الفريدون", "العملاء المسجلون خلال الفترة المختارة ضمن نطاق صلاحياتك", () => true)} />)}
           {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
           {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
-          {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => leadStatus(lead) === "تم البيع")} />)}
+          {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء أصحاب معاملات بيع خلال الفترة المحددة، حتى لو تسجلوا في شهر سابق. رقم الكارت يحسب عدد السيارات المباعة.", () => true, true)} />)}
 
           {customizableMainWidget("analytics:new-customers", <article className="panel chart-panel">
             <h2>العملاء الجدد</h2>
@@ -780,37 +806,38 @@ export function DashboardPage() {
                   </ResponsiveContainer>
                 </div>
                 <div className="chart-summary">
-                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => void openCrmList("جدد هذا الأسبوع", "العملاء المسجلون منذ بداية الأسبوع الحالي", (lead) => riyadhDateKey(lead.registered_at || lead.created_at) >= riyadhWeekStartKey())} />
+                  <SmallMetric label={dashboardRangeIsMonthly(appliedRange) ? "جدد هذا الشهر" : dashboardRangeIsWeekly(appliedRange) ? "جدد هذا الأسبوع" : "جدد خلال الفترة"} value={crm?.newInRange ?? null} onClick={() => void openCrmList(dashboardRangeIsMonthly(appliedRange) ? "جدد هذا الشهر" : dashboardRangeIsWeekly(appliedRange) ? "جدد هذا الأسبوع" : "جدد خلال الفترة", "العملاء الجدد المسجلون داخل الفترة المختارة", (lead) => { const day = riyadhDateKey(lead.registered_at || lead.created_at); return day >= appliedRange.from && day <= appliedRange.to; })} />
                   <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => void openCrmList("جدد اليوم", "العملاء المسجلون اليوم", (lead) => isToday(lead.registered_at || lead.created_at))} />
                 </div>
               </>
             ) : <EmptyChart label="العملاء الجدد" />}
           </article>)}
 
-          {customizableMainWidget("analytics:recent-conversations", <article className="panel conversations-panel">
-            <h2>آخر المحادثات</h2>
-            {current?.connected && (crm?.recentConversations.length ?? 0) > 0 ? (
-              <div className="conversation-list">
-                {crm?.recentConversations.map((conversation) => (
-                  <button type="button" className="conversation-row" key={conversation.id} onClick={() => navigate(`/crm?department=${conversation.department}&lead=${encodeURIComponent(conversation.leadId || conversation.id)}`)}>
+          {customizableMainWidget("analytics:representatives", <article className="panel conversations-panel">
+            <h2>المناديب</h2>
+            {current?.connected && (crm?.representatives.length ?? 0) > 0 ? (
+              <div className="conversation-list dashboard-representatives-list">
+                {crm?.representatives.map((rep) => (
+                  <button type="button" className="conversation-row" key={rep.id || `unassigned:${rep.branch}`} onClick={() => void openCrmList(`${rep.name} — ${rep.branch}`, "عملاء المندوب ضمن فترة الداش بورد", lead => rep.id ? lead.assigned_to === rep.id : !lead.assigned_to)}>
                     <div className="conversation-avatar"><UserCircle size={27} weight="duotone" /></div>
-                    <div className="conversation-copy"><strong>{conversation.customerName}</strong><span>{conversation.preview || "بدون نص"}</span></div>
-                    <div className="conversation-meta"><span>{conversation.time}</span>{conversation.unreadCount > 0 ? <b>{conversation.unreadCount}</b> : null}</div>
+                    <div className="conversation-copy"><strong>{rep.name}</strong><span>{rep.branch}</span></div>
+                    <div className="conversation-meta"><strong>{numberFormatter.format(rep.customers)}</strong><span>عميل</span></div>
                   </button>
                 ))}
               </div>
-            ) : <EmptyChart label="آخر المحادثات" />}
+            ) : <EmptyChart label="المناديب" />}
           </article>)}
 
           {customizableMainWidget("analytics:distribution", <article className="panel distribution-panel">
             <h2>توزيع العملاء حسب القسم</h2>
+            <p className="dashboard-metric-definition">توزيع العملاء الفريدين حسب قسمهم الحالي؛ مجموع الأقسام مطابق لإجمالي العملاء.</p>
             {pieData.length > 0 ? (
               <div className="distribution-content">
                 <div className="pie-wrap">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={pieData} dataKey="value" nameKey="name" innerRadius="57%" outerRadius="88%" paddingAngle={1}>
-                        {pieData.map((entry, index) => <Cell key={entry.name} fill={["#5b291f", "#e88b63", "#c3a28d"][index]} />)}
+                        {pieData.map((entry, index) => <Cell key={entry.name} fill={["#5b291f", "#e88b63", "#c3a28d", "#ae937e"][index]} />)}
                       </Pie>
                     </PieChart>
                   </ResponsiveContainer>
@@ -818,8 +845,8 @@ export function DashboardPage() {
                 </div>
                 <div className="distribution-legend">
                   {pieData.map((entry, index) => (
-                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name}`, (lead) => dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash"))}>
-                      <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d"][index] }} />
+                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name} من نفس إجمالي العملاء الفريدين`, (lead) => (entry.name === "غير مصنف" ? !["cash_sales","wholesale","wholesale_sales","finance_sales","call_center","customer_service"].includes(String(lead.department_code || "")) : dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash")))}>
+                      <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d", "#ae937e"][index] }} />
                       <span>{entry.name}</span>
                       <strong>{numberFormatter.format(entry.value)}</strong>
                     </button>
@@ -833,19 +860,19 @@ export function DashboardPage() {
             <h2>ملخص الإدارات</h2>
             <div className="department-grid">
               <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
-                { label: "العملاء", value: crm?.cashSales ?? null },
+                { label: "إجمالي العملاء", value: crm?.cashSales ?? null },
                 { label: "تم البيع", value: crm?.cashSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
-              ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
+              ]} onOpen={() => void openCrmList("مبيعات الكاش", "عملاء مبيعات الكاش المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "cash")} />
               <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
-                { label: "العملاء", value: crm?.financeSales ?? null },
+                { label: "إجمالي العملاء", value: crm?.financeSales ?? null },
                 { label: "تم البيع", value: crm?.financeSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
-              ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
+              ]} onOpen={() => void openCrmList("مبيعات التمويل", "عملاء مبيعات التمويل المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "finance")} />
               <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
-                { label: "العملاء", value: crm?.customerService ?? null },
+                { label: "إجمالي العملاء", value: crm?.customerService ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
-              ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
+              ]} onOpen={() => void openCrmList("خدمة العملاء", "عملاء خدمة العملاء المسجلون في الفترة", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
                 { label: "الحملات", value: marketing?.campaigns ?? null },
                 { label: "الأجندات", value: marketing?.agendas ?? null },
@@ -862,12 +889,12 @@ export function DashboardPage() {
             {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" badge={operations?.inventory.actualTotal ?? null} className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
-                <Value value={operations?.inventory.actualTotal ?? null} />
+                <Value value={dashboardActualTotal} />
               </div>
               <div className="inventory-tags">
-                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "actual_total", metricName: "الإجمالي الفعلي" })} />
+                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "agency_inventory", metricName: "مخزون الوكالة" })} />
                 <OperationMetric label="حجز" value={operations?.inventory.reserved ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "reserved", metricName: "حجز", branchesOnly: true })} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع" })} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع", branchesOnly: true })} />
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>

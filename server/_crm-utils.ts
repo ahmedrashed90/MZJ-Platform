@@ -13,6 +13,27 @@ export function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+/** Preserve the first CRM source and append later platform interactions once. */
+export function appendCrmSourceHistory(value: unknown, sourceCode: string, sourceName: string, occurredAt: string) {
+  const history = Array.isArray(value) ? [...value] : [];
+  const normalizedCode = clean(sourceCode).toLowerCase();
+  const normalizedName = clean(sourceName).toLowerCase();
+  if (!normalizedCode) return history;
+  const exists = history.some((item) => {
+    if (typeof item === "string") {
+      const text = clean(item).toLowerCase();
+      return text === normalizedCode || text === normalizedName;
+    }
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    const code = [record.sourceCode, record.source_code, record.source, record.name, record.label]
+      .map(clean).find(Boolean)?.toLowerCase() || "";
+    return code === normalizedCode || code === normalizedName;
+  });
+  if (!exists) history.push({ source: sourceCode, sourceCode, sourceName, at: occurredAt });
+  return history;
+}
+
 export function departmentKey(value: unknown) {
   const raw = clean(value).toLowerCase();
   if (raw.includes("call_center") || raw.includes("callcenter") || raw.includes("كول")) return "finance";
@@ -28,9 +49,20 @@ export function departmentCodeFromKey(key: string) {
 }
 
 export function branchForDepartment(key: string) {
-  if (key === "finance") return "online";
+  if (key === "finance") return "";
   if (key === "service") return "customer_service";
   return "";
+}
+
+export function distributionSourceCode(value: unknown) {
+  const source = clean(value).toLowerCase();
+  if (source === "facebook_post") return "facebook";
+  if (source === "instagram_post") return "instagram";
+  if (source === "facebook_lead" || source === "fb") return "facebook";
+  if (source === "instagram_lead" || source === "ig") return "instagram";
+  if (source === "snapchat_lead") return "snapchat";
+  if (source === "tiktok_lead") return "tiktok";
+  return source;
 }
 
 export function isCrmManager(user: SessionUser) {
@@ -57,23 +89,67 @@ export type Scope = {
   includeAssigned: boolean;
   departmentCodes: string[];
   branchCodes: string[];
+  branchRestricted: boolean;
+  branchManager: boolean;
   userId: string;
   callCenterOnly: boolean;
 };
 
 export function userScope(user: SessionUser): Scope {
   const access = getSystemAccess(user, "crm");
-  const all = access.dataScope === "all";
-  const includeAssigned = ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
-  const allCrmDepartments = ["cash_sales", "finance_sales", "customer_service", "call_center"];
-  const departmentCodes = ["branch", "branches"].includes(access.dataScope)
+  const isBranchManager = !hasPermission(user, "platform.superadmin") && (
+    access.roleCode === "branch_manager"
+    || (user.roleCodes.includes("branch_manager") && !["admin", "superadmin"].includes(access.roleCode || ""))
+  );
+  // A branch manager's former unrestricted/supplementary scope must never
+  // override the currently assigned PRIMARY CRM branch after a transfer.
+  const all = access.dataScope === "all" && !isBranchManager;
+  const includeAssigned = !isBranchManager && ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
+  const allCrmDepartments = ["cash_sales", "finance_sales", "customer_service", "call_center", "wholesale", "wholesale_sales"];
+  const departmentCodes = isBranchManager || ["branch", "branches"].includes(access.dataScope)
     ? allCrmDepartments
     : ["department", "departments", "branch_and_department"].includes(access.dataScope)
       ? access.departmentCodes
       : [];
-  const branchCodes = ["branch", "branches", "branch_and_department"].includes(access.dataScope) ? access.branchCodes : [];
+  const branchRestricted = isBranchManager || ["branch", "branches", "branch_and_department"].includes(access.dataScope);
+  // The manager's current PRIMARY CRM branch is authoritative. Historical/global
+  // branch assignments must not keep a transferred manager able to view old staff.
+  const branchCodes = branchRestricted ? (isBranchManager ? access.branchCodes.slice(0, 1) : access.branchCodes) : [];
   const callCenterOnly = includeAssigned && access.departmentCodes.includes("call_center") && !access.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
-  return { all, includeAssigned, departmentCodes, branchCodes, userId: user.id, callCenterOnly };
+  return { all, includeAssigned, departmentCodes, branchCodes, branchRestricted, branchManager: isBranchManager, userId: user.id, callCenterOnly };
+}
+
+/** CRM lead access follows the assigned rep's CURRENT primary CRM branch.
+ * Old l.branch_code is a historical snapshot and must not grant managers access.
+ * Unassigned leads use their current stored branch and stay visible to its manager.
+ */
+export function currentCrmLeadBranchSql(sql: ReturnType<typeof getSql>) {
+  return sql`(
+    case when l.assigned_to is null then nullif(l.branch_code,'')
+    else coalesce(
+      (select b.code from core.user_system_branches usb
+       join core.branches b on b.id=usb.branch_id and b.is_active=true
+       where usb.user_id=l.assigned_to and usb.system_code='crm'
+       order by usb.is_primary desc,b.sort_order,b.name limit 1),
+      (select b.code from core.user_branches ub
+       join core.branches b on b.id=ub.branch_id and b.is_active=true
+       where ub.user_id=l.assigned_to and not exists (
+         select 1 from core.user_system_branches usb0
+         where usb0.user_id=l.assigned_to and usb0.system_code='crm'
+       ) order by ub.is_primary desc,b.sort_order,b.name limit 1)
+    ) end
+  )`;
+}
+
+export function crmLeadScopeSql(sql: ReturnType<typeof getSql>, scope: Scope) {
+  const branch = currentCrmLeadBranchSql(sql);
+  return sql`(
+    ${scope.all}::boolean
+    or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+    or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+    or (l.department_code=any(${scope.departmentCodes}::text[])
+        and (not ${scope.branchRestricted}::boolean or ${branch}=any(${scope.branchCodes}::text[])))
+  )`;
 }
 
 export function parseBody(request: VercelRequest): Record<string, any> {
@@ -110,11 +186,13 @@ export function sourceLabel(source: string, fallback = "") {
     facebook: "فيسبوك", fb: "فيسبوك", meta: "فيسبوك", facebook_chat: "فيسبوك",
     instagram: "إنستجرام", ig: "إنستجرام", insta: "إنستجرام", instagram_chat: "إنستجرام",
     tiktok: "تيك توك", tt: "تيك توك", tik_tok: "تيك توك", tiktok_chat: "تيك توك", tiktok_snapchat: "تيك توك ليد وسناب شات ليد",
+    facebook_lead: "فيسبوك ليد", instagram_lead: "إنستجرام ليد", meta_lead: "ميتا ليد",
     tiktok_lead: "تيك توك ليد", snapchat: "سناب شات", snap: "سناب شات", snapchat_lead: "سناب شات ليد",
     whatsapp: "واتساب", wa: "واتساب", mersal: "واتساب",
     installment_calculator: "حاسبة التقسيط", installment: "حاسبة التقسيط", calculator: "حاسبة التقسيط",
     haraj: "موقع حراج", other_website: "موقع آخر", branch: "خلال الفرع", friend: "صديق",
     unified_number: "اتصال الرقم الموحد", manual: "إدخال يدوي", manual_entry: "إدخال يدوي",
+    qr: "QR", cash_qr: "QR", sheet_lead: "ليد - استيراد شيت",
     فيسبوك: "فيسبوك", فيس_بوك: "فيسبوك", انستجرام: "إنستجرام", انستغرام: "إنستجرام",
     تيك_توك: "تيك توك", تيك_توك_ليد: "تيك توك ليد", سناب_شات: "سناب شات", سناب_شات_ليد: "سناب شات ليد",
     واتساب: "واتساب", حاسبه_التقسيط: "حاسبة التقسيط", موقع_حراج: "موقع حراج", موقع_اخر: "موقع آخر",
@@ -168,99 +246,455 @@ type AssignmentResult = {
   ruleName?: string;
 };
 
-async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
+async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string, requirePhysicalBranch = false): Promise<AssignmentResult | null> {
   const sql = getSql();
-  const [rule] = await sql<any[]>`
-    select r.*, r.id::text,
-      state.last_user_id::text,
-      state.updated_at as last_distribution_at
-    from crm.assignment_rules r
-    left join crm.assignment_state state on state.pool_key = concat('rule:', r.id::text)
-    where r.is_active = true
-      and r.department_code = ${departmentCode}
-      and (r.branch_code is null or r.branch_code = ${requestedBranch || null})
-      and (coalesce(array_length(r.source_codes, 1), 0) = 0 or ${sourceCode || ""} = any(r.source_codes))
-    order by
-      case when r.branch_code = ${requestedBranch || null} then 0 else 1 end,
-      case when coalesce(array_length(r.source_codes, 1), 0) > 0 then 0 else 1 end,
-      r.sort_order,
-      r.created_at
-    limit 1
-  `;
-  if (!rule) return null;
+  const requested = clean(requestedBranch);
+  const source = clean(sourceCode);
+  const routingSource = distributionSourceCode(source);
 
-  const candidates = await sql<any[]>`
-    select u.id::text, u.full_name, m.priority, m.assignment_count
-    from crm.assignment_rule_members m
-    join core.users u on u.id = m.user_id
-    where m.rule_id = ${rule.id}::uuid
-      and m.is_active = true
-      and u.is_active = true
-      and u.can_receive_leads = true
-    order by m.priority, u.full_name, u.id::text
+  const matchingRules = await sql<any[]>`
+    select r.id::text,r.name,r.branch_code,r.source_codes,r.assignment_mode,r.prevent_consecutive,r.sort_order,r.created_at,
+      case when ${requested || null}::text is not null and r.branch_code = ${requested || null} then 0
+           when ${requested || null}::text is not null and r.branch_code is null then 1
+           else 0 end as branch_specificity,
+      case when coalesce(array_length(r.source_codes,1),0) > 0 then 0 else 1 end as source_specificity
+    from crm.assignment_rules r
+    where r.is_active=true
+      and r.department_code=${departmentCode}
+      and (${requested || null}::text is null or r.branch_code is null or r.branch_code=${requested || null})
+      and (${!requirePhysicalBranch} or r.branch_code is null or r.branch_code not in ('online','website'))
+      and (coalesce(array_length(r.source_codes,1),0)=0 or ${source}=any(r.source_codes) or ${routingSource}=any(r.source_codes))
+    order by branch_specificity,source_specificity,r.sort_order,r.created_at,r.id
   `;
+  if (!matchingRules.length) return null;
+
+  const firstRule = matchingRules[0];
+  const activeRules = matchingRules.filter((rule) =>
+    Number(rule.branch_specificity) === Number(firstRule.branch_specificity)
+    && Number(rule.source_specificity) === Number(firstRule.source_specificity)
+    && Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)
+    && String(rule.assignment_mode || "round_robin") === String(firstRule.assignment_mode || "round_robin")
+  );
+  const ruleIds = activeRules.map((rule) => rule.id);
+  const ruleById = new Map(activeRules.map((rule) => [rule.id, rule]));
+
+  const candidateRows = await sql<any[]>`
+    select m.rule_id::text,u.id::text as user_id,u.full_name,m.priority,m.assignment_count,m.allocation_percentage,m.weighted_assignment_count,
+      r.branch_code as rule_branch_code,r.sort_order as rule_sort_order,r.assignment_mode as rule_assignment_mode,
+      coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+            and (${!requirePhysicalBranch} or b.code not in ('online','website'))
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+            and (${!requirePhysicalBranch} or b.code not in ('online','website'))
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) as primary_branch_code
+    from crm.assignment_rule_members m
+    join crm.assignment_rules r on r.id=m.rule_id
+    join core.users u on u.id=m.user_id
+    where m.rule_id=any(${ruleIds}::uuid[])
+      and m.is_active=true
+      and u.is_active=true
+      and u.can_receive_leads=true
+      and (
+        exists (
+          select 1
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm' and d.code=${departmentCode}
+        )
+        or (
+          not exists (select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code=${departmentCode}
+          )
+        )
+      )
+      and (
+        r.branch_code is null
+        or exists (
+          select 1
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm' and b.code=r.branch_code
+        )
+        or (
+          not exists (select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_branches ub
+            join core.branches b on b.id=ub.branch_id and b.is_active=true
+            where ub.user_id=u.id and b.code=r.branch_code
+          )
+        )
+      )
+      and (
+        ${requested || null}::text is null
+        or exists (
+          select 1
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm' and b.code=${requested || null}
+        )
+        or (
+          not exists (select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_branches ub
+            join core.branches b on b.id=ub.branch_id and b.is_active=true
+            where ub.user_id=u.id and b.code=${requested || null}
+          )
+        )
+      )
+    order by r.sort_order,m.priority,u.full_name,u.id::text,m.rule_id::text
+  `;
+  if (!candidateRows.length) return null;
+
+  const candidateByUser = new Map<string, any>();
+  for (const candidate of candidateRows) {
+    const existing = candidateByUser.get(candidate.user_id);
+    if (!existing || (candidate.primary_branch_code && candidate.rule_branch_code === candidate.primary_branch_code && existing.rule_branch_code !== existing.primary_branch_code)) {
+      candidateByUser.set(candidate.user_id, candidate);
+    }
+  }
+  const candidates = [...candidateByUser.values()].sort((left, right) => {
+    const sortOrder = Number(left.rule_sort_order || 0) - Number(right.rule_sort_order || 0);
+    if (sortOrder) return sortOrder;
+    const priority = Number(left.priority || 0) - Number(right.priority || 0);
+    if (priority) return priority;
+    return String(left.full_name || '').localeCompare(String(right.full_name || ''), 'ar');
+  });
   if (!candidates.length) return null;
 
-  const lastIndex = candidates.findIndex((candidate) => candidate.id === rule.last_user_id);
-  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  const poolKey = `rule:${rule.id}`;
+  const percentageMode = candidates.every((candidate) => (ruleById.get(candidate.rule_id) || firstRule).assignment_mode === "percentage");
+  const percentageCandidates = percentageMode
+    ? candidates.filter((candidate) => Number(candidate.allocation_percentage || 0) > 0)
+    : [];
+  let selected: any;
+  let selectedRule: any;
+  let poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
+  if (percentageMode) {
+    if (!percentageCandidates.length) return null;
+    const totalWeight = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.allocation_percentage || 0), 0);
+    const totalAssigned = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.weighted_assignment_count || 0), 0);
+    selected = percentageCandidates.slice().sort((left, right) => {
+      const leftDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(left.allocation_percentage || 0) / totalWeight) - Number(left.weighted_assignment_count || 0) : 0;
+      const rightDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(right.allocation_percentage || 0) / totalWeight) - Number(right.weighted_assignment_count || 0) : 0;
+      return rightDeficit - leftDeficit
+        || Number(left.rule_sort_order || 0) - Number(right.rule_sort_order || 0)
+        || Number(left.priority || 0) - Number(right.priority || 0)
+        || String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar");
+    })[0];
+    selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  } else {
+    const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
+    const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+    selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
+    selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  }
+  const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested;
+  if (requirePhysicalBranch && (!selectedBranch || ['online', 'website'].includes(selectedBranch))) return null;
+
   await sql`
     insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
-    values (${poolKey},${selected.id}::uuid,${requestedBranch || null},now())
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch || null},now())
+    on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${`rule:${selected.rule_id}`},${selected.user_id}::uuid,${selectedBranch || null},now())
     on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
   `;
   await sql`
     update crm.assignment_rule_members
-    set assignment_count=assignment_count+1,last_assigned_at=now(),updated_at=now()
-    where rule_id=${rule.id}::uuid and user_id=${selected.id}::uuid
+    set assignment_count=assignment_count+1,
+        weighted_assignment_count=case when ${selectedRule.assignment_mode || "round_robin"}='percentage' then weighted_assignment_count+1 else weighted_assignment_count end,
+        last_assigned_at=now(),updated_at=now()
+    where rule_id=${selected.rule_id}::uuid and user_id=${selected.user_id}::uuid
   `;
   await sql`
     insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
-    values (${rule.id}::uuid,${departmentCode},${requestedBranch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},${rule.assignment_mode || "round_robin"})
+    values (${selected.rule_id}::uuid,${departmentCode},${selectedBranch || null},${source || null},${selected.user_id}::uuid,${selected.full_name},${selectedRule.assignment_mode || "round_robin"})
   `;
-  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: requestedBranch, ruleId: rule.id, ruleName: rule.name };
+  return {
+    assignedTo: selected.user_id,
+    assignedName: selected.full_name,
+    branchCode: selectedBranch,
+    ruleId: selected.rule_id,
+    ruleName: selectedRule.name,
+  };
 }
 
-async function fallbackAssignment(departmentCode: string, branch: string, sourceCode: string): Promise<AssignmentResult> {
+// Only for external finance imports: choose among the CRM's active finance rules
+// without forcing the online branch. Keep all other assignment paths unchanged.
+export async function chooseFinanceImportAssignment(sourceCode: string, requirePhysicalBranch = false) {
+  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode, requirePhysicalBranch);
+  if (configured?.assignedTo) return configured;
+
+  // Import-only fallback. Use the actual active CRM finance representatives and
+  // their CRM branches, never force an online branch or an unrelated department.
+  // Other assignment pathways continue to use their existing configured rules.
   const sql = getSql();
-  const candidates = await sql<{ id: string; full_name: string; branch_code: string | null }[]>`
-    select u.id::text, u.full_name, min(b.code) as branch_code
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (select b.code from core.user_system_branches usb
+         join core.branches b on b.id=usb.branch_id and b.is_active=true
+         where usb.user_id=u.id and usb.system_code='crm'
+           and (${!requirePhysicalBranch} or b.code not in ('online','website'))
+         order by usb.is_primary desc,b.sort_order,b.name limit 1),
+        (select b.code from core.user_branches ub
+         join core.branches b on b.id=ub.branch_id and b.is_active=true
+         where ub.user_id=u.id
+           and (${!requirePhysicalBranch} or b.code not in ('online','website'))
+           and not exists (select 1 from core.user_system_branches usb0
+                           where usb0.user_id=u.id and usb0.system_code='crm')
+         order by ub.is_primary desc,b.sort_order,b.name limit 1)
+      ) as branch_code
     from core.users u
-    join core.user_departments ud on ud.user_id = u.id
-    join core.departments d on d.id = ud.department_id and d.code = ${departmentCode}
-    left join core.user_branches ub on ub.user_id = u.id
-    left join core.branches b on b.id = ub.branch_id
-    where u.is_active = true and u.can_receive_leads = true
-      and (${branch || null}::text is null or b.code = ${branch || null})
-    group by u.id
-    order by u.full_name, u.id
+    where u.is_active=true and u.can_receive_leads=true
+      and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+      and (
+        exists (select 1 from core.user_system_departments usd
+                join core.departments d on d.id=usd.department_id
+                  and d.system_code='crm' and d.is_active=true
+                where usd.user_id=u.id and usd.system_code='crm' and d.code='finance_sales')
+        or (
+          not exists (select 1 from core.user_system_departments usd0
+                      where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (select 1 from core.user_departments ud
+                      join core.departments d on d.id=ud.department_id and d.is_active=true
+                      where ud.user_id=u.id and d.code='finance_sales')
+        )
+      )
+    order by u.full_name,u.id::text
   `;
-  if (!candidates.length) return { assignedTo: null, assignedName: "", branchCode: branch };
-  const poolKey = `sales:${departmentCode}:${branch || "all"}`;
-  const [state] = await sql<{ last_user_id: string | null }[]>`select last_user_id::text from crm.assignment_state where pool_key = ${poolKey}`;
-  const lastIndex = candidates.findIndex((candidate) => candidate.id === state?.last_user_id);
-  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code) && !['website', ...(requirePhysicalBranch ? ['online'] : [])].includes(clean(candidate.branch_code)));
+  if (!eligible.length) {
+    console.error('Finance lead import has no eligible active finance representative', { sourceCode });
+    return { assignedTo: null, assignedName: "", branchCode: "" };
+  }
+
+  const poolKey = 'finance_import:finance_sales:all_branches';
+  const [state] = await sql<any[]>`
+    select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1
+  `;
+  const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];
+  const selectedBranch = clean(selected.branch_code);
   await sql`
-    insert into crm.assignment_state(pool_key, last_user_id, last_branch_code, updated_at)
-    values (${poolKey}, ${selected.id}::uuid, ${selected.branch_code || branch || null}, now())
-    on conflict (pool_key) do update set last_user_id = excluded.last_user_id, last_branch_code = excluded.last_branch_code, updated_at = now()
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch},now())
+    on conflict (pool_key) do update set last_user_id=excluded.last_user_id,
+      last_branch_code=excluded.last_branch_code,updated_at=now()
   `;
   await sql`
-    insert into crm.assignment_logs(department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
-    values (${departmentCode},${selected.branch_code || branch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},'round_robin')
+    insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action)
+    values (null,'finance_sales',${selectedBranch},${sourceCode},${selected.user_id}::uuid,
+      ${selected.full_name},'round_robin','finance_import_fallback')
   `;
-  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: selected.branch_code || branch };
+  return { assignedTo: selected.user_id, assignedName: selected.full_name,
+           branchCode: selectedBranch, ruleId: null, ruleName: 'Finance import fallback' };
 }
 
 export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
   const department = departmentCodeFromKey(serviceKey);
   const branch = requestedBranch || branchForDepartment(serviceKey);
-  return (await chooseFromConfiguredRule(department, branch, sourceCode)) || fallbackAssignment(department, branch, sourceCode);
+  const configured = await chooseFromConfiguredRule(department, branch, sourceCode);
+  return configured || { assignedTo: null, assignedName: "", branchCode: branch };
 }
 
-export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
+/**
+ * Unified-name/phone spreadsheet imports use the actual CRM routing rules and
+ * the representative's real CRM branch. They never use the removed online branch
+ * or change another lead's existing assignment.
+ */
+export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance", sourceCode = "sheet_lead"): Promise<AssignmentResult> {
+  const departmentCode = serviceKey === "finance" ? "finance_sales" : "cash_sales";
+  const requirePhysicalBranch = sourceCode !== 'sheet_lead';
+  if (serviceKey === "finance") {
+    const result = await chooseFinanceImportAssignment(sourceCode, requirePhysicalBranch);
+    return ["online", "website"].includes(clean(result.branchCode))
+      ? { assignedTo: null, assignedName: "", branchCode: "" }
+      : result;
+  }
+  const configured = await chooseFromConfiguredRule(departmentCode, "", sourceCode, requirePhysicalBranch);
+  if (configured?.assignedTo) {
+    return ["online", "website"].includes(clean(configured.branchCode))
+      ? { assignedTo: null, assignedName: "", branchCode: "" }
+      : configured;
+  }
+  const sql = getSql();
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (select b.code from core.user_system_branches usb
+         join core.branches b on b.id=usb.branch_id and b.is_active=true and b.code not in ('online','website')
+         where usb.user_id=u.id and usb.system_code='crm'
+         order by usb.is_primary desc,b.sort_order,b.name limit 1),
+        (select b.code from core.user_branches ub
+         join core.branches b on b.id=ub.branch_id and b.is_active=true and b.code not in ('online','website')
+         where ub.user_id=u.id and not exists (
+           select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm'
+         ) order by ub.is_primary desc,b.sort_order,b.name limit 1)
+      ) as branch_code
+    from core.users u
+    where u.is_active=true and coalesce(u.is_archived,false)=false and u.can_receive_leads=true
+      and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+      and (
+        exists (
+          select 1 from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.is_active=true and d.system_code='crm'
+          where usd.user_id=u.id and usd.system_code='crm' and d.code='cash_sales'
+        ) or (
+          not exists (select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (
+            select 1 from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code='cash_sales'
+          )
+        )
+      )
+    order by u.full_name,u.id::text
+  `;
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code));
+  // Marketing form intake can use the same active finance sales representatives
+  // when there is no eligible cash representative. Sheet imports keep their
+  // original cash-only behavior unchanged.
+  if (!eligible.length && sourceCode !== 'sheet_lead') return chooseFinanceImportAssignment(sourceCode);
+  if (!eligible.length) return { assignedTo: null, assignedName: "", branchCode: "" };
+  const poolKey = sourceCode === 'sheet_lead' ? 'sheet_import:cash_sales:all_branches' : 'marketing_form:cash_sales:all_branches';
+  const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
+  const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];
+  const branchCode = clean(selected.branch_code);
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.user_id}::uuid,${branchCode},now())
+    on conflict(pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action)
+    values (null,'cash_sales',${branchCode},${sourceCode},${selected.user_id}::uuid,${selected.full_name},'round_robin','sheet_import_fallback')
+  `;
+  return { assignedTo: selected.user_id, assignedName: selected.full_name, branchCode, ruleId: null, ruleName: "Sheet import fallback" };
+}
+
+/**
+ * Public cash-register / QR intake keeps Website as the CRM source, but Website
+ * is not a routing branch. Route the lead independently through cash sales:
+ * first honor an explicit/generic QR-compatible cash assignment rule, then fall
+ * back to one round-robin pool of active cash-sales representatives. The branch
+ * is always taken from the selected representative's real CRM branch.
+ */
+export async function chooseCashQrAssignment(): Promise<AssignmentResult> {
+  const configured = await chooseFromConfiguredRule("cash_sales", "", "qr");
+  if (configured?.assignedTo && clean(configured.branchCode) && clean(configured.branchCode) !== "website") {
+    return configured;
+  }
+
+  const sql = getSql();
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true and b.code<>'website'
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true and b.code<>'website'
+          where ub.user_id=u.id
+            and not exists (
+              select 1 from core.user_system_branches usb0
+              where usb0.user_id=u.id and usb0.system_code='crm'
+            )
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) as branch_code
+    from core.users u
+    where u.is_active=true
+      and u.can_receive_leads=true
+      and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+      and (
+        exists (
+          select 1
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm' and d.code='cash_sales'
+        )
+        or (
+          not exists (select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code='cash_sales'
+          )
+        )
+      )
+    order by u.full_name,u.id::text
+  `;
+
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code));
+  if (!eligible.length) return { assignedTo: null, assignedName: "", branchCode: "" };
+
+  const poolKey = "cash_qr:cash_sales:all_branches";
+  const [state] = await sql<any[]>`
+    select last_user_id::text
+    from crm.assignment_state
+    where pool_key=${poolKey}
+    limit 1
+  `;
+  const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];
+  const selectedBranch = clean(selected.branch_code);
+
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch},now())
+    on conflict (pool_key) do update set
+      last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_logs(
+      rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action
+    ) values (
+      null,'cash_sales',${selectedBranch},'website',${selected.user_id}::uuid,${selected.full_name},'round_robin','cash_qr_fallback'
+    )
+  `;
+
+  return {
+    assignedTo: selected.user_id,
+    assignedName: selected.full_name,
+    branchCode: selectedBranch,
+    ruleId: null,
+    ruleName: "Cash QR direct round robin",
+  };
+}
+
+export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "") {
   const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
-  if (configured) return configured;
-  const fallback = await fallbackAssignment("call_center", "", sourceCode);
-  return { assignedTo: fallback.assignedTo, assignedName: fallback.assignedName };
+  return configured ? { assignedTo: configured.assignedTo, assignedName: configured.assignedName } : { assignedTo: null, assignedName: "" };
 }

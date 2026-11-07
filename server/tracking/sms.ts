@@ -5,7 +5,11 @@ import { requireTrackingUser } from "../_tracking-auth.js";
 import { hasPermission } from "../_access-control.js";
 import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
+import { ensureCrmSchema } from "../_crm-schema.js";
+import { queueOwnerWelcomeSms } from "../_owners-welcome.js";
+import { ensureOwnerMemberByPhone } from "../_owners.js";
 import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-utils.js";
+import { effectiveTrackingSmsTemplate, renderTrackingSmsTemplate } from "../_tracking-message-templates.js";
 
 function formatMoney(value: unknown) {
   const number = Number(value || 0);
@@ -18,23 +22,31 @@ function requestOrigin(request: VercelRequest) {
   return `${protocol}://${host}`;
 }
 
-function messageForStage(order: any, vehicle: any, stage: any, link: string) {
+function messageForStage(order: any, vehicle: any, stage: any, link: string, club?: { personalCode?: unknown; portalUrl?: unknown }) {
   const customer = clean(order.customer_name) || "عميلنا العزيز";
-  if (Number(stage.sort_order) === 1) {
-    return `عميلنا العزيز / ${customer}\nمرحباً بكم في مجموعة محمد ذعار العجمي للسيارات\nتم تسجيل طلب شرائكم بنجاح ✅\nعدد السيارات: ${Number(order.vehicles_count || 1)}\nالإجمالي قبل الضريبة: ${formatMoney(order.subtotal_before_tax)} ر.س\nقيمة الضريبة: ${formatMoney(order.tax_value)} ر.س\nالإجمالي شامل الضريبة: ${formatMoney(order.total_incl_vat)} ر.س\nيمكنكم متابعة حالة الطلب عبر الرابط التالي:\n${link}\nمع مجموعة محمد ذعار العجمي للسيارات أنت نجم الطريق ⭐\n📞 920014635\nرابط التواصل واتساب https://api.whatsapp.com/send?phone=966920014635`;
-  }
-  if (Number(stage.sort_order) === 9) {
-    return `عميلنا العزيز / ${customer}\nيسعدنا إبلاغك بجاهزية سيارتك، الآن يمكنك الحضور للاستلام أو طلب خدمة الشحن.\nنشكرك على ثقتك، مع محمد ذعار العجمي للسيارات أنت نجم الطريق ⭐\n\nمواعيد العمل:\nالفترة الصباحية من الساعة 9 صباحاً إلى 11 صباحاً\nالفترة المسائية من الساعة 4 مساءً إلى 9 مساءً\nيوم الجمعة المساء فقط\n\nمتابعة الطلب: ${link}`;
-  }
-  if (Number(stage.sort_order) === 10) {
-    return `عميلنا العزيز / ${customer}\nنبارك لكم إتمام عملية التسليم بنجاح.\nيشرفنا في مجموعة محمد ذعار العجمي للسيارات خدمتكم، ونتمنى لكم قيادة آمنة وتجربة ممتعة.\n#نجم_الطريق`;
+  const template = effectiveTrackingSmsTemplate(stage.sort_order, stage.sms_message_template, stage.sms_message_template_legacy, stage.sms_message_mode);
+  if (template) {
+    return renderTrackingSmsTemplate(template, {
+      customer_name: customer,
+      tracking_link: link,
+      order_no: clean(order.sales_order_no),
+      stage_name: clean(stage.name),
+      car_name: clean(vehicle.car_name),
+      vin: clean(vehicle.vin).startsWith("PENDING-") ? "" : clean(vehicle.vin),
+      vehicles_count: Number(order.vehicles_count || 1),
+      subtotal_before_tax: formatMoney(order.subtotal_before_tax),
+      tax_value: formatMoney(order.tax_value),
+      total_incl_vat: formatMoney(order.total_incl_vat),
+      personal_code: clean(club?.personalCode),
+      portal_url: clean(club?.portalUrl),
+    });
   }
   return `عميلنا العزيز / ${customer}\nتم تحديث طلبكم رقم ${order.sales_order_no}: ${stage.name}\nمتابعة الطلب: ${link}`;
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-  await ensureTrackingSchema();
+  await Promise.all([ensureTrackingSchema(), ensureCrmSchema()]);
   const user = await requireTrackingUser(request, response);
   if (!user) return;
 
@@ -49,7 +61,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     select o.*,o.id::text,o.assigned_to::text,
       (select count(*) from tracking.order_vehicles vx where vx.order_id=o.id)::int as vehicles_count,
       v.id::text as vehicle_id,v.vin,v.item_no,v.car_name,
-      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,o.tracking_token
+      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,s.sms_message_template,s.sms_message_template_legacy,s.sms_message_mode,o.tracking_token
     from tracking.orders o
     join tracking.order_vehicles v on v.order_id=o.id and v.id=${vehicleId}::uuid
     join tracking.stages s on s.id=${stageId}::uuid
@@ -74,8 +86,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const phone = normalizeSaudiPhone(row.customer_mobile);
   if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صالح أو غير موجود" });
-  const link = publicTrackingUrl(requestOrigin(request), row.tracking_token);
-  const message = clean(body.message) || messageForStage(row, row, { name: row.stage_name, sort_order: row.sort_order }, link);
+  const origin = requestOrigin(request);
+  const link = publicTrackingUrl(origin, row.tracking_token);
+  const clubPortalUrl = `${origin}/club`;
+  const stage10Member = Number(row.sort_order) === 10 ? await ensureOwnerMemberByPhone(row.customer_mobile) : null;
+  const message = clean(body.message) || messageForStage(
+    row,
+    row,
+    { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template, sms_message_template_legacy: row.sms_message_template_legacy, sms_message_mode: row.sms_message_mode },
+    link,
+    { personalCode: stage10Member?.referral_code, portalUrl: clubPortalUrl },
+  );
+  let automaticWelcomeEnabled = false;
+  if (Number(row.sort_order) === 10) {
+    const [settings] = await sql<any[]>`
+      select tracking_final_delivery_welcome_enabled
+      from crm.crm_runtime_settings
+      where id='default'
+      limit 1
+    `;
+    automaticWelcomeEnabled = settings?.tracking_final_delivery_welcome_enabled === true;
+  }
 
   try {
     const queued = await queueFirebaseSms({
@@ -102,7 +133,47 @@ export default async function handler(request: VercelRequest, response: VercelRe
       insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
       values (${user.id}::uuid,'tracking','sms_queued','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, firestoreDocumentId: queued.documentId })})
     `;
-    return response.status(200).json({ ok: true, status: "queued", documentId: queued.documentId, message: "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق" });
+
+    let welcome: { status: string; documentId?: string; error?: string } = {
+      status: automaticWelcomeEnabled ? "pending" : "disabled",
+    };
+    if (automaticWelcomeEnabled) {
+      try {
+        const welcomeResult = await queueOwnerWelcomeSms({
+          phone,
+          byUid: user.id,
+          portalUrl: clubPortalUrl,
+        });
+        welcome = { status: welcomeResult.status, documentId: welcomeResult.documentId };
+        await sql`
+          insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
+          values (${user.id}::uuid,'tracking','owners_welcome_auto','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, status: welcomeResult.status, firestoreDocumentId: welcomeResult.documentId || null })})
+        `;
+      } catch (welcomeError) {
+        const welcomeErrorMessage = welcomeError instanceof Error ? welcomeError.message : "تعذر إرسال رسالة الترحيب عبر SMS+";
+        welcome = { status: "failed", error: welcomeErrorMessage };
+        await sql`
+          insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
+          values (${user.id}::uuid,'tracking','owners_welcome_auto_failed','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, error: welcomeErrorMessage })})
+        `.catch(() => undefined);
+      }
+    }
+
+    const responseMessage = welcome.status === "queued"
+      ? "تم إرسال رسالة التتبع إلى SMS+ وإضافة رسالة الترحيب تلقائيًا"
+      : welcome.status === "already_sent"
+        ? "تم إرسال رسالة التتبع إلى SMS+؛ رسالة الترحيب سبق إرسالها لهذا العميل"
+        : welcome.status === "failed"
+          ? "تم إرسال رسالة التتبع إلى SMS+، لكن تعذر إضافة رسالة الترحيب تلقائيًا"
+          : "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق";
+
+    return response.status(200).json({
+      ok: true,
+      status: "queued",
+      documentId: queued.documentId,
+      message: responseMessage,
+      welcome,
+    });
   } catch (error) {
     console.error("Firebase SMS queue failed", error);
     return response.status(500).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال الرسالة إلى SMS+" });

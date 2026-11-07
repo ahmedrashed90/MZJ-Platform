@@ -24,7 +24,7 @@ export const AUTOMATIC_VEHICLE_ARCHIVE_REASON =
  * A vehicle is archived only when all three business conditions are true:
  * 1) the latest approval cycle has both financial and administrative approval,
  * 2) no non-deleted/non-cancelled transfer request is still incomplete,
- * 3) at least one linked tracking vehicle has every active stage completed.
+ * 3) the newest eligible sale for this VIN has every active stage completed.
  *
  * Finalizing the archive is the canonical delivery completion point: the vehicle
  * becomes `delivered` and leaves active inventory in the same atomic update.
@@ -68,14 +68,21 @@ export async function tryArchiveEligibleVehicle(
       ) as active_transfer,
       exists(
         select 1
-        from tracking.order_vehicles ov
-        join tracking.orders o on o.id=ov.order_id
-        join tracking.vehicle_stages vs on vs.vehicle_id=ov.id
+        from (
+          -- Never let historical stages complete a newer sale for this VIN.
+          select ov.id
+          from tracking.order_vehicles ov
+          join tracking.orders o on o.id=ov.order_id
+          where (ov.vehicle_id=${vehicleId}::uuid or (ov.vehicle_id is null and ov.vin=${vehicle.vin}))
+            and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+          order by coalesce(o.is_archived,false) asc,o.order_date desc nulls last,o.created_at desc,ov.created_at desc
+          limit 1
+        ) latest_sale
+        join tracking.vehicle_stages vs on vs.vehicle_id=latest_sale.id
         join tracking.stages s on s.id=vs.stage_id and s.is_active=true
-        where (ov.vehicle_id=${vehicleId}::uuid or (ov.vehicle_id is null and ov.vin=${vehicle.vin}))
-          and coalesce(o.is_deleted,false)=false
-        group by ov.id
+        group by latest_sale.id
         having count(vs.id)>0
+          and count(vs.id)=(select count(*) from tracking.stages where is_active=true)
           and count(vs.id) filter (where vs.status='completed')=count(vs.id)
       ) as tracking_complete
   `;

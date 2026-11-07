@@ -7,6 +7,7 @@ import {
   ClipboardText,
   FilmSlate,
   Hash,
+  DownloadSimple,
   MegaphoneSimple,
   NotePencil,
   Target,
@@ -48,6 +49,7 @@ type TaskTemplatePresentationProps = {
   onClearField?: (key: string) => void;
   onFieldNoteChange?: (key: string, value: string) => void;
   onDataChange?: (key: string, value: string) => void;
+  canDownloadScenesWord?: boolean;
   onClose?: () => void;
 };
 
@@ -123,6 +125,63 @@ function parseScenes(value: unknown): Scene[] {
   });
 }
 
+function escapeWordHtml(value: unknown) {
+  return text(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function wordFileNamePart(value: unknown) {
+  return text(value).replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim();
+}
+
+function downloadScenesWord(task: any, scenes: Scene[], rawScript: unknown) {
+  const sceneRows = scenes.length
+    ? scenes.map((scene) => `
+      <section class="scene">
+        <h2>${escapeWordHtml(`المشهد / السلايد ${scene.number}${scene.title ? ` - ${scene.title}` : ""}`)}</h2>
+        ${scene.time ? `<p class="time">${escapeWordHtml(scene.time)}</p>` : ""}
+        <p>${escapeWordHtml(scene.body).replace(/\n/g, "<br>")}</p>
+      </section>`).join("")
+    : `<section class="scene"><p>${escapeWordHtml(rawScript || "لا توجد بيانات داخل السكريبت الأساسي.").replace(/\n/g, "<br>")}</p></section>`;
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<title>${escapeWordHtml(task?.creative_name || task?.title || "المشاهد والسلايدات")}</title>
+<style>
+  body { font-family: Arial, Tahoma, sans-serif; direction: rtl; text-align: right; margin: 36px; color: #222; line-height: 1.7; }
+  h1 { font-size: 22pt; margin: 0 0 8px; }
+  .meta { color: #666; margin: 0 0 24px; }
+  .scene { border: 1px solid #d9d9d9; padding: 14px 16px; margin: 0 0 14px; page-break-inside: avoid; }
+  .scene h2 { font-size: 14pt; margin: 0 0 6px; }
+  .scene p { margin: 4px 0; white-space: normal; }
+  .time { direction: ltr; text-align: right; color: #777; font-size: 10pt; }
+</style>
+</head>
+<body>
+  <h1>المشاهد / السلايدات</h1>
+  <p class="meta">${escapeWordHtml([task?.source_name, task?.task_no || task?.instance_code, task?.creative_name].filter(Boolean).join(" · "))}</p>
+  ${sceneRows}
+</body>
+</html>`;
+
+  const blob = new Blob(["\ufeff", html], { type: "application/msword;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const baseName = wordFileNamePart(task?.task_no || task?.instance_code || task?.creative_name || "scenes-slides") || "scenes-slides";
+  anchor.href = url;
+  anchor.download = `${baseName}-scenes-slides.doc`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function AutoTextarea({ value, onChange, ariaLabel, minHeight = 78 }: { value: string; onChange: (value: string) => void; ariaLabel: string; minHeight?: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -157,6 +216,7 @@ export function TaskTemplatePresentation({
   onClearField,
   onFieldNoteChange,
   onDataChange,
+  canDownloadScenesWord = false,
   onClose,
 }: TaskTemplatePresentationProps) {
   const editable = mode === "review" && Boolean(onDataChange);
@@ -291,7 +351,10 @@ export function TaskTemplatePresentation({
     >
       <div className="marketing-template-scenes-head">
         <h3><MegaphoneSimple size={20} />المشاهد / السلايدات</h3>
-        {editable ? <button type="button" onClick={(event) => { event.stopPropagation(); setScriptEditorOpen((value) => !value); }}><NotePencil size={16} />{scriptEditorOpen ? "إغلاق محرر السكريبت" : "تعديل السكريبت الأساسي"}</button> : null}
+        <div className="marketing-inline-actions">
+          {canDownloadScenesWord ? <button type="button" onClick={(event) => { event.stopPropagation(); downloadScenesWord(task, scenes, data.mainScript); }}><DownloadSimple size={16} />تحميل Word</button> : null}
+          {editable ? <button type="button" onClick={(event) => { event.stopPropagation(); setScriptEditorOpen((value) => !value); }}><NotePencil size={16} />{scriptEditorOpen ? "إغلاق محرر السكريبت" : "تعديل السكريبت الأساسي"}</button> : null}
+        </div>
       </div>
       {scenes.length
         ? <div className="marketing-template-scene-grid">{scenes.map((scene) => <article key={`${scene.number}-${scene.title}`}>

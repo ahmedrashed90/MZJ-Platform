@@ -1,0 +1,4 @@
+PASS: server/_owners-schema.ts
+PASS: server/_owners.ts
+PASS: server/owners-public.ts
+PASS: src/owners/OwnersPortalPage.tsx

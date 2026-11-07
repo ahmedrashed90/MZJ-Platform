@@ -60,6 +60,19 @@ const graphCall = calls.findLast((call) => call.url.includes("graph.facebook.com
 const graphBody = JSON.parse(graphCall.options.body);
 assert.equal(graphBody.message.quick_replies[0].payload, "a");
 
+const privateReply = await worker.fetch(new Request("https://worker.test/send/facebook", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-mzj-gateway-secret": "gateway-secret" },
+  body: JSON.stringify({ pageId: "page-1", commentId: "comment-1", privateReply: true, text: "اهلا" }),
+}), env, {});
+// The current production Worker intentionally waits for a verified Messenger
+// identity. It never sends a direct private reply to a post comment actor ID.
+assert.equal(privateReply.status, 409);
+const privateReplyBody = await privateReply.json();
+assert.equal(privateReplyBody.status, "waiting_identity");
+const privateReplyCall = calls.findLast((call) => call.url.includes("/comment-1/private_replies"));
+assert.equal(privateReplyCall, undefined);
+
 const source = await (await import("node:fs/promises")).readFile(new URL("./src/index.js", import.meta.url), "utf8");
 for (const forbidden of ["مبيعات الكاش", "مبيعات التمويل", "خدمة العملاء", "finance_registration_complete", "forceServiceReclassification"]) assert.equal(source.includes(forbidden), false, `worker must not contain flow string: ${forbidden}`);
 

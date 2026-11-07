@@ -41,8 +41,9 @@ expect(
     && !metrics.includes("v.has_notes=true"),
 );
 expect(
-  "Agency total uses the same actual-total predicate with agency location only",
-  dashboard.includes('operationsInventoryMetricCondition(sql, "actual_total")} and l.code=\'agency\''),
+  "Agency total uses the four-status agency predicate shared with vehicle drill-down",
+  dashboard.includes('operationsInventoryMetricCondition(sql, "agency_inventory")} and l.code=\'agency\'')
+    && metrics.includes('if (metric === "agency_inventory")'),
 );
 expect(
   "Location cards use the canonical predicate for every displayed stock metric",

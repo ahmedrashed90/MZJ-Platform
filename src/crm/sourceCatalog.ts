@@ -23,6 +23,8 @@ const SOURCE_LABELS: Record<string, string> = {
   whatsapp: "واتساب",
   wa: "واتساب",
   mersal: "واتساب",
+  facebook_lead: "فيسبوك ليد",
+  instagram_lead: "إنستجرام ليد",
   tiktok_lead: "تيك توك ليد",
   "tiktok-lead": "تيك توك ليد",
   snapchat_lead: "سناب شات ليد",
@@ -40,7 +42,10 @@ const SOURCE_LABELS: Record<string, string> = {
   "unified-number": "اتصال الرقم الموحد",
   manual: "إدخال يدوي",
   manual_entry: "إدخال يدوي",
+  sheet_lead: "ليد - استيراد شيت",
   "manual-entry": "إدخال يدوي",
+  qr: "QR",
+  cash_qr: "QR",
 };
 
 const ARABIC_NORMALIZED: Record<string, string> = {
@@ -99,7 +104,7 @@ export function sourceLabel(value?: string | null, fallback?: string | null) {
     if (key.includes("unified") || key.includes("رقم_الموحد")) return "اتصال الرقم الموحد";
     if (key.includes("manual") || key.includes("ادخال_يدوي")) return "إدخال يدوي";
   }
-  return raw || fallbackRaw || "غير محدد";
+  return fallbackRaw || raw || "غير محدد";
 }
 
 export type MessagePolicy = {

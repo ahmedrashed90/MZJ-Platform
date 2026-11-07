@@ -28,6 +28,7 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
   if (route === "crm/history") return req("crm.finance_history.view", "crm", "finance_history", "view");
   if (route === "crm/sales") return req(method === "GET" ? "crm.customer.view" : "crm.customer.status.update", "crm", "database", method === "GET" ? "sales_history" : "record_sale");
   if (route === "crm/contacts") return method === "DELETE" ? req("crm.contacts.purge", "crm", "contacts", "purge") : req("crm.contacts.view", "crm", "contacts", "view");
+  if (route === "crm/sheet-leads") return req("platform.superadmin", "core", "settings", "crm_sheet_import");
   if (route === "crm/manual-leads") {
     if (method === "GET") return req("crm.manual_leads.view", "crm", "manual_leads", "view");
     if (method === "POST") return req("crm.manual_lead.request", "crm", "manual_leads", "request");
@@ -74,6 +75,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
     const map: Record<string, string> = {
       meta: "system.operations.access", vehicles: "operations.inventory.view", vehicle: "operations.vehicle.view",
       movements: "operations.movements.view", transfers: "operations.transfers.view", approvals: "operations.approvals.view", sales_orders_followup: "operations.sales_orders_followup.view",
+      sales_followup_approval_candidates: "platform.superadmin",
       dashboard_vehicles: "operations.inventory.view", dashboard_requests: "operations.transfers.view", dashboard_shortages: "operations.inventory.view",
     };
     return req(map[resource] || "system.operations.access", "operations", resource, "view");
@@ -84,7 +86,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
     create_vehicle: "operations.vehicle.create", update_vehicle: "operations.vehicle.edit", delete_vehicle: "operations.vehicle.delete",
     archive_vehicle: "operations.vehicle.archive", import_vehicles: "operations.vehicle.import", move_vehicles: "operations.movement.create",
     create_transfer: "operations.transfer.create", transfer_action: "operations.request.receive_order", approval_action: "operations.approval.financial",
-    save_setting: "settings.operations.manage",
+    save_setting: "settings.operations.manage", sales_followup_approval_action: "platform.superadmin",
   };
   if (action === "approval_action" && clean(payload.type) === "administrative") return req("operations.approval.administrative", "operations", "approvals", action);
   if (action === "move_vehicles" && clean(payload.newStatus) === "delivered") return req("operations.movement.delivered", "operations", "movement", action);
@@ -108,28 +110,34 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
-      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", monitoring: "marketing.monitoring.view",
-      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
+      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", meta_ads: "marketing.engagement.view", campaign_report: "marketing.engagement.view", google_ads: "marketing.engagement.view", tiktok_ads: "marketing.engagement.view", tiktok_ads_builder: "marketing.campaign.create", monitoring: "marketing.monitoring.view",
+      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view", subscriptions: "marketing.subscriptions.view", subscription_settings: "marketing.subscriptions.manage", subscription_history: "marketing.subscriptions.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
+      work_schema_status: "system.marketing.access",
     };
     return req(map[resource] || "system.marketing.access", "marketing", resource, "view");
   }
   const payload = body(request); const action = clean(payload.action);
   const map: Record<string, string> = {
-    create_campaign: "marketing.campaign.create", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
+    create_campaign: "marketing.campaign.create", create_funnel: "system.marketing.access", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
-    attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", upload_final_file_proxy: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access",
-    move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", create_manual_publish_entry: "marketing.publish_prep.manage", discard_manual_publish_entry: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",
-    archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
-    create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
+    attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", commit_final_file_upload: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access", delete_first_file: "marketing.task.final_file.upload",
+    move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", create_manual_publish_entry: "marketing.publish_prep.manage", discard_manual_publish_entry: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", refresh_meta_engagement_metrics: "marketing.engagement.refresh", sync_meta_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",
+    google_ads_create_search: "marketing.campaign.create", google_ads_campaign_status: "marketing.campaign.edit",
+    tiktok_ads_link: "marketing.campaign.edit", tiktok_ads_disconnect: "marketing.campaign.edit", tiktok_ads_campaign_status: "marketing.campaign.edit", tiktok_ads_create_campaign: "marketing.campaign.create", tiktok_ads_create_adgroup: "marketing.campaign.create", tiktok_ads_create_ad: "marketing.campaign.create",
+    archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete",
+    create_photo_request: "marketing.photo_request.create", delete_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
-    save_user_colors: "settings.marketing.manage",
+    save_subscription: "marketing.subscriptions.manage", delete_subscription: "marketing.subscriptions.manage", renew_subscription: "marketing.subscriptions.renew",
+    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin", work_upgrade_schema: "platform.superadmin", work_remove_item_format: "marketing.task.review",
+    work_save_campaign_goal: "settings.marketing.manage", work_delete_campaign_goal: "settings.marketing.manage",
+    work_save_campaign_platform_goals: "system.marketing.access",
   };
   if (action === "prepare_upload" || action === "mark_file_ready") {
     const category = clean(payload.category);
     if (category === "task-template") return req("system.marketing.access", "marketing", "dashboard", action);
-    if (category === "final-file") return req("marketing.task.final_file.upload", "marketing", "dashboard", action);
+    if (category === "final-file" || category === "first-file") return req("marketing.task.final_file.upload", "marketing", "dashboard", action);
     return req("marketing.file.upload", "marketing", resource, action);
   }
   if (action === "review_template") {
@@ -142,10 +150,8 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (action === "save_links") {
     return req(clean(payload.sourceType) === "agenda" ? "marketing.agenda.edit" : "marketing.campaign.edit", "marketing", "database", action);
   }
-  if (action === "attendance") {
-    const attendanceAction = clean(payload.attendanceAction);
-    if (["save_settings", "edit"].includes(attendanceAction)) return req("marketing.attendance.manage", "marketing", "attendance", "manage");
-    if (attendanceAction === "ping") return req("system.marketing.access", "marketing", "attendance", "presence_ping");
+  if (action === "save_campaign_budgets") {
+    return req("marketing.campaign.edit", "marketing", "database", action);
   }
   return req(map[action] || "system.marketing.access", "marketing", resource, action || "write");
 }
@@ -167,10 +173,34 @@ function trackingRequirement(route: string, request: VercelRequest): ApiPermissi
 
 export function resolveApiPermission(route: string, request: VercelRequest): ApiPermissionRequirement | null {
   if (route === "data-management") return req("platform.superadmin", "core", "settings", "data_management");
-  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public"].includes(route)) return null;
+  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public", "owners/public", "crm/cash-qr"].includes(route)) return null;
+  if (route === "owners") {
+    const payload = body(request);
+    const ownersAction = clean(payload.action);
+    if (["lookup_redemption", "confirm_redemption"].includes(ownersAction)) {
+      return req("owners.community.manage", "core", "owners_community", ownersAction);
+    }
+    const settingsScope = clean(request.query.scope) === "settings" || ["save_settings", "save_points_settings"].includes(ownersAction);
+    if (settingsScope) {
+      return req(
+        request.method === "GET" ? "settings.owners.view" : "settings.owners.manage",
+        "core",
+        "settings",
+        request.method === "GET" ? "owners_view" : "owners_manage",
+      );
+    }
+    return req(
+      request.method === "GET" ? "owners.community.view" : "owners.community.manage",
+      "core",
+      "owners_community",
+      request.method === "GET" ? "view" : "manage",
+    );
+  }
+  if (route === "website") return req("website.stock.view", "website", "stock", "view");
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");
   if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");
+  if (route === "crm/mersal-users") return null;
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);
   if (route === "marketing/instagram-media") return null;

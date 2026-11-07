@@ -21,6 +21,7 @@ export function requestId(prefix = "ops") {
 export type OperationErrorCode =
   | "VALIDATION_ERROR"
   | "VEHICLE_NOT_FOUND"
+  | "VEHICLE_ARCHIVED"
   | "VEHICLE_NOT_ELIGIBLE"
   | "INVALID_STATUS_TRANSITION"
   | "APPROVALS_REQUIRED"
@@ -28,6 +29,7 @@ export type OperationErrorCode =
   | "INVALID_DESTINATION_LOCATION"
   | "DUPLICATE_VIN"
   | "DUPLICATE_ACTIVE_REQUEST"
+  | "ALREADY_APPROVED"
   | "FORBIDDEN"
   | "NEXT_ERP_USER_ID_REQUIRED"
   | "CONFLICT"

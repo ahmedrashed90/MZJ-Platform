@@ -86,6 +86,37 @@ export async function withDatabaseAdvisoryLock<T>(lockKey: string, work: () => P
   }
 }
 
+/**
+ * Non-blocking form of the same session advisory lock. A scheduled invocation
+ * must not spend its runtime waiting for an active manual or scheduled sync.
+ * Existing callers of withDatabaseAdvisoryLock keep their original behavior.
+ */
+export async function tryWithDatabaseAdvisoryLock<T>(
+  lockKey: string,
+  work: () => Promise<T>,
+): Promise<{ acquired: boolean; result?: T }> {
+  const normalizedKey = String(lockKey || "").trim();
+  if (!normalizedKey) return { acquired: true, result: await work() };
+  const [lockNamespace, lockValue] = databaseAdvisoryLockPair(`session:${normalizedKey}`);
+  const locks = getLockSql();
+  await ensureLockClientReady(locks);
+  const reserved = await locks.reserve();
+  let acquired = false;
+  try {
+    const [row] = await reserved<{ acquired: boolean }[]>`
+      select pg_try_advisory_lock(${lockNamespace}::integer,${lockValue}::integer) as acquired
+    `;
+    acquired = Boolean(row?.acquired);
+    if (!acquired) return { acquired: false };
+    return { acquired: true, result: await work() };
+  } finally {
+    if (acquired) {
+      await reserved`select pg_advisory_unlock(${lockNamespace}::integer,${lockValue}::integer)`.catch(() => undefined);
+    }
+    await reserved.release();
+  }
+}
+
 function splitSqlStatements(sqlText: string) {
   const statements: string[] = [];
   let current = "";
@@ -187,12 +218,30 @@ function splitSqlStatements(sqlText: string) {
   return statements;
 }
 
+function withoutLeadingSqlComments(value: string): string {
+  let statement = value.trimStart();
+  // A migration can start with SQL comments before BEGIN. Postgres.js must
+  // never execute that BEGIN on an unreserved connection from its pool.
+  while (statement.startsWith('--') || statement.startsWith('/*')) {
+    if (statement.startsWith('--')) {
+      const end = statement.indexOf('\n');
+      if (end < 0) return '';
+      statement = statement.slice(end + 1).trimStart();
+    } else {
+      const end = statement.indexOf('*/');
+      if (end < 0) return '';
+      statement = statement.slice(end + 2).trimStart();
+    }
+  }
+  return statement.trim();
+}
+
 export async function runSqlScript(sqlText: string) {
   const sql = getSql();
-  const statements = splitSqlStatements(sqlText);
+  const statements = splitSqlStatements(sqlText).filter(statement => withoutLeadingSqlComments(statement).length > 0);
   const transactionWrapped = statements.length >= 2
-    && /^begin(?:\s+transaction)?$/i.test(statements[0].trim())
-    && /^(?:commit|end)(?:\s+transaction)?$/i.test(statements[statements.length - 1].trim());
+    && /^begin(?:\s+transaction)?$/i.test(withoutLeadingSqlComments(statements[0]))
+    && /^(?:commit|end)(?:\s+transaction)?$/i.test(withoutLeadingSqlComments(statements[statements.length - 1]));
   if (transactionWrapped) {
     await sql.begin(async (tx) => {
       for (const statement of statements.slice(1, -1)) await tx.unsafe(statement);

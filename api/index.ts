@@ -13,6 +13,7 @@ import meHandler from "../server/auth/me.js";
 import setupStatusHandler from "../server/setup/status.js";
 import setupInitializeHandler from "../server/setup/initialize.js";
 import integrationHandler from "../server/integrations/[source].js";
+import leadSourcesIntegrationHandler from "../server/integrations/lead-sources.js";
 import integrationMediaHandler from "../server/integrations/media.js";
 import crmMetaHandler from "../server/crm/meta.js";
 import crmDashboardHandler from "../server/crm/dashboard.js";
@@ -20,6 +21,7 @@ import crmLeadsHandler from "../server/crm/leads.js";
 import crmHistoryHandler from "../server/crm/history.js";
 import crmConversationsHandler from "../server/crm/conversations.js";
 import crmManualLeadsHandler from "../server/crm/manual-leads.js";
+import crmSheetLeadsHandler from "../server/crm/sheet-leads.js";
 import crmReportsHandler from "../server/crm/reports.js";
 import crmDataReviewHandler from "../server/crm/data-review.js";
 import crmKpiHandler from "../server/crm/kpi.js";
@@ -28,13 +30,20 @@ import crmSettingsHandler from "../server/crm/settings.js";
 import crmInboxAgentHandler from "../server/crm/inbox-agent.js";
 import crmUnreadHandler from "../server/crm/unread.js";
 import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
+import crmMersalUsersHandler from "../server/crm/mersal-users.js";
 import crmEntryRoutingHandler from "../server/crm/entry-routing.js";
 import crmAutomationSettingsHandler from "../server/crm/automation-settings.js";
+import crmCashQrHandler from "../server/crm/cash-qr.js";
 import crmInboxHandler from "../server/crm/inbox.js";
 import crmMediaHandler from "../server/crm/media.js";
 import crmContactsHandler from "../server/crm/contacts.js";
 import crmSalesHandler from "../server/crm/sales.js";
 import internalAutomationJobHandler from "../server/internal/automation-job.js";
+import internalAttendanceTickHandler from "../server/internal/attendance-tick.js";
+import internalMetaEngagementSyncHandler from "../server/internal/meta-engagement-sync.js";
+import internalMarketingPublishTickHandler from "../server/internal/marketing-publish-tick.js";
+import attendanceHandler from "../server/attendance.js";
+import deviceAgentHandler from "../server/device-agent.js";
 import trackingOrdersHandler from "../server/tracking/orders.js";
 import trackingPublicHandler from "../server/tracking/public.js";
 import trackingSmsHandler from "../server/tracking/sms.js";
@@ -43,25 +52,40 @@ import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
 import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
 import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpnext-vehicle-status.js";
+import erpNextPurchaseReceiptStockHandler from "../server/integrations/erpnext-purchase-receipt-stock.js";
 import zohoIntegrationHandler from "../server/integrations/zoho.js";
+import googleDriveIntegrationHandler from "../server/integrations/google-drive.js";
 import operationsHandler from "../server/operations/index.js";
+import legacyOperationsHistoryHandler from "../server/operations/legacy-history.js";
 import marketingHandler from "../server/marketing/index.js";
+import marketingLeadFormsHandler from "../server/marketing/lead-forms.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import instagramMediaHandler from "../server/marketing/instagram-media.js";
+import googleDriveMediaHandler from "../server/marketing/google-drive-media.js";
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
 import notificationSettingsHandler from "../server/notification-settings.js";
 import dataManagementHandler from "../server/data-management.js";
+import ownersHandler from "../server/owners.js";
+import ownersPublicHandler from "../server/owners-public.js";
+import websiteHandler from "../server/website.js";
 import { ensureRequestId, logApiWriteIfMissing } from "../server/_activity.js";
 import { getSessionUser } from "../server/_auth.js";
 import type { PermissionUser } from "../server/_access-control.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
-function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube"): ApiHandler {
+function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube" | "google_ads"): ApiHandler {
   return (request, response) => {
     request.query.provider = provider;
     return platformConnectionsHandler(request, response);
+  };
+}
+
+function googleDriveRoute(action: "connect" | "callback" | "status"): ApiHandler {
+  return (request, response) => {
+    request.query.googleDriveAction = action;
+    return googleDriveIntegrationHandler(request, response);
   };
 }
 
@@ -81,6 +105,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/history", crmHistoryHandler],
   ["crm/conversations", crmConversationsHandler],
   ["crm/manual-leads", crmManualLeadsHandler],
+  ["crm/sheet-leads", crmSheetLeadsHandler],
   ["crm/reports", crmReportsHandler],
   ["crm/data-review", crmDataReviewHandler],
   ["crm/kpi", crmKpiHandler],
@@ -89,14 +114,22 @@ const routes = new Map<string, ApiHandler>([
   ["crm/inbox-agent", crmInboxAgentHandler],
   ["crm/unread", crmUnreadHandler],
   ["crm/mersal-templates", crmMersalTemplatesHandler],
+  ["crm/mersal-users", crmMersalUsersHandler],
   ["crm/entry-routing", crmEntryRoutingHandler],
   ["crm/automation-settings", crmAutomationSettingsHandler],
+  ["crm/cash-qr", crmCashQrHandler],
   ["crm/inbox", crmInboxHandler],
   ["crm/media", crmMediaHandler],
   ["crm/contacts", crmContactsHandler],
   ["crm/sales", crmSalesHandler],
   ["integrations/media", integrationMediaHandler],
+  ["integrations/lead-sources", leadSourcesIntegrationHandler],
   ["internal/automation-job", internalAutomationJobHandler],
+  ["internal/attendance-tick", internalAttendanceTickHandler],
+  ["internal/meta-engagement-sync", internalMetaEngagementSyncHandler],
+  ["internal/marketing-publish-tick", internalMarketingPublishTickHandler],
+  ["attendance", attendanceHandler],
+  ["device-agent", deviceAgentHandler],
   ["tracking/orders", trackingOrdersHandler],
   ["tracking/public", trackingPublicHandler],
   ["tracking/sms", trackingSmsHandler],
@@ -105,17 +138,28 @@ const routes = new Map<string, ApiHandler>([
   ["integrations/tracking/orders", trackingIntegrationHandler],
   ["integrations/erpnext/sales-order", erpNextSalesOrderIntegrationHandler],
   ["integrations/erpnext/serial-no-status", erpNextVehicleStatusIntegrationHandler],
+  ["integrations/erpnext/purchase-receipt-stock", erpNextPurchaseReceiptStockHandler],
   ["operations", operationsHandler],
+  ["operations/legacy-history", legacyOperationsHistoryHandler],
   ["marketing", marketingHandler],
+  ["marketing/lead-forms", marketingLeadFormsHandler],
   ["marketing/instagram-media", instagramMediaHandler],
+  ["marketing/google-drive-media", googleDriveMediaHandler],
+  ["google-drive/connect", googleDriveRoute("connect")],
+  ["google-drive/callback", googleDriveRoute("callback")],
+  ["google-drive/status", googleDriveRoute("status")],
   ["marketing/platform-connections", platformConnectionsHandler],
   ["marketing/platform-connections/callback/meta", platformConnectionCallback("meta")],
   ["marketing/platform-connections/callback/tiktok", platformConnectionCallback("tiktok")],
   ["marketing/platform-connections/callback/youtube", platformConnectionCallback("youtube")],
+  ["marketing/platform-connections/callback/google_ads", platformConnectionCallback("google_ads")],
   ["activity", activityHandler],
   ["notifications", notificationsHandler],
   ["notification-settings", notificationSettingsHandler],
   ["data-management", dataManagementHandler],
+  ["owners", ownersHandler],
+  ["owners/public", ownersPublicHandler],
+  ["website", websiteHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -155,11 +199,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return erpNextVehicleStatusIntegrationHandler(request, response);
   }
 
+  if (route === "integrations/erpnext/purchase-receipt-stock") {
+    return erpNextPurchaseReceiptStockHandler(request, response);
+  }
+
   if (route.startsWith("integrations/zoho/")) {
     request.query.zohoAction = route.slice("integrations/zoho/".length).split("/")[0];
     return zohoIntegrationHandler(request, response);
   }
 
+  if (route === "integrations/lead-sources") return leadSourcesIntegrationHandler(request, response);
   if (route.startsWith("integrations/")) {
     const source = route.slice("integrations/".length).split("/")[0];
     request.query.source = source;

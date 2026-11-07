@@ -9,6 +9,7 @@ import {
   Car,
   ChatText,
   CheckCircle,
+  CheckSquare,
   Clock,
   Copy,
   CurrencyCircleDollar,
@@ -57,6 +58,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [selected, setSelected] = useState<TrackingOrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeVehicleId, setActiveVehicleId] = useState("");
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
+  const [bulkStageId, setBulkStageId] = useState("");
   const [actionKey, setActionKey] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -93,6 +96,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
       const payload = await trackingFetch<DetailResponse>(`/api/tracking/orders?id=${encodeURIComponent(id)}`);
       setSelected(payload.order);
       setActiveVehicleId(payload.order.vehicles[0]?.id || "");
+      setSelectedVehicleIds(payload.order.is_archived ? [] : payload.order.vehicles.map(vehicle => vehicle.id));
+      setBulkStageId("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر فتح طلب التتبع");
     } finally {
@@ -114,26 +119,83 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   );
 
   async function stageAction(action: "complete_stage" | "revert_stage", vehicle: TrackingVehicle, stage: TrackingStage) {
-    if (!selected) return;
-    const note = action === "revert_stage" ? window.prompt(`اكتب سبب التراجع عن مرحلة: ${stage.name}`)?.trim() || "" : "";
-    if (action === "revert_stage" && !note) return;
+    if (!selected || !selectedVehicleIds.length) return;
+    const selectedIds = [...selectedVehicleIds];
+    const reverting = action === "revert_stage";
+    const note = reverting ? window.prompt(`اكتب سبب التراجع عن مرحلة: ${stage.name} للسيارات المحددة (${selectedIds.length})`)?.trim() || "" : "";
+    if (reverting && !note) return;
+    if (selectedIds.length > 1 && !window.confirm(`تنفيذ ${reverting ? "التراجع" : "الانتهاء"} من المرحلة ${stage.name} على السيارات المحددة (${selectedIds.length})؟`)) return;
     const key = `${action}:${vehicle.id}:${stage.stage_id}`;
     setActionKey(key);
     setMessage("");
     setError("");
     try {
-      const payload = await trackingFetch<DetailResponse>("/api/tracking/orders", {
+      const bulk = selectedIds.length > 1;
+      const payload = await trackingFetch<DetailResponse & { skippedVehicles?: number }>("/api/tracking/orders", {
         method: "POST",
-        body: JSON.stringify({ action, vehicleId: vehicle.id, stageId: stage.stage_id, note }),
+        body: JSON.stringify({
+          action: bulk ? (reverting ? "revert_stage_bulk" : "complete_stage_bulk") : action,
+          vehicleId: selectedIds[0], vehicleIds: selectedIds, stageId: stage.stage_id, note,
+        }),
       });
       setSelected(payload.order);
-      setMessage(payload.message || "تم تحديث المرحلة");
+      setMessage(`${payload.message || "تم تحديث المرحلة"}${payload.skippedVehicles ? ` — ${payload.skippedVehicles} لم تتغير حالتها` : ""}`);
       await loadOrders();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "تعذر تحديث المرحلة");
     } finally {
       setActionKey("");
     }
+  }
+
+  async function completeSelectedStage() {
+    if (!selected || !bulkStageId || !selectedVehicleIds.length || actionKey ||
+      !window.confirm(`تأكيد تم الانتهاء للمرحلة المحددة على ${selectedVehicleIds.length} سيارة؟`)) return;
+    setActionKey('complete_stage_bulk'); setError(''); setMessage('');
+    try {
+      const result = await trackingFetch<DetailResponse & { affectedVehicles: number; skippedVehicles: number }>("/api/tracking/orders", {
+        method: 'POST', body: JSON.stringify({ action: 'complete_stage_bulk', vehicleIds: selectedVehicleIds, stageId: bulkStageId }),
+      });
+      setSelected(result.order);
+      setMessage(`${result.message || 'تم إنهاء المرحلة'}${result.skippedVehicles ? ` — ${result.skippedVehicles} مكتملة مسبقًا` : ''}`);
+      await loadOrders();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'تعذر إنهاء المرحلة للسيارات المحددة'); }
+    finally { setActionKey(''); }
+  }
+  async function revertSelectedStage() {
+    if (!selected || !bulkStageId || !selectedVehicleIds.length || actionKey) return;
+    const stage = activeVehicle?.stages.find(item => item.stage_id === bulkStageId);
+    if (!stage || !hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.rollback`)) return;
+    const note = window.prompt(`سبب التراجع عن المرحلة ${stage.name} للسيارات المحددة (${selectedVehicleIds.length}):`)?.trim();
+    if (!note || !window.confirm(`تأكيد التراجع عن المرحلة للسيارات المحددة (${selectedVehicleIds.length})؟`)) return;
+    setActionKey("revert_stage_bulk"); setError(""); setMessage("");
+    try {
+      const payload = await trackingFetch<DetailResponse & { skippedVehicles: number }>("/api/tracking/orders", {
+        method: "POST", body: JSON.stringify({ action: "revert_stage_bulk", vehicleIds: selectedVehicleIds, stageId: bulkStageId, note }),
+      });
+      setSelected(payload.order);
+      setMessage(`${payload.message || "تم التراجع عن المرحلة"}${payload.skippedVehicles ? ` — ${payload.skippedVehicles} لم تكن مكتملة` : ""}`);
+      await loadOrders();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر التراجع للسيارات المحددة"); }
+    finally { setActionKey(""); }
+  }
+
+  async function reconcileArchivedOrders() {
+    if (actionKey || !window.confirm("فحص الطلبات المؤرشفة واستكمال أرشفة سياراتها المستوفية للشروط في العمليات؟ لن تتغير الموافقات أو مراحل التراكينج.")) return;
+    setActionKey("reconcile_archived_orders"); setError(""); setMessage("");
+    try {
+      const result = await trackingFetch<{
+        message: string; failures: Array<{ salesOrderNo: string; error: string }>;
+      }>("/api/tracking/orders", { method: "POST", body: JSON.stringify({ action: "reconcile_archived_orders" }) });
+      await loadOrders();
+      setMessage(result.message);
+      if (result.failures?.length) setError(result.failures.slice(0, 3).map(item => `${item.salesOrderNo}: ${item.error}`).join(" — "));
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تسوية الطلبات المؤرشفة"); }
+    finally { setActionKey(""); }
+  }
+
+  function toggleSelectedVehicle(id: string, checked: boolean) {
+    setSelectedVehicleIds(current => checked ? [...new Set([...current, id])] : current.filter(value => value !== id));
   }
 
   async function sendSms(vehicle: TrackingVehicle, stage: TrackingStage) {
@@ -224,10 +286,17 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
   return (
     <div className="module-page tracking-orders-page">
-      <div className="page-top-actions"><button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
-        <ArrowClockwise size={18} className={loading ? "spin" : ""} />
-        تحديث
-      </button></div>
+      <div className="page-top-actions">
+        {archivedOnly && canArchiveTracking ? (
+          <button type="button" className="tracking-refresh-button" disabled={Boolean(actionKey) || loading} onClick={() => void reconcileArchivedOrders()}>
+            <Archive size={18} />{actionKey === "reconcile_archived_orders" ? "جاري تسوية الأرشيف..." : "تسوية أرشفة العمليات للطلبات السابقة"}
+          </button>
+        ) : null}
+        <button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading || Boolean(actionKey)}>
+          <ArrowClockwise size={18} className={loading ? "spin" : ""} />
+          تحديث
+        </button>
+      </div>
 
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {message ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>{message}</span></div> : null}
@@ -274,7 +343,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                   <tr key={order.id} onClick={() => void openOrder(order.id)}>
                     <td><button type="button" className="tracking-order-link">{order.sales_order_no}</button><small>{order.vins || "لا يوجد رقم هيكل"}</small></td>
                     <td><strong>{order.customer_name || "—"}</strong><small>{order.customer_mobile || "—"}</small></td>
-                    <td>{trackingBranchLabel(order.branch)}</td>
+                    <td>{trackingBranchLabel(order.branch) === "—" ? "الموقع الالكتروني" : trackingBranchLabel(order.branch)}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                     <td><span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span></td>
@@ -352,19 +421,43 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                     <div className="tracking-order-info-item"><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
                     <div className="tracking-order-info-item"><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
                     <div className="tracking-order-info-item"><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
+                    {selected.package_name ? <>
+                      <div className="tracking-order-info-item tracking-order-package-name"><CurrencyCircleDollar size={18} /><span><small>اسم الباقة</small><strong>{selected.package_name}</strong>{selected.package_group ? <small>{selected.package_group}</small> : null}</span></div>
+                      <div className="tracking-order-info-item"><CurrencyCircleDollar size={18} /><span><small>سعر الباقة</small><strong>{formatTrackingMoney(selected.package_price_before_tax)}</strong></span></div>
+                    </> : null}
                     <div className="tracking-order-info-item tracking-order-total"><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
                   </div>
                 </section>
 
                 <section className="tracking-overview-card tracking-vehicle-summary-card">
                   <div className="tracking-section-heading"><div><Car size={20} /><h3>السيارات في الطلب</h3></div><span>{selected.vehicles.length}</span></div>
+                  <div className="tracking-vehicle-multi-toolbar">
+                    <label className="tracking-vehicle-select-all"><input type="checkbox" disabled={Boolean(actionKey) || selected.is_archived || selected.is_cancelled} checked={!!selected.vehicles.length && selectedVehicleIds.length === selected.vehicles.length} onChange={event => setSelectedVehicleIds(event.target.checked ? selected.vehicles.map(vehicle => vehicle.id) : [])} />تحديد الكل</label>
+                    <span>المحدد: {selectedVehicleIds.length} من {selected.vehicles.length}</span>
+                  </div>
                   <div className="tracking-vehicle-tabs">
                     {selected.vehicles.map((vehicle, index) => (
-                      <button key={vehicle.id} type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>
-                        سيارة {index + 1}<small>{visibleVin(vehicle)}</small>
-                      </button>
+                      <div key={vehicle.id} className={`tracking-vehicle-select-item ${activeVehicle?.id === vehicle.id ? "active" : ""}`}>
+                        <input aria-label={`تحديد سيارة ${index + 1} ${visibleVin(vehicle)}`} type="checkbox" disabled={Boolean(actionKey) || selected.is_archived || selected.is_cancelled} checked={selectedVehicleIds.includes(vehicle.id)} onChange={event => toggleSelectedVehicle(vehicle.id, event.target.checked)} />
+                        <button type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>سيارة {index + 1}<small>{visibleVin(vehicle)}</small></button>
+                      </div>
                     ))}
                   </div>
+                  {!selected.is_archived && !selected.is_cancelled && <div className="tracking-stage-bulk-toolbar">
+                    <label htmlFor="tracking-bulk-stage">المرحلة</label>
+                    <select id="tracking-bulk-stage" value={bulkStageId} disabled={Boolean(actionKey)} onChange={event => setBulkStageId(event.target.value)}>
+                      <option value="">اختر المرحلة</option>
+                      {activeVehicle?.stages.filter(stage => ![6, 7].includes(Number(stage.sort_order)) && (
+                        hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.complete`) ||
+                        hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,'0')}.rollback`)
+                      )).map(stage => <option key={stage.stage_id} value={stage.stage_id}>{stage.sort_order} - {stage.name}</option>)}
+                    </select>
+                    <button type="button" disabled={Boolean(actionKey) || !selectedVehicleIds.length || !bulkStageId || !activeVehicle?.stages.some(stage => stage.stage_id === bulkStageId && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,"0")}.complete`))} onClick={() => void completeSelectedStage()}><CheckSquare size={19} />{actionKey === 'complete_stage_bulk' ? 'جاري إنهاء المراحل...' : `تم الانتهاء للمحدد (${selectedVehicleIds.length})`}</button>
+                    {activeVehicle?.stages.some(stage => stage.stage_id === bulkStageId && ![6,7].includes(Number(stage.sort_order)) && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2,"0")}.rollback`)) ? (
+                      <button type="button" disabled={Boolean(actionKey) || !selectedVehicleIds.length || !bulkStageId} onClick={() => void revertSelectedStage()}><ArrowCounterClockwise size={18} />تراجع للمحدد ({selectedVehicleIds.length})</button>
+                    ) : null}
+                  </div>}
+
                   {activeVehicle ? <div className="tracking-car-details">
                     <div className="tracking-car-name"><small>السيارة</small><strong>{activeVehicle.car_name || [activeVehicle.item_type, activeVehicle.item_category, activeVehicle.item_model].filter(Boolean).join(" ") || "—"}</strong></div>
                     <div><small>رقم الهيكل</small><strong>{visibleVin(activeVehicle)}</strong></div>
@@ -393,6 +486,11 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                       const completeKey = `complete_stage:${activeVehicle.id}:${stage.stage_id}`;
                       const revertKey = `revert_stage:${activeVehicle.id}:${stage.stage_id}`;
                       const smsKey = `sms:${activeVehicle.id}:${stage.stage_id}`;
+                      const approvalControlled = [6, 7].includes(Number(stage.sort_order));
+                      const selectedStages = selected.vehicles.filter(vehicle => selectedVehicleIds.includes(vehicle.id))
+                        .map(vehicle => vehicle.stages.find(item => item.stage_id === stage.stage_id));
+                      const selectedPending = selectedStages.filter(item => item && item.status !== "completed").length;
+                      const selectedCompleted = selectedStages.filter(item => item?.status === "completed").length;
                       return (
                         <article key={stage.stage_id} className={`tracking-stage-card ${done ? "done" : ""}`}>
                           <div className="tracking-stage-number">{done ? <CheckCircle size={20} weight="fill" /> : stage.sort_order}</div>
@@ -402,8 +500,9 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                             <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
                           </div>
                           <div className="tracking-stage-actions">
-                            {!selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                            {!selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                            {approvalControlled ? <small>تُحدَّث تلقائيًا من تبويب الموافقات</small> : null}
+                            {!approvalControlled && !selected.is_archived && !selected.is_cancelled && selectedPending > 0 && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : selectedVehicleIds.length > 1 ? `تم الانتهاء للمحدد (${selectedVehicleIds.length})` : "تم الانتهاء"}</button> : null}
+                            {!approvalControlled && !selected.is_archived && !selected.is_cancelled && selectedCompleted > 0 && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : selectedVehicleIds.length > 1 ? `تراجع للمحدد (${selectedVehicleIds.length})` : "تراجع"}</button> : null}
                             {!selected.is_archived && !selected.is_cancelled && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className={`sms ${stage.sms_sent ? "sent" : ""}`} onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)} title={stage.sms_sent ? "تم إرسال SMS+ لهذه المرحلة" : "إرسال SMS+"}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
                           </div>
                         </article>

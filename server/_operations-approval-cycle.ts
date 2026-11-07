@@ -1,3 +1,5 @@
+import { syncTrackingApprovalStagesForOperationsVehicle } from "./_tracking-approval-sync.js";
+
 /**
  * Canonical approval-cycle lifecycle for operations vehicles.
  *
@@ -31,6 +33,9 @@ export async function ensureActiveVehicleApprovalCycle(tx: any, vehicleId: strin
     values (${vehicleId}::uuid,${Number(cycle?.next || 1)},true,null)
     returning *,id::text
   `;
+  // A new sale/delivery cycle starts with fresh, unapproved stages 6 and 7.
+  // Historical completed stages of already archived orders are untouched.
+  await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId);
   return created;
 }
 

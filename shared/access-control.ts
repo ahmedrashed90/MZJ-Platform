@@ -1,4 +1,6 @@
-export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking";
+import { W } from './marketing-workflow-labels.js';
+import { OPERATIONS_INVENTORY_FIELDS } from './operations-inventory-fields.js';
+export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking" | "website";
 export type AccessSystemCode = PlatformSystem | "core";
 export type DataScope =
   | "self"
@@ -70,19 +72,24 @@ export const SYSTEM_CATALOG: Array<{ code: PlatformSystem; name: string; sortOrd
   { code: "tracking", name: "التراكينج", sortOrder: 20 },
   { code: "marketing", name: "التسويق", sortOrder: 30 },
   { code: "crm", name: "CRM", sortOrder: 40 },
+  { code: "website", name: "الموقع الإلكتروني", sortOrder: 50 },
 ];
 
 export const PAGE_CATALOG: CatalogPage[] = [
   { system: "core", code: "dashboard", name: "الداش بورد الموحد", route: "/", sortOrder: 10 },
+  { system: "core", code: "attendance", name: "الحضور والانصراف", route: "/attendance", sortOrder: 15 },
   { system: "core", code: "reports", name: "التقارير الموحدة", route: "/reports", sortOrder: 20 },
   { system: "core", code: "database", name: "قاعدة البيانات الموحدة", route: "/database", sortOrder: 30 },
   { system: "core", code: "settings", name: "الإعدادات", route: "/settings", sortOrder: 40 },
   { system: "core", code: "activity", name: "سجل النشاط", route: "/activity", sortOrder: 50 },
+  { system: "core", code: "owners_community", name: "MZJ Owners Community", route: "/owners-community", sortOrder: 60 },
+
+  { system: "website", code: "stock", name: "الاستوك في الموقع", route: "/website", sortOrder: 10 },
 
   { system: "crm", code: "dashboard", name: "الداش بورد", route: "/crm", sortOrder: 10 },
   { system: "crm", code: "database", name: "قاعدة البيانات", route: "/crm/database", sortOrder: 20 },
   { system: "crm", code: "manual_leads", name: "إضافة العملاء", route: "/crm/manual-leads", sortOrder: 30 },
-  { system: "crm", code: "finance_history", name: "سجل عملاء التمويل", route: "/crm/finance-history", sortOrder: 40 },
+  { system: "crm", code: "finance_history", name: "سجل العملاء", route: "/crm/finance-history", sortOrder: 40 },
   { system: "crm", code: "inbox", name: "رسائل غير مصنفة", route: "/crm/inbox", sortOrder: 50 },
   { system: "crm", code: "contacts", name: "جهات الاتصال", route: "/crm/contacts", sortOrder: 60 },
   { system: "crm", code: "inbox_agent", name: "وكيل صندوق الوارد", route: "/crm/inbox-agent", sortOrder: 70 },
@@ -90,18 +97,17 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "crm", code: "kpi", name: "تقييم المناديب KPI", route: "/crm/kpi", sortOrder: 90 },
 
   { system: "marketing", code: "dashboard", name: "الداش بورد", route: "/marketing", sortOrder: 10 },
-  { system: "marketing", code: "create_campaign", name: "إنشاء حملة", route: "/marketing/create-campaign", sortOrder: 20 },
-  { system: "marketing", code: "create_agenda", name: "إنشاء أجندة", route: "/marketing/create-agenda", sortOrder: 30 },
-  { system: "marketing", code: "database", name: "قاعدة البيانات", route: "/marketing/database", sortOrder: 40 },
+  { system: "marketing", code: "create", name: W.create, route: "/marketing/create", sortOrder: 30 },
+  { system: "marketing", code: "products", name: W.products, route: "/marketing/products", sortOrder: 40 },
+  { system: "marketing", code: "database", name: "قاعدة البيانات", route: "/marketing/database", sortOrder: 20 },
   { system: "marketing", code: "packages", name: "إدارة الباقات", route: "/marketing/packages", sortOrder: 50 },
   { system: "marketing", code: "platforms", name: "ربط المنصات", route: "/marketing/platforms", sortOrder: 60 },
-  { system: "marketing", code: "publish_prep", name: "تجهيز النشر", route: "/marketing/publish-prep", sortOrder: 70 },
+  { system: "marketing", code: "publish_prep", name: W.publishing, route: "/marketing/publish-prep", sortOrder: 60 },
   { system: "marketing", code: "engagement", name: "تفاعل النشر", route: "/marketing/engagement", sortOrder: 75 },
-  { system: "marketing", code: "monitoring", name: "المتابعة", route: "/marketing/monitoring", sortOrder: 80 },
-  { system: "marketing", code: "calendar", name: "التقويم", route: "/marketing/calendar", sortOrder: 90 },
-  { system: "marketing", code: "receipt_calendar", name: "تقويم الاستلام", route: "/marketing/receipt-calendar", sortOrder: 100 },
+  { system: "marketing", code: "receipt_calendar", name: W.calendar, route: "/marketing/receipt-calendar", sortOrder: 50 },
   { system: "marketing", code: "stock", name: "الاستوك", route: "/marketing/stock", sortOrder: 110 },
-  { system: "marketing", code: "attendance", name: "الحضور والانصراف", route: "/marketing/attendance", sortOrder: 120 },
+  { system: "marketing", code: "subscriptions", name: "الاشتراكات", route: "/marketing/subscriptions", sortOrder: 120 },
+  { system: "marketing", code: "lead_forms", name: "فورم المنصات", route: "/marketing/lead-forms", sortOrder: 125 },
 
   { system: "operations", code: "inventory", name: "مخزون السيارات", route: "/operations", sortOrder: 10 },
   { system: "operations", code: "manage", name: "إدارة السيارات", route: "/operations/manage", sortOrder: 20 },
@@ -136,6 +142,7 @@ function p(
 export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("platform.superadmin", "صلاحية مدير النظام العليا", "core", "settings", "superadmin", "security", "تجاوز إداري كامل عبر قالب مدير النظام فقط", true),
   p("platform.dashboard.view", "مشاهدة الداش بورد الموحد", "core", "dashboard", "view", "page"),
+  p("attendance.records.correct", "تصحيح سجلات الحضور والانصراف", "core", "attendance", "correct", "action", "تصحيح أوقات الحضور والانصراف مع سبب وسجل تدقيق؛ يتطلب منحًا مباشرًا للمستخدم", true),
   p("platform.reports.view", "مشاهدة التقارير الموحدة", "core", "reports", "view", "page"),
   p("platform.database.view", "مشاهدة قاعدة البيانات الموحدة", "core", "database", "view", "page"),
   p("platform.activity.view", "مشاهدة سجل النشاط", "core", "activity", "view", "page", "مشاهدة سجل النشاط التشغيلي", true),
@@ -158,12 +165,19 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("settings.operations.manage", "تعديل إعدادات العمليات", "core", "settings", "operations_manage", "settings", "تعديل إعدادات العمليات التشغيلية", true),
   p("settings.tracking.view", "مشاهدة إعدادات التتبع", "core", "settings", "tracking_view", "settings"),
   p("settings.tracking.manage", "تعديل إعدادات التتبع", "core", "settings", "tracking_manage", "settings", "تعديل إعدادات التتبع التشغيلية", true),
+  p("settings.owners.view", "مشاهدة إعدادات MZJ Owners Community", "core", "settings", "owners_view", "settings", "مشاهدة إعدادات برنامج مجتمع ملاك MZJ", true),
+  p("settings.owners.manage", "تعديل إعدادات MZJ Owners Community", "core", "settings", "owners_manage", "settings", "تعديل إعدادات النقاط والمكافآت والقوالب", true),
+  p("owners.community.view", "دخول MZJ Owners Community", "core", "owners_community", "view", "page", "فتح لوحة إدارة مجتمع ملاك MZJ", true),
+  p("owners.community.manage", "إدارة MZJ Owners Community", "core", "owners_community", "manage", "action", "إدارة الأعضاء والدعوات والمكافآت والاستبدالات", true),
+
+  p("system.website.access", "دخول نظام الموقع الإلكتروني", "website", "stock", "access", "system"),
+  p("website.stock.view", "مشاهدة الاستوك في الموقع", "website", "stock", "view", "page"),
 
   p("system.crm.access", "دخول نظام CRM", "crm", "dashboard", "access", "system"),
   p("crm.dashboard.view", "مشاهدة داش بورد CRM", "crm", "dashboard", "view", "page"),
   p("crm.database.view", "مشاهدة قاعدة بيانات CRM", "crm", "database", "view", "page"),
   p("crm.manual_leads.view", "فتح إضافة العملاء", "crm", "manual_leads", "view", "page"),
-  p("crm.finance_history.view", "مشاهدة سجل عملاء التمويل", "crm", "finance_history", "view", "page"),
+  p("crm.finance_history.view", "مشاهدة سجل العملاء", "crm", "finance_history", "view", "page"),
   p("crm.inbox.view", "مشاهدة الرسائل غير المصنفة", "crm", "inbox", "view", "page"),
   p("crm.contacts.view", "مشاهدة جهات الاتصال", "crm", "contacts", "view", "page"),
   p("crm.inbox_agent.view", "فتح وكيل صندوق الوارد", "crm", "inbox_agent", "view", "page"),
@@ -218,6 +232,8 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
 
   p("system.operations.access", "دخول نظام العمليات", "operations", "inventory", "access", "system"),
   p("operations.inventory.view", "مشاهدة مخزون السيارات", "operations", "inventory", "view", "page"),
+  p("operations.inventory.tajyeer.update", "التجيير", "operations", "inventory", "tajyeer_update", "action", "تغيير حالة التجيير لكل رقم هيكل", true),
+  ...OPERATIONS_INVENTORY_FIELDS.map((field) => p(field.permission, `إظهار ${field.label}`, "operations", "inventory", `column_${field.key}`, "action", `إظهار عمود ${field.label} في مخزون السيارات`)),
   p("operations.manage.view", "فتح إدارة السيارات", "operations", "manage", "view", "page"),
   p("operations.movement.view", "فتح صفحة الحركة", "operations", "movement", "view", "page"),
   p("operations.transfers.view", "مشاهدة طلبات العمليات", "operations", "transfers", "view", "page"),
@@ -287,9 +303,14 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("tracking.stage.skip", "تخطي مراحل التتبع", "tracking", "orders", "stage_skip", "workflow", "تخطي ترتيب المراحل", true),
 
   p("system.marketing.access", "دخول نظام التسويق", "marketing", "dashboard", "access", "system"),
+  p("marketing.create.view", W.create, "marketing", "create", "view", "page"),
+  p("marketing.task.create", W.createTask, "marketing", "create", "task_create", "action", W.createTask, true),
+  p("marketing.task.edit", W.edit + " " + W.task, "marketing", "create", "task_edit", "action", W.edit, true),
+  p("marketing.task.review", W.approve, "marketing", "dashboard", "task_review", "workflow", W.approve, true),
+  p("marketing.products.view", W.products, "marketing", "products", "view", "page"),
   p("marketing.dashboard.view", "مشاهدة داش بورد التسويق", "marketing", "dashboard", "view", "page"),
-  p("marketing.create_campaign.view", "فتح إنشاء حملة", "marketing", "create_campaign", "view", "page"),
-  p("marketing.create_agenda.view", "فتح إنشاء أجندة", "marketing", "create_agenda", "view", "page"),
+  p("marketing.create_campaign.view", "فتح إنشاء حملة", "marketing", "create", "view_campaign", "page"),
+  p("marketing.create_agenda.view", "فتح إنشاء أجندة", "marketing", "create", "view_agenda", "page"),
   p("marketing.database.view", "مشاهدة قاعدة بيانات التسويق", "marketing", "database", "view", "page"),
   p("marketing.packages.view", "مشاهدة إدارة الباقات", "marketing", "packages", "view", "page"),
   p("marketing.platforms.view", "مشاهدة ربط المنصات", "marketing", "platforms", "view", "page"),
@@ -303,12 +324,23 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.calendar.view", "مشاهدة تقويم التسويق", "marketing", "calendar", "view", "page"),
   p("marketing.receipt_calendar.view", "مشاهدة تقويم الاستلام", "marketing", "receipt_calendar", "view", "page"),
   p("marketing.stock.view", "مشاهدة استوك التسويق", "marketing", "stock", "view", "page"),
-  p("marketing.attendance.view", "مشاهدة الحضور والانصراف", "marketing", "attendance", "view", "page"),
-  p("marketing.campaign.create", "إنشاء حملة", "marketing", "create_campaign", "create", "action", "إنشاء حملة جديدة", true),
+  p("marketing.subscriptions.view", "مشاهدة الاشتراكات", "marketing", "subscriptions", "view", "page", "فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق", true),
+  p("marketing.subscriptions.renew", "تجديد الاشتراكات", "marketing", "subscriptions", "renew", "action", "تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام", true),
+  p("marketing.subscriptions.manage", "إدارة الاشتراكات", "marketing", "subscriptions", "manage", "settings", "إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق", true),
+  p("marketing.lead_forms.view", "مشاهدة فورم المنصات", "marketing", "lead_forms", "view", "page"),
+  p("marketing.lead_forms.create", "إنشاء فورم", "marketing", "lead_forms", "create", "action", "إنشاء وتصميم فورم جديد", true),
+  p("marketing.lead_forms.edit", "تعديل فورم", "marketing", "lead_forms", "edit", "action", "تعديل فورم ومسودته", true),
+  p("marketing.lead_forms.publish", "نشر وإيقاف الفورمات", "marketing", "lead_forms", "publish", "action", "نشر وإيقاف الروابط العامة", true),
+  p("marketing.lead_forms.leads.view", "عرض ليدات الفورم", "marketing", "lead_forms", "leads_view", "action", "عرض الأسماء وأرقام الهواتف والإجابات", true),
+  p("marketing.lead_forms.leads.export", "تصدير ليدات الفورم", "marketing", "lead_forms", "leads_export", "action", "تحميل بيانات الليدات", true),
+  p("marketing.lead_forms.leads.delete", "حذف بيانات فورم المنصات", "marketing", "lead_forms", "leads_delete", "action", "حذف ليد محدد أو مسح بيانات الزيارات والليدات بعد تأكيد المدير", true),
+  p("marketing.lead_forms.reports.view", "مشاهدة تقارير الفورم", "marketing", "lead_forms", "reports_view", "action"),
+  p("marketing.lead_forms.sheets.manage", "إعدادات Google Sheets للفورم", "marketing", "lead_forms", "sheets_manage", "settings", "تغيير وجهة بيانات العملاء وتحديث المزامنة", true),
+  p("marketing.campaign.create", "إنشاء حملة", "marketing", "create", "campaign_create", "action", "إنشاء حملة جديدة", true),
   p("marketing.campaign.edit", "تعديل حملة", "marketing", "database", "edit", "action", "تعديل بيانات حملة", true),
   p("marketing.campaign.delete", "حذف حملة", "marketing", "database", "delete", "action", "حذف حملة", true),
   p("marketing.campaign.archive", "أرشفة حملة", "marketing", "database", "archive", "action"),
-  p("marketing.agenda.create", "إنشاء أجندة", "marketing", "create_agenda", "create", "action", "إنشاء أجندة جديدة", true),
+  p("marketing.agenda.create", "إنشاء أجندة", "marketing", "create", "agenda_create", "action", "إنشاء أجندة جديدة", true),
   p("marketing.agenda.edit", "تعديل أجندة", "marketing", "database", "edit", "action", "تعديل أجندة", true),
   p("marketing.agenda.delete", "حذف أجندة", "marketing", "database", "delete", "action", "حذف أجندة", true),
   p("marketing.structure.approve", "اعتماد الهيكل", "marketing", "database", "structure_approve", "workflow", "اعتماد هيكل الحملة أو الأجندة", true),
@@ -335,7 +367,6 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.publish.now", "النشر الآن", "marketing", "publish_prep", "publish_now", "action", "تنفيذ النشر المباشر", true),
   p("marketing.photo_request.create", "إنشاء طلب تصوير", "marketing", "stock", "photo_request_create", "action", "إنشاء طلب تصوير مرتبط بالعمليات", true),
   p("marketing.photo_request.complete", "إنهاء طلب تصوير", "marketing", "stock", "photo_request_complete", "workflow"),
-  p("marketing.attendance.manage", "إدارة الحضور والانصراف", "marketing", "attendance", "manage", "action", "تعديل إعدادات وتقارير الحضور", true),
   p("marketing.connections.manage", "إدارة ربط المنصات", "marketing", "platforms", "manage", "settings", "حفظ وفصل التوكنات", true),
 ];
 
@@ -359,7 +390,10 @@ export function canAccessSystem(user: AccessUserShape | null | undefined, system
 }
 
 export function canOpenSettings(user: AccessUserShape | null | undefined) {
-  return PERMISSION_CATALOG.some((permission) => permission.system === "core" && permission.page === "settings" && hasPermission(user, permission.code));
+  return PERMISSION_CATALOG.some((permission) =>
+    ((permission.system === "core" && permission.page === "settings") || permission.code === "marketing.subscriptions.manage")
+    && hasPermission(user, permission.code),
+  );
 }
 
 export function isPlatformAdmin(user: AccessUserShape | null | undefined) {

@@ -6,10 +6,11 @@ import { operationsFetch, queryString } from "../api";
 import type { VehicleRow } from "../types";
 import { useOperations } from "../useOperations";
 
+const AGENCY_INTERIOR_COLORS = ["احمر", "اسود", "برتقالي", "بني غامق", "بيج", "جملي", "رمادي"] as const;
+
 type SelectedVehicle = VehicleRow & {
-  note: string;
   stateNote: string;
-  shortageNote: string;
+  agencyInteriorColor: string;
   checks: Record<string, { status: string; note: string }>;
 };
 
@@ -19,8 +20,7 @@ export function MovementPage() {
   const [results, setResults] = useState<VehicleRow[]>([]);
   const [selected, setSelected] = useState<SelectedVehicle[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
-  const [newStatus, setNewStatus] = useState("available_for_sale");
-  const [note, setNote] = useState("");
+  const [newStatus, setNewStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -46,9 +46,8 @@ export function MovementPage() {
   function add(row: VehicleRow) {
     setSelected((current) => [...current, {
       ...row,
-      note: "",
       stateNote: row.state_note || "",
-      shortageNote: row.shortage_note || "",
+      agencyInteriorColor: AGENCY_INTERIOR_COLORS.includes((row.interior_color || "") as (typeof AGENCY_INTERIOR_COLORS)[number]) ? String(row.interior_color) : "",
       checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "ok", note: "" }])),
     }]);
     setSearch("");
@@ -60,7 +59,15 @@ export function MovementPage() {
   }
 
   const destination = useMemo(() => meta.locations.find((item) => item.id === destinationLocationId), [meta.locations, destinationLocationId]);
-  const statusName = statuses.find((status) => status.code === newStatus)?.name || newStatus;
+  // No user-selected override: keep the existing status of each selected vehicle.
+  // A mixed selection must not silently force the first vehicle's status on the others.
+  const currentStatusCodes = [...new Set(selected.map((item) => item.status_code))];
+  const displayedNewStatus = newStatus || (currentStatusCodes.length === 1 ? currentStatusCodes[0] : "");
+  const statusName = newStatus
+    ? statuses.find((status) => status.code === newStatus)?.name || newStatus
+    : currentStatusCodes.length === 1
+      ? selected[0].status_name || statuses.find((status) => status.code === displayedNewStatus)?.name || displayedNewStatus
+      : "الحالة الحالية لكل سيارة";
 
   const columns = useMemo<ResizableOperationsColumn<SelectedVehicle>[]>(() => {
     const base: ResizableOperationsColumn<SelectedVehicle>[] = [
@@ -68,13 +75,9 @@ export function MovementPage() {
       { key: "car", label: "السيارة والبيان", width: 230, min: 150, max: 420, value: (row) => `${row.car_name || ""} ${row.statement || ""}`, render: (row) => <span className="operations-cell-stack"><b>{row.car_name || "—"}</b><small>{row.statement || "لا يوجد بيان"}</small></span> },
       { key: "location", label: "المكان الحالي", width: 135, min: 105, max: 230, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
       { key: "status", label: "الحالة الحالية", width: 155, min: 115, max: 250, value: (row) => row.status_name, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
-      { key: "approvals", label: "الموافقات", width: 145, min: 115, max: 220, value: (row) => `${row.financial_approved} ${row.administrative_approved}`, render: (row) => <span className={row.financial_approved && row.administrative_approved ? "operations-approval-pair complete" : "operations-approval-pair"}><small>{row.financial_approved ? "مالي ✓" : "مالي —"}</small><small>{row.administrative_approved ? "إداري ✓" : "إداري —"}</small></span> },
-      { key: "note", label: "ملاحظة السيارة", width: 210, min: 145, max: 420, value: (row) => row.note, render: (row) => <input value={row.note} onChange={(event) => patch(row.id, { note: event.target.value })} placeholder="ملاحظة اختيارية" /> },
-      { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 245, min: 170, max: 480, value: (row) => row.shortageNote, render: (row) => <input value={row.shortageNote} onChange={(event) => patch(row.id, { shortageNote: event.target.value })} placeholder="حجز أو نواقص" /> },
+      { key: "approvals", label: "الموافقة المالية", width: 125, min: 105, max: 185, value: (row) => row.financial_approved, render: (row) => <span className="operations-approval-pair"><small>{row.financial_approved ? "مالي ✓" : "مالي —"}</small></span> },
+      { key: "stateNote", label: "ملاحظات", width: 265, min: 185, max: 470, value: (row) => row.stateNote, render: (row) => <input required={(newStatus || row.status_code) === "has_notes"} value={row.stateNote} onChange={(event) => patch(row.id, { stateNote: event.target.value })} placeholder={(newStatus || row.status_code) === "has_notes" ? "اكتب الملاحظات" : "ملاحظة اختيارية"} /> },
     ];
-    if (newStatus === "has_notes") {
-      base.push({ key: "stateNote", label: "ملاحظات الحالة", width: 220, min: 160, max: 460, value: (row) => row.stateNote, render: (row) => <input required value={row.stateNote} onChange={(event) => patch(row.id, { stateNote: event.target.value })} placeholder="مطلوبة" /> });
-    }
     base.push({ key: "delete", label: "حذف", width: 76, min: 68, max: 100, value: () => "", render: (row) => <button type="button" className="operations-row-delete" onClick={() => setSelected((current) => current.filter((item) => item.id !== row.id))} aria-label={`حذف السيارة ${row.vin}`}><Trash size={17} /></button> });
     return base;
   }, [newStatus]);
@@ -90,12 +93,10 @@ export function MovementPage() {
           action: "move_vehicles",
           destinationLocationId,
           newStatus,
-          note,
           items: selected.map((item) => ({
             vehicleId: item.id,
-            note: item.note,
             stateNote: item.stateNote,
-            shortageNote: item.shortageNote,
+            agencyInteriorColor: item.location_code === "agency" ? item.agencyInteriorColor : undefined,
             checks: item.location_code === "agency" ? meta.checkItems.map((check) => {
               const value = item.checks[check.code] || { status: "ok", note: "" };
               return { itemCode: check.code, status: value.status, note: value.note };
@@ -106,7 +107,7 @@ export function MovementPage() {
       setMessage(payload.message);
       setSelected([]);
       setDestinationLocationId("");
-      setNote("");
+      setNewStatus("");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الحركة");
     } finally {
@@ -126,11 +127,10 @@ export function MovementPage() {
           </div>
           <div className="operations-movement-targets" aria-label="بيانات الحركة الجديدة">
             <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={displayedNewStatus} onChange={(event) => setNewStatus(event.target.value)}><option value="">الحالة الحالية لكل سيارة (بدون تغيير)</option>{displayedNewStatus && !statuses.some((item) => item.code === displayedNewStatus) ? <option value={displayedNewStatus}>{selected[0]?.status_name || displayedNewStatus}</option> : null}{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
           </div>
         </div>
 
-        <label className="operations-field operations-general-note"><span>حجز - نواقص - تحديد مكان</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="اكتب الحجز أو النواقص أو تحديد المكان" /></label>
 
         {!selected.length ? (
           <div className="operations-empty-state"><Car size={42} weight="duotone" /><strong>لم يتم اختيار سيارات</strong><span>ابحث عن السيارة وأضفها، ثم حدد المكان والحالة الجديدة.</span></div>
@@ -141,15 +141,22 @@ export function MovementPage() {
               rows={selected}
               columns={columns}
               rowKey={(row) => row.id}
-              storageKey={`mzj.operations.movementSelection.columnWidths.${newStatus === "has_notes" ? "notes" : "default"}.v1`}
+              storageKey="mzj.operations.movementSelection.columnWidths.single-note.v1"
               emptyText="لم يتم اختيار سيارات"
-              minTableWidth={1350}
+              minTableWidth={1100}
               tableClassName="operations-selection-table operations-movement-selection-table"
             />
 
             {selected.filter((item) => item.location_code === "agency").map((item) => (
               <details key={`checks-${item.id}`} className="operations-agency-checks">
                 <summary>تشيك الوكالة للسيارة <b dir="ltr">{item.vin}</b></summary>
+                <label className="operations-agency-interior-color">
+                  <span>اللون الداخلي</span>
+                  <select value={item.agencyInteriorColor} onChange={(event) => patch(item.id, { agencyInteriorColor: event.target.value })}>
+                    <option value="">اختر اللون الداخلي</option>
+                    {AGENCY_INTERIOR_COLORS.map((color) => <option key={color} value={color}>{color}</option>)}
+                  </select>
+                </label>
                 <div className="operations-check-editor">
                   {meta.checkItems.map((check) => {
                     const checkValue = item.checks[check.code] || { status: "ok", note: "" };
@@ -191,7 +198,7 @@ export function MovementPage() {
           </div>
         )}
 
-        <button className="operations-primary-button operations-submit-movement" type="button" disabled={saving || !selected.length || !destinationLocationId || !meta.permissions.canMove || (newStatus === "has_notes" && selected.some((item) => !item.stateNote.trim()))} onClick={() => void submit()}>{saving ? "جاري تنفيذ الحركة..." : `تنفيذ الحركة على ${selected.length} سيارة`}</button>
+        <button className="operations-primary-button operations-submit-movement" type="button" disabled={saving || !selected.length || !destinationLocationId || !meta.permissions.canMove || selected.some((item) => (newStatus || item.status_code) === "has_notes" && !item.stateNote.trim())} onClick={() => void submit()}>{saving ? "جاري تنفيذ الحركة..." : `تنفيذ الحركة على ${selected.length} سيارة`}</button>
       </section>
     </div>
   );

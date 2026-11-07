@@ -1,24 +1,37 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   CaretDown,
   ChartBar,
+  Crown,
   Database,
   Gear,
+  Globe,
   House,
   List,
   MapPin,
   Megaphone,
   Pulse,
   Question,
+  SignIn,
   SignOut,
   SuitcaseSimple,
+  UserSwitch,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
+import { attendanceFetch, formatAttendanceTime } from "../attendance/api";
 import { NotificationBell } from "../notifications/NotificationBell";
-import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
+import {
+  canAccessCrm,
+  canAccessMarketing,
+  canAccessOperations,
+  canAccessTracking,
+  canAccessWebsite,
+  canOpenSettings,
+  hasPermission,
+} from "../systemAccess";
 import { firstAllowedPage } from "../../shared/access-control";
 
 const items = [
@@ -27,6 +40,9 @@ const items = [
   { href: "/marketing", label: "التسويق", icon: Megaphone, system: "marketing" },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, system: "operations" },
   { href: "/tracking", label: "التراكينج", icon: MapPin, system: "tracking" },
+  { href: "/website", label: "الموقع الإلكتروني", icon: Globe, system: "website" },
+  { href: "/owners-community", label: "MZJ Club Community", icon: Crown, permission: "owners.community.view" },
+  { href: "/attendance", label: "الحضور والانصراف", icon: UserSwitch, permission: "platform.superadmin" },
 ] as const;
 
 const supportItems = [
@@ -46,7 +62,7 @@ const mobileSystems = [
       ["/crm", "الداش بورد", "crm.dashboard.view"],
       ["/crm/database", "قاعدة البيانات", "crm.database.view"],
       ["/crm/manual-leads", "إضافة العملاء", "crm.manual_leads.view"],
-      ["/crm/finance-history", "سجل عملاء التمويل", "crm.finance_history.view"],
+      ["/crm/finance-history", "سجل العملاء", "crm.finance_history.view"],
       ["/crm/inbox", "رسائل غير مصنفة", "crm.inbox.view"],
       ["/crm/contacts", "جهات الاتصال", "crm.contacts.view"],
       ["/crm/inbox-agent", "وكيل صندوق الوارد", "crm.inbox_agent.view"],
@@ -60,17 +76,17 @@ const mobileSystems = [
     icon: Megaphone,
     pages: [
       ["/marketing", "الداش بورد", "marketing.dashboard.view"],
-      ["/marketing/create-campaign", "إنشاء حملة", "marketing.create_campaign.view"],
-      ["/marketing/create-agenda", "إنشاء أجندة", "marketing.create_agenda.view"],
       ["/marketing/database", "قاعدة البيانات", "marketing.database.view"],
-      ["/marketing/packages", "إدارة الباقات", "marketing.packages.view"],
+      ["/marketing/create", "إنشاء", "marketing.create.view"],
+      ["/marketing/products", "المنتجات", "marketing.products.view"],
+      ["/marketing/packages", "الباقات", "marketing.packages.view"],
+      ["/marketing/receipt-calendar", "تقويم الاستلام", "marketing.receipt_calendar.view"],
       ["/marketing/publish-prep", "تجهيز النشر", "marketing.publish_prep.view"],
       ["/marketing/engagement", "تفاعل النشر", "marketing.engagement.view"],
-      ["/marketing/monitoring", "المتابعة", "marketing.monitoring.view"],
-      ["/marketing/calendar", "التقويم", "marketing.calendar.view"],
-      ["/marketing/receipt-calendar", "تقويم الاستلام", "marketing.receipt_calendar.view"],
+      ["/marketing/ratings", "تقييمات المنفذين", "marketing.dashboard.view"],
       ["/marketing/stock", "الاستوك", "marketing.stock.view"],
-      ["/marketing/attendance", "الحضور والانصراف", "marketing.attendance.view"],
+      ["/marketing/subscriptions", "الاشتراكات", "marketing.subscriptions.view"],
+      ["/marketing/lead-forms", "فورم المنصات", "marketing.lead_forms.view"],
     ],
   },
   {
@@ -98,9 +114,47 @@ const mobileSystems = [
       ["/tracking/delete", "حذف طلبات التراكينج", "tracking.delete.view"],
     ],
   },
+  {
+    key: "website",
+    label: "الموقع الإلكتروني",
+    icon: Globe,
+    pages: [
+      ["/website", "الاستوك في الموقع", "website.stock.view"],
+      ["/website/images", "إدارة صور السيارات", "website.stock.view"],
+    ],
+  },
 ] as const;
 
+type SelfAttendanceState = {
+  enforcementEnabled: boolean;
+  assigned: boolean;
+  scheduleName: string | null;
+  isDayOff: boolean;
+  activePeriod: {
+    id: string;
+    name: string;
+    startTime: string;
+    endTime: string;
+    graceMinutes: number;
+    workDate: string;
+  } | null;
+  record: {
+    checkIn: string | null;
+    checkOut: string | null;
+    checkoutSource: string | null;
+    delayMinutes: number;
+    workMinutes: number;
+    status: string;
+  } | null;
+  canCheckIn: boolean;
+  hasOpenAttendance: boolean;
+  deviceAttendanceRole?: "primary" | "secondary" | "exempt" | "unverified";
+};
+
+type SelfAttendancePayload = { ok: true; state: SelfAttendanceState };
+
 type NavItem = { href: string; label: string; icon: typeof House; onNavigate?: () => void };
+
 function Item({ href, label, icon: Icon, onNavigate }: NavItem) {
   return (
     <NavLink to={href} end={href === "/"} onClick={onNavigate} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
@@ -109,10 +163,27 @@ function Item({ href, label, icon: Icon, onNavigate }: NavItem) {
   );
 }
 
+function attendanceStateLabel(state: SelfAttendanceState | null) {
+  if (state?.deviceAttendanceRole === "secondary") return "جهاز ثانوي • الحضور من الجهاز الأساسي";
+  if (!state?.assigned) return "";
+  if (state.isDayOff) return "اليوم إجازة";
+  if (!state.activePeriod) return "خارج فترة العمل";
+  if (state.hasOpenAttendance && state.record?.checkIn) {
+    return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}`;
+  }
+  if (state.canCheckIn) return `${state.activePeriod.name} • لم يسجل الحضور`;
+  if (state.record?.checkOut) return `${state.activePeriod.name} • تم الانصراف`;
+  return state.activePeriod.name;
+}
+
 export function Sidebar() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [attendanceState, setAttendanceState] = useState<SelfAttendanceState | null>(null);
+  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "logout">("");
+  const [attendanceError, setAttendanceError] = useState("");
+  const autoCheckInAttempts = useRef(new Set<string>());
   const currentSystem = mobileSystems.find((system) => location.pathname === `/${system.key}` || location.pathname.startsWith(`/${system.key}/`))?.key || "";
   const [expandedSystem, setExpandedSystem] = useState<string>(currentSystem);
 
@@ -121,9 +192,11 @@ export function Sidebar() {
     marketing: canAccessMarketing(user),
     operations: canAccessOperations(user),
     tracking: canAccessTracking(user),
+    website: canAccessWebsite(user),
   };
-  const visibleItems = items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
+  const visibleItems = items.filter((item) => "permission" in item ? !item.permission || hasPermission(user, item.permission) : systemAllowed[item.system]);
   const resolvedItems = visibleItems.map((item) => "system" in item ? { ...item, href: firstAllowedPage(user, item.system) } : item);
+  const mobileStandaloneItems = resolvedItems.filter((item) => "permission" in item && item.href !== "/");
   const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
   const visibleMobileSystems = useMemo(() => mobileSystems
     .filter((system) => systemAllowed[system.key])
@@ -142,6 +215,77 @@ export function Sidebar() {
     return () => document.body.classList.remove("mobile-sidebar-open");
   }, [mobileOpen]);
 
+  useEffect(() => {
+    if (!user?.id) {
+      setAttendanceState(null);
+      autoCheckInAttempts.current.clear();
+      return;
+    }
+    let stopped = false;
+    const load = async () => {
+      try {
+        const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance?view=self");
+        if (!stopped) setAttendanceState(payload.state);
+      } catch {
+        if (!stopped) setAttendanceState(null);
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => { void load(); }, 30000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [user?.id]);
+
+  async function handleCheckIn() {
+    if (attendanceBusy) return;
+    setAttendanceBusy("checkin");
+    setAttendanceError("");
+    try {
+      const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "self_check_in" }),
+      });
+      setAttendanceState(payload.state);
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الحضور");
+    } finally {
+      setAttendanceBusy("");
+    }
+  }
+
+  useEffect(() => {
+    if (!user?.id || !attendanceState?.canCheckIn || !attendanceState.activePeriod || attendanceBusy) return;
+    if (!["primary", "exempt"].includes(attendanceState.deviceAttendanceRole || "")) return;
+    const period = attendanceState.activePeriod;
+    const key = `${user.id}:${period.id}:${period.workDate}`;
+    if (autoCheckInAttempts.current.has(key)) return;
+    autoCheckInAttempts.current.add(key);
+    void handleCheckIn();
+  }, [user?.id, attendanceState?.canCheckIn, attendanceState?.activePeriod?.id,
+    attendanceState?.activePeriod?.workDate, attendanceState?.deviceAttendanceRole, attendanceBusy]);
+
+  async function handleLogout() {
+    if (attendanceBusy) return;
+    setAttendanceBusy("logout");
+    setAttendanceError("");
+    try {
+      await logout();
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الخروج");
+    } finally {
+      setAttendanceBusy("");
+    }
+  }
+
+  const needsCheckIn = Boolean(attendanceState?.canCheckIn);
+  const hasOpenAttendance = Boolean(attendanceState?.hasOpenAttendance);
+  const actionLabel = needsCheckIn
+    ? attendanceBusy === "checkin" ? "جاري تسجيل الحضور..." : "تسجيل حضور"
+    : attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج";
+  const ActionIcon = needsCheckIn ? SignIn : SignOut;
+  const stateLabel = attendanceStateLabel(attendanceState);
   const closeMobile = () => setMobileOpen(false);
 
   return <>
@@ -181,6 +325,10 @@ export function Sidebar() {
             </section>;
           })}
         </div>
+        {mobileStandaloneItems.length ? <>
+          <div className="nav-separator" />
+          <div className="nav-group">{mobileStandaloneItems.map((item) => <Item key={item.href} {...item} onNavigate={closeMobile} />)}</div>
+        </> : null}
         <div className="nav-separator" />
         <div className="nav-group">{visibleSupport.map((item) => <Item key={item.href} {...item} onNavigate={closeMobile} />)}</div>
       </nav>
@@ -192,10 +340,20 @@ export function Sidebar() {
             <strong className="account-name" title={fullName}>{fullName}</strong>
             <NotificationBell />
           </div>
-          <div className="account-row account-secondary">
-            <span className="account-role" title={roleText}>{roleText}</span>
-            <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={17} /></button>
-          </div>
+          <span className="account-role" title={roleText}>{roleText}</span>
+          {stateLabel ? <span className={`attendance-account-state ${needsCheckIn ? "needs-checkin" : hasOpenAttendance ? "checked-in" : ""}`}>{stateLabel}</span> : null}
+          {attendanceError ? <span className="attendance-account-error" title={attendanceError}>{attendanceError}</span> : null}
+          <button
+            type="button"
+            className={`attendance-account-action ${needsCheckIn ? "checkin" : "logout"}`}
+            onClick={() => needsCheckIn ? void handleCheckIn() : void handleLogout()}
+            disabled={Boolean(attendanceBusy)}
+            aria-label={actionLabel}
+            title={needsCheckIn ? actionLabel : hasOpenAttendance ? "تسجيل الخروج من المنصة - الانصراف يتم تلقائيًا حسب نهاية الدوام" : actionLabel}
+          >
+            <ActionIcon size={17} />
+            <span>{actionLabel}</span>
+          </button>
         </div>
       </div>
     </aside>

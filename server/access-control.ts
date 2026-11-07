@@ -24,7 +24,7 @@ function bool(value: unknown, fallback = false) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 function array(value: unknown) { return Array.isArray(value) ? value.map(clean).filter(Boolean) : []; }
-function validSystem(value: unknown): value is PlatformSystem { return ["crm", "marketing", "operations", "tracking"].includes(clean(value)); }
+function validSystem(value: unknown): value is PlatformSystem { return ["crm", "marketing", "operations", "tracking", "website"].includes(clean(value)); }
 function validScope(value: unknown): value is DataScope { return DATA_SCOPE_OPTIONS.some((item) => item.code === clean(value)); }
 function safeRoleCode(value: unknown) { return clean(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80); }
 
@@ -155,7 +155,7 @@ async function userSnapshot(userId: string) {
 async function listUsers() {
   const sql = getSql();
   return sql<any[]>`
-    select u.id::text,u.employee_no,u.full_name,u.email,u.mobile,u.next_erp_user_id,u.is_active,u.can_receive_leads,u.can_receive_tasks,
+    select u.id::text,u.employee_no,u.full_name,u.email,u.mobile,u.next_erp_user_id,u.mersal_user_id,u.is_active,u.is_archived,u.can_receive_leads,u.can_receive_tasks,
       u.last_login_at,u.created_at,u.updated_at,u.permission_version,
       coalesce((select string_agg(r.name,'، ' order by r.name) from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=u.id),'') as roles,
       coalesce((select string_agg(b.name,'، ' order by b.sort_order,b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id where ub.user_id=u.id),'') as branches,
@@ -173,7 +173,7 @@ async function listUsers() {
 async function userDetail(userId: string) {
   const sql = getSql();
   const [userRows, roles, systems, overrides, access] = await Promise.all([
-    sql<any[]>`select id::text,employee_no,full_name,email,mobile,next_erp_user_id,is_active,can_receive_leads,can_receive_tasks,last_login_at,created_at,updated_at,permission_version from core.users where id=${userId}::uuid and coalesce(disabled_reason,'') not like 'ACCOUNT_DELETED:%'`,
+    sql<any[]>`select id::text,employee_no,full_name,email,mobile,next_erp_user_id,mersal_user_id,is_active,is_archived,can_receive_leads,can_receive_tasks,last_login_at,created_at,updated_at,permission_version from core.users where id=${userId}::uuid and coalesce(disabled_reason,'') not like 'ACCOUNT_DELETED:%'`,
     sql<any[]>`select r.id::text,r.code,r.name from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=${userId}::uuid order by r.name`,
     sql<any[]>`
       select us.system_code,us.is_enabled,us.role_id::text,us.data_scope,
@@ -194,7 +194,7 @@ async function userDetail(userId: string) {
 
 async function bootstrap() {
   const sql = getSql();
-  const [systems, pages, permissions, roles, branches, departments, vehicleStatuses] = await Promise.all([
+  const [systems, pages, permissions, roles, branches, departments, vehicleStatuses, mersalUsers] = await Promise.all([
     sql<any[]>`select code,name_ar,sort_order,is_active from core.systems where code in ('crm','marketing','operations','tracking') order by sort_order`,
     sql<any[]>`select id::text,system_code,code,name_ar,route,sort_order,is_active from core.system_pages where is_active=true order by system_code,sort_order`,
     sql<any[]>`select id::text,code,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order from core.permissions where is_active=true order by system_code,sort_order,code`,
@@ -207,8 +207,9 @@ async function bootstrap() {
     sql<any[]>`select id::text,code,name,is_active,sort_order from core.branches order by is_active desc,sort_order,name`,
     sql<any[]>`select id::text,code,name,system_code,is_active from core.departments order by is_active desc,system_code,name`,
     sql<any[]>`select code,name,is_active,sort_order from operations.vehicle_statuses order by is_active desc,sort_order,name`,
+    sql<any[]>`select mersal_user_id,full_name,email,role_name,status,is_active,synced_at from core.mersal_users order by is_active desc,full_name,mersal_user_id`,
   ]);
-  return { systems, pages, permissions, roles, branches, departments, vehicleStatuses, dataScopes: DATA_SCOPE_OPTIONS };
+  return { systems, pages, permissions, roles, branches, departments, vehicleStatuses, mersalUsers, dataScopes: DATA_SCOPE_OPTIONS };
 }
 
 async function saveUser(request: VercelRequest, actor: PermissionUser, body: Record<string, any>) {
@@ -224,10 +225,12 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   const email = clean(input.email).toLowerCase() || null;
   const mobile = clean(input.mobile) || null;
   const nextErpUserId = clean(input.nextErpUserId).toLowerCase() || null;
+  const mersalUserId = clean(input.mersalUserId) || null;
   const password = clean(input.password);
   const isActive = bool(input.isActive, true);
-  const canReceiveLeads = bool(input.canReceiveLeads);
-  const canReceiveTasks = bool(input.canReceiveTasks);
+  const isArchived = bool(input.isArchived);
+  const canReceiveLeads = isArchived ? false : bool(input.canReceiveLeads);
+  const canReceiveTasks = isArchived ? false : bool(input.canReceiveTasks);
   const roleIds = array(body.roleIds);
   const systems = Array.isArray(body.systems) ? body.systems.filter((item: any) => validSystem(item?.systemCode)) : [];
   const requestedOverrides = Array.isArray(body.overrides) ? body.overrides.filter((item: any) => clean(item?.permissionCode) && ["allow", "deny"].includes(clean(item?.effect))) : [];
@@ -250,15 +253,20 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
     || clean(beforeUser.email).toLowerCase() !== clean(email).toLowerCase()
     || clean(beforeUser.mobile) !== clean(mobile)
     || clean(beforeUser.next_erp_user_id).toLowerCase() !== clean(nextErpUserId).toLowerCase()
+    || clean(beforeUser.mersal_user_id) !== clean(mersalUserId)
     || Boolean(beforeUser.can_receive_leads) !== canReceiveLeads
     || Boolean(beforeUser.can_receive_tasks) !== canReceiveTasks
     || Boolean(password);
   const activeChanged = !creating && Boolean(beforeUser.is_active) !== isActive;
+  const archiveChanged = !creating && Boolean(beforeUser.is_archived) !== isArchived;
   if (!creating && profileChanged && !hasPermission(actor, "settings.users.update")) {
     throw Object.assign(new Error("لا توجد صلاحية لتعديل بيانات المستخدم"), { status: 403 });
   }
   if (activeChanged && !hasPermission(actor, "settings.users.disable")) {
     throw Object.assign(new Error("لا توجد صلاحية لتعطيل أو تفعيل المستخدم"), { status: 403 });
+  }
+  if ((archiveChanged || (creating && isArchived)) && !hasPermission(actor, "settings.permissions.manage")) {
+    throw Object.assign(new Error("لا توجد صلاحية لأرشفة المستخدم أو إعادته للفروع"), { status: 403 });
   }
 
   const creatingWithAccess = creating && (
@@ -267,8 +275,8 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
     || systems.some((item: any) => bool(item.isEnabled) || clean(item.roleId) || array(item.branchIds).length || array(item.departmentIds).length || array(item.vehicleStatusCodes).length)
   );
   const requestedAccessChanged = creating
-    ? creatingWithAccess
-    : accessPayloadSignature(roleIds, systems, overrides) !== accessPayloadSignature(
+    ? creatingWithAccess || isArchived
+    : archiveChanged || accessPayloadSignature(roleIds, systems, overrides) !== accessPayloadSignature(
         (before?.roles || []).map((item: any) => clean(item.id)),
         (before?.systems || []).map((item: any) => ({ systemCode:item.systemCode,isEnabled:item.isEnabled,roleId:item.roleId,dataScope:item.dataScope,branchIds:item.branchIds,departmentIds:item.departmentIds,vehicleStatusCodes:item.vehicleStatusCodes,primaryBranchId:item.primaryBranchId,primaryDepartmentId:item.primaryDepartmentId })),
         (before?.overrides || []).map((item: any) => ({ permissionCode:item.permissionCode,effect:item.effect })),
@@ -311,22 +319,24 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
     let id = userId;
     if (creating) {
       const [created] = await tx<any[]>`
-        insert into core.users(employee_no,full_name,email,mobile,next_erp_user_id,password_hash,must_change_password,is_active,can_receive_leads,can_receive_tasks)
-        values(${employeeNo},${fullName},${email},${mobile},${nextErpUserId},crypt(${password},gen_salt('bf')),true,${isActive},${canReceiveLeads},${canReceiveTasks})
+        insert into core.users(employee_no,full_name,email,mobile,next_erp_user_id,mersal_user_id,password_hash,must_change_password,is_active,is_archived,archived_at,archived_by,can_receive_leads,can_receive_tasks)
+        values(${employeeNo},${fullName},${email},${mobile},${nextErpUserId},${mersalUserId},crypt(${password},gen_salt('bf')),true,${isActive},${isArchived},case when ${isArchived} then now() else null end,case when ${isArchived} then ${actor.id}::uuid else null end,${canReceiveLeads},${canReceiveTasks})
         returning id::text
       `;
       id = created.id;
     } else if (password) {
       await tx`
-        update core.users set employee_no=${employeeNo},full_name=${fullName},email=${email},mobile=${mobile},next_erp_user_id=${nextErpUserId},
-          password_hash=crypt(${password},gen_salt('bf')),must_change_password=true,password_changed_at=null,is_active=${isActive},
+        update core.users set employee_no=${employeeNo},full_name=${fullName},email=${email},mobile=${mobile},next_erp_user_id=${nextErpUserId},mersal_user_id=${mersalUserId},
+          password_hash=crypt(${password},gen_salt('bf')),must_change_password=true,password_changed_at=null,is_active=${isActive},is_archived=${isArchived},
+          archived_at=case when ${isArchived} then coalesce(archived_at,now()) else null end,archived_by=case when ${isArchived} then ${actor.id}::uuid else null end,
           disabled_at=case when ${isActive} then null else now() end,disabled_by=case when ${isActive} then null else ${actor.id}::uuid end,disabled_reason=case when ${isActive} then null else ${reason} end,
           can_receive_leads=${canReceiveLeads},can_receive_tasks=${canReceiveTasks},updated_at=now()
         where id=${id}::uuid
       `;
     } else {
       await tx`
-        update core.users set employee_no=${employeeNo},full_name=${fullName},email=${email},mobile=${mobile},next_erp_user_id=${nextErpUserId},is_active=${isActive},
+        update core.users set employee_no=${employeeNo},full_name=${fullName},email=${email},mobile=${mobile},next_erp_user_id=${nextErpUserId},mersal_user_id=${mersalUserId},is_active=${isActive},is_archived=${isArchived},
+          archived_at=case when ${isArchived} then coalesce(archived_at,now()) else null end,archived_by=case when ${isArchived} then ${actor.id}::uuid else null end,
           disabled_at=case when ${isActive} then null else coalesce(disabled_at,now()) end,disabled_by=case when ${isActive} then null else ${actor.id}::uuid end,disabled_reason=case when ${isActive} then null else ${reason} end,
           can_receive_leads=${canReceiveLeads},can_receive_tasks=${canReceiveTasks},updated_at=now()
         where id=${id}::uuid
@@ -407,7 +417,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
     values(${targetId}::uuid,${actor.id}::uuid,${creating?'user_created':'user_access_updated'},${before ? sql.json(before) : null},${sql.json(after)},${reason},${requestId(request)},${requestIp(request)},${requestUserAgent(request)})
   `;
   await logSecurityEvent({ request,user:actor,systemCode:"core",pageCode:"settings",permissionCode:requiredPermission,action:creating?"user_created":"user_updated",entityType:"user",entityId:targetId,result:"success",beforeData:before,afterData:after,ipAddress:requestIp(request) });
-  return { ok: true, userId: targetId, message: creating ? "تم إنشاء المستخدم وصلاحياته" : "تم تحديث المستخدم وصلاحياته" };
+  return { ok: true, userId: targetId, message: creating ? "تم إنشاء المستخدم وصلاحياته" : isArchived ? "تم نقل المستخدم إلى الأرشيف مع الاحتفاظ ببياناته التاريخية" : "تم تحديث المستخدم وصلاحياته" };
 }
 
 
@@ -458,6 +468,7 @@ async function deleteUser(request: VercelRequest, actor: PermissionUser, body: R
         email=null,
         mobile=null,
         next_erp_user_id=null,
+        mersal_user_id=null,
         password_hash=null,
         must_change_password=true,
         is_active=false,
@@ -632,7 +643,9 @@ export default async function handler(request: VercelRequest,response: VercelRes
   }catch(error:any){
     console.error('Access control API failed',error);
     const status=Number(error?.status)|| (error?.code==='23505'?409:error?.code==='23503'?400:500);
-    const message=error?.code==='23505'?'الكود أو البريد أو الجوال مستخدم بالفعل':clean(error?.message)||'تعذر تنفيذ عملية الصلاحيات';
+    const message=error?.code==='23505'
+      ? (clean(error?.constraint).includes('mersal_user_id') ? 'مستخدم مرسال مربوط بحساب آخر في البلاتفورم' : 'الكود أو البريد أو الجوال مستخدم بالفعل')
+      : clean(error?.message)||'تعذر تنفيذ عملية الصلاحيات';
     const attemptedAction=request.method==='POST'?clean(bodyObject(request).action):(clean(request.query.resource)||'read');
     await logSecurityEvent({request,user:actor,systemCode:'core',pageCode:'settings',permissionCode:null,action:`access_control_${attemptedAction||'unknown'}`,entityType:'access_control',result:status<500?'denied':'failure',reason:message,ipAddress:requestIp(request)}).catch(()=>undefined);
     return response.status(status).json({ok:false,error:message});

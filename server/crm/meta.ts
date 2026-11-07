@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { getSystemAccess, hasPermission } from "../_access-control.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
@@ -61,7 +62,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           where us.user_id=u.id and us.system_code='crm' and us.is_enabled=true
         ) roles
       ) user_roles on true
-      where u.is_active = true
+      where u.is_active = true and coalesce(u.is_archived,false)=false
       order by u.full_name
     `,
     sql`select code,name,sort_order,system_codes,delivery_route,allow_free_text,report_group from core.sources where is_active=true order by sort_order,name`,
@@ -72,6 +73,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     sql`select id::text,field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked from crm.customer_field_definitions where is_active=true order by sort_order,label`,
   ]);
 
+  const crmAccess = getSystemAccess(user, "crm");
+  const managerPrimaryBranchCode = String(crmAccess.branchCodes[0] || "").trim();
+  const primaryBranchManagerScope = (
+    !hasPermission(user, "platform.superadmin")
+    && (crmAccess.roleCode === "branch_manager" || user.roleCodes.includes("branch_manager"))
+    && Boolean(managerPrimaryBranchCode)
+  );
+  const visibleUsers = primaryBranchManagerScope
+    ? users.filter((row: any) => String(row.primary_branch_code || "").trim() === managerPrimaryBranchCode)
+    : users;
+  const visibleBranches = primaryBranchManagerScope
+    ? branches.filter((row: any) => String(row.code || "").trim() === managerPrimaryBranchCode)
+    : branches;
+
   response.setHeader("Cache-Control", "no-store");
-  return response.status(200).json({ ok: true, statuses, branches, users, sources, quality: quality[0] || null, endpoints, templates, mappings, customerFields });
+  return response.status(200).json({ ok: true, statuses, branches: visibleBranches, users: visibleUsers, sources, quality: quality[0] || null, endpoints, templates, mappings, customerFields });
 }

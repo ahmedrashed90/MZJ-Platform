@@ -3,7 +3,7 @@ import fs from "node:fs";
 const read = (path) => fs.readFileSync(path, "utf8");
 const publishApi = read("server/marketing/index.ts");
 const schema = read("server/_marketing-schema.ts");
-const publishPage = read("src/marketing/pages/PublishPrepPage.tsx");
+const publishPage = read("src/marketing/pages/ManualPublishPage.tsx");
 const instagramPublisher = read("server/_instagram-publisher.ts");
 
 const checks = [

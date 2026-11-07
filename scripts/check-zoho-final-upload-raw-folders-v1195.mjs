@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -5,46 +6,60 @@ const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const files = {
   schema: read("server/_marketing-schema.ts"),
-  zoho: read("server/_zoho-workdrive.ts"),
-  route: read("server/integrations/zoho.ts"),
+  drive: read("server/_google-drive-storage.ts"),
+  driveRoute: read("server/integrations/google-drive.ts"),
   api: read("api/index.ts"),
   marketing: read("server/marketing/index.ts"),
   instagram: read("server/_instagram-publisher.ts"),
+  facebook: read("server/_facebook-video-publisher.ts"),
+  youtube: read("server/_youtube-publisher.ts"),
+  imageDelivery: read("server/_instagram-media-delivery.ts"),
   client: read("src/marketing/api.ts"),
   modal: read("src/marketing/components/TaskDetailModal.tsx"),
+  executionFolders: read("src/marketing/executionFolders.ts"),
   css: read("src/marketing/marketing.css"),
-  publish: read("src/marketing/pages/PublishPrepPage.tsx"),
-  connections: read("src/marketing/pages/PlatformConnectionsPage.tsx"),
-  worker: read("gateway-worker/src/index.js"),
+  publish: read("src/marketing/pages/ManualPublishPage.tsx"),
+  campaign: read("src/marketing/workflow/CreatePage.tsx"),
+  agenda: read("src/marketing/workflow/CreatePage.tsx"),
   env: read(".env.example"),
 };
 
-const oldGatewayTokens = ["partUploadUrl", "handleZohoUploadPart", "handleZohoUploadFinalize", "ZOHO_UPLOAD_STAGING", "ZOHO_UPLOAD_GATEWAY_URL", "createZohoMediaUrl", "zoho_media_tickets"];
-const liveSource = [files.schema, files.zoho, files.route, files.marketing, files.client, files.modal, files.worker, files.env].join("\n");
-
 const checks = [
-  ["Zoho connection schema", files.schema.includes("marketing.zoho_workdrive_connection")],
-  ["Ordered final media schema", files.schema.includes("marketing.final_media_groups") && files.schema.includes("order_index")],
-  ["Platform proxy upload sessions are database-backed", files.schema.includes("marketing.zoho_upload_tickets") && files.marketing.includes("uploadFinalFileProxy") && files.marketing.includes("cancelFinalUpload")],
-  ["OAuth start and callback", files.route.includes('action === "start"') && files.route.includes('action === "callback"')],
-  ["Zoho route registered before generic integrations", files.api.indexOf('route.startsWith("integrations/zoho/")') < files.api.indexOf('route.startsWith("integrations/")')],
-  ["Final upload prepares ordered files", files.marketing.includes("prepareFinalUpload") && files.marketing.includes("attachFinalMediaGroup")],
-  ["Zoho filenames are collision-safe", files.marketing.includes("zohoFinalFileName") && files.marketing.includes("const zohoFileName=zohoFinalFileName")],
-  ["Browser uploads through the platform API", files.client.includes("new XMLHttpRequest()") && files.client.includes("upload_final_file_proxy") && files.client.includes("/api/marketing") && !files.client.includes("/workdrive/api/v1/upload")],
-  ["Upload progress, speed and ETA are reported", files.client.includes("xhr.upload.onprogress") && files.client.includes("speedBytesPerSecond") && files.client.includes("etaSeconds")],
-  ["Upload can be cancelled", files.client.includes("currentRequest?.abort()") && files.client.includes("UploadCancelledError") && files.modal.includes("cancelFinalUpload")],
-  ["Task details contain a visible upload panel", files.modal.includes("marketing-final-upload-dropzone") && files.modal.includes("اسحب الملفات هنا أو اضغط للاختيار") && files.css.includes(".marketing-final-upload-progress")],
-  ["Multiple images keep their selection order", files.client.includes("file = input.files[upload.orderIndex]") && files.marketing.includes("orderIndex:item.orderIndex")],
-  ["Old Zoho Worker and R2 upload path removed", oldGatewayTokens.every((token) => !liveSource.includes(token))],
-  ["Carousel server records remain ordered", files.marketing.includes("multipleImages") && files.instagram.includes('media_type: "CAROUSEL"') && files.instagram.includes("for (const file of files)")],
-  ["Existing final button condition preserved", files.modal.includes('task.template_status !== "approved" || task.status === "completed"')],
-  ["Campaign and agenda final files supported", files.marketing.includes("source_type") && files.marketing.includes("source_id")],
-  ["RAW token compatibility retained", files.marketing.includes("MZJ_RAW_ALLOW_LEGACY_TOKEN") && files.marketing.includes("MZJ_RAW_SECRET_2026_CHANGE_ME")],
-  ["Zoho environment documented without gateway", files.env.includes("ZOHO_PUBLISH_ROOT_FOLDER_ID=efosi67f34a771f13446c8d01545192eb1829") && !files.env.includes("ZOHO_UPLOAD_GATEWAY_URL")],
-  ["Zoho connection UI", files.connections.includes("Zoho WorkDrive") && files.connections.includes("/api/integrations/zoho/start") && files.connections.includes("رفع من المنصة")],
-  ["Publish prep recognizes media groups", files.publish.includes("final_file_count")],
-  ["Every selected platform requires a post type", files.marketing.includes("حدد نوع نشر لكل منصة مختارة") && files.publish.includes("نوع النشر لكل منصة")],
-  ["Server blocks incomplete publishing", files.marketing.includes("الكابشن غير موجود") && files.marketing.includes("الهاشتاج غير موجود") && files.marketing.includes("نوع النشر غير محدد")],
+  ["Legacy Zoho schema remains for existing stored files", files.schema.includes("marketing.zoho_workdrive_connection") && files.marketing.includes("getZohoRuntime")],
+  ["Google Drive connection schema exists", files.schema.includes("marketing.google_drive_connection") && files.schema.includes("marketing.google_drive_oauth_states")],
+  ["Google Drive upload tickets are database-backed", files.schema.includes("marketing.google_drive_upload_tickets") && files.marketing.includes("googleDriveTicketHash")],
+  ["OAuth connect and callback are registered", files.api.includes('"google-drive/connect"') && files.api.includes('"google-drive/callback"') && files.driveRoute.includes('action === "connect"') && files.driveRoute.includes('action === "callback"')],
+  ["OAuth uses drive.file only", files.drive.includes('https://www.googleapis.com/auth/drive.file') && !files.drive.includes('https://www.googleapis.com/auth/drive"')],
+  ["First files upload to Google Drive", files.marketing.includes("category==='first-file'") && files.marketing.includes("storageProvider:'google-drive'")],
+  ["Final files upload to Google Drive", files.marketing.includes("prepareFinalUpload") && files.marketing.includes("createGoogleDriveResumableUpload")],
+  ["New first/final uploads no longer stage through R2", !files.marketing.includes("category:'final-upload-staging'") && !files.client.includes("uploadWholeFinalFileToZoho")],
+  ["Browser PUT uses XMLHttpRequest for progress", files.client.includes('xhr.open("PUT", input.uploadUrl, true)') && files.client.includes("xhr.upload.onprogress") && files.client.includes("xhr.send(input.file)")],
+  ["First-file progress, speed and ETA are visible", files.modal.includes("firstUploadPercent") && files.modal.includes("activeFirstUploadFile") && files.modal.includes("speedBytesPerSecond") && files.modal.includes("formatUploadEta")],
+  ["First-file cancel aborts request and cleans pending record", files.modal.includes("cancelFirstUpload") && files.client.includes('action: "cancel_file_upload"') && files.marketing.includes("async function cancelFileUpload")],
+  ["Final-file progress and cancel remain", files.modal.includes("cancelFinalUpload") && files.client.includes("cancel_final_upload") && files.client.includes("UploadCancelledError")],
+  ["Drive confirmation can recover file ID server-side", files.drive.includes("findGoogleDriveUploadedFile") && files.marketing.includes("externalId:externalId||undefined") && files.marketing.includes("resolvedExternalId")],
+  ["First file becomes ready after Drive verification", files.marketing.includes("set status='ready',external_id=${resolvedExternalId}") && files.marketing.includes("where id=${fileId}::uuid and status='uploading'")],
+  ["First-file delete handles Google Drive", files.marketing.includes("deleteGoogleDriveFile") && files.marketing.includes("category='first-file'")],
+  ["Existing R2 and Zoho downloads remain compatible", files.marketing.includes("provider!=='zoho'") && files.marketing.includes("createDownloadUrl") && files.marketing.includes("getZohoFileInfo")],
+  ["Google Drive downloads stay private through backend", files.marketing.includes("openGoogleDriveFile")],
+  
+  
+  ["Raw/delivery folder hierarchy is created on Google Drive", files.marketing.includes('name:"01-RAW"') && files.marketing.includes('name:"02-OUTPUT"') && files.marketing.includes('mzjKind:"user-output"')],
+  ["Folder creation is idempotent under MZJ root", files.drive.includes("ensureGoogleDriveFolder") && files.drive.includes("runtime.rootFolderId") && files.drive.includes("trashed=false and name=")],
+  ["Drive folder IDs and URLs survive frontend compaction", files.executionFolders.includes("rawFolderId") && files.executionFolders.includes("outputFolderId") && files.executionFolders.includes("campaignFolderId") && files.executionFolders.includes("outputFolderUrl")],
+  ["Task stores Drive raw and user delivery folders", files.marketing.includes('type: "google_drive"') && files.marketing.includes("userOutputFolderId") && files.marketing.includes("rawFolderUrl")],
+  ["Task folder buttons accept Drive URLs without Windows paths", files.modal.includes('folders.type === "google_drive"') && files.modal.includes("drive.google.com/drive/folders") && files.modal.includes("openExecutionFolder")],
+  ["New task uploads use its Drive delivery folder", files.marketing.includes("googleDriveTaskUploadParent") && files.marketing.includes("parentFolderId:driveParentFolderId||undefined")],
+  ["Requested old notes are removed", !files.modal.includes("نسخ العمل الأولية للمراجعة قبل الملف النهائي") && !files.modal.includes("يرفع من داخل المنصة إلى Zoho WorkDrive")],
+  ["Upload status names Google Drive", files.modal.includes("رفع الملفات إلى Google Drive") && !files.modal.includes("رفع الملفات إلى Zoho")],
+  ["Instagram image delivery supports Google Drive", files.imageDelivery.includes('storage_provider) === "google-drive"')],
+  ["Instagram video publishing supports Google Drive", files.instagram.includes('storage_provider) === "google-drive"')],
+  ["Facebook video publishing supports Google Drive", files.facebook.includes('storage_provider) === "google-drive"')],
+  ["YouTube publishing supports Google Drive", files.youtube.includes('storage_provider) === "google-drive"')],
+  ["Task details keep existing upload CSS", files.modal.includes("marketing-final-upload-dropzone") && files.css.includes(".marketing-final-upload-progress")],
+  ["Multiple final images keep selection order", files.client.includes("file = input.files[upload.orderIndex]") && files.marketing.includes("orderIndex:item.orderIndex")],
+  ["Publish prep still recognizes media groups", files.publish.includes("final_file_count")],
+  ["Google Drive environment variables are documented", files.env.includes("GOOGLE_DRIVE_CLIENT_ID=") && files.env.includes("GOOGLE_DRIVE_REDIRECT_URI=https://mzj-platform.vercel.app/api/google-drive/callback")],
 ];
 
 let failed = false;

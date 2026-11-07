@@ -7,5 +7,5 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const user = await getSessionUser(request).catch(() => null);
   await clearSession(request, response);
   if (user) await logSecurityEvent({ request, user, systemCode: "core", pageCode: "login", action: "logout", result: "success", ipAddress: requestIp(request) });
-  return response.status(200).json({ ok: true });
+  return response.status(200).json({ ok: true, attendanceCheckedOut: false });
 }

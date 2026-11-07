@@ -103,6 +103,33 @@ export default async function handler(request: VercelRequest, response: VercelRe
         return { found: false as const };
       }
 
+      // Existing ERP status webhooks must never erase NEXT/Operations notes or
+      // regress a sold/delivered vehicle back to a reservation/available state.
+      if (
+        ['has_notes', 'under_delivery', 'delivered', 'archived'].includes(clean(vehicle.status_code))
+        || clean(vehicle.state_note) || clean(vehicle.notes)
+      ) {
+        return {
+          found: true as const,
+          protected: true as const,
+          changed: false,
+          statusChanged: false,
+          reservationChanged: false,
+          vehicleId: vehicle.id,
+          previousStatus: vehicle.status_code,
+          previousStatusName: vehicle.status_name,
+          currentStatus: vehicle.status_code,
+          currentStatusName: vehicle.status_name,
+          reservedByName: vehicle.reserved_by_name || null,
+          reservedByEmail: vehicle.reserved_by_email || null,
+          reservedAt: vehicle.reserved_at || null,
+          actorId: null,
+          actorName: 'NEXT ERP',
+          movementId: null,
+          batchId: null,
+        };
+      }
+
       const [targetStatus] = await tx<any[]>`
         select code,name from operations.vehicle_statuses
         where code=${mapping.code} and is_active=true
@@ -289,7 +316,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       });
     }
 
-    const message = result.changed
+    const message = ('protected' in result && result.protected)
+      ? 'تم الحفاظ على حالة السيارة لأنها مباعة أو تم تسليمها أو تحتوي على ملاحظات'
+      : result.changed
       ? mapping.isReserved
         ? "تم تحديث حالة السيارة إلى حجز وتسجيل الإداري الذي حجز"
         : "تم تحديث حالة السيارة إلى متاح للبيع ومسح بيانات الحجز"
@@ -300,6 +329,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       serialNo: payload.serialNo,
       vehicleStatus: payload.vehicleStatus,
       changed: result.changed,
+      protected: 'protected' in result && result.protected === true,
       statusChanged: result.statusChanged,
       reservationChanged: result.reservationChanged,
       vehicleId: result.vehicleId,

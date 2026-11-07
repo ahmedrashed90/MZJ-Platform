@@ -22,6 +22,7 @@ function loadPublisher({ createDownloadUrl = () => "https://download.local/video
   const customRequire = (specifier) => {
     if (specifier === "./_media-storage.js") return { createDownloadUrl };
     if (specifier === "./_instagram-media-delivery.js") return { createInstagramImageDeliveryUrl };
+    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile: async () => new Response(Buffer.from("google-drive-bytes"), { status: 200, headers: { "content-type": "video/mp4", "content-length": "18" } }) };
     if (specifier === "./_zoho-workdrive.js") {
       return {
         getZohoFileInfo: async () => ({}),
@@ -63,6 +64,7 @@ function loadImageDelivery({ createDownloadUrl = () => "https://r2.local/image.j
   const customRequire = (specifier) => {
     if (specifier === "node:crypto") return crypto;
     if (specifier === "./_media-storage.js") return { createDownloadUrl };
+    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile: async () => new Response(Buffer.from("google-drive-image"), { status: 200, headers: { "content-type": "image/jpeg", "content-length": "18" } }) };
     if (specifier === "./_zoho-workdrive.js") return { getZohoFileInfo, getZohoRuntime };
     throw new Error(`Unexpected require: ${specifier}`);
   };

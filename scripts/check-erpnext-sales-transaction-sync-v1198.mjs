@@ -15,7 +15,7 @@ expect('canonical ERP sales transaction helper', sync.includes('async function u
 expect('ERP quantity comes from normalized order payloads', sync.includes('function erpSalesOrderQuantity'));
 expect('canonical source type', sync.includes("'erpnext_sales_order'"));
 expect('canonical source reference uses sales order number', sync.includes('source_reference=${normalized.orderNo}'));
-expect('sale date is the ERP order date', sync.includes('const saleAt = dateTimeForOrder(normalized.orderDate)'));
+expect('sale timestamp keeps the ERP order date and the real creation time', sync.includes('const saleAt = saleTimestampForOrder(normalized.orderDate, saleEventAt)') && !sync.includes('T12:00:00+03:00'));
 expect('representative snapshot comes from mapped ERP user', sync.includes('assigned_name=${mapping.full_name}'));
 expect('department snapshot comes from mapped ERP user context', sync.includes('department_code=${input.departmentCode}'));
 expect('CRM link writes the canonical sales transaction atomically', sync.includes('await upsertErpNextSalesTransaction(tx, {'));

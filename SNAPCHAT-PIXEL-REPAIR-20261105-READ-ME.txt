@@ -1,0 +1,50 @@
+MZJ Platform - Snapchat Pixel browser SDK lifecycle repair
+Date: 2026-11-05
+Input: MZJ-MARKETING-PIXELS-CRM-PUBLISH-DATE-BUILD-FIX-CLEAN-FULL-20261104(1).zip
+
+المشكلة التي كشفها فحص السورس:
+- الاختبارات السابقة كانت تعتبر وضع PAGE_VIEW أو SIGN_UP في طابور snaptr نجاحاً، دون التأكد من جاهزية SDK.
+- كان مفتاح الزيارة يُسجَّل كمرسَل قبل التأكد من تنفيذ أمر track فعلياً؛ أي فشل مبكر كان يمنع إعادة الإرسال عند إعادة فتح نفس الفورم داخل التطبيق.
+- التمييز بين زيارات نفس الفورم برابط اختبار/حملة مختلف كان مفقوداً (الدالة القديمة تعتمد على slug وحده).
+
+التعديلات الفعلية:
+1) انتظار تحميل scevent.min.js ووجود handler الرسمي قبل تنفيذ snaptr init/track.
+2) إعادة محاولة واحدة فقط عند فشل تحميل SDK أو تحميله دون handler. لا تغيير لمسار API.
+3) عدم اعتبار PAGE_VIEW أو SIGN_UP مرسلين إلا بعد استدعاء handler. منع التكرار خلال الانتظار.
+4) عزل PAGE_VIEW بالرابط الفعلي، لتجديد الزيارة إذا تغير رابط الحملة أو اختبار Snap.
+5) احترام سحب موافقة التتبع أثناء التحميل، وعدم إطلاق أحداث صفحة قديمة بعد تغيير الرابط.
+6) الحفاظ على ScTestModeId القادم من Snapchat كما هو، حتى إن وافق قيمة Pixel ID.
+
+الملفات المعدلة من السورس الأصلي فقط:
+- src/marketing/lead-forms/pixel-tracking.ts
+- scripts/test-marketing-lead-form-pixels-20261104.cjs (تحديث اختبارات SDK غير المتزامنة)
+- scripts/test-marketing-utm-snap-publishing-date-20261104.cjs (تحديث اختبار رابط Snapchat)
+- package.json (إضافة اختبار Lifecycle إلى خطوات typecheck)
+
+ملف جديد:
+- scripts/test-snapchat-pixel-sdk-lifecycle-20261105.cjs (ستة سيناريوهات اختبار)
+- SNAPCHAT-PIXEL-REPAIR-20261105-READ-ME.txt
+
+النطاق الذي لم يُمس:
+- CRM وقواعد توزيع الليدات
+- TikTok وMeta وبكسلاتهما
+- التسويق/تقويم النشر وتجهيز النشر
+- API وقاعدة البيانات والمهاجرات
+
+الاختبارات:
+- عدد 157 أمر فحص NodeJS مضمن في typecheck وصلوا جميعاً إلى PASS.
+- 6 اختبارات جديدة لسلوك تحميل Snapchat SDK ونجاح أحداث PAGE_VIEW وSIGN_UP عند استدعاء SDK فعلياً.
+- TypeScript strict للملف المعدل نجح.
+- تعذر تنفيذ tsc -b الكامل أو vite build محلياً لغياب حزم dependencies للمشروع (React/Vite/@types/node) من البيئة الحالية، وليس بسبب خطأ مثبت في الملف المعدل.
+
+خطوة النشر:
+- ارفع محتويات ZIP كاملة بدلاً من دمج ترقيعات منفصلة.
+- على بيئة المشروع التي تحوي الاعتمادات: pnpm install --frozen-lockfile ثم pnpm run build
+- بعد النشر: افتح Test Events في نفس Pixel account على Snapchat واستعمل رابط الفورم مع قبول التتبع.
+- لا يمكن إثبات استلام Snapchat الفعلي للأحداث من الاختبارات المحلية؛ تأكيده يحتاج Events Manager بعد النشر.
+
+BUILD PORTABILITY FIX (05 Nov 2026):
+Removed machine-specific TypeScript import paths from all 15 test scripts.
+The tests now load the TypeScript devDependency from the project via require('typescript').
+The application source, pixel events, CRM, TikTok, and marketing business logic were not changed by this build fix.
+Vercel: pnpm install --frozen-lockfile; pnpm run build (existing vercel.json).

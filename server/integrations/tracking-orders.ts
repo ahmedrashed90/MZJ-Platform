@@ -95,6 +95,8 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
   const orderNo = clean(body.orderNo || body.salesOrderNo);
   const item = body.item || {};
   const totals = body.totals || {};
+  const packageDetails = body.package || {};
+  const hasPackage = Boolean(clean(packageDetails.name || packageDetails.packageName || packageDetails.itemCode));
   const itemNo = clean(item.no || item.itemNo) || "1";
   const rawVin = clean(item.vin || body.vin);
   const vin = rawVin || `PENDING-${orderNo}-${itemNo}`;
@@ -159,6 +161,13 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
       total: numberValue(totals.grandTotal || totals.carTotalInclVAT),
       advancePaid: numberValue(totals.advancePaid || totals.advance_paid),
       registrationFee: numberValue(totals.registrationFee),
+      hasPackage,
+      packageName: hasPackage ? clean(packageDetails.name || packageDetails.packageName) || "باقة الموقع" : null,
+      packageGroup: hasPackage ? clean(packageDetails.group || packageDetails.packageGroup) || null : null,
+      packagePriceBeforeTax: hasPackage ? numberValue(packageDetails.priceBeforeTax || packageDetails.packagePrice) : 0,
+      packageTaxValue: hasPackage ? numberValue(packageDetails.taxValue) : 0,
+      packageTotalInclVat: hasPackage ? numberValue(packageDetails.totalInclVat || packageDetails.totalIncludingVat) : 0,
+      packageCashDiscountPercent: hasPackage ? numberValue(packageDetails.cashDiscountPercent || packageDetails.discountPercent) : 0,
     };
 
     if (order) {
@@ -169,6 +178,12 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
           delivery_date=coalesce(${orderValues.deliveryDate},delivery_date),sales_person=coalesce(${orderValues.salesPerson},sales_person),
           subtotal_before_tax=greatest(subtotal_before_tax,${orderValues.subtotal}),tax_value=greatest(tax_value,${orderValues.tax}),
           total_incl_vat=greatest(total_incl_vat,${orderValues.total}),advance_paid=${orderValues.advancePaid},registration_fee=greatest(registration_fee,${orderValues.registrationFee}),
+          package_name=case when ${orderValues.hasPackage} then ${orderValues.packageName} else package_name end,
+          package_group=case when ${orderValues.hasPackage} then ${orderValues.packageGroup} else package_group end,
+          package_price_before_tax=case when ${orderValues.hasPackage} then ${orderValues.packagePriceBeforeTax} else package_price_before_tax end,
+          package_tax_value=case when ${orderValues.hasPackage} then ${orderValues.packageTaxValue} else package_tax_value end,
+          package_total_incl_vat=case when ${orderValues.hasPackage} then ${orderValues.packageTotalInclVat} else package_total_incl_vat end,
+          package_cash_discount_percent=case when ${orderValues.hasPackage} then ${orderValues.packageCashDiscountPercent} else package_cash_discount_percent end,
           source=${source.integrationSource},source_payload=${tx.json(body)},source_updated_at=now(),source_identity=coalesce(source_identity,${source.sourceIdentity}),
           source_instance_key=coalesce(nullif(${source.sourceInstanceKey||""},''),source_instance_key),
           erp_created_at=coalesce(${source.erpCreatedAt||null}::timestamptz,erp_created_at),
@@ -182,11 +197,15 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
       [order] = await tx<any[]>`
         insert into tracking.orders(
           sales_order_no,customer_name,customer_mobile,customer_vat,branch,order_date,delivery_date,sales_person,
-          subtotal_before_tax,tax_value,total_incl_vat,advance_paid,registration_fee,source,source_payload,source_updated_at,is_deleted,
+          subtotal_before_tax,tax_value,total_incl_vat,advance_paid,registration_fee,
+          package_name,package_group,package_price_before_tax,package_tax_value,package_total_incl_vat,package_cash_discount_percent,
+          source,source_payload,source_updated_at,is_deleted,
           source_identity,source_instance_key,erp_created_at,source_fingerprint,source_sheet_id,source_sheet_name,source_row_number,source_message_id,source_original_id,updated_at
         ) values (
           ${orderNo},${orderValues.customerName},${orderValues.customerPhone},${orderValues.customerVat},${orderValues.branch},${orderValues.orderDate},${orderValues.deliveryDate},${orderValues.salesPerson},
-          ${orderValues.subtotal},${orderValues.tax},${orderValues.total},${orderValues.advancePaid},${orderValues.registrationFee},${source.integrationSource},${tx.json(body)},now(),false,
+          ${orderValues.subtotal},${orderValues.tax},${orderValues.total},${orderValues.advancePaid},${orderValues.registrationFee},
+          ${orderValues.packageName},${orderValues.packageGroup},${orderValues.packagePriceBeforeTax},${orderValues.packageTaxValue},${orderValues.packageTotalInclVat},${orderValues.packageCashDiscountPercent},
+          ${source.integrationSource},${tx.json(body)},now(),false,
           ${source.sourceIdentity},${source.sourceInstanceKey||null},${source.erpCreatedAt||null}::timestamptz,${source.sourceFingerprint},${source.sourceSheetId||null},${source.sourceSheetName||null},${source.sourceRowNumber||null},${source.sourceMessageId||null},${source.sourceOriginalId||null},now()
         ) returning *,id::text
       `;
@@ -252,7 +271,9 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
 
     await tx`
       update tracking.orders o set
-        subtotal_before_tax=coalesce(x.subtotal_before_tax,0),tax_value=coalesce(x.tax_value,0),total_incl_vat=coalesce(x.total_incl_vat,0),
+        subtotal_before_tax=coalesce(x.subtotal_before_tax,0)+coalesce(o.package_price_before_tax,0),
+        tax_value=coalesce(x.tax_value,0)+coalesce(o.package_tax_value,0),
+        total_incl_vat=coalesce(x.total_incl_vat,0)+coalesce(o.package_total_incl_vat,0),
         registration_fee=coalesce(x.registration_fee,0),updated_at=now()
       from (
         select order_id,sum(subtotal_excl_vat)+max(registration_fee) as subtotal_before_tax,sum(tax_value) as tax_value,

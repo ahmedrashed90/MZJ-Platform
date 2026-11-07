@@ -47,7 +47,9 @@ expect('unified dashboard has one scoped canonical sold source',
   unifiedDashboard.includes('), scoped_sold as (') &&
   !unifiedDashboard.includes('scoped_erp_sold') &&
   !unifiedDashboard.includes('scoped_manual_sold'));
-expect('unified sold totals sum scoped_sold only',
-  unifiedDashboard.includes('coalesce((select sum(quantity) from scoped_sold),0)::int as sold'));
+expect('unified sold totals aggregate only scoped_sold transactions through canonical department activity',
+  unifiedDashboard.includes('sold_counts as (') &&
+  unifiedDashboard.includes('from scoped_sold group by department_code') &&
+  unifiedDashboard.includes('coalesce((select sum(sold) from department_activity),0)::int as sold'));
 
 console.log(`CRM canonical sold single-source checks: ${passed}/${total} passed.`);

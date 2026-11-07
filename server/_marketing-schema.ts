@@ -1,6 +1,7 @@
-import { runSqlScript } from "./_db.js";
+import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
+const MARKETING_SCHEMA_VERSION = 3;
 
 const MARKETING_SCHEMA_SQL = String.raw`begin;
 
@@ -8,24 +9,7 @@ create extension if not exists pgcrypto;
 
 create schema if not exists marketing;
 
-do $marketing_schema_reset$
-declare
-  current_version integer;
-begin
-  if to_regclass('marketing.schema_state') is not null then
-    begin
-      execute 'select version from marketing.schema_state where id = 1' into current_version;
-    exception when others then
-      current_version := null;
-    end;
-  end if;
-
-  if current_version is distinct from 1 then
-    execute 'drop schema marketing cascade';
-    execute 'create schema marketing';
-  end if;
-end
-$marketing_schema_reset$;
+-- Marketing workflow migrations are additive. Existing history/media/publication data is retained.
 
 create table if not exists marketing.departments (
   id uuid primary key default gen_random_uuid(),
@@ -54,10 +38,13 @@ create table if not exists marketing.creative_types (
   name text not null unique,
   short_code text not null,
   primary_department_id uuid references marketing.departments(id) on delete set null,
+  supported_publish_formats jsonb not null default '[]'::jsonb,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table marketing.creative_types add column if not exists supported_publish_formats jsonb not null default '[]'::jsonb;
 
 create table if not exists marketing.campaign_types (
   id uuid primary key default gen_random_uuid(),
@@ -130,6 +117,21 @@ create table if not exists marketing.package_sales_types (
   updated_at timestamptz not null default now()
 );
 
+-- Legacy-safe upgrade: these lookup tables may already exist from older releases.
+-- CREATE TABLE IF NOT EXISTS does not add columns to an existing relation, so add
+-- every field used by the current package settings API explicitly and idempotently.
+alter table marketing.package_categories add column if not exists is_active boolean not null default true;
+alter table marketing.package_categories add column if not exists sort_order integer not null default 0;
+alter table marketing.package_categories add column if not exists created_by uuid references core.users(id);
+alter table marketing.package_categories add column if not exists created_at timestamptz not null default now();
+alter table marketing.package_categories add column if not exists updated_at timestamptz not null default now();
+
+alter table marketing.package_sales_types add column if not exists is_active boolean not null default true;
+alter table marketing.package_sales_types add column if not exists sort_order integer not null default 0;
+alter table marketing.package_sales_types add column if not exists created_by uuid references core.users(id);
+alter table marketing.package_sales_types add column if not exists created_at timestamptz not null default now();
+alter table marketing.package_sales_types add column if not exists updated_at timestamptz not null default now();
+
 insert into marketing.package_categories(name,sort_order)
 select seed.name,seed.sort_order
 from (values ('العناية',10),('الفضية',20),('الذهبية',30),('VIP',40)) as seed(name,sort_order)
@@ -139,6 +141,52 @@ insert into marketing.package_sales_types(name,sort_order)
 select seed.name,seed.sort_order
 from (values ('مبيعات الكاش',10),('مبيعات القسط',20)) as seed(name,sort_order)
 where not exists(select 1 from marketing.package_sales_types current where lower(btrim(current.name))=lower(btrim(seed.name)));
+
+create table if not exists marketing.subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  service_name text not null,
+  billing_cycle text not null check(billing_cycle in ('monthly','annual')),
+  pricing_model text not null default 'fixed' check(pricing_model in ('fixed','per_unit','usage')),
+  amount numeric(14,2) not null default 0 check(amount >= 0),
+  unit_price numeric(14,4) check(unit_price is null or unit_price >= 0),
+  usage_quantity numeric(18,4) check(usage_quantity is null or usage_quantity >= 0),
+  usage_limit numeric(18,4) check(usage_limit is null or usage_limit >= 0),
+  usage_unit text,
+  currency text not null default 'SAR',
+  start_date date not null,
+  renewal_date date not null,
+  notes text,
+  is_active boolean not null default true,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint marketing_subscriptions_dates_check check(renewal_date > start_date)
+);
+create index if not exists marketing_subscriptions_active_renewal_idx on marketing.subscriptions(is_active,renewal_date);
+create index if not exists marketing_subscriptions_service_idx on marketing.subscriptions(lower(service_name));
+
+create table if not exists marketing.subscription_renewals (
+  id uuid primary key default gen_random_uuid(),
+  subscription_id uuid not null references marketing.subscriptions(id) on delete cascade,
+  previous_start_date date not null,
+  previous_renewal_date date not null,
+  actual_renewal_date date not null,
+  next_renewal_date date not null,
+  billing_cycle text not null check(billing_cycle in ('monthly','annual')),
+  pricing_model text not null check(pricing_model in ('fixed','per_unit','usage')),
+  amount numeric(14,2) not null default 0 check(amount >= 0),
+  unit_price numeric(14,4),
+  usage_quantity numeric(18,4),
+  usage_limit numeric(18,4),
+  usage_unit text,
+  currency text not null default 'SAR',
+  note text,
+  renewed_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  constraint marketing_subscription_renewals_dates_check check(next_renewal_date > actual_renewal_date)
+);
+create index if not exists marketing_subscription_renewals_subscription_idx on marketing.subscription_renewals(subscription_id,created_at desc);
 
 create table if not exists marketing.packages (
   id uuid primary key default gen_random_uuid(),
@@ -151,6 +199,7 @@ create table if not exists marketing.packages (
   cash_discount numeric(6,2) not null default 0,
   registration_fees boolean not null default false,
   insurance boolean not null default false,
+  insurance_description text,
   issuance_fees boolean not null default false,
   care_features jsonb not null default '[]'::jsonb,
   delivery_home boolean not null default false,
@@ -164,6 +213,7 @@ create table if not exists marketing.packages (
 alter table marketing.packages add column if not exists category_id uuid references marketing.package_categories(id) on delete set null;
 alter table marketing.packages add column if not exists sales_type text;
 alter table marketing.packages add column if not exists sales_type_id uuid references marketing.package_sales_types(id) on delete set null;
+alter table marketing.packages add column if not exists insurance_description text;
 update marketing.packages p set category_id=c.id from marketing.package_categories c where p.category_id is null and lower(btrim(p.category))=lower(btrim(c.name));
 update marketing.packages p set sales_type_id=s.id,sales_type=s.name from marketing.package_sales_types s where p.sales_type_id is null and lower(btrim(s.name))=lower(btrim(coalesce(p.sales_type,'مبيعات الكاش')));
 
@@ -279,6 +329,18 @@ alter table marketing.creatives add column if not exists optional_assignments js
 alter table marketing.creatives add column if not exists platform_assignments jsonb not null default '[]'::jsonb;
 alter table marketing.creatives add column if not exists schedule_day date;
 alter table marketing.creatives add column if not exists notes jsonb not null default '{}'::jsonb;
+
+-- Persistent monotonic counters for creatives/task-template batches.
+-- These counters deliberately survive creative deletion so a later create never
+-- reuses a number that was already allocated inside the same campaign/agenda.
+create table if not exists marketing.entity_sequences (
+  source_type text not null check(source_type in ('campaign','agenda')),
+  source_id uuid not null,
+  next_creative_index bigint not null default 1 check(next_creative_index > 0),
+  next_task_batch bigint not null default 1 check(next_task_batch > 0),
+  updated_at timestamptz not null default now(),
+  primary key(source_type,source_id)
+);
 
 create table if not exists marketing.files (
   id uuid primary key default gen_random_uuid(),
@@ -512,11 +574,11 @@ create table if not exists marketing.platform_connections (
   connected_by uuid references core.users(id),
   disconnected_by uuid references core.users(id),
   updated_by uuid references core.users(id),
-  constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube'))
+  constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube','google_ads'))
 );
 
 alter table marketing.platform_connections drop constraint if exists platform_connections_platform_check;
-alter table marketing.platform_connections add constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube'));
+alter table marketing.platform_connections add constraint platform_connections_platform_check check(platform in ('facebook','instagram','tiktok','youtube','google_ads'));
 alter table marketing.platform_connections add column if not exists scopes jsonb not null default '[]'::jsonb;
 alter table marketing.platform_connections add column if not exists metadata jsonb not null default '{}'::jsonb;
 alter table marketing.platform_connections add column if not exists refresh_token_encrypted text;
@@ -531,7 +593,7 @@ alter table marketing.platform_connections add column if not exists disconnected
 
 create table if not exists marketing.platform_oauth_states (
   state_hash text primary key,
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   user_id uuid not null references core.users(id) on delete cascade,
   return_origin text not null,
   return_path text not null default '/marketing/platforms',
@@ -543,7 +605,7 @@ create index if not exists marketing_platform_oauth_states_expiry_idx on marketi
 
 create table if not exists marketing.platform_connection_drafts (
   id uuid primary key default gen_random_uuid(),
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   user_id uuid not null references core.users(id) on delete cascade,
   payload_encrypted text not null,
   public_payload jsonb not null default '{}'::jsonb,
@@ -555,7 +617,7 @@ create index if not exists marketing_platform_connection_drafts_expiry_idx on ma
 
 create table if not exists marketing.platform_connection_events (
   id uuid primary key default gen_random_uuid(),
-  provider text not null check(provider in ('meta','tiktok','youtube')),
+  provider text not null check(provider in ('meta','tiktok','youtube','google_ads')),
   action text not null,
   status text not null,
   account_name text,
@@ -592,39 +654,6 @@ create table if not exists marketing.publish_logs (
   published_by uuid references core.users(id),
   created_at timestamptz not null default now()
 );
-
-create table if not exists marketing.attendance_settings (
-  singleton boolean primary key default true check(singleton),
-  work_start time not null default '09:00',
-  work_end time not null default '17:00',
-  grace_minutes integer not null default 15,
-  updated_by uuid references core.users(id),
-  updated_at timestamptz not null default now()
-);
-insert into marketing.attendance_settings(singleton) values(true) on conflict(singleton) do nothing;
-
-create table if not exists marketing.attendance_records (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references core.users(id) on delete cascade,
-  attendance_date date not null default current_date,
-  check_in timestamptz,
-  check_out timestamptz,
-  delay_minutes integer not null default 0,
-  work_minutes integer not null default 0,
-  status text not null default 'not_registered',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id,attendance_date)
-);
-
-create table if not exists marketing.presence_status (
-  user_id uuid primary key references core.users(id) on delete cascade,
-  online boolean not null default false,
-  last_activity_at timestamptz not null default now(),
-  last_activity_type text,
-  updated_at timestamptz not null default now()
-);
-alter table marketing.presence_status add column if not exists last_activity_type text;
 
 create table if not exists marketing.user_colors (
   user_id uuid primary key references core.users(id) on delete cascade,
@@ -894,10 +923,36 @@ create table if not exists marketing.zoho_oauth_states (
 );
 create index if not exists marketing_zoho_oauth_states_expiry_idx on marketing.zoho_oauth_states(expires_at);
 
+-- Google Drive storage for new marketing first/final files. Existing R2/Zoho rows remain unchanged.
+create table if not exists marketing.google_drive_connection (
+  id smallint primary key default 1 check(id = 1),
+  status text not null default 'disconnected',
+  root_folder_id text,
+  root_folder_name text,
+  scopes jsonb not null default '[]'::jsonb,
+  access_token_encrypted text,
+  refresh_token_encrypted text,
+  token_expires_at timestamptz,
+  last_verified_at timestamptz,
+  last_error text,
+  connected_by uuid references core.users(id),
+  connected_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists marketing.google_drive_oauth_states (
+  state_hash text primary key,
+  user_id uuid not null references core.users(id) on delete cascade,
+  redirect_uri text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists marketing_google_drive_oauth_states_expiry_idx on marketing.google_drive_oauth_states(expires_at);
+
 create table if not exists marketing.final_media_groups (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references marketing.tasks(id) on delete cascade,
-  media_kind text not null check(media_kind in ('image','carousel','video')),
+  media_kind text not null check(media_kind in ('image','carousel','video','file')),
   file_count integer not null default 0,
   status text not null default 'uploading',
   is_active boolean not null default true,
@@ -906,6 +961,8 @@ create table if not exists marketing.final_media_groups (
   updated_at timestamptz not null default now()
 );
 create index if not exists marketing_final_media_groups_task_idx on marketing.final_media_groups(task_id,is_active,created_at desc);
+alter table marketing.final_media_groups drop constraint if exists final_media_groups_media_kind_check;
+alter table marketing.final_media_groups add constraint final_media_groups_media_kind_check check(media_kind in ('image','carousel','video','file'));
 
 alter table marketing.tasks add column if not exists final_media_group_id uuid references marketing.final_media_groups(id) on delete set null;
 alter table marketing.files add column if not exists storage_provider text not null default 'r2';
@@ -926,14 +983,37 @@ create table if not exists marketing.zoho_upload_tickets (
   mime_type text,
   file_size bigint,
   parent_folder_id text not null,
-  upload_id text not null,
+  upload_strategy text not null default 'standard',
+  upload_id text,
+  status text not null default 'prepared',
+  expires_at timestamptz not null,
+  created_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  completed_at timestamptz,
+  constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','stream'))
+);
+alter table marketing.zoho_upload_tickets add column if not exists upload_strategy text;
+alter table marketing.zoho_upload_tickets drop constraint if exists marketing_zoho_upload_tickets_strategy_check;
+update marketing.zoho_upload_tickets set upload_strategy='stream' where upload_strategy='chunk';
+update marketing.zoho_upload_tickets set upload_strategy='standard' where upload_strategy is null or upload_strategy not in ('standard','stream');
+alter table marketing.zoho_upload_tickets alter column upload_strategy set default 'standard';
+alter table marketing.zoho_upload_tickets alter column upload_strategy set not null;
+alter table marketing.zoho_upload_tickets alter column upload_id drop not null;
+alter table marketing.zoho_upload_tickets add constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','stream'));
+create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
+
+create table if not exists marketing.google_drive_upload_tickets (
+  ticket_hash text primary key,
+  file_id uuid not null references marketing.files(id) on delete cascade,
+  final_media_group_id uuid not null references marketing.final_media_groups(id) on delete cascade,
+  task_id uuid not null references marketing.tasks(id) on delete cascade,
   status text not null default 'prepared',
   expires_at timestamptz not null,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
-create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
+create index if not exists marketing_google_drive_upload_tickets_expiry_idx on marketing.google_drive_upload_tickets(expires_at,status);
 
 
 create table if not exists marketing.published_posts (
@@ -945,7 +1025,7 @@ create table if not exists marketing.published_posts (
   task_id uuid references marketing.tasks(id) on delete set null,
   platform text not null check(platform in ('facebook','instagram','tiktok','snapchat','youtube')),
   account_id text not null,
-  provider_post_id text not null,
+  provider_post_id text,
   provider_media_id text,
   permalink text,
   post_type_name text,
@@ -963,6 +1043,7 @@ create table if not exists marketing.published_posts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table marketing.published_posts alter column provider_post_id drop not null;
 create index if not exists marketing_published_posts_provider_idx on marketing.published_posts(platform,account_id,provider_post_id);
 create index if not exists marketing_published_posts_media_idx on marketing.published_posts(platform,provider_media_id) where provider_media_id is not null;
 create index if not exists marketing_published_posts_source_idx on marketing.published_posts(source_type,source_id,published_at desc);
@@ -1049,6 +1130,74 @@ create table if not exists marketing.data_migrations (
   details jsonb not null default '{}'::jsonb
 );
 
+-- Meta posts imported independently of the publishing schedule and CRM event pipeline.
+create table if not exists marketing.meta_external_posts (
+  id uuid primary key default gen_random_uuid(),
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  provider_post_id text not null,
+  provider_media_id text,
+  caption text,
+  permalink text,
+  post_type_name text,
+  published_at timestamptz not null,
+  likes_count bigint,
+  comments_count bigint,
+  shares_count bigint,
+  saves_count bigint,
+  views_count bigint,
+  reach_count bigint,
+  sync_status text not null default 'pending' check(sync_status in ('pending','synced','failed')),
+  sync_error text,
+  last_synced_at timestamptz,
+  raw_metrics jsonb not null default '{}'::jsonb,
+  archived_at timestamptz,
+  archived_by uuid references core.users(id),
+  is_deleted boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(platform,account_id,provider_post_id)
+);
+create index if not exists marketing_meta_external_active_idx on marketing.meta_external_posts(published_at desc) where is_deleted=false;
+
+create table if not exists marketing.meta_sync_state (
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  next_after text,
+  backfill_complete boolean not null default false,
+  last_recent_at timestamptz,
+  last_backfill_at timestamptz,
+  last_success_at timestamptz,
+  last_error text,
+  updated_at timestamptz not null default now(),
+  primary key(platform,account_id)
+);
+
+-- Campaign manager names are private MZJ annotations for Meta-paid campaigns.
+-- Never mutate campaign records in Meta or reuse an organic-campaign ID here.
+create table if not exists marketing.meta_ads_campaign_managers (
+  account_id text not null,
+  campaign_id text not null,
+  manager_name text not null default '',
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key(account_id,campaign_id)
+);
+
+create table if not exists marketing.meta_follower_snapshots (
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  account_name text,
+  snapshot_date date not null default current_date,
+  followers_count bigint not null,
+  fan_count bigint,
+  media_count bigint,
+  updated_at timestamptz not null default now(),
+  primary key(platform,account_id,snapshot_date)
+);
+
 create table if not exists marketing.engagement_snapshots (
   id bigserial primary key,
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
@@ -1069,18 +1218,72 @@ create table if not exists marketing.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into marketing.schema_state(id,version,updated_at) values(1,1,now())
-on conflict(id) do update set version=excluded.version,updated_at=excluded.updated_at;
+insert into marketing.schema_state(id,version,updated_at) values(1,3,now())
+on conflict(id) do update set version=greatest(marketing.schema_state.version,excluded.version),updated_at=excluded.updated_at;
 
 commit;
 `;
 
+// Existing databases already at v1 only need this small, additive migration.
+// Do not replay the full legacy Marketing schema (which can lock large tables).
+const MARKETING_SCHEMA_V2_SQL = String.raw`begin;
+create table if not exists marketing.meta_ads_campaign_managers (
+  account_id text not null,
+  campaign_id text not null,
+  manager_name text not null default '',
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key(account_id,campaign_id)
+);
+update marketing.schema_state set version=greatest(version,2),updated_at=now() where id=1;
+commit;`;
+
+// Existing v2 databases only need four provider check-constraint extensions.
+const MARKETING_SCHEMA_V3_SQL = String.raw`begin;
+-- Add Google Ads to existing provider lists without touching YouTube or Meta tokens.
+alter table marketing.platform_connections drop constraint if exists platform_connections_platform_check;
+alter table marketing.platform_connections add constraint platform_connections_platform_check
+  check(platform in ('facebook','instagram','tiktok','youtube','google_ads'));
+alter table marketing.platform_oauth_states drop constraint if exists platform_oauth_states_provider_check;
+alter table marketing.platform_oauth_states add constraint platform_oauth_states_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+alter table marketing.platform_connection_events drop constraint if exists platform_connection_events_provider_check;
+alter table marketing.platform_connection_events add constraint platform_connection_events_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+alter table marketing.platform_connection_drafts drop constraint if exists platform_connection_drafts_provider_check;
+alter table marketing.platform_connection_drafts add constraint platform_connection_drafts_provider_check
+  check(provider in ('meta','tiktok','youtube','google_ads'));
+update marketing.schema_state set version=greatest(version,3),updated_at=now() where id=1;
+commit;`;
+
+async function marketingSchemaVersion(): Promise<number> {
+  const sql = getSql();
+  const [relation] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.schema_state')::text as relation`;
+  if (!relation?.relation) return 0;
+  const [state] = await sql<{ version: number }[]>`select version from marketing.schema_state where id=1`;
+  return Number(state?.version || 0);
+}
+async function marketingSchemaIsCurrent() {
+  return (await marketingSchemaVersion()) >= MARKETING_SCHEMA_VERSION;
+}
+
 export async function ensureMarketingSchema() {
   if (!ready) {
-    ready = runSqlScript(MARKETING_SCHEMA_SQL).catch((error) => {
-      ready = null;
-      throw error;
-    });
+    // Migrations are NOT a normal page-load operation. Cold starts perform
+    // read-only version checks, while only outdated schemas enter serialized DDL.
+    ready = (async () => {
+      if (await marketingSchemaIsCurrent()) return;
+      await withDatabaseAdvisoryLock('mzj:marketing:schema-setup', async () => {
+        const version = await marketingSchemaVersion();
+        if (version < MARKETING_SCHEMA_VERSION) {
+          if (version === 0) await runSqlScript(MARKETING_SCHEMA_SQL);
+          else {
+            if (version < 2) await runSqlScript(MARKETING_SCHEMA_V2_SQL);
+            await runSqlScript(MARKETING_SCHEMA_V3_SQL);
+          }
+        }
+      });
+    })().catch(error => { ready = null; throw error; });
   }
   await ready;
 }

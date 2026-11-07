@@ -333,7 +333,9 @@ insert into crm.sources(code, name, sort_order) values
 ('installment_calculator','حاسبة التقسيط',80),
 ('haraj','موقع حراج',90),
 ('other_website','موقع آخر',100),
+('website','Website',105),
 ('branch','خلال الفرع',110),
+('qr','QR',115),
 ('friend','صديق',120),
 ('unified_number','اتصال الرقم الموحد',130),
 ('next_erp','NEXT ERP',140)
@@ -420,7 +422,9 @@ insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_ro
 ('installment_calculator','حاسبة التقسيط',80,true,array['crm','marketing'],'whatsapp',false,'digital'),
 ('haraj','موقع حراج',90,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('other_website','موقع آخر',100,true,array['crm','marketing'],'whatsapp',false,'direct'),
+('website','Website',105,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('branch','خلال الفرع',110,true,array['crm','marketing'],'whatsapp',false,'direct'),
+('qr','QR',115,true,array['crm'],'whatsapp',false,'direct'),
 ('friend','صديق',120,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('unified_number','اتصال الرقم الموحد',130,true,array['crm','marketing'],'whatsapp',false,'digital'),
 ('manual','إدخال يدوي',140,true,array['crm'],'whatsapp',false,'direct')
@@ -523,7 +527,7 @@ insert into crm.customer_field_definitions(
 ('department_code','القسم','department',40,'{}',true,true,true,'[]'::jsonb,true,true),
 ('department_transfer','تحويل لقسم آخر','transfer',50,'{}',true,false,false,'[]'::jsonb,true,true),
 ('customer_name','اسم العميل','text',60,'{}',true,true,true,'[]'::jsonb,true,true),
-('phone','رقم الجوال','phone',70,'{}',true,true,true,'[]'::jsonb,true,true),
+('phone','رقم الجوال','phone',70,'{}',true,false,true,'[]'::jsonb,true,true),
 ('age','العمر','number',80,'{}',true,false,true,'[]'::jsonb,true,false),
 ('salary','الراتب','number',90,'{}',true,false,true,'[]'::jsonb,true,true),
 ('obligation','الالتزام إن وجد','number',100,'{}',true,false,true,'[]'::jsonb,true,true),
@@ -1606,6 +1610,133 @@ values('crm-sales-history-20260806')
 on conflict(version) do nothing;
 `;
 
+const CRM_PHONE_OPTIONAL_20260820_SQL = String.raw`
+update crm.customer_field_definitions
+set is_required=false,updated_at=now()
+where field_key='phone' and is_required=true;
+
+insert into core.schema_migrations(version)
+values('crm-phone-optional-20260820')
+on conflict(version) do nothing;
+`;
+
+const CRM_SALES_ORDER_ACTUAL_TIME_20260817_SQL = String.raw`
+begin;
+
+create temporary table _crm_sale_time_affected_leads (
+  lead_id uuid primary key
+) on commit drop;
+
+with corrected as (
+  update crm.sales_transactions st
+  set
+    sale_at=(
+      (st.sale_at at time zone 'Asia/Riyadh')::date
+      + (st.created_at at time zone 'Asia/Riyadh')::time
+    ) at time zone 'Asia/Riyadh',
+    metadata=coalesce(st.metadata,'{}'::jsonb)||jsonb_build_object(
+      'soldTimeCorrectedAt',now(),
+      'soldTimeCorrectionReason','replace_default_midnight_or_noon_with_sales_order_entry_time',
+      'previousSaleAt',st.sale_at
+    ),
+    updated_at=now()
+  from integrations.erpnext_sales_orders so
+  where so.sales_order_no=st.source_reference
+    and st.source_type in ('erpnext_sales_order','crm_contact_sales_order','erp_reconciliation')
+    and coalesce(st.is_cancelled,false)=false
+    and (st.sale_at at time zone 'Asia/Riyadh')::time in (time '00:00:00',time '12:00:00')
+  returning st.lead_id
+)
+insert into _crm_sale_time_affected_leads(lead_id)
+select distinct lead_id
+from corrected
+where lead_id is not null
+on conflict(lead_id) do nothing;
+
+with sales_summary as (
+  select
+    st.lead_id,
+    coalesce(sum(greatest(coalesce(st.quantity,1),1)),0)::int as sold_quantity,
+    max(st.sale_at) as sold_at
+  from crm.sales_transactions st
+  join _crm_sale_time_affected_leads a on a.lead_id=st.lead_id
+  where coalesce(st.is_cancelled,false)=false
+  group by st.lead_id
+)
+update crm.leads l
+set
+  sold_quantity=s.sold_quantity,
+  sold_at=s.sold_at
+from sales_summary s
+where l.id=s.lead_id
+  and (
+    l.sold_quantity is distinct from s.sold_quantity
+    or l.sold_at is distinct from s.sold_at
+  );
+
+insert into core.schema_migrations(version)
+values('crm-sales-order-actual-time-20260817')
+on conflict(version) do nothing;
+
+commit;
+
+`;
+
+const CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL = String.raw`
+begin;
+
+alter table crm.crm_runtime_settings
+  add column if not exists tracking_final_delivery_welcome_enabled boolean not null default false;
+
+insert into core.schema_migrations(version)
+values('crm-tracking-final-delivery-welcome-20260822')
+on conflict(version) do nothing;
+
+commit;
+`;
+
+const CRM_PERCENTAGE_DISTRIBUTION_20260901_SQL = String.raw`
+begin;
+
+alter table crm.assignment_rule_members
+  add column if not exists allocation_percentage numeric(5,2) not null default 0;
+
+alter table crm.assignment_rule_members
+  add column if not exists weighted_assignment_count integer not null default 0;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='crm_assignment_rule_members_percentage_range'
+      and conrelid='crm.assignment_rule_members'::regclass
+  ) then
+    alter table crm.assignment_rule_members
+      add constraint crm_assignment_rule_members_percentage_range
+      check (allocation_percentage >= 0 and allocation_percentage <= 100);
+  end if;
+end $$;
+
+insert into core.schema_migrations(version)
+values('crm-percentage-distribution-20260901')
+on conflict(version) do nothing;
+
+commit;
+`;
+
+const CRM_MERSAL_USER_LINK_20260918_SQL = String.raw`
+begin;
+
+alter table crm.integration_endpoints
+  add column if not exists mersal_token text;
+
+insert into core.schema_migrations(version)
+values('crm-mersal-user-link-20260918')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1620,6 +1751,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-v1.3'
       `;
       if (!baseMigration) await runSqlScript(CRM_SCHEMA_SQL);
+      const [mersalUserLinkMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-mersal-user-link-20260918'
+      `;
+      if (!mersalUserLinkMigration) await runSqlScript(CRM_MERSAL_USER_LINK_20260918_SQL);
       const [settingsMigration] = await sql<{ version: string }[]>`
         select version from core.schema_migrations where version = 'platform-settings-v1.5'
       `;
@@ -1684,6 +1819,67 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-sales-history-20260806'
       `;
       if (!salesHistoryMigration) await runSqlScript(CRM_SALES_HISTORY_20260806_SQL);
+      const [salesOrderActualTimeMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-sales-order-actual-time-20260817'
+      `;
+      if (!salesOrderActualTimeMigration) await runSqlScript(CRM_SALES_ORDER_ACTUAL_TIME_20260817_SQL);
+      const [phoneOptionalMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-phone-optional-20260820'
+      `;
+      if (!phoneOptionalMigration) await runSqlScript(CRM_PHONE_OPTIONAL_20260820_SQL);
+      const [trackingFinalDeliveryWelcomeMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-tracking-final-delivery-welcome-20260822'
+      `;
+      if (!trackingFinalDeliveryWelcomeMigration) await runSqlScript(CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL);
+      const [percentageDistributionMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-percentage-distribution-20260901'
+      `;
+      if (!percentageDistributionMigration) await runSqlScript(CRM_PERCENTAGE_DISTRIBUTION_20260901_SQL);
+
+      // Keep the dedicated Website source/branch/user available for confirmed online
+      // checkout Sales Orders. Public cash-register / QR registrations are distributed
+      // independently across real cash-sales representatives and their CRM branches.
+      await sql`
+        insert into crm.sources(code,name,sort_order,is_active)
+        values('website','Website',105,true)
+        on conflict(code) do update set name='Website',sort_order=105,is_active=true
+      `;
+      await sql`
+        insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group,updated_at)
+        values('website','Website',105,true,array['crm','marketing'],'whatsapp',false,'direct',now())
+        on conflict(code) do update set
+          name='Website',sort_order=105,is_active=true,system_codes=array['crm','marketing'],
+          delivery_route='whatsapp',allow_free_text=false,report_group='direct',updated_at=now()
+      `;
+      await sql`
+        insert into core.branches(code,name,sort_order,is_active,updated_at)
+        values('website','الموقع الإلكتروني',45,true,now())
+        on conflict(code) do update set
+          name='الموقع الإلكتروني',sort_order=45,is_active=true,updated_at=now()
+      `;
+      await sql`
+        insert into core.users(employee_no,full_name,is_active,can_receive_leads,can_receive_tasks,must_change_password,updated_at)
+        values('SYSTEM-WEBSITE','Website',true,false,false,false,now())
+        on conflict(employee_no) do update set
+          full_name='Website',is_active=true,can_receive_leads=false,can_receive_tasks=false,
+          must_change_password=false,updated_at=now()
+      `;
+      await sql`
+        insert into core.user_departments(user_id,department_id,is_primary)
+        select u.id,d.id,true
+        from core.users u
+        join core.departments d on d.code='cash_sales' and d.is_active=true
+        where u.employee_no='SYSTEM-WEBSITE'
+        on conflict(user_id,department_id) do update set is_primary=true
+      `;
+      await sql`
+        insert into core.user_branches(user_id,branch_id,is_primary)
+        select u.id,b.id,true
+        from core.users u
+        join core.branches b on b.code='website' and b.is_active=true
+        where u.employee_no='SYSTEM-WEBSITE'
+        on conflict(user_id,branch_id) do update set is_primary=true
+      `;
     })().catch((error) => {
       schemaPromise = null;
       throw error;

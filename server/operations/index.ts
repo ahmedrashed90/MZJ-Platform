@@ -1,10 +1,13 @@
+import { vehicleImportStateNote } from "../../shared/operations-vehicle-import.js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import type { TransactionSql } from "postgres";
 import { getSql } from "../_db.js";
 import { getSystemAccess } from "../_access-control.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
+import { syncTrackingApprovalStagesForOperationsVehicle, syncTrackingApprovalStagesForTrackingVehicle } from "../_tracking-approval-sync.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
@@ -16,10 +19,12 @@ import {
 import { emitOperationsNotification } from "../_notifications.js";
 import {
   operationsApprovalVisibilityScope,
+  operationsArchivedCompletedApprovalVisibilityScope,
   operationsRequestAccessScope,
   operationsRequestHasActiveVehicle,
 } from "../_operations-query-scope.js";
 import { isOperationsInventoryMetric, operationsInventoryMetricCondition } from "../_operations-inventory-metrics.js";
+import { OPERATIONS_INVENTORY_FIELDS, canViewOperationsInventoryField } from "../../shared/operations-inventory-fields.js";
 import {
   boolValue,
   clean,
@@ -31,6 +36,13 @@ import {
 } from "../_operations-utils.js";
 
 type QueryRequest = Pick<VercelRequest, "query">;
+
+// Both the pooled SQL client and the transaction-scoped SQL client support
+// tagged queries and interpolated SQL fragments used by the access checks.
+// Do not widen a transaction to the pooled client type: it has no pool methods.
+type OperationsScopeSql = ReturnType<typeof getSql> | TransactionSql;
+
+const AGENCY_INTERIOR_COLORS = new Set(["احمر", "اسود", "برتقالي", "بني غامق", "بيج", "جملي", "رمادي"]);
 
 function pageValues(request: QueryRequest) {
   const page = Math.max(1, intValue(request.query.page, 1));
@@ -49,7 +61,7 @@ function actor(user: Awaited<ReturnType<typeof requireOperationsUser>>) {
   };
 }
 
-function accessScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
+function accessScope(sql: OperationsScopeSql, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
   const access = getSystemAccess(user, "operations");
   if (access.dataScope === "all") return sql`true`;
   if (!access.branchCodes.length) return sql`false`;
@@ -96,7 +108,7 @@ function assertVehicleStatusAccess(
   if (!hasVehicleStatusAccess(user, statusCode)) throw new OperationError(403, "FORBIDDEN", message);
 }
 
-function vehicleStatusScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, target: "vehicle" | "movement" = "vehicle") {
+function vehicleStatusScope(sql: OperationsScopeSql, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, target: "vehicle" | "movement" = "vehicle") {
   const allowed = allowedVehicleStatusCodes(user);
   if (!allowed.length) return sql`true`;
   return target === "movement" ? sql`movement_state.new_status in ${sql(allowed)}` : sql`v.status_code in ${sql(allowed)}`;
@@ -126,6 +138,7 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
     locations,
     statuses,
     checkItems,
+    inventoryVisibleColumns: OPERATIONS_INVENTORY_FIELDS.filter((field) => canViewOperationsInventoryField(user, field.permission)).map((field) => field.key),
     permissions: {
       canCreateVehicle: hasPermission(user, "operations.vehicle.create"),
       canEditVehicle: hasPermission(user, "operations.vehicle.edit"),
@@ -139,6 +152,7 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
       canApproveAdministrative: hasPermission(user, "operations.approval.administrative"),
       canManageSettings: hasPermission(user, "settings.operations.manage"),
       canEditVin: hasPermission(user, "operations.vehicle.vin.update"),
+      canUpdateTajyeer: hasPermission(user, "operations.inventory.tajyeer.update"),
     },
   };
 }
@@ -149,6 +163,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
   const status = clean(request.query.status);
   const model = clean(request.query.model);
   const agent = clean(request.query.agent);
+  const tajyeer = clean(request.query.tajyeer);
+  if (tajyeer && !["yes", "no"].includes(tajyeer)) throw new OperationError(400, "VALIDATION_ERROR", "فلتر التجيير غير صحيح");
   const archived = boolValue(request.query.archived);
   const all = boolValue(request.query.all);
   const activeOnly = !archived && !all;
@@ -169,6 +185,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       and (${status}='' or v.status_code=${status})
       and (${model}='' or coalesce(v.model_year,'')=${model})
       and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and (${tajyeer}='' or v.is_tajyeer=(${tajyeer}='yes'))
       and ${scope}
       and ${statusScope}
   `;
@@ -179,6 +196,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
       v.status_code,coalesce(s.name,v.status_code) as status_name,v.source_type,v.has_notes,v.notes,v.state_note,v.shortage_note,
       v.reserved_by_email,v.reserved_by_name,v.reserved_at,
+      v.is_tajyeer,v.tajyeer_updated_at,v.tajyeer_updated_by_name,
       v.archived_at,v.archive_reason,v.created_by_name,v.updated_by_name,v.created_at,v.updated_at,v.version,
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved,
@@ -222,12 +240,61 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       and (${status}='' or v.status_code=${status})
       and (${model}='' or coalesce(v.model_year,'')=${model})
       and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and (${tajyeer}='' or v.is_tajyeer=(${tajyeer}='yes'))
       and ${scope}
       and ${statusScope}
     order by v.updated_at desc,v.vin
     limit ${pageSize} offset ${offset}
   `;
+  // Field-level inventory visibility applies only to stock queries. Movement and
+  // other operational workflows keep their own existing permissions and data.
+  if (boolValue(request.query.inventory)) {
+    const responseFields: Record<string, string[]> = {
+      car: ["car_name"], statement: ["statement"], agent: ["agent_name"], interior: ["interior_color"],
+      exterior: ["exterior_color"], model: ["model_year"], plate: ["plate_no"], batch: ["batch_no"],
+      location: ["location_name"], status: ["status_name"], notes: ["state_note", "notes", "shortage_note"], checks: ["check_values"],
+      tajyeer: ["is_tajyeer", "tajyeer_updated_by_name", "tajyeer_updated_at"],
+      financialApproval: ["financial_approved", "financial_note"],
+      administrativeApproval: ["administrative_approved", "administrative_note"],
+      tracking: ["tracking_active_orders", "tracking_order_id", "tracking_order_no", "tracking_status", "tracking_progress"],
+    };
+    for (const field of OPERATIONS_INVENTORY_FIELDS) {
+      if (canViewOperationsInventoryField(user, field.permission)) continue;
+      for (const row of rows) for (const key of responseFields[field.key] || []) delete row[key];
+    }
+  }
   return { ok: true, rows, total: Number(countRow?.total || 0), page, pageSize };
+}
+
+async function updateVehicleTajyeer(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) || typeof body.isTajyeer !== "boolean") {
+    throw new OperationError(400, "VALIDATION_ERROR", "حدد السيارة وحالة التجيير: نعم أو لا");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const scope = accessScope(tx, user, "l");
+    const statusScope = vehicleStatusScope(tx, user);
+    const [before] = await tx<any[]>`
+      select v.*,v.id::text from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false and ${scope} and ${statusScope}
+      for update of v
+    `;
+    if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة ضمن صلاحياتك");
+    if (Boolean(before.is_tajyeer) === body.isTajyeer) return { ok: true, row: before, unchanged: true };
+    const [row] = await tx<any[]>`
+      update operations.vehicles set is_tajyeer=${body.isTajyeer},
+      tajyeer_updated_at=now(),tajyeer_updated_by=${who.id}::uuid,tajyeer_updated_by_name=${who.name},
+      updated_at=now(),updated_by=${who.id}::uuid,updated_by_name=${who.name},version=version+1
+      where id=${id}::uuid returning *,id::text
+    `;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+      values (${who.id}::uuid,'operations','vehicle_tajyeer_updated','vehicle',${id},
+        ${tx.json({ vin: before.vin, isTajyeer: Boolean(before.is_tajyeer) })},
+        ${tx.json({ vin: row.vin, isTajyeer: Boolean(row.is_tajyeer), by: who.name })})`;
+    return { ok: true, row };
+  });
 }
 
 async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -304,6 +371,15 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const timeFrom = clean(request.query.timeFrom);
   const timeTo = clean(request.query.timeTo);
   const pattern = `%${search}%`;
+  const [vinLookup] = search ? await sql<{ exact_vin: boolean }[]>`
+    select exists(
+      select 1 from operations.vehicles vehicle_search
+      where lower(btrim(vehicle_search.vin))=lower(btrim(${search}))
+    ) as exact_vin
+  ` : [{ exact_vin: false }];
+  const lifetimeVinHistory = Boolean(vinLookup?.exact_vin);
+  const movementQueryLimit = lifetimeVinHistory ? 100000 : pageSize;
+  const movementQueryOffset = lifetimeVinHistory ? 0 : offset;
   const scope = accessScope(sql, user, "tl");
   const statusScope = vehicleStatusScope(sql, user, "movement");
   const rows = await sql<any[]>`
@@ -393,13 +469,13 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
       and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date)
-      and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time)
-      and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
-    order by m.created_at desc,m.id desc limit ${pageSize} offset ${offset}
+    order by m.created_at desc,m.id desc limit ${movementQueryLimit} offset ${movementQueryOffset}
   `;
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
@@ -451,11 +527,444 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
+      and (${lifetimeVinHistory}=true or ${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date) and (${lifetimeVinHistory}=true or ${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${lifetimeVinHistory}=true or ${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time) and (${lifetimeVinHistory}=true or ${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
   `;
+  if (lifetimeVinHistory) {
+    const vehicleScope = accessScope(sql, user, "l");
+    const historyStatusScope = vehicleStatusScope(sql, user);
+    const [vehicle] = await sql<any[]>`
+      select
+        v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.interior_color,v.exterior_color,v.model_year,v.plate_no,v.batch_no,
+        v.notes as vehicle_notes,v.status_code,v.created_at,v.updated_at,
+        l.code as current_location_code,l.name as current_location_name,
+        coalesce(checks.sensor_status,'unknown') as sensor_status,coalesce(checks.camera_status,'unknown') as camera_status,
+        coalesce(checks.ac_status,'unknown') as ac_status,coalesce(checks.radio_status,'unknown') as radio_status,
+        coalesce(checks.screen_status,'unknown') as screen_status,coalesce(checks.remote_status,'unknown') as remote_status,
+        coalesce(checks.mats_status,'unknown') as mats_status,coalesce(checks.extinguisher_status,'unknown') as extinguisher_status,
+        coalesce(checks.safety_bag_status,'unknown') as safety_bag_status,coalesce(checks.spare_tire_status,'unknown') as spare_tire_status,
+        coalesce(approval.financial_approved,false) as financial_approved,
+        coalesce(approval.administrative_approved,false) as administrative_approved
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      left join lateral (
+        select
+          max(status) filter(where item_code='sensor') as sensor_status,
+          max(status) filter(where item_code='camera') as camera_status,
+          max(status) filter(where item_code='ac') as ac_status,
+          max(status) filter(where item_code='radio') as radio_status,
+          max(status) filter(where item_code='screen') as screen_status,
+          max(status) filter(where item_code='remote') as remote_status,
+          max(status) filter(where item_code='mats') as mats_status,
+          max(status) filter(where item_code='extinguisher') as extinguisher_status,
+          max(status) filter(where item_code='safety_bag') as safety_bag_status,
+          max(status) filter(where item_code='spare_tire') as spare_tire_status
+        from operations.vehicle_check_values cv where cv.vehicle_id=v.id
+      ) checks on true
+      left join lateral (
+        select financial_approved,administrative_approved
+        from operations.vehicle_approvals va
+        where va.vehicle_id=v.id and va.is_active=true
+        order by va.cycle_no desc,va.created_at desc limit 1
+      ) approval on true
+      where lower(btrim(v.vin))=lower(btrim(${search}))
+        and v.is_deleted=false
+        and ${vehicleScope}
+        and ${historyStatusScope}
+      limit 1
+    `;
+
+    if (vehicle) {
+      const [auditRows, requestEventRows, archiveRows, checkHistoryRows, approvalEventRows, statusNoteRows, trackingEventRows] = await Promise.all([
+        sql<any[]>`
+          select a.id::text,a.action,a.before_data,a.after_data,a.created_at,
+            coalesce(u.full_name,nullif(a.after_data->>'updated_by_name',''),nullif(a.before_data->>'updated_by_name',''),a.user_email) as actor_name,
+            coalesce(a.branch_code,nullif(a.after_data->>'branch_name',''),nullif(a.before_data->>'branch_name','')) as actor_branch
+          from audit.activity_log a
+          left join core.users u on u.id=a.user_id
+          where a.system_code='operations'
+            and a.entity_type='vehicle'
+            and (
+              a.entity_id=${vehicle.id}
+              or lower(btrim(a.entity_id))=lower(btrim(${search}))
+              or lower(btrim(coalesce(a.after_data->>'vin',a.before_data->>'vin','')))=lower(btrim(${search}))
+            )
+          order by a.created_at desc,a.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.stage,e.action,e.note,e.actor_name,e.actor_role,e.actor_branch,e.before_data,e.after_data,e.created_at,
+            r.id::text as transfer_request_id,r.request_no,
+            sl.code as from_location_code,sl.name as from_location_name,
+            dl.code as to_location_code,dl.name as to_location_name
+          from operations.transfer_request_events e
+          join operations.transfer_requests r on r.id=e.transfer_request_id
+          join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id and rv.vehicle_id=${vehicle.id}::uuid
+          left join operations.locations sl on sl.id=r.source_location_id
+          left join operations.locations dl on dl.id=r.destination_location_id
+          order by e.created_at desc,e.id desc
+        `,
+        sql<any[]>`
+          select id::text,action,reason,actor_name,created_at,snapshot
+          from operations.vehicle_archive_events
+          where vehicle_id=${vehicle.id}::uuid
+          order by created_at desc,id desc
+        `,
+        sql<any[]>`
+          select h.id::text,h.item_code,coalesce(d.name,h.item_code) as item_name,h.old_status,h.new_status,h.note,
+            h.movement_id::text,h.changed_by_name,h.created_at
+          from operations.vehicle_check_history h
+          left join operations.check_item_definitions d on d.code=h.item_code
+          where h.vehicle_id=${vehicle.id}::uuid
+          order by h.created_at desc,h.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.cycle_no,e.approval_type,e.action,e.note,e.actor_name,e.actor_role,
+            e.before_data,e.after_data,e.created_at
+          from operations.approval_events e
+          where e.vehicle_id=${vehicle.id}::uuid
+          order by e.created_at desc,e.id desc
+        `,
+        sql<any[]>`
+          select n.id::text,n.status_code,n.note,n.movement_id::text,n.created_by_name,n.created_at,
+            coalesce(s.name,n.status_code) as status_name
+          from operations.vehicle_status_notes n
+          left join operations.vehicle_statuses s on s.code=n.status_code
+          where n.vehicle_id=${vehicle.id}::uuid
+          order by n.created_at desc,n.id desc
+        `,
+        sql<any[]>`
+          select e.id::text,e.action,e.actor_name,e.note,e.created_at,s.code as stage_code,s.name as stage_name,
+            o.id::text as tracking_order_id,o.sales_order_no
+          from tracking.stage_events e
+          join tracking.order_vehicles ov on ov.id=e.vehicle_id
+          join tracking.orders o on o.id=e.order_id
+          join tracking.stages s on s.id=e.stage_id
+          where ov.vehicle_id=${vehicle.id}::uuid
+             or (ov.vehicle_id is null and lower(btrim(coalesce(ov.vin,'')))=lower(btrim(${search})))
+          order by e.created_at desc,e.id desc
+        `,
+      ]);
+
+      const base = {
+        vehicle_id: vehicle.id,
+        vin: vehicle.vin,
+        car_name: vehicle.car_name,
+        statement: vehicle.statement,
+        agent_name: vehicle.agent_name,
+        interior_color: vehicle.interior_color,
+        exterior_color: vehicle.exterior_color,
+        model_year: vehicle.model_year,
+        plate_no: vehicle.plate_no,
+        batch_no: vehicle.batch_no,
+        vehicle_notes: vehicle.vehicle_notes,
+        sensor_status: vehicle.sensor_status,
+        camera_status: vehicle.camera_status,
+        ac_status: vehicle.ac_status,
+        radio_status: vehicle.radio_status,
+        screen_status: vehicle.screen_status,
+        remote_status: vehicle.remote_status,
+        mats_status: vehicle.mats_status,
+        extinguisher_status: vehicle.extinguisher_status,
+        safety_bag_status: vehicle.safety_bag_status,
+        spare_tire_status: vehicle.spare_tire_status,
+        financial_approved: vehicle.financial_approved,
+        administrative_approved: vehicle.administrative_approved,
+      };
+      const textValue = (value: unknown) => String(value ?? "").trim();
+      const jsonValue = (source: any, keys: string[]) => {
+        for (const key of keys) {
+          const value = source && typeof source === "object" ? source[key] : null;
+          if (textValue(value)) return textValue(value);
+        }
+        return "";
+      };
+      const statusName = (value: unknown) => textValue(value);
+      const supplemental: any[] = [];
+
+      for (const item of auditRows) {
+        const before = item.before_data && typeof item.before_data === "object" ? item.before_data : {};
+        const after = item.after_data && typeof item.after_data === "object" ? item.after_data : {};
+        const oldStatus = jsonValue(before, ["status_name","status_label","status_code","status"]);
+        const newStatus = jsonValue(after, ["status_name","status_label","status_code","status"]);
+        const fromLocation = jsonValue(before, ["location_name","place_name","location"]);
+        const toLocation = jsonValue(after, ["location_name","place_name","location"]);
+        const auditLabels: Record<string, string> = {
+          vehicle_created: "تسجيل السيارة في النظام",
+          vehicle_updated: "تحديث بيانات السيارة",
+          vehicle_deleted: "حذف السيارة من النظام",
+          erpnext_vehicle_status_synced: "مزامنة حالة السيارة من ERPNext",
+        };
+        const label = auditLabels[textValue(item.action)] || `إجراء على السيارة: ${textValue(item.action) || "غير محدد"}`;
+        supplemental.push({
+          ...base,
+          id: `audit:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: item.action,
+          old_status: oldStatus || null,
+          new_status: newStatus || null,
+          old_status_name: oldStatus || null,
+          new_status_name: newStatus || null,
+          note: label,
+          state_note: null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: item.actor_branch || null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: fromLocation || null,
+          to_location_code: null,
+          to_location_name: toLocation || null,
+        });
+      }
+
+      for (const item of requestEventRows) {
+        const before = item.before_data && typeof item.before_data === "object" ? item.before_data : {};
+        const after = item.after_data && typeof item.after_data === "object" ? item.after_data : {};
+        const oldStatus = jsonValue(before, ["status","status_code"]);
+        const newStatus = jsonValue(after, ["status","status_code"]) || textValue(item.stage);
+        supplemental.push({
+          ...base,
+          id: `request-event:${item.id}`,
+          batch_id: null,
+          transfer_request_id: item.transfer_request_id || null,
+          request_no: item.request_no || null,
+          created_at: item.created_at,
+          movement_type: `request_${textValue(item.action) || "event"}`,
+          old_status: oldStatus || null,
+          new_status: newStatus || null,
+          old_status_name: oldStatus || null,
+          new_status_name: newStatus || null,
+          note: textValue(item.note) || `حركة طلب ${item.request_no || "نقل"}`,
+          state_note: textValue(item.stage) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: item.actor_role || null,
+          performed_by_branch: item.actor_branch || null,
+          operations_admin_name: null,
+          from_location_code: item.from_location_code || null,
+          from_location_name: item.from_location_name || null,
+          to_location_code: item.to_location_code || null,
+          to_location_name: item.to_location_name || null,
+        });
+      }
+
+      for (const item of archiveRows) {
+        supplemental.push({
+          ...base,
+          id: `archive:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: `archive_${textValue(item.action) || "event"}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: textValue(item.reason) || (textValue(item.action) === "restored" ? "استعادة السيارة من الأرشيف" : "أرشفة السيارة"),
+          state_note: textValue(item.action) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const checkStatusLabel = (value: unknown) => {
+        const key = textValue(value).toLowerCase();
+        if (key === "ok") return "نعم";
+        if (key === "missing") return "لا";
+        if (key === "unknown") return "غير محدد";
+        return textValue(value) || "غير محدد";
+      };
+      for (const item of checkHistoryRows) {
+        supplemental.push({
+          ...base,
+          id: `check:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: "vehicle_check",
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `تحديث التشييك — ${textValue(item.item_name) || textValue(item.item_code)}: ${checkStatusLabel(item.old_status)} ← ${checkStatusLabel(item.new_status)}`,
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.changed_by_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const approvalTypeLabel = (value: unknown) => textValue(value) === "financial" ? "الموافقة المالية" : textValue(value) === "administrative" ? "الموافقة الإدارية" : textValue(value) || "الموافقة";
+      const approvalActionLabel = (value: unknown) => {
+        const key = textValue(value);
+        if (key === "approve") return "اعتماد";
+        if (key === "revert") return "إلغاء الاعتماد";
+        if (key === "reset") return "إعادة ضبط";
+        if (key === "note") return "تحديث ملاحظة";
+        if (key === "cancelled") return "إلغاء";
+        return key || "إجراء";
+      };
+      for (const item of approvalEventRows) {
+        supplemental.push({
+          ...base,
+          id: `approval:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: `approval_${textValue(item.approval_type)}_${textValue(item.action)}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `${approvalTypeLabel(item.approval_type)} — ${approvalActionLabel(item.action)} (الدورة ${Number(item.cycle_no || 1)})`,
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: item.actor_role || null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      for (const item of statusNoteRows) {
+        supplemental.push({
+          ...base,
+          id: `status-note:${item.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: item.created_at,
+          movement_type: "status_note",
+          old_status: null,
+          new_status: item.status_code || null,
+          old_status_name: null,
+          new_status_name: item.status_name || item.status_code || null,
+          note: "تحديث ملاحظة الحالة",
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.created_by_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      for (const item of trackingEventRows) {
+        const actionLabel = textValue(item.action) === "reverted" ? "تراجع عن المرحلة" : "إكمال المرحلة";
+        supplemental.push({
+          ...base,
+          id: `tracking-stage:${item.id}`,
+          batch_id: null,
+          transfer_request_id: item.tracking_order_id || null,
+          request_no: item.sales_order_no || null,
+          created_at: item.created_at,
+          movement_type: `tracking_stage_${textValue(item.action)}`,
+          old_status: null,
+          new_status: null,
+          old_status_name: null,
+          new_status_name: null,
+          note: `${actionLabel} — ${textValue(item.stage_name) || textValue(item.stage_code) || "مرحلة التتبع"}`,
+          state_note: textValue(item.note) || null,
+          shortage_note: null,
+          performed_by_name: item.actor_name || null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: null,
+          to_location_name: null,
+        });
+      }
+
+      const hasCreatedAudit = auditRows.some((item) => item.action === "vehicle_created");
+      if (!hasCreatedAudit && vehicle.created_at) {
+        supplemental.push({
+          ...base,
+          id: `vehicle-created:${vehicle.id}`,
+          batch_id: null,
+          transfer_request_id: null,
+          request_no: null,
+          created_at: vehicle.created_at,
+          movement_type: "vehicle_registered",
+          old_status: null,
+          new_status: vehicle.status_code || null,
+          old_status_name: null,
+          new_status_name: statusName(vehicle.status_code) || null,
+          note: "تسجيل السيارة في النظام",
+          state_note: null,
+          shortage_note: null,
+          performed_by_name: null,
+          performed_by_role: null,
+          performed_by_branch: null,
+          operations_admin_name: null,
+          from_location_code: null,
+          from_location_name: null,
+          to_location_code: vehicle.current_location_code || null,
+          to_location_name: vehicle.current_location_name || null,
+        });
+      }
+
+      const matchesExtraFilters = (row: any) => {
+        if (from && textValue(row.from_location_code) !== from) return false;
+        if (to && textValue(row.to_location_code) !== to) return false;
+        if (status && textValue(row.new_status) !== status) return false;
+        if (userSearch) {
+          const needle = userSearch.toLocaleLowerCase("ar-SA");
+          const haystack = `${textValue(row.performed_by_name)} ${textValue(row.operations_admin_name)}`.toLocaleLowerCase("ar-SA");
+          if (!haystack.includes(needle)) return false;
+        }
+        return true;
+      };
+
+      const merged = [...rows, ...supplemental.filter(matchesExtraFilters)]
+        .sort((left, right) => {
+          const dateDiff = new Date(String(right.created_at || 0)).getTime() - new Date(String(left.created_at || 0)).getTime();
+          if (dateDiff) return dateDiff;
+          return String(right.id || "").localeCompare(String(left.id || ""));
+        });
+      const seen = new Set<string>();
+      const uniqueRows = merged.filter((row) => {
+        const key = String(row.id || "");
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const start = (page - 1) * pageSize;
+      return { ok: true, rows: uniqueRows.slice(start, start + pageSize), total: uniqueRows.length, page, pageSize };
+    }
+  }
+
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
@@ -468,7 +977,7 @@ function nextRequestStage(status: string) {
 
 function canAdvanceRequest(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)) {
   if (!nextStatus || row.cancelled_at) return false;
-  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && row.requested_by === user.id;
+  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && (row.requested_by === user.id || hasPermission(user, "platform.superadmin"));
   if (nextStatus === "request_received") return hasPermission(user, "operations.request.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
   if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.request.send_car") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
   if (nextStatus === "vehicle_received") return hasPermission(user, "operations.request.receive_car") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
@@ -483,6 +992,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const completedRaw = clean(request.query.completed);
   const hasCompletedFilter = completedRaw !== "";
   const completed = boolValue(request.query.completed);
+  const includeArchivedHistory = hasCompletedFilter && completed;
   const includeCancelled = clean(request.query.includeCancelled) !== "false";
   const pattern = `%${search}%`;
   const allowedStatuses = allowedVehicleStatusCodes(user);
@@ -494,7 +1004,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
     r.is_deleted=false
     and ${requestAccessScope}
     and (${includeCancelled}=true or r.cancelled_at is null)
-    and (r.cancelled_at is not null or ${activeVehicleScope})
+    and ((r.cancelled_at is not null or ${activeVehicleScope}) or (${includeArchivedHistory}=true and r.status='completed'))
     and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
@@ -504,7 +1014,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       join operations.vehicles vx on vx.id=rx.vehicle_id
       where rx.transfer_request_id=r.id
         and vx.is_deleted=false
-        and (r.cancelled_at is not null or (vx.archived_at is null and vx.is_inventory_active=true))
+        and (r.cancelled_at is not null or ${includeArchivedHistory}=true or (vx.archived_at is null and vx.is_inventory_active=true))
         and (${statusUnrestricted}=true or vx.status_code in ${sql(statusCodes)})
         and (vx.vin ilike ${pattern} or coalesce(vx.car_name,'') ilike ${pattern} or coalesce(vx.statement,'') ilike ${pattern})
     ))
@@ -512,7 +1022,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.transfer_requests r where ${where}`;
   const rows = await sql<any[]>`
     select r.id::text,r.request_no,r.request_kind,r.status,r.note,r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,
-      r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.cancelled_at,r.cancellation_reason,r.version,
+      r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.photography_date::text,r.cancelled_at,r.cancellation_reason,r.version,
       sl.code as source_location_code,sl.name as source_location_name,dl.code as destination_location_code,dl.name as destination_location_name,
       coalesce(cars.vehicles_count,0)::int as vehicles_count,coalesce(cars.vehicles,'[]'::json) as vehicles,
       coalesce(events.events,'[]'::json) as events
@@ -533,7 +1043,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       left join operations.vehicle_statuses cs on cs.code=v.status_code
       where rv.transfer_request_id=r.id
         and v.is_deleted=false
-        and (r.cancelled_at is not null or (v.archived_at is null and v.is_inventory_active=true))
+        and (r.cancelled_at is not null or ${includeArchivedHistory}=true or (v.archived_at is null and v.is_inventory_active=true))
         and (${statusUnrestricted}=true or v.status_code in ${sql(statusCodes)})
     ) cars on true
     left join lateral (
@@ -565,28 +1075,65 @@ async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequ
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
   const visibilityScope = operationsApprovalVisibilityScope(sql, user);
-  const rows = await sql<any[]>`
-    select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
-      a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
-      v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
-      v.notes,v.state_note,v.shortage_note,v.status_code,coalesce(s.name,v.status_code) as status_name,
-      l.code as location_code,l.name as location_name,dl.name as pending_destination_name
-    from operations.vehicle_approvals a
-    join operations.vehicles v on v.id=a.vehicle_id
-    left join operations.locations l on l.id=v.location_id
-    left join operations.vehicle_statuses s on s.code=v.status_code
-    left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
-    where ${visibilityScope}
-      and (${filter}='' or (${filter}='missing_financial' and a.financial_approved=false) or (${filter}='missing_administrative' and a.administrative_approved=false) or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true))
-      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}
-        or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern}
-        or coalesce(l.name,'') ilike ${pattern} or coalesce(a.financial_note,'') ilike ${pattern}
-        or coalesce(a.administrative_note,'') ilike ${pattern}
-        or coalesce(a.financial_approved_by_name,'') ilike ${pattern}
-        or coalesce(a.administrative_approved_by_name,'') ilike ${pattern})
-    order by a.updated_at desc
-  `;
-  return { ok: true, rows };
+  const archivedCompletedScope = operationsArchivedCompletedApprovalVisibilityScope(sql, user);
+  // Unarchived cars remain in the normal queue. Archived cars are visible only
+  // in the read-only Completed tab and do not inflate active approval counts.
+  const [rows, activeCounts, archivedCounts] = await Promise.all([
+    sql<any[]>`
+      select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
+        a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
+        v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
+        v.notes,v.state_note,v.shortage_note,v.status_code,v.archived_at,v.archive_reason,coalesce(s.name,v.status_code) as status_name,
+        l.code as location_code,l.name as location_name,dl.name as pending_destination_name
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      left join operations.vehicle_statuses s on s.code=v.status_code
+      left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
+      where (
+        (${visibilityScope} and (
+          ${filter}=''
+          or (${filter}='missing_financial' and a.financial_approved=false)
+          or (${filter}='missing_administrative' and a.administrative_approved=false)
+          or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true)
+        ))
+        or (${filter}='completed' and ${archivedCompletedScope})
+      )
+        and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}
+          or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern}
+          or coalesce(l.name,'') ilike ${pattern} or coalesce(a.financial_note,'') ilike ${pattern}
+          or coalesce(a.administrative_note,'') ilike ${pattern}
+          or coalesce(a.financial_approved_by_name,'') ilike ${pattern}
+          or coalesce(a.administrative_approved_by_name,'') ilike ${pattern})
+      order by a.updated_at desc
+    `,
+    sql<any[]>`
+      select count(*)::int as all_count,
+        count(*) filter(where a.financial_approved=false)::int as missing_financial,
+        count(*) filter(where a.administrative_approved=false)::int as missing_administrative,
+        count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      where ${visibilityScope}
+    `,
+    sql<any[]>`
+      select count(*)::int as completed
+      from operations.vehicle_approvals a
+      join operations.vehicles v on v.id=a.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      where ${archivedCompletedScope}
+    `,
+  ]);
+  return {
+    ok: true, rows,
+    counts: {
+      all: Number(activeCounts[0]?.all_count || 0),
+      missingFinancial: Number(activeCounts[0]?.missing_financial || 0),
+      missingAdministrative: Number(activeCounts[0]?.missing_administrative || 0),
+      completed: Number(activeCounts[0]?.completed || 0) + Number(archivedCounts[0]?.completed || 0),
+    },
+  };
 }
 
 async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -701,7 +1248,7 @@ async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string
     assertVehicleStatusAccess(user, valid.status_code, "لا تملك صلاحية إضافة سيارة بهذه الحالة");
     const [row] = await tx<any[]>`
       insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,source_type,notes,state_note,shortage_note,has_notes,created_by,created_by_name,updated_by,updated_by_name)
-      values (${vin},${clean(body.carName)||null},${clean(body.statement)||null},${clean(body.agentName)||null},${clean(body.exteriorColor)||null},${clean(body.interiorColor)||null},${clean(body.modelYear)||null},${clean(body.plateNo)||null},${clean(body.batchNo)||null},${locationId}::uuid,${statusCode},${clean(body.sourceType)||null},${clean(body.notes)||null},${clean(body.stateNote)||null},${clean(body.shortageNote)||null},${statusCode==='has_notes' || Boolean(clean(body.notes))},${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+      values (${vin},${clean(body.carName)||null},${clean(body.statement)||null},${clean(body.agentName)||null},${clean(body.exteriorColor)||null},${clean(body.interiorColor)||null},${clean(body.modelYear)||null},${clean(body.plateNo)||null},${clean(body.batchNo)||null},${locationId}::uuid,${statusCode},${clean(body.sourceType)||null},${clean(body.notes)||null},${clean(body.stateNote)||null},${clean(body.shortageNote)||null},${statusCode==='has_notes' || Boolean(clean(body.notes)) || Boolean(clean(body.stateNote))},${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
       returning *,id::text
     `;
     await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','vehicle_created','vehicle',${row.id},${tx.json(row)})`;
@@ -739,11 +1286,15 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
       throw new OperationError(400, "VALIDATION_ERROR", "ملاحظات الحالة مطلوبة عند اختيار حالة بها ملاحظات");
     }
 
+    // The removed legacy inputs are not sent by the vehicle-management page.
+    // Keep any old values in the database rather than resetting them to NULL.
+    const legacyNotes = body.notes === undefined ? before.notes : clean(body.notes) || null;
+    const legacyShortageNote = body.shortageNote === undefined ? before.shortage_note : clean(body.shortageNote) || null;
     const [detailsRow] = await tx<any[]>`
       update operations.vehicles set vin=${vin},car_name=${clean(body.carName)||null},statement=${clean(body.statement)||null},agent_name=${clean(body.agentName)||null},
         exterior_color=${clean(body.exteriorColor)||null},interior_color=${clean(body.interiorColor)||null},model_year=${clean(body.modelYear)||null},plate_no=${clean(body.plateNo)||null},batch_no=${clean(body.batchNo)||null},
-        source_type=${clean(body.sourceType)||null},notes=${clean(body.notes)||null},state_note=${clean(body.stateNote)||null},shortage_note=${clean(body.shortageNote)||null},
-        has_notes=${statusCode==='has_notes' || Boolean(clean(body.notes))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+        source_type=${clean(body.sourceType)||null},notes=${legacyNotes},state_note=${clean(body.stateNote)||null},shortage_note=${legacyShortageNote},
+        has_notes=${statusCode==='has_notes' || Boolean(legacyNotes) || Boolean(clean(body.stateNote))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
       where id=${id}::uuid returning *,id::text
     `;
 
@@ -917,6 +1468,7 @@ type PendingDeliveryPayload = {
   stateNote?: string;
   shortageNote?: string;
   checks?: Array<{ itemCode: string; status: string; note?: string }>;
+  agencyInteriorColor?: string;
   requestedBy?: MovementActor;
   requestedAt?: string;
 };
@@ -939,6 +1491,7 @@ async function persistVehicleMovement(
   const noteOnly = Boolean(input.noteOnly);
   const nextStateNote = raw.stateNote === undefined ? clean(vehicle.state_note) : clean(raw.stateNote);
   const nextShortageNote = raw.shortageNote === undefined ? clean(vehicle.shortage_note) : clean(raw.shortageNote);
+  const nextInteriorColor = raw.agencyInteriorColor === undefined ? clean(vehicle.interior_color) : clean(raw.agencyInteriorColor);
   const before = { ...vehicle };
   const [movement] = await tx`
     insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,state_note,shortage_note,performed_by,performed_by_name,performed_by_role,performed_by_branch,batch_id,movement_type,before_data)
@@ -951,7 +1504,7 @@ async function persistVehicleMovement(
         where id=${vehicle.id}::uuid returning *,id::text
       `
     : await tx`
-        update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},
+        update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},interior_color=${nextInteriorColor||null},
           has_notes=${newStatus==='has_notes'},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
         where id=${vehicle.id}::uuid returning *,id::text
       `;
@@ -974,7 +1527,7 @@ async function persistVehicleMovement(
     await tx.savepoint(async (eventTx: any) => {
       const eventType = noteOnly ? 'operations.vehicle.note_updated' : 'operations.vehicle.moved';
       const eventTitle = noteOnly ? 'تم تحديث ملاحظة سيارة' : 'تم تحريك سيارة';
-      const eventDescription = noteOnly ? `${vehicle.vin}: تم تحديث حجز - نواقص - تحديد مكان` : `${vehicle.vin} إلى ${destination.name}`;
+      const eventDescription = noteOnly ? `${vehicle.vin}: تم تحديث الملاحظات` : `${vehicle.vin} إلى ${destination.name}`;
       await eventTx`insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values (${eventType},'vehicle',${vehicle.id},'vehicle',${vehicle.id},${vehicle.id}::uuid,${vehicle.vin},${who.id}::uuid,${who.name},${destination.branch_code},${eventTitle},${eventDescription},${eventTx.json({ movementId: movement.id, batchId, noteOnly })})`;
     });
   } catch (outboxError) {
@@ -986,15 +1539,18 @@ async function persistVehicleMovement(
 async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const items = Array.isArray(body.items) ? body.items : [];
   const destinationLocationId = clean(body.destinationLocationId);
-  const newStatus = clean(body.newStatus);
-  if (!items.length || !destinationLocationId || !newStatus) throw new OperationError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل والمكان والحالة الجديدة");
+  // A status is an optional *explicit* override. Without it, each car keeps its own current status.
+  const requestedNewStatus = clean(body.newStatus);
+  if (!items.length || !destinationLocationId) throw new OperationError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل والمكان الجديد");
   const vehicleIds = [...new Set(items.map((item: any) => clean(item.vehicleId)).filter(Boolean))];
   if (vehicleIds.length !== items.length) throw new OperationError(400, "VALIDATION_ERROR", "لا يمكن اختيار السيارة نفسها أكثر من مرة");
   const [destination] = await sql<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
-  const [status] = await sql<any[]>`select code,name from operations.vehicle_statuses where code=${newStatus} and is_active=true`;
   if (!destination) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", "المكان الجديد غير صحيح");
-  if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
-  assertVehicleStatusAccess(user, newStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
+  if (requestedNewStatus) {
+    const [status] = await sql<any[]>`select code,name from operations.vehicle_statuses where code=${requestedNewStatus} and is_active=true`;
+    if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
+    assertVehicleStatusAccess(user, requestedNewStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
+  }
   assertBranchAccess(user, destination.branch_code, destination.code, "الحركة المباشرة متاحة فقط إلى موقع داخل الفروع المسموح بها؛ استخدم طلب نقل للانتقال إلى فرع آخر");
   const who = actor(user);
   const movementBatchNo = requestId("MB").toUpperCase();
@@ -1004,7 +1560,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (batch) return batch;
       [batch] = await tx<any[]>`
         insert into operations.movement_batches(batch_no,destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
-        values (${movementBatchNo},${destinationLocationId}::uuid,${newStatus},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
+        values (${movementBatchNo},${destinationLocationId}::uuid,${requestedNewStatus || null},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
       `;
       return batch;
     }
@@ -1022,13 +1578,25 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", `السيارة ${vehicleId} غير موجودة`);
       assertBranchAccess(user, v.branch_code, v.location_code, `لا تملك صلاحية تحريك السيارة ${v.vin}`);
       assertVehicleStatusAccess(user, v.status_code, `لا تملك صلاحية التعامل مع الحالة الحالية للسيارة ${v.vin}`);
+      // Resolve within the locked row, so a move without an override cannot change the car's status.
+      const newStatus = requestedNewStatus || v.status_code;
+      assertVehicleStatusAccess(user, newStatus, "لا تملك صلاحية الحركة إلى الحالة المحددة");
       const sameLocationAndStatus = String(v.location_id) === destinationLocationId && v.status_code === newStatus;
       const sharedMovementNote = clean(body.note);
-      const effectiveShortageNote = sharedMovementNote || clean(raw.shortageNote);
+      const effectiveShortageNote = raw.shortageNote === undefined && !sharedMovementNote ? undefined : sharedMovementNote || clean(raw.shortageNote);
       const effectiveStateNote = clean(raw.stateNote);
-      const persistenceRaw = { ...raw, shortageNote: effectiveShortageNote, stateNote: effectiveStateNote };
+      const agencyInteriorColor = v.location_code === "agency" ? clean(raw.agencyInteriorColor) : "";
+      if (agencyInteriorColor && !AGENCY_INTERIOR_COLORS.has(agencyInteriorColor)) {
+        throw new OperationError(400, "VALIDATION_ERROR", `اللون الداخلي للسيارة ${v.vin} غير موجود في قائمة تشيك الوكالة`);
+      }
+      const persistenceRaw = {
+        ...raw,
+        shortageNote: effectiveShortageNote,
+        stateNote: effectiveStateNote,
+        agencyInteriorColor: v.location_code === "agency" && agencyInteriorColor ? agencyInteriorColor : undefined,
+      };
       const hasNoteUpdate = Boolean(clean(raw.note) || sharedMovementNote)
-        || effectiveShortageNote !== clean(v.shortage_note)
+        || (effectiveShortageNote !== undefined && effectiveShortageNote !== clean(v.shortage_note))
         || effectiveStateNote !== clean(v.state_note);
       if (sameLocationAndStatus && !hasNoteUpdate) throw new OperationError(409, "CONFLICT", `السيارة ${v.vin} موجودة بالفعل في المكان والحالة المختارين ولم تتم إضافة ملاحظة جديدة`);
       if (newStatus === "has_notes" && !effectiveStateNote) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
@@ -1050,7 +1618,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
         continue;
       }
 
-      if (newStatus === "delivered") {
+      if (newStatus === "delivered" && v.status_code !== "delivered") {
         const approval = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
         const approvalsComplete = Boolean(approval?.financial_approved && approval?.administrative_approved);
         if (!approvalsComplete) {
@@ -1060,6 +1628,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
             stateNote: clean(raw.stateNote),
             shortageNote: effectiveShortageNote,
             checks: Array.isArray(raw.checks) ? raw.checks : [],
+            agencyInteriorColor: v.location_code === "agency" && agencyInteriorColor ? agencyInteriorColor : undefined,
             requestedBy: who,
             requestedAt: new Date().toISOString(),
           };
@@ -1074,7 +1643,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
 
       const activeBatch = await ensureBatch();
       const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw: persistenceRaw, generalNote: sharedMovementNote, who, batchId: activeBatch.id });
-      if (newStatus === "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
+      if (newStatus === "delivered" && v.status_code !== "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
       moved.push({
         vehicleId,
         vin: v.vin,
@@ -1215,7 +1784,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل الطلب بالترتيب");
     }
     if (!canAdvanceRequest(r, user, next)) {
-      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتظل متاحة لمنشئ الطلب فقط");
+      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتتاح لمنشئ الطلب أو مدير النظام");
       if (next === "vehicle_received") throw new OperationError(403, "FORBIDDEN", "مرحلة تم استلام السيارة خاصة بمسؤول المكان المستهدف");
       throw new OperationError(403, "FORBIDDEN", "هذه المرحلة خاصة بمسؤول مكان السيارة الحالي");
     }
@@ -1291,6 +1860,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
       where v.id=${vehicleId}::uuid and v.is_deleted=false for update of v
     `;
     if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
+    if (v.archived_at) throw new OperationError(409, "VEHICLE_ARCHIVED", "هذه السيارة مؤرشفة؛ الموافقات التاريخية للعرض فقط");
     assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية تنفيذ موافقة على سيارة في هذا الفرع");
     assertVehicleStatusAccess(user, v.status_code, "لا تملك صلاحية تنفيذ موافقة على سيارة بهذه الحالة");
     let a = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
@@ -1316,6 +1886,10 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
       `;
     }
     await tx`insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data) values (${a.id}::uuid,${vehicleId}::uuid,${a.cycle_no},${type},${action},${note||null},${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(a)})`;
+
+    // Stage 6 and 7 reflect this approval cycle in the same transaction.
+    // Reset/revert must also clear the corresponding Tracking milestones.
+    await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, { id: who.id, name: who.name, note: "تحديث الموافقات من سيستم العمليات" });
 
     let delivered = false;
     if (a.financial_approved && a.administrative_approved && a.pending_delivery) {
@@ -1346,6 +1920,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
           stateNote: pending.stateNote,
           shortageNote: pending.shortageNote,
           checks: Array.isArray(pending.checks) ? pending.checks : [],
+          agencyInteriorColor: pending.agencyInteriorColor,
         },
         generalNote: pending.note,
         who: movementWho,
@@ -1471,6 +2046,12 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
   return sql.begin(async (tx) => {
     const report: any = { total: rows.length, inserted: 0, updated: 0, skipped: 0, failed: 0, errors: [], warnings: [] };
     const vins = new Set<string>();
+    const removedHeadings = ["ملاحظات في السيارة", "حجز - نواقص - تحديد مكان"].filter((header) =>
+      Object.prototype.hasOwnProperty.call(rows[0] || {}, header),
+    );
+    if (removedHeadings.length) {
+      report.warnings.push({ row: 1, warning: `تم تجاهل أعمدة القالب القديم: ${removedHeadings.join("، ")}. استخدم حقل ملاحظات فقط.` });
+    }
     const normalized = rows.map((raw: any, index: number) => ({
       row: index + 2,
       vin: clean(raw.vin || raw["الهيكل (VIN)"] || raw["رقم الهيكل"] || raw["الهيكل"]),
@@ -1478,8 +2059,7 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
       exteriorColor: clean(raw.exteriorColor || raw["خارجي"] || raw["اللون الخارجي"]), interiorColor: clean(raw.interiorColor || raw["داخلي"] || raw["اللون الداخلي"]),
       modelYear: clean(raw.modelYear || raw["موديل"]), plateNo: clean(raw.plateNo || raw["اللوحة"]), batchNo: clean(raw.batchNo || raw["اسم الدفعة بالتاريخ"]),
       locationCode: clean(raw.locationCode || raw["المكان"]), statusCode: clean(raw.statusCode || raw["الحالة"]),
-      notes: clean(raw.notes || raw["ملاحظات في السيارة"]), shortageNote: clean(raw.shortageNote || raw["حجز - نواقص - تحديد مكان"]),
-      stateNote: clean(raw.stateNote || raw["ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)"]),
+      stateNote: clean(vehicleImportStateNote(raw)),
       checks: IMPORT_CHECK_COLUMNS.map(([itemCode, column]) => ({ itemCode, status: importedCheckStatus(raw[column]) })).filter((item) => item.status),
     }));
     for (const row of normalized) {
@@ -1510,8 +2090,8 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
           let vehicleId = existing?.id;
           if (!existing) {
             const [created] = await rowTx<any[]>`
-              insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,notes,state_note,shortage_note,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name)
-              values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${targetStatusCode},${row.notes||null},${row.stateNote||null},${row.shortageNote||null},${status?.code==='has_notes' || Boolean(row.notes) || Boolean(row.stateNote)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+              insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,state_note,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name)
+              values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${targetStatusCode},${row.stateNote||null},${targetStatusCode==='has_notes' || Boolean(row.stateNote)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
               returning id::text
             `;
             vehicleId = created.id;
@@ -1519,9 +2099,9 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
             await rowTx`
               update operations.vehicles set car_name=coalesce(nullif(${row.carName},''),car_name),statement=coalesce(nullif(${row.statement},''),statement),agent_name=coalesce(nullif(${row.agentName},''),agent_name),
                 exterior_color=coalesce(nullif(${row.exteriorColor},''),exterior_color),interior_color=coalesce(nullif(${row.interiorColor},''),interior_color),model_year=coalesce(nullif(${row.modelYear},''),model_year),
-                plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),notes=coalesce(nullif(${row.notes},''),notes),
-                state_note=coalesce(nullif(${row.stateNote},''),state_note),shortage_note=coalesce(nullif(${row.shortageNote},''),shortage_note),
-                has_notes=case when status_code='has_notes' or nullif(${row.notes},'') is not null or nullif(${row.stateNote},'') is not null then true else has_notes end,
+                plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),
+                state_note=coalesce(nullif(${row.stateNote},''),state_note),
+                has_notes=case when status_code='has_notes' or nullif(${row.stateNote},'') is not null then true else has_notes end,
                 is_inventory_active=true,updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
               where id=${existing.id}::uuid
             `;
@@ -1589,13 +2169,17 @@ async function listSalesOrderFollowup(
 ) {
   const search = clean(request.query.search);
   const status = clean(request.query.status);
-  const branch = clean(request.query.branch);
+  const requestedBranch = clean(request.query.branch);
+  const branch = requestedBranch.toLowerCase() === "online" ? "hall" : requestedBranch;
   const completedOnly = clean(request.query.completed).toLowerCase() === "true";
+  const pendingApprovalsOnly = clean(request.query.resource) === "sales_followup_approval_candidates";
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const access = getSystemAccess(user, "operations");
   const unrestricted = access.dataScope === "all";
-  const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
+  const branchCodes = access.branchCodes.length
+    ? [...new Set(access.branchCodes.map((code) => clean(code).toLowerCase() === "online" ? "hall" : clean(code)).filter(Boolean))]
+    : ["__no_branch_access__"];
   const allowedStatuses = access.vehicleStatusCodes?.length ? access.vehicleStatusCodes : ["__all_statuses__"];
   const unrestrictedStatuses = !access.vehicleStatusCodes?.length;
   const { ownOrdersOnly, nextErpUserId } = await salesOrderFollowupIdentity(sql,user);
@@ -1613,6 +2197,8 @@ async function listSalesOrderFollowup(
       vehicle_match.location_code,
       vehicle_match.location_name,
       vehicle_match.location_branch_code,
+      effective_branch.code as effective_branch_code,
+      effective_branch.name as effective_branch_name,
       vehicle_match.status_code as operations_status_code,
       coalesce(o.total_incl_vat,0)::numeric(14,2) as total_incl_vat,
       coalesce(o.advance_paid,0)::numeric(14,2) as advance_paid,
@@ -1622,17 +2208,19 @@ async function listSalesOrderFollowup(
         else 0
       end)::numeric(14,2) as remaining_amount,
       o.sales_followup_completed_at,
+      coalesce(o.is_archived,false) as order_archived,
       o.sales_followup_completed_by::text,
       o.sales_followup_completed_by_name,
       erp_order.erp_user_id,
       coalesce(stage_status.stage_3_completed,false) as stage_3_completed,
       coalesce(stage_status.stage_4_completed,false) as stage_4_completed,
       coalesce(stage_status.stage_5_completed,false) as stage_5_completed,
-      coalesce(stage_status.stage_6_completed,false) as stage_6_completed,
-      coalesce(stage_status.stage_7_completed,false) as stage_7_completed,
+      (coalesce(external_approval.financial_approved,false) or coalesce(current_approval.financial_approved,false)) as stage_6_completed,
+      (coalesce(external_approval.administrative_approved,false) or coalesce(current_approval.administrative_approved,false)) as stage_7_completed,
       coalesce(stage_status.stage_9_completed,false) as stage_9_completed,
       coalesce(stage_status.stage_10_completed,false) as stage_10_completed,
-      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at)) as updated_at
+      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at),
+        coalesce(current_approval.updated_at,o.updated_at),coalesce(external_approval.updated_at,o.updated_at)) as updated_at
     from tracking.orders o
     join tracking.order_vehicles tv on tv.order_id=o.id
     left join lateral (
@@ -1653,7 +2241,15 @@ async function listSalesOrderFollowup(
       limit 1
     ) vehicle_match on true
     left join lateral (
-      select so.erp_user_id,so.platform_user_id::text
+      select va.financial_approved,va.administrative_approved,va.updated_at
+      from operations.vehicle_approvals va
+      where va.vehicle_id=vehicle_match.id
+      order by va.cycle_no desc,va.updated_at desc
+      limit 1
+    ) current_approval on true
+    left join tracking.sale_vehicle_approvals external_approval on external_approval.tracking_vehicle_id=tv.id
+    left join lateral (
+      select so.erp_user_id,so.platform_user_id::text,so.platform_branch_code,so.platform_branch_name,so.erp_branch
       from integrations.erpnext_sales_orders so
       where coalesce(so.is_cancelled,false)=false
         and (
@@ -1665,11 +2261,119 @@ async function listSalesOrderFollowup(
     ) erp_order on true
     left join lateral (
       select
+        u.id::text as user_id,
+        dep.code as department_code,
+        dep.name as department_name,
+        br.code as branch_code,
+        br.name as branch_name
+      from core.users u
+      left join lateral (
+        select d.code,d.name
+        from core.user_system_departments usd
+        join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+        where usd.user_id=u.id and usd.system_code='crm'
+        order by usd.is_primary desc,d.created_at,d.code
+        limit 1
+      ) dep on true
+      left join lateral (
+        select b.code,b.name
+        from core.user_system_branches usb
+        join core.branches b on b.id=usb.branch_id and b.is_active=true
+        where usb.user_id=u.id and usb.system_code='crm'
+        order by usb.is_primary desc,b.created_at,b.code
+        limit 1
+      ) br on true
+      where u.is_active=true
+        and (
+          u.id::text=coalesce(erp_order.platform_user_id,'')
+          or (
+            nullif(trim(coalesce(erp_order.erp_user_id,'')),'') is not null
+            and lower(trim(coalesce(u.next_erp_user_id,'')))=lower(trim(erp_order.erp_user_id))
+          )
+          or (
+            nullif(trim(coalesce(o.sales_person,'')),'') is not null
+            and lower(trim(u.full_name))=lower(trim(o.sales_person))
+          )
+        )
+      order by
+        case
+          when u.id::text=coalesce(erp_order.platform_user_id,'') then 0
+          when lower(trim(coalesce(u.next_erp_user_id,'')))=lower(trim(coalesce(erp_order.erp_user_id,''))) then 1
+          else 2
+        end,
+        u.full_name
+      limit 1
+    ) sales_rep on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
+    left join lateral (
+      select
+        case
+          when lower(trim(coalesce(o.branch,''))) in ('online','الاونلاين','الأونلاين','الاون لاين','الأون لاين')
+            or coalesce(o.branch,'') ilike '%الاونلاين%'
+            or coalesce(o.branch,'') ilike '%الأونلاين%'
+            then 'hall'
+          when coalesce(o.branch,'') ilike '%الملتقى%'
+            or lower(trim(coalesce(o.branch,''))) in ('multaqa','meetup')
+            then 'multaqa'
+          when coalesce(o.branch,'') ilike '%الصالة%'
+            or lower(trim(coalesce(o.branch,''))) in ('hall','showroom')
+            then 'hall'
+          when (coalesce(o.branch,'') ilike '%الفرع الرئيسي%' and coalesce(o.branch,'') ilike '%الشفا%')
+            then case
+              when lower(trim(coalesce(sales_rep.branch_code,''))) in ('hall','multaqa') then lower(trim(sales_rep.branch_code))
+              when lower(trim(coalesce(sales_rep.branch_code,'')))='online' then 'hall'
+              when coalesce(sales_rep.branch_name,'') ilike '%الاونلاين%' or coalesce(sales_rep.branch_name,'') ilike '%الأونلاين%' then 'hall'
+              when coalesce(sales_rep.branch_name,'') ilike '%الملتقى%' then 'multaqa'
+              when coalesce(sales_rep.branch_name,'') ilike '%الصالة%' then 'hall'
+              else null
+            end
+          when coalesce(o.branch,'') ilike '%القادسية%'
+            or lower(trim(coalesce(o.branch,''))) in ('qadisiyah','qadisiya')
+            then case
+              when lower(trim(coalesce(sales_rep.department_code,''))) in ('wholesale','wholesale_sales')
+                or coalesce(sales_rep.department_name,'') ilike '%الجملة%'
+                or lower(trim(coalesce(sales_rep.branch_code,''))) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+                or lower(trim(coalesce(sales_rep.branch_code,''))) like '%wholesale%'
+                or lower(trim(coalesce(sales_rep.branch_code,''))) like '%jumla%'
+                or coalesce(sales_rep.branch_name,'') ilike '%الجملة%'
+                then coalesce(nullif(trim(wholesale_branch.code),''),nullif(trim(sales_rep.branch_code),''),'qadisiyah')
+              else 'qadisiyah'
+            end
+          else nullif(trim(o.branch),'')
+        end as code
+    ) tracking_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true
+        and (
+          lower(trim(b.code))=lower(trim(coalesce(tracking_branch.code,'')))
+          or lower(trim(b.name))=lower(trim(coalesce(tracking_branch.code,'')))
+        )
+      order by case when lower(trim(b.code))=lower(trim(coalesce(tracking_branch.code,''))) then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) branch_match on true
+    left join lateral (
+      select
+        coalesce(nullif(trim(branch_match.code),''),nullif(trim(tracking_branch.code),'')) as code,
+        coalesce(nullif(trim(branch_match.name),''),nullif(trim(tracking_branch.code),''),nullif(trim(o.branch),'')) as name
+    ) effective_branch on true
+    left join lateral (
+      select
         bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=4) as stage_4_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=5) as stage_5_completed,
-        bool_or(vs.status='completed') filter (where st.sort_order=6) as stage_6_completed,
-        bool_or(vs.status='completed') filter (where st.sort_order=7) as stage_7_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=9) as stage_9_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=10) as stage_10_completed,
         max(vs.updated_at) as updated_at
@@ -1680,12 +2384,16 @@ async function listSalesOrderFollowup(
     where coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
       and (${ownOrdersOnly}=false or lower(trim(coalesce(erp_order.erp_user_id,'')))=${nextErpUserId})
-      and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
+      and (
+        ${pendingApprovalsOnly}=true
+        or (${pendingApprovalsOnly}=false and (
+          (${completedOnly}=true and o.sales_followup_completed_at is not null)
+          or (${completedOnly}=false and o.sales_followup_completed_at is null)
+        ))
+      )
       and (
         ${unrestricted}=true
-        or coalesce(o.branch,'') in ${sql(branchCodes)}
-        or coalesce(vehicle_match.location_code,'') in ${sql(branchCodes)}
-        or coalesce(vehicle_match.location_branch_code,'') in ${sql(branchCodes)}
+        or coalesce(effective_branch.code,'') in ${sql(branchCodes)}
       )
       and (${unrestrictedStatuses}=true or vehicle_match.id is null or vehicle_match.status_code in ${sql(allowedStatuses)})
       and (
@@ -1696,9 +2404,7 @@ async function listSalesOrderFollowup(
       )
       and (
         ${branch}=''
-        or coalesce(o.branch,'')=${branch}
-        or coalesce(vehicle_match.location_code,'')=${branch}
-        or coalesce(vehicle_match.location_branch_code,'')=${branch}
+        or coalesce(effective_branch.code,'')=${branch}
       )
   `;
 
@@ -1721,7 +2427,16 @@ async function listSalesOrderFollowup(
                   `
                     : sql`true`;
 
-  const [summaryRows, countRows, rows] = await Promise.all([
+  // List every missing approval belonging to the SAME visible sales-followup
+  // cohort, including already-delivered vehicles. Previous inventory-status
+  // restrictions silently hid many outstanding sales orders from this modal.
+  // Non-actionable rows remain visible with a reason; the POST route still
+  // validates the exact vehicle, latest order, and eligibility on the server.
+  const pendingApprovalClause = pendingApprovalsOnly ? sql`
+    (stage_6_completed=false or stage_7_completed=false)
+  ` : sql`true`;
+
+  const [summaryRows, countRows, rows, branchRows] = await Promise.all([
     sql<any[]>`
       with scoped as (${scopedRows})
       select
@@ -1732,23 +2447,48 @@ async function listSalesOrderFollowup(
         count(*) filter (where stage_10_completed=true)::int as delivered
       from scoped
     `,
-    sql<any[]>`with scoped as (${scopedRows}) select count(*)::int as total from scoped where ${statusClause}`,
+    sql<any[]>`with scoped as (${scopedRows}) select count(*)::int as total from scoped where ${statusClause} and ${pendingApprovalClause}`,
     sql<any[]>`
       with scoped as (${scopedRows})
       select * from scoped
-      where ${statusClause}
-      order by updated_at desc,sales_order_no desc,tracking_vehicle_id
+      where ${statusClause} and ${pendingApprovalClause}
+      order by (stage_3_completed and stage_4_completed and stage_5_completed and stage_6_completed and stage_7_completed and stage_9_completed and stage_10_completed),updated_at desc,sales_order_no desc,tracking_vehicle_id
       limit ${pageSize} offset ${offset}
+    `,
+    sql<any[]>`
+      select code,name
+      from (
+        select b.code,b.name,b.sort_order
+        from core.branches b
+        where b.is_active=true
+          and lower(trim(b.code))<>'online'
+          and (${unrestricted}=true or b.code in ${sql(branchCodes)})
+        union
+        select distinct
+          coalesce(nullif(trim(l.branch_code),''),l.code) as code,
+          coalesce(b.name,l.name) as name,
+          coalesce(b.sort_order,l.sort_order,9999) as sort_order
+        from operations.locations l
+        left join core.branches b on b.code=l.branch_code and b.is_active=true
+        where l.is_active=true
+          and lower(trim(coalesce(nullif(l.branch_code,''),l.code)))<>'online'
+          and (
+            ${unrestricted}=true
+            or l.code in ${sql(branchCodes)}
+            or coalesce(l.branch_code,'') in ${sql(branchCodes)}
+          )
+      ) configured_branches
+      where nullif(trim(code),'') is not null
+      order by sort_order,name
     `,
   ]);
 
   const summary = summaryRows[0] || {};
   const total = Number(countRows[0]?.total || 0);
   const branchMap = new Map<string, string>();
-  for (const row of rows) {
-    const code = clean(row.location_code || row.location_branch_code || row.branch);
-    const name = clean(row.location_name || row.branch);
-    if (code && !branchMap.has(code)) branchMap.set(code, name || code);
+  for (const row of branchRows) {
+    const code = clean(row.code);
+    if (code && !branchMap.has(code)) branchMap.set(code, clean(row.name) || code);
   }
 
   return {
@@ -1766,6 +2506,344 @@ async function listSalesOrderFollowup(
   };
 }
 
+
+/**
+ * Record a late approval for a delivered car or an archived sales order.
+ * This is a *recording-only* action: never re-deliver, move the vehicle,
+ * activate another delivery cycle, unarchive the order, or backdate approvals.
+ * The canonical Operations approval and its audit event remain the source of
+ * truth. Only the selected Tracking vehicle's stages 6 and 7 may be synced.
+ */
+async function recordRetrospectiveSalesFollowupApproval(
+  sql: ReturnType<typeof getSql>,
+  vehicleId: string,
+  trackingVehicleId: string,
+  approvalType: "financial" | "administrative",
+  note: string,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  if (!hasPermission(user, approvalType === "financial" ? "operations.approval.financial" : "operations.approval.administrative")) {
+    throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة المطلوبة");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [vehicle] = await tx<any[]>`
+      select id::text,vin,status_code
+      from operations.vehicles
+      where id=${vehicleId}::uuid and is_deleted=false
+      for update
+    `;
+    if (!vehicle) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "السيارة غير موجودة. حدّث القائمة قبل الموافقة");
+    }
+
+    // Revalidate inside the vehicle lock. Archived orders are eligible only
+    // when they are the newest non-cancelled sale of this VIN. Never attach
+    // the approval of a historical sale to a newer sale cycle.
+    const [order] = await tx<any[]>`
+      select tv.id::text as id,coalesce(o.is_archived,false) as is_archived
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      where tv.id=${trackingVehicleId}::uuid
+        and coalesce(o.is_deleted,false)=false
+        and coalesce(o.is_cancelled,false)=false
+
+        and (
+          tv.vehicle_id=${vehicleId}::uuid
+          or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
+        )
+      limit 1
+    `;
+    const [latest] = await tx<any[]>`
+      select tv.id::text as id
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      where coalesce(o.is_deleted,false)=false
+        and coalesce(o.is_cancelled,false)=false
+        and (
+          tv.vehicle_id=${vehicleId}::uuid
+          or (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(${vehicle.vin})))
+        )
+      order by o.order_date desc nulls last,o.created_at desc,tv.created_at desc,tv.id desc
+      limit 1
+    `;
+    if (!order || latest?.id !== trackingVehicleId || (!order.is_archived && vehicle.status_code !== "delivered")) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "الطلب ملغي أو مرتبط بعملية بيع أحدث أو حالة السيارة لا تسمح بالتوثيق");
+    }
+    const archivedOrder = order.is_archived === true;
+    const auditNote = archivedOrder
+      ? ["توثيق موافقة لاحقة على طلب مؤرشف", note].filter(Boolean).join(" - ")
+      : note;
+
+    let [approval] = await tx<any[]>`
+      select *,id::text
+      from operations.vehicle_approvals
+      where vehicle_id=${vehicleId}::uuid
+      order by cycle_no desc,updated_at desc
+      limit 1
+      for update
+    `;
+    if (!approval) {
+      const [cycle] = await tx<any[]>`
+        select coalesce(max(cycle_no),0)+1 as next
+        from operations.vehicle_approvals
+        where vehicle_id=${vehicleId}::uuid
+      `;
+      // A retrospective approval is not a new pending delivery or active
+      // stock cycle, whether the sale was delivered or archived.
+      [approval] = await tx<any[]>`
+        insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active,pending_delivery)
+        values (${vehicleId}::uuid,${Number(cycle?.next || 1)},false,null)
+        returning *,id::text
+      `;
+    }
+    if (approvalType === "financial" ? approval.financial_approved : approval.administrative_approved) {
+      throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+    }
+    const before = { ...approval };
+    if (approvalType === "financial") {
+      [approval] = await tx<any[]>`
+        update operations.vehicle_approvals
+        set financial_approved=true,financial_note=${note || approval.financial_note || null},
+          financial_approved_by=${who.id}::uuid,financial_approved_by_name=${who.name},financial_approved_at=now(),updated_at=now()
+        where id=${approval.id}::uuid returning *,id::text
+      `;
+    } else {
+      [approval] = await tx<any[]>`
+        update operations.vehicle_approvals
+        set administrative_approved=true,administrative_note=${note || approval.administrative_note || null},
+          administrative_approved_by=${who.id}::uuid,administrative_approved_by_name=${who.name},administrative_approved_at=now(),updated_at=now()
+        where id=${approval.id}::uuid returning *,id::text
+      `;
+    }
+    await tx`
+      insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data)
+      values (${approval.id}::uuid,${vehicleId}::uuid,${approval.cycle_no},${approvalType},'approve',${auditNote || null},
+        ${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(approval)})
+    `;
+    if (archivedOrder) {
+      // Standard sync intentionally skips archived sales. This explicit path
+      // updates only the selected archived order's stages, without reopening
+      // the order or changing its original tracking status and archive flags.
+      await syncTrackingApprovalStagesForTrackingVehicle(tx, trackingVehicleId, {
+        id: who.id, name: who.name, note: auditNote,
+      }, { allowArchived: true });
+    } else {
+      await syncTrackingApprovalStagesForOperationsVehicle(tx, vehicleId, {
+        id: who.id, name: who.name, note: "توثيق موافقة متأخرة من متابعة طلبات البيع بعد التسليم",
+      });
+    }
+    return {
+      ok: true, approval, delivered: false, autoArchived: false, archivedOrder,
+      message: archivedOrder
+        ? "تم توثيق الموافقة على الطلب المؤرشف دون فك الأرشفة أو تغيير حالة السيارة"
+        : "تم توثيق الموافقة بعد التسليم دون تغيير حالة السيارة أو نقلها",
+    };
+  });
+}
+
+/**
+ * Approve a vehicle sold outside Operations inventory. A Tracking sales-order
+ * vehicle is sufficient to record an approval; do not insert fake inventory
+ * cars or use an inventory approval cycle for an external sale.
+ */
+async function recordExternalSalesFollowupApproval(
+  sql: ReturnType<typeof getSql>,
+  trackingVehicleId: string,
+  approvalType: "financial" | "administrative",
+  note: string,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  const permission = approvalType === "financial" ? "operations.approval.financial" : "operations.approval.administrative";
+  if (!hasPermission(user, "platform.superadmin") || !hasPermission(user, permission)) {
+    throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة المطلوبة");
+  }
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [sale] = await tx<any[]>`
+      select tv.id::text as tracking_vehicle_id,tv.vin,o.id::text as order_id,
+        o.sales_order_no,coalesce(o.is_archived,false) as is_archived,
+        inventory.id::text as operations_vehicle_id
+      from tracking.order_vehicles tv
+      join tracking.orders o on o.id=tv.order_id
+      left join lateral (
+        select v.id from operations.vehicles v
+        where v.is_deleted=false and (
+          v.id=tv.vehicle_id or
+          (tv.vehicle_id is null and upper(trim(v.vin))=upper(trim(tv.vin)))
+        )
+        order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
+        limit 1
+      ) inventory on true
+      where tv.id=${trackingVehicleId}::uuid
+        and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+
+        and nullif(trim(tv.vin),'') is not null
+        and upper(trim(tv.vin)) not like 'PENDING-%'
+      for update of tv
+    `;
+    if (!sale || sale.operations_vehicle_id) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة ربط السيارة أو طلب البيع تغيّرت. حدّث القائمة قبل الاعتماد");
+    }
+    // A VIN may appear in multiple sales over time. Never approve an older
+    // transaction by mistake, even if its order is already archived.
+    const [latest] = await tx<any[]>`
+      select newer_tv.id::text as id
+      from tracking.order_vehicles newer_tv
+      join tracking.orders newer_o on newer_o.id=newer_tv.order_id
+      where coalesce(newer_o.is_deleted,false)=false
+        and coalesce(newer_o.is_cancelled,false)=false
+        and upper(trim(newer_tv.vin))=upper(trim(${sale.vin}))
+      order by newer_o.order_date desc nulls last,newer_o.created_at desc,
+        newer_tv.created_at desc,newer_tv.id desc
+      limit 1
+    `;
+    if (latest?.id !== trackingVehicleId) {
+      throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "توجد عملية بيع أحدث لرقم الهيكل؛ لا يمكن اعتماد الطلب القديم");
+    }
+
+    await tx`
+      insert into tracking.sale_vehicle_approvals(tracking_vehicle_id)
+      values (${trackingVehicleId}::uuid)
+      on conflict (tracking_vehicle_id) do nothing
+    `;
+    const [before] = await tx<any[]>`
+      select * from tracking.sale_vehicle_approvals
+      where tracking_vehicle_id=${trackingVehicleId}::uuid
+      for update
+    `;
+    if (approvalType === "financial" ? before.financial_approved : before.administrative_approved) {
+      throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+    }
+    const [approval] = approvalType === "financial"
+      ? await tx<any[]>`
+          update tracking.sale_vehicle_approvals set
+            financial_approved=true,financial_approved_at=now(),
+            financial_approved_by=${who.id}::uuid,financial_approved_by_name=${who.name},
+            financial_note=${note || null},updated_at=now()
+          where tracking_vehicle_id=${trackingVehicleId}::uuid
+          returning *
+        `
+      : await tx<any[]>`
+          update tracking.sale_vehicle_approvals set
+            administrative_approved=true,administrative_approved_at=now(),
+            administrative_approved_by=${who.id}::uuid,administrative_approved_by_name=${who.name},
+            administrative_note=${note || null},updated_at=now()
+          where tracking_vehicle_id=${trackingVehicleId}::uuid
+          returning *
+        `;
+    const auditNote = [sale.is_archived ? "توثيق موافقة لاحقة على طلب مؤرشف" : "موافقة سيارة من خارج مخزون العمليات", note]
+      .filter(Boolean).join(" - ");
+    await tx`
+      insert into tracking.sale_vehicle_approval_events(
+        tracking_vehicle_id,order_id,approval_type,action,actor_id,actor_name,actor_role,note,before_data,after_data
+      ) values (
+        ${trackingVehicleId}::uuid,${sale.order_id}::uuid,${approvalType},'approve',
+        ${who.id}::uuid,${who.name},${who.role},${auditNote},${tx.json(before)},${tx.json(approval)}
+      )
+    `;
+    // Stage 6 / 7 are projections of the recorded approval, not independent
+    // clickable tracking actions. Sync the selected car only, atomically.
+    await syncTrackingApprovalStagesForTrackingVehicle(tx, trackingVehicleId, {
+      id: who.id,name: who.name,note: auditNote,
+    }, { allowArchived: sale.is_archived === true });
+    return {
+      ok: true,approval,externalVehicle: true,archivedOrder: sale.is_archived,
+      delivered: false,autoArchived: false,
+      message: "تم توثيق الموافقة للسيارة الخارجية وربطها بطلب البيع والتراكينج دون إنشاء سيارة في المخزون",
+    };
+  });
+}
+
+async function approveSalesFollowupVehicle(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, any>,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  if (!hasPermission(user, "platform.superadmin")) {
+    throw new OperationError(403, "FORBIDDEN", "اعتماد السيارات من متابعة طلبات البيع متاح لمدير النظام فقط");
+  }
+  const vehicleId = clean(body.vehicleId);
+  const trackingVehicleId = clean(body.trackingVehicleId);
+  const approvalType = clean(body.approvalType);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(trackingVehicleId) || (vehicleId && !uuid.test(vehicleId)) || !["financial", "administrative"].includes(approvalType)) {
+    throw new OperationError(400, "VALIDATION_ERROR", "حدد رقم هيكل ونوع الموافقة الصحيحين");
+  }
+  // The sale itself is the required record; inventory is optional. Never
+  // accept a client-provided inventory ID without matching the selected sale.
+  const [target] = await sql<any[]>`
+    select tv.id::text as tracking_vehicle_id,tv.vin,
+      inventory.id::text as operations_vehicle_id,inventory.status_code,
+      coalesce(o.is_archived,false) as order_archived,
+      (coalesce(external_approval.financial_approved,false) or coalesce(approval.financial_approved,false)) as financial_approved,
+      (coalesce(external_approval.administrative_approved,false) or coalesce(approval.administrative_approved,false)) as administrative_approved
+    from tracking.order_vehicles tv
+    join tracking.orders o on o.id=tv.order_id
+    left join lateral (
+      select v.id,v.vin,v.status_code from operations.vehicles v
+      where v.is_deleted=false and (
+        v.id=tv.vehicle_id or
+        (tv.vehicle_id is null and upper(trim(tv.vin))=upper(trim(v.vin)))
+      )
+      order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
+      limit 1
+    ) inventory on true
+    left join lateral (
+      select financial_approved,administrative_approved
+      from operations.vehicle_approvals va
+      where va.vehicle_id=inventory.id
+      order by va.cycle_no desc,va.updated_at desc limit 1
+    ) approval on true
+    left join tracking.sale_vehicle_approvals external_approval on external_approval.tracking_vehicle_id=tv.id
+    left join lateral (
+      select newer_tv.id from tracking.order_vehicles newer_tv
+      join tracking.orders newer_o on newer_o.id=newer_tv.order_id
+      where coalesce(newer_o.is_deleted,false)=false
+        and coalesce(newer_o.is_cancelled,false)=false
+        and (
+          (inventory.id is not null and newer_tv.vehicle_id=inventory.id)
+          or upper(trim(newer_tv.vin))=upper(trim(tv.vin))
+        )
+      order by newer_o.order_date desc nulls last,newer_o.created_at desc,
+        newer_tv.created_at desc,newer_tv.id desc
+      limit 1
+    ) latest_order on true
+    where tv.id=${trackingVehicleId}::uuid and latest_order.id=tv.id
+      and coalesce(o.is_deleted,false)=false and coalesce(o.is_cancelled,false)=false
+
+      and nullif(trim(tv.vin),'') is not null
+      and upper(trim(tv.vin)) not like 'PENDING-%'
+    limit 1
+  `;
+  if (!target || (vehicleId && target.operations_vehicle_id !== vehicleId)) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "رقم الهيكل غير مؤهل أو لديه طلب بيع أحدث. حدّث القائمة");
+  }
+  if (target.operations_vehicle_id && !target.order_archived && !["under_delivery", "delivered"].includes(target.status_code)) {
+    throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "حالة سيارة المخزون لا تسمح بالموافقة");
+  }
+  if (approvalType === "financial" ? target.financial_approved : target.administrative_approved) {
+    throw new OperationError(409, "ALREADY_APPROVED", "هذه الموافقة مكتملة بالفعل. حدّث القائمة");
+  }
+  const note = clean(body.note).slice(0, 1000);
+  if (!target.operations_vehicle_id) {
+    return recordExternalSalesFollowupApproval(
+      sql, trackingVehicleId, approvalType as "financial" | "administrative", note, user,
+    );
+  }
+  if (target.order_archived || target.status_code === "delivered") {
+    return recordRetrospectiveSalesFollowupApproval(
+      sql, target.operations_vehicle_id, trackingVehicleId,
+      approvalType as "financial" | "administrative", note, user,
+    );
+  }
+  return approvalAction(sql, {
+    vehicleId: target.operations_vehicle_id,
+    approvalType,
+    approvalAction: "approve",
+    note,
+  }, user);
+}
 
 async function completeSalesOrderFollowup(
   sql: ReturnType<typeof getSql>,
@@ -1862,6 +2940,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
         return response.status(200).json(await listSalesOrderFollowup(sql, request, user));
       }
+      if (resource === "sales_followup_approval_candidates") {
+        if (!requireOperationsPermission(user, "platform.superadmin", response)) return;
+        if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
+        return response.status(200).json(await listSalesOrderFollowup(sql, request, user));
+      }
       if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
       if (resource === "dashboard_shortages") return response.status(200).json(await dashboardShortages(sql, request, user));
       if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));
@@ -1884,6 +2967,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else if (action === "archive_vehicle") {
       if (!requireOperationsPermission(user, "operations.vehicle.archive", response)) return;
       result = await archiveVehicle(sql, body, user);
+    } else if (action === "update_vehicle_tajyeer") {
+      if (!requireOperationsPermission(user, "operations.inventory.tajyeer.update", response)) return;
+      result = await updateVehicleTajyeer(sql, body, user);
     } else if (action === "move_vehicles") {
       if (!requireOperationsPermission(user, "operations.movement.create", response)) return;
       result = await moveVehicles(sql, body, user);
@@ -1894,6 +2980,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       result = await transferAction(sql, body, user);
     } else if (action === "approval_action") {
       result = await approvalAction(sql, body, user);
+    } else if (action === "sales_followup_approval_action") {
+      if (!requireOperationsPermission(user, "platform.superadmin", response)) return;
+      result = await approveSalesFollowupVehicle(sql, body, user);
     } else if (action === "save_setting") {
       if (!requireOperationsPermission(user, "settings.operations.manage", response)) return;
       result = await saveOperationSetting(sql, body, user);
@@ -1906,7 +2995,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
     }
-    await emitOperationsNotification(user, action, body, result).catch((error) => console.error("Operations notification failed", error));
+    await emitOperationsNotification(user, action === "sales_followup_approval_action" ? "approval_action" : action, body, result).catch((error) => console.error("Operations notification failed", error));
     return response.status(200).json({ ...(result as object), requestId: traceId });
   } catch (error) {
     console.error("Operations API failed", { traceId, method: request.method, resource: request.query.resource, error });

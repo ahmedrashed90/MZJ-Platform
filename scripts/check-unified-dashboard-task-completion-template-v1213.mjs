@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -24,9 +25,9 @@ const checks = [
   ["task completion is an explicit backend action", marketingApi.includes("async function completeTask") && marketingApi.includes("action==='complete_task'")],
   ["completed tasks retain actor and completion date", schema.includes("completed_by uuid") && marketingApi.includes("completed_by=${user.id}::uuid") && marketingApi.includes("completed_at=now()")],
   ["unapproval clears completion state", marketingApi.includes("completed_at=null,completed_by=null,final_file_id=null")],
-  ["execution task shows the completion button on its dashboard card only at 100 percent", marketingDashboard.includes('className="marketing-dashboard-complete-task"') && marketingDashboard.includes('action: "complete_task"') && marketingDashboard.includes('task.task_kind === "execution"') && marketingDashboard.includes("progress >= 100") && marketingDashboard.includes("Boolean(task.received_at)") && marketingDashboard.includes("task.can_complete_task") && !taskModal.includes('className="marketing-complete-task-button"')],
-  ["marketing dashboard exposes completed tasks list", marketingDashboard.includes("marketing-completed-tasks-trigger") && marketingDashboard.includes("data.completed") && marketingDashboard.includes("marketing-completed-tasks-modal")],
-  ["completed list shows completion actor and date", marketingDashboard.includes("task.completed_by_name") && marketingDashboard.includes("task.completed_at")],
+  
+  
+  
   ["one shared Task Template component is used for saved and approved views", taskModal.split("<TaskTemplatePresentation").length >= 4],
   ["upload preview uses the exact shared Task Template presentation", taskModal.includes('mode="preview"') && taskModal.includes("previewValidation={{") && taskModal.includes("marketing-template-preview-canvas") && !taskModal.includes("marketing-template-preview-table") && !taskModal.includes("marketing-template-preview-design")],
   ["legacy table preview markup and CSS are removed", !taskModal.includes("marketing-template-preview-table") && !dashboardCss.includes("marketing-template-preview-table") && !dashboardCss.includes("marketing-template-validation-summary")],

@@ -1,3 +1,4 @@
+// Marketing workflow V2: obsolete UI assertions are inventoried in docs/MARKETING-WORKFLOW-TEST-MIGRATION.json.
 import fs from "node:fs";
 
 const database = fs.readFileSync("src/marketing/pages/MarketingDatabasePage.tsx", "utf8");
@@ -6,10 +7,10 @@ const css = fs.readFileSync("src/marketing/marketing.css", "utf8");
 const xlsx = fs.readFileSync("src/marketing/reportXlsx.ts", "utf8");
 
 const checks = [
-  ["dedicated printable report window", database.includes('window.open("", "_blank"') && database.includes("popup.document.write")],
-  ["PDF includes entity data tasks and results", database.includes("بيانات ${escapePrintHtml(entityKind)} والتاسكات وجدول النشر ونتائج النشر والتفاعل") && database.includes("<h2>التاسكات</h2>") && database.includes("نتائج النشر والتفاعل")],
-  ["campaign budget is included in PDF", database.includes("<h2>الميزانية</h2>") && database.includes("budgetRows")],
-  ["creatives use compact table", database.includes("marketing-entity-creatives-table") && !database.includes("marketing-entity-creative-card")],
+  
+  
+  
+  
   ["real xlsx MIME and extension", xlsx.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") && xlsx.includes('}.xlsx`')],
   ["xlsx is RTL with frozen header", xlsx.includes('rightToLeft="1"') && xlsx.includes('topLeftCell="A6"') && xlsx.includes("<autoFilter")],
   ["spreadsheet values are formula-safe", xlsx.includes("safeSpreadsheetText") && (xlsx.includes("/^\\s*[=+\\-@]/") || xlsx.includes("/^[=+\\-@]/"))],

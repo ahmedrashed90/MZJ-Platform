@@ -1,5 +1,6 @@
 import { normalizePhone } from "./_phone-utils.js";
 import { clean, numberValue } from "./_tracking-utils.js";
+import { normalizeRiyadhTimestamp } from "./_crm-sale-timestamp.js";
 
 type JsonRecord = Record<string, any>;
 
@@ -51,6 +52,8 @@ export type NormalizedErpNextSalesOrder = {
   erpSubmittedBy: string;
   erpSubmittedByName: string;
   erpBranch: string;
+  crmSourceCode: string;
+  crmSourceName: string;
   accountingCustomerName: string;
   actualCustomerName: string;
   actualCustomerPhone: string;
@@ -173,6 +176,64 @@ function isRegistrationFeeItem(item: JsonRecord) {
   ].some(includesRegistrationFee);
 }
 
+const WEBSITE_PACKAGE_ITEM_CODE = "MZJ-WEBSITE-PACKAGE";
+const WEBSITE_PACKAGE_FEE_ITEM_CODE = "رسوم";
+
+function normalizedItemCode(value: unknown) {
+  return clean(value).toUpperCase().replace(/\s+/g, "");
+}
+
+function isWebsitePackageItem(item: JsonRecord, isWebsiteOrder = false) {
+  const itemCode = normalizedItemCode(pick(item, ["item_code", "code"]));
+  if (itemCode === normalizedItemCode(WEBSITE_PACKAGE_ITEM_CODE)) return true;
+  if (!isWebsiteOrder || itemCode !== normalizedItemCode(WEBSITE_PACKAGE_FEE_ITEM_CODE)) return false;
+
+  const description = clean(pick(item, ["description"]));
+  return description.includes("باقة الموقع");
+}
+
+function descriptionValue(description: unknown, label: string) {
+  const normalizedLabel = label.replace(/\s+/g, "").replace(/[：:]/g, "");
+  for (const rawLine of clean(description).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const [head, ...rest] = line.split(/[：:]/);
+    if (head.replace(/\s+/g, "").trim() === normalizedLabel && rest.length) return rest.join(":").trim();
+  }
+  return "";
+}
+
+function packageSummaryFromItems(items: JsonRecord[], fallbackTaxRate: number) {
+  if (!items.length) return null;
+  const first = items[0];
+  const description = pickText(first, ["description"]);
+  const priceBeforeTax = Number(items.reduce((sum, item) => sum + itemAmount(item), 0).toFixed(2));
+  const taxValue = Number(items.reduce((sum, item) => {
+    const subtotal = itemAmount(item);
+    const rate = percentRate(pick(item, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || fallbackTaxRate;
+    return sum + (directTaxAmount(item) || subtotal * rate / 100);
+  }, 0).toFixed(2));
+  const totalInclVat = Number((priceBeforeTax + taxValue).toFixed(2));
+  const packageName = pickText(first, ["package_name", "custom_package_name"])
+    || descriptionValue(description, "الباقة")
+    || "باقة الموقع";
+  const packageGroup = pickText(first, ["package_group", "custom_package_group"])
+    || descriptionValue(description, "مجموعة الباقة");
+  const discountText = pickText(first, ["package_discount_percent", "custom_package_discount_percent"])
+    || descriptionValue(description, "خصم نقدي على السيارة");
+  const cashDiscountPercent = numberValue(discountText.replace("%", ""));
+
+  return {
+    itemCode: pickText(first, ["item_code", "code"]) || WEBSITE_PACKAGE_ITEM_CODE,
+    name: packageName,
+    group: packageGroup,
+    priceBeforeTax,
+    taxValue,
+    totalInclVat,
+    cashDiscountPercent,
+  };
+}
+
 function itemAmount(item: JsonRecord) {
   const qty = numberValue(pick(item, ["qty", "quantity", "stock_qty"])) || 1;
   const amount = numberValue(pick(item, ["net_amount", "amount", "base_net_amount", "base_amount", "item_value", "value"]));
@@ -234,6 +295,31 @@ function resolveErpUserId(doc: JsonRecord, body: JsonRecord) {
     .map((row) => pickText(row, ["sales_rep_email", "email", "user", "user_id", "sales_person_email", "employee_email"]))
     .find(Boolean);
   return (teamEmail || "").toLowerCase();
+}
+
+function resolveCrmBusinessSource(doc: JsonRecord, body: JsonRecord) {
+  const rawSource = pickText(doc, ["source", "source_code", "sourceCode", "order_source", "orderSource"])
+    || pickText(body, ["source", "source_code", "sourceCode", "order_source", "orderSource"]);
+  const normalized = rawSource.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const purchaseOrderReference = pickText(doc, [
+    "po_no", "poNo", "customer_po_no", "customerPoNo", "purchase_order", "purchaseOrder",
+  ]) || pickText(body, [
+    "po_no", "poNo", "customer_po_no", "customerPoNo", "purchase_order", "purchaseOrder",
+  ]);
+
+  // Website checkout Sales Orders are stamped by the checkout worker as WC-<Woo order id>.
+  // This stable ERP reference is authoritative even if a webhook omits its source field.
+  if (/^WC-\d+$/i.test(purchaseOrderReference)) {
+    return { code: "website", name: "Website" };
+  }
+
+  if (normalized === "website" || normalized === "web" || normalized === "الموقع" || normalized === "الموقعالالكتروني") {
+    return { code: "website", name: "Website" };
+  }
+
+  // Preserve the established manual ERPNext flow for every payload that does
+  // not explicitly identify itself as a website-originated order.
+  return { code: "next_erp", name: "NEXT ERP" };
 }
 
 function resolveAlternateCustomer(doc: JsonRecord, body: JsonRecord) {
@@ -304,8 +390,12 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || "sales_order.submitted";
   const createdAt = pickText(doc, ["creation", "created_at", "createdAt", "Timestamp"])
     || pickText(body, ["Timestamp", "createdAt", "creation"]);
-  const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
-  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
+  // Keep the historical source-instance identity stable, while storing the real
+  // ERP creation timestamp as Riyadh local time when the webhook omits an offset.
+  const sourceInstanceTimestamp = normalizedInstanceTimestamp(createdAt);
+  const erpCreatedAt = normalizeRiyadhTimestamp(createdAt) || "legacy";
+  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${sourceInstanceTimestamp}`;
+  const crmSource = resolveCrmBusinessSource(doc, body);
   const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
   const isUpdateAfterSubmit = updateAfterSubmitEvent(erpEvent);
 
@@ -314,13 +404,16 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على جدول Items في طلب ${orderNo}`);
   }
 
-  const feeItems = rawItems.filter(isRegistrationFeeItem);
-  const vehicleItems = rawItems.filter((item) => !isRegistrationFeeItem(item));
+  const isWebsiteOrder = crmSource.code === "website";
+  const packageItems = rawItems.filter((item) => isWebsitePackageItem(item, isWebsiteOrder));
+  const feeItems = rawItems.filter((item) => !isWebsitePackageItem(item, isWebsiteOrder) && isRegistrationFeeItem(item));
+  const vehicleItems = rawItems.filter((item) => !isWebsitePackageItem(item, isWebsiteOrder) && !isRegistrationFeeItem(item));
   if (!vehicleItems.length && !isCancellation && !isUpdateAfterSubmit) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على صف سيارة داخل طلب ${orderNo}`);
   }
 
   const taxMeta = resolveTaxMetadata(doc, body);
+  const packageSummary = packageSummaryFromItems(packageItems, taxMeta.rate);
   const directRegistrationFee = numberValue(pick(doc, ["registration_fee", "custom_registration_fee", "RegistrationFee"]));
   const registrationFee = directRegistrationFee || feeItems.reduce((sum, item) => sum + itemAmount(item), 0);
 
@@ -335,7 +428,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   ]) || pickText(body, ["CustomerPhone", "customerPhone", "customerMobile"]);
   const alternateCustomer = resolveAlternateCustomer(doc, body);
   const actualCustomerName = alternateCustomer.name || accountingCustomerName;
-  const actualCustomerPhone = alternateCustomer.name ? alternateCustomer.phone : (accountingCustomerPhone || alternateCustomer.phone);
+  const actualCustomerPhone = alternateCustomer.phone || accountingCustomerPhone;
   const actualCustomerPhoneNormalized = normalizePhone(actualCustomerPhone);
   const branch = pickText(doc, ["branch", "branch_name", "custom_branch", "Branch"])
     || pickText(body, ["Branch", "branch"]);
@@ -354,6 +447,11 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
+  const totalPackageSubtotal = packageSummary?.priceBeforeTax || 0;
+  const explicitNetTotal = numberValue(
+    pick(doc, ["net_total", "base_net_total", "subtotal_excl_vat", "NetTotal", "netTotal"])
+      ?? pick(body, ["net_total", "base_net_total", "subtotal_excl_vat", "NetTotal", "netTotal"]),
+  );
   const explicitGrandTotal = numberValue(
     pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"])
       ?? pick(body, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"]),
@@ -362,6 +460,13 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     pick(doc, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"])
       ?? pick(body, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"]),
   );
+  const vehicleTaxTotal = vehicleItems.reduce((sum, current) => {
+    const currentSubtotal = itemAmount(current);
+    const currentRate = percentRate(pick(current, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || taxMeta.rate;
+    return sum + (directTaxAmount(current) || currentSubtotal * currentRate / 100);
+  }, 0);
+  const orderTaxValue = Number((vehicleTaxTotal + (packageSummary?.taxValue || 0)).toFixed(2));
+  const orderSubtotalBeforeTax = explicitNetTotal || Number((totalVehicleSubtotal + totalPackageSubtotal + registrationFee).toFixed(2));
   const payloads: NormalizedErpNextSalesOrder["payloads"] = [];
   const warnings: NormalizedErpNextSalesOrder["warnings"] = [];
 
@@ -441,17 +546,15 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
         unitPrice,
         value: itemValue,
       },
+      package: packageSummary,
       totals: {
         carSubtotalExclVAT: subtotal,
         carTaxValue: taxValue,
         carTotalInclVAT: totalInclVat,
         registrationFee: feeForThisRow,
-        subtotalBeforeTax: Number((totalVehicleSubtotal + registrationFee).toFixed(2)),
-        grandTotal: explicitGrandTotal || Number((totalVehicleSubtotal + registrationFee + vehicleItems.reduce((sum, current) => {
-          const currentSubtotal = itemAmount(current);
-          const currentRate = percentRate(pick(current, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || taxMeta.rate;
-          return sum + (directTaxAmount(current) || currentSubtotal * currentRate / 100);
-        }, 0)).toFixed(2)),
+        subtotalBeforeTax: orderSubtotalBeforeTax,
+        orderTaxValue,
+        grandTotal: explicitGrandTotal || Number((orderSubtotalBeforeTax + orderTaxValue).toFixed(2)),
         advancePaid: explicitAdvancePaid,
         taxCode: taxMeta.code,
         taxName: taxMeta.name,
@@ -495,6 +598,8 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     erpSubmittedBy,
     erpSubmittedByName,
     erpBranch: branch,
+    crmSourceCode: crmSource.code,
+    crmSourceName: crmSource.name,
     accountingCustomerName,
     actualCustomerName,
     actualCustomerPhone,

@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getSql } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 import { getEffectiveAccess, hasPermission, type EffectiveAccessSnapshot } from "./_access-control.js";
+import { isAttendanceSessionAllowed } from "./_attendance.js";
 
 export const SESSION_COOKIE = "mzj_session";
 const SESSION_HOURS = 12;
@@ -20,6 +21,7 @@ export type SessionUser = EffectiveAccessSnapshot & {
   departmentCodes: string[];
   branches: string[];
   branchCodes: string[];
+  verifiedDeviceId?: string | null;
 };
 
 function parseCookies(header: string | undefined) {
@@ -95,19 +97,33 @@ export async function loadUserProfile(userId: string): Promise<SessionUser | nul
   };
 }
 
-export async function createSession(request: VercelRequest, response: VercelResponse, userId: string) {
+export async function createSession(
+  request: VercelRequest,
+  response: VercelResponse,
+  userId: string,
+  options: { verifiedDeviceId?: string | null } = {},
+) {
   await ensureAccessControlSchema();
   const sql = getSql();
   const token = randomBytes(32).toString("hex");
   const hash = tokenHash(token);
   const userAgent = String(request.headers["user-agent"] || "").slice(0, 500) || null;
   const ipAddress = requestIp(request);
+  const verifiedDeviceId = String(options.verifiedDeviceId || "").trim() || null;
 
-  await sql`
-    insert into core.sessions(token_hash,user_id,expires_at,user_agent,ip_address,permission_version)
-    select ${hash},u.id,now()+${SESSION_HOURS}*interval '1 hour',${userAgent},${ipAddress},u.permission_version
-    from core.users u where u.id=${userId}::uuid and u.is_active=true
-  `;
+  if (verifiedDeviceId) {
+    await sql`
+      insert into core.sessions(token_hash,user_id,expires_at,user_agent,ip_address,permission_version,verified_device_id)
+      select ${hash},u.id,now()+${SESSION_HOURS}*interval '1 hour',${userAgent},${ipAddress},u.permission_version,${verifiedDeviceId}
+      from core.users u where u.id=${userId}::uuid and u.is_active=true
+    `;
+  } else {
+    await sql`
+      insert into core.sessions(token_hash,user_id,expires_at,user_agent,ip_address,permission_version)
+      select ${hash},u.id,now()+${SESSION_HOURS}*interval '1 hour',${userAgent},${ipAddress},u.permission_version
+      from core.users u where u.id=${userId}::uuid and u.is_active=true
+    `;
+  }
 
   const secure = process.env.VERCEL ? "; Secure" : "";
   response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}${secure}`);
@@ -135,8 +151,8 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
   }
 
   const sql = getSql();
-  const [session] = await sql<{ user_id: string }[]>`
-    select s.user_id::text
+  const [session] = await sql<{ user_id: string; verified_device_id: string | null }[]>`
+    select s.user_id::text,s.verified_device_id
     from core.sessions s
     join core.users u on u.id=s.user_id and u.is_active=true
     where s.token_hash=${tokenHash(token)}
@@ -148,7 +164,15 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     return null;
   }
 
+  const attendanceAllowed = await isAttendanceSessionAllowed(session.user_id, session.verified_device_id);
+  if (!attendanceAllowed) {
+    await sql`delete from core.sessions where token_hash=${tokenHash(token)}`.catch(() => undefined);
+    requestWithCache[REQUEST_USER_KEY] = null;
+    return null;
+  }
+
   const user = await loadUserProfile(session.user_id);
+  if (user) user.verifiedDeviceId = session.verified_device_id || null;
   requestWithCache[REQUEST_USER_KEY] = user;
   if (!user) return null;
 

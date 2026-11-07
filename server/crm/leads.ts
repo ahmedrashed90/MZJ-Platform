@@ -1,10 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
-import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
+import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent, syncLeadConversationContext } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
 import { requirePermissionForUser } from "../_access-control.js";
+import { correctLatestCanonicalSaleDate } from "../_crm-sales-history.js";
 
 
 function soldQuantity(value: unknown) {
@@ -12,6 +13,11 @@ function soldQuantity(value: unknown) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   return Math.max(1, Math.floor(parsed));
+}
+
+function isWholesaleDepartmentCode(value: unknown) {
+  const code = clean(value).toLowerCase();
+  return code === "wholesale" || code === "wholesale_sales" || code.includes("wholesale") || code.includes("جملة");
 }
 
 function riyadhNoteTimestamp(date = new Date()) {
@@ -44,6 +50,32 @@ function comparableDate(value: unknown) {
   if (!raw) return "";
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function riyadhCalendarDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function isValidCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
 function comparableNumber(value: unknown) {
@@ -111,6 +143,8 @@ function leadPayload(body: Record<string, any>) {
 async function list(request: VercelRequest, response: VercelResponse, user: any) {
   const sql = getSql();
   const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
+  const liveBranch = currentCrmLeadBranchSql(sql);
   const q = clean(request.query.q);
   const source = clean(request.query.source);
   const status = clean(request.query.status);
@@ -140,7 +174,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
     left join core.users cc on cc.id = l.call_center_assigned_to
-    left join core.branches b on b.code = l.branch_code
+    left join core.branches b on b.code = ${liveBranch}
     left join lateral (
       select * from crm.conversations cx where cx.lead_id = l.id order by cx.last_message_at desc nulls last limit 1
     ) c on true
@@ -150,17 +184,12 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
     ) sale_summary on true
     where l.is_deleted = false
-      and (
-        ${scope.all}::boolean
-        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
-        or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
-      )
+      and ${leadScope}
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
-      and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to = ${callCenter || null}::uuid)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
@@ -175,17 +204,12 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from crm.leads l
     where l.is_deleted = false
-      and (
-        ${scope.all}::boolean
-        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
-        or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
-      )
+      and ${leadScope}
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
-      and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${branch || null}::text is null or ${liveBranch} = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to = ${callCenter || null}::uuid)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
@@ -222,7 +246,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   let assignment = { assignedTo: input.assignedTo, assignedName: "", branchCode: input.branchCode };
   if (!input.assignedTo) assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
   let callCenter = { assignedTo: input.callCenterAssignedTo, assignedName: "" };
-  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode);
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
@@ -269,8 +293,11 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const id = clean(body.id || request.query.id);
   if (!id) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
 
+  const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
   const [before] = await sql<any[]>`
     select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
+      ${leadScope} as can_view,
       sales.full_name as assigned_name,
       cc.full_name as call_center_name
     from crm.leads l
@@ -280,11 +307,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   `;
   if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
 
-  const scope = userScope(user);
-  const canEdit = scope.all
-    || before.assigned_to === user.id
-    || before.call_center_assigned_to === user.id
-    || (scope.departmentCodes.includes(before.department_code) && (!scope.branchCodes.length || scope.branchCodes.includes(before.branch_code)));
+  // Access is validated by the very same CURRENT-branch SQL used for listing.
+  // An old l.branch_code snapshot cannot grant a transferred manager edit rights.
+  const canEdit = Boolean(before.can_view);
   if (!canEdit) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل هذا العميل" });
 
   const input = leadPayload({ ...before, ...body });
@@ -302,10 +327,15 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   }
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
-  if (departmentChanged && !databaseEdit) {
-    input.statusLabel = "عميل جديد";
-    input.statusCode = "";
-    input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+  if (departmentChanged) {
+    // Every department transfer preserves the customer's status, including
+    // database edits and requests sent by an older/stale CRM client. A status
+    // update, if intended, must be submitted independently from the transfer.
+    input.statusLabel = clean(before.status_label) || "عميل جديد";
+    input.statusCode = clean(before.status_code);
+    if (!databaseEdit) {
+      input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+    }
   } else if (databaseEdit && clean(before.status_label) !== input.statusLabel) {
     input.statusCode = "";
   }
@@ -319,12 +349,20 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const previousSoldQuantity = previousStatusLabel === "تم البيع" ? (before.sold_quantity || 1) : before.sold_quantity;
   const statusLabelChanged = previousStatusLabel !== input.statusLabel;
   const soldAtFieldProvided = hasOwnField(body, ["soldAt", "sold_at"]);
-  const soldDateChangeRequested = databaseEdit && changedDate(body, ["soldAt", "sold_at"], before.sold_at);
+  const soldDateChangeRequested = databaseEdit
+    && soldAtFieldProvided
+    && riyadhCalendarDate(providedValue(body, ["soldAt", "sold_at"])) !== riyadhCalendarDate(before.sold_at);
   if (soldAtFieldProvided && input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) {
     return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
   }
+  if (databaseEdit && soldAtFieldProvided && input.soldAt && !isValidCalendarDate(input.soldAt)) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع يجب أن يكون يومًا صحيحًا بصيغة YYYY-MM-DD" });
+  }
   if (soldAtFieldProvided && input.soldAt && input.statusLabel !== "تم البيع") {
     return response.status(400).json({ ok: false, error: "يمكن تحديد تاريخ تم البيع للعملاء بحالة تم البيع فقط" });
+  }
+  if (soldDateChangeRequested && !input.soldAt) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع مطلوب ولا يمكن تركه فارغًا" });
   }
   const assignedFieldProvided = hasOwnField(body, ["assignedTo", "assigned_to", "responsibleId"]);
   const callCenterFieldProvided = hasOwnField(body, ["callCenterAssignedTo", "call_center_assigned_to"]);
@@ -334,16 +372,20 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const callCenterChangeRequested = databaseEdit
     && callCenterFieldProvided
     && clean(providedValue(body, ["callCenterAssignedTo", "call_center_assigned_to"])) !== clean(before.call_center_assigned_to);
-  const statusChangeRequested = changedText(body, ["status", "statusLabel", "status_label"], previousStatusLabel)
+  const statusChangeRequested = previousStatusLabel !== input.statusLabel
     || changedDate(body, ["followUpAt", "follow_up_at"], before.follow_up_at)
     || changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
+  const sourceChangeRequested = changedText(body, ["sourceCode", "source_code", "source"], before.source_code);
+  if (sourceChangeRequested && !databaseEdit) {
+    return response.status(403).json({ ok: false, error: "لا يمكن تغيير مصدر العميل من لوحة المتابعة" });
+  }
   const noteAdditionRequested = Boolean(newNote);
   const previousExtraData = before.extra_data && typeof before.extra_data === "object" ? before.extra_data : {};
   const customFieldsChanged = Object.entries(customFieldPatch).some(([key, next]) => clean(next) !== clean(previousExtraData[key]));
   const generalDataChangeRequested = soldDateChangeRequested || customFieldsChanged || [
     changedText(body, ["customerName", "customer_name", "name", "fullName", "full_name"], before.customer_name),
     changedText(body, ["phone", "mobile", "phone_number", "phoneNumber"], before.phone_normalized, normalizePhone),
-    changedText(body, ["sourceCode", "source_code", "source"], before.source_code),
+    sourceChangeRequested,
     changedText(body, ["serviceKey", "service_key"], previousServiceKey, departmentKey),
     changedText(body, ["departmentCode", "department_code"], previousDepartmentCode),
     changedText(body, ["branchCode", "branch_code"], previousBranchCode),
@@ -375,6 +417,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     if (!allowed) return;
   }
 
+  if (databaseEdit && isWholesaleDepartmentCode(input.departmentCode) && !input.branchCode) {
+    return response.status(400).json({ ok: false, error: "اختر فرع قسم الجملة قبل حفظ بيانات العميل" });
+  }
   if (input.phone && !input.phoneNormalized) {
     return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
   }
@@ -469,7 +514,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     assignedName = assignment.assignedName;
 
     if (input.serviceKey === "finance") {
-      const callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+      const callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode);
       callCenterAssignedTo = callCenter.assignedTo;
       callCenterName = callCenter.assignedName;
     } else {
@@ -497,7 +542,23 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
 
   const soldQuantityChangeRequested = changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
-  const row = await sql.begin(async (tx: any) => {
+  const updateResult = await sql.begin(async (tx: any) => {
+    const correctedSale = soldDateChangeRequested
+      ? await correctLatestCanonicalSaleDate(tx, {
+        leadId: id,
+        saleAt: input.soldAt!,
+        actorId: user.id,
+        actorName: user.fullName,
+        reason: "تصحيح تاريخ تم البيع من قاعدة بيانات CRM",
+      })
+      : null;
+
+    if (soldDateChangeRequested && !correctedSale) {
+      return { error: "لا توجد عملية بيع نشطة مرتبطة بالعميل لتعديل تاريخها" };
+    }
+
+    const persistedSoldQuantity = correctedSale ? correctedSale.soldQuantity : input.soldQuantity;
+    const persistedSoldAt = correctedSale ? correctedSale.soldAt : nextSoldAt;
     const [updated] = await tx<any[]>`
       update crm.leads set
         customer_name=${input.customerName || before.customer_name},
@@ -533,16 +594,22 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
         call_center_assigned_to=${callCenterAssignedTo}::uuid,
         responsible_name_snapshot=${assignedName || null},
         call_center_name_snapshot=${callCenterName || null},
-        sold_quantity=${input.soldQuantity},
-        sold_at=${nextSoldAt}::timestamptz,
+        sold_quantity=${persistedSoldQuantity},
+        sold_at=${persistedSoldAt}::timestamptz,
         updated_by=${user.id}::uuid,
         updated_at=now()
       where id=${id}::uuid
       returning *, id::text, assigned_to::text, call_center_assigned_to::text
     `;
 
-    return updated;
+    return { row: updated };
   });
+  if ("error" in updateResult) return response.status(409).json({ ok: false, error: updateResult.error });
+  const row = updateResult.row;
+
+  if (departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
+    await syncLeadConversationContext(sql, id);
+  }
 
   let lifecycleResult: any = null;
   if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
@@ -624,8 +691,10 @@ async function remove(request: VercelRequest, response: VercelResponse, user: an
   const sql = getSql();
   const body = parseBody(request);
   const id = clean(body.id || request.query.id);
-  const [before] = await sql<any[]>`select *, id::text from crm.leads where id=${id}::uuid and is_deleted=false`;
-  if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
+  const scope = userScope(user);
+  const leadScope = crmLeadScopeSql(sql, scope);
+  const [before] = await sql<any[]>`select l.*, l.id::text from crm.leads l where l.id=${id}::uuid and l.is_deleted=false and ${leadScope}`;
+  if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود أو غير متاح في فرعك الحالي" });
   await sql`update crm.leads set is_deleted=true, deleted_by=${user.id}::uuid, deleted_at=now(), updated_at=now() where id=${id}::uuid`;
   await audit(user, "lead_deleted", "lead", id, { isDeleted: true }, before);
   return response.status(200).json({ ok: true });

@@ -4,7 +4,7 @@ const drawer = fs.readFileSync("src/crm/components/LeadDrawer.tsx", "utf8");
 const api = fs.readFileSync("server/crm/leads.ts", "utf8");
 
 const checks = [
-  [drawer.includes('databaseEdit: !showConversation'), "database edit mode is sent only by the database edit drawer"],
+  [drawer.includes('if (!showConversation) payload.databaseEdit = true;') || drawer.includes('databaseEdit: !showConversation'), "database edit mode is sent only by the database edit drawer"],
   [drawer.includes('method: "PATCH"'), "customer edit uses PATCH instead of creating a new customer"],
   [drawer.includes('>القسم</span><select') && drawer.includes('>الفرع</span><select'), "department and branch controls exist"],
   [drawer.includes('>الدفع</span><select') && drawer.includes('>الحالة</span><select'), "payment and status controls exist"],

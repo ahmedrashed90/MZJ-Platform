@@ -1,7 +1,14 @@
 export type MarketingUser = { id: string; full_name?: string; fullName?: string; email?: string | null };
 export type MarketingDepartment = { id: string; name: string; is_content: boolean; users: MarketingUser[] };
 export type AssignmentAction = { id: string; department_id: string; department_name: string; name: string; percentage: number; admin_only: boolean; sort_order: number };
-export type CreativeType = { id: string; name: string; short_code: string; primary_department_id: string; primary_department_name: string };
+export type CreativeType = {
+  id: string;
+  name: string;
+  short_code: string;
+  primary_department_id: string;
+  primary_department_name: string;
+  supported_publish_formats: string[];
+};
 export type CampaignType = { id: string; name: string; short_code: string; code_prefix: string; sequence_value: number };
 export type MarketingPlatform = { id: string; code: string; name: string };
 export type PlatformPostType = { id: string; platform_id: string; name: string; width?: number | null; height?: number | null };
@@ -26,6 +33,16 @@ export type StockCar = {
   financial_approved?: boolean;
   administrative_approved?: boolean;
   active_transfer_requests?: number;
+  active_request_details?: Array<{
+    requestId?: string;
+    requestNo: string;
+    requestKind: string;
+    status: string;
+    requestedAt?: string | null;
+    requestedByName?: string | null;
+    sourceLocationName?: string | null;
+    destinationLocationName?: string | null;
+  }>;
   content_usage?: any[];
 };
 export type MarketingMeta = {
@@ -51,6 +68,7 @@ export type PlatformAssignment = { platformId: string; postTypeIds: string[] };
 export type CreativeDraft = {
   tempId: string;
   creativeTypeId: string;
+  name: string;
   quantity: number;
   cars: StockCar[];
   contentAssignments: ContentAssignment[];

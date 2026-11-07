@@ -13,7 +13,10 @@ function compactServerUsers(value: unknown) {
       name: user.name || user.fullName || user.full_name || "",
       folderName: user.folderName || key,
       folderPath: user.folderPath || user.outputFolderPath || user.path || "",
+      folderId: user.folderId || user.outputFolderId || "",
+      outputFolderId: user.outputFolderId || user.folderId || "",
       outputWindowsPath: user.userOutputWindowsPath || user.outputWindowsPath || user.windowsPath || "",
+      folderUrl: user.folderUrl || user.outputFolderUrl || "",
       outputFolderUrl: user.outputFolderUrl || user.folderUrl || "",
     }];
   }));
@@ -30,6 +33,12 @@ function compactRawFolders(value: unknown) {
       creativeInstanceId: creative.creativeInstanceId || creative.id || "",
       creativeId: creative.creativeId || "",
       creativeIndex: creative.creativeIndex ?? null,
+      storageProvider: creative.storageProvider || creative.storage_provider || "",
+      type: creative.type || "",
+      folderId: creative.folderId || creative.creativeFolderId || "",
+      creativeFolderId: creative.creativeFolderId || creative.folderId || "",
+      rawFolderId: creative.rawFolderId || "",
+      outputFolderId: creative.outputFolderId || "",
       folderPath: creative.folderPath || creative.creativeFolderPath || creative.path || "",
       folderUrl: creative.folderUrl || "",
       rawFolderPath: creative.rawFolderPath || creative.rawPath || "",
@@ -48,11 +57,12 @@ function compactRawFolders(value: unknown) {
 }
 
 /**
- * Keep only the exact folder identities and paths returned by the RAW server.
+ * Keep only the folder identities and paths returned by the storage service.
  * Cars and other response payloads are deliberately excluded so campaign/agenda
  * creation does not duplicate a large amount of data in its request body.
  */
 export function compactExecutionFolderCreation(request: RawFolderRequest, result: RawFolderResult): ExecutionFolderCreation {
+  const raw = result as Record<string, any>;
   return {
     request: {
       ...request,
@@ -69,17 +79,23 @@ export function compactExecutionFolderCreation(request: RawFolderRequest, result
     result: {
       ok: result.ok,
       message: result.message,
+      storageProvider: raw.storageProvider || raw.storage_provider || "",
+      type: raw.type || "",
       monthKey: result.monthKey,
       campaignCode: result.campaignCode,
       campaignFolderName: result.campaignFolderName,
       campaignFolderPath: result.campaignFolderPath,
+      campaignFolderId: raw.campaignFolderId || "",
+      campaignFolderUrl: raw.campaignFolderUrl || "",
+      monthFolderId: raw.monthFolderId || "",
+      rootFolderId: raw.rootFolderId || "",
       rawRoot: result.rawRoot,
-      rawBaseUrl: result.rawBaseUrl,
+      rawBaseUrl: raw.rawBaseUrl,
       driveLetter: result.driveLetter,
-      rootPath: result.rootPath,
-      basePath: result.basePath,
-      folderPath: result.folderPath,
-      campaignPath: result.campaignPath,
+      rootPath: raw.rootPath,
+      basePath: raw.basePath,
+      folderPath: raw.folderPath,
+      campaignPath: raw.campaignPath,
       rawFolders: compactRawFolders(result.rawFolders),
     },
   };

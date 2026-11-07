@@ -1,4 +1,38 @@
+import { ensureMarketingWorkflowAccess } from './_marketing-workflow-access.js';
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
+
+const OPERATIONS_INVENTORY_ACCESS_SQL = String.raw`
+-- Operations inventory: independent tajyeer edit grant and per-column visibility options.
+insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
+  ('operations.inventory.tajyeer.update','التجيير','operations','inventory','update','التجيير','تعديل التجيير','action',true,8550,true),
+  ('operations.inventory.column.car','إظهار السيارة','operations','inventory','car','إظهار السيارة','إظهار عمود السيارة بمخزون السيارات','action',false,8551,true),
+  ('operations.inventory.column.statement','إظهار البيان','operations','inventory','statement','إظهار البيان','إظهار عمود البيان بمخزون السيارات','action',false,8552,true),
+  ('operations.inventory.column.agent','إظهار الوكيل','operations','inventory','agent','إظهار الوكيل','إظهار عمود الوكيل بمخزون السيارات','action',false,8553,true),
+  ('operations.inventory.column.interior','إظهار اللون الداخلي','operations','inventory','interior','إظهار اللون الداخلي','إظهار عمود اللون الداخلي بمخزون السيارات','action',false,8554,true),
+  ('operations.inventory.column.exterior','إظهار اللون الخارجي','operations','inventory','exterior','إظهار اللون الخارجي','إظهار عمود اللون الخارجي بمخزون السيارات','action',false,8555,true),
+  ('operations.inventory.column.model','إظهار الموديل','operations','inventory','model','إظهار الموديل','إظهار عمود الموديل بمخزون السيارات','action',false,8556,true),
+  ('operations.inventory.column.plate','إظهار اللوحة','operations','inventory','plate','إظهار اللوحة','إظهار عمود اللوحة بمخزون السيارات','action',false,8557,true),
+  ('operations.inventory.column.batch','إظهار اسم الدفعة','operations','inventory','batch','إظهار اسم الدفعة','إظهار عمود اسم الدفعة بمخزون السيارات','action',false,8558,true),
+  ('operations.inventory.column.location','إظهار المكان','operations','inventory','location','إظهار المكان','إظهار عمود المكان بمخزون السيارات','action',false,8559,true),
+  ('operations.inventory.column.status','إظهار الحالة','operations','inventory','status','إظهار الحالة','إظهار عمود الحالة بمخزون السيارات','action',false,8560,true),
+  ('operations.inventory.column.notes','إظهار ملاحظات','operations','inventory','notes','إظهار ملاحظات','إظهار عمود ملاحظات بمخزون السيارات','action',false,8566,true),
+  ('operations.inventory.column.tajyeer','إظهار التجيير','operations','inventory','tajyeer','إظهار التجيير','إظهار عمود التجيير بمخزون السيارات','action',false,8561,true),
+  ('operations.inventory.column.checks','إظهار التشييك','operations','inventory','checks','إظهار التشييك','إظهار عمود التشييك بمخزون السيارات','action',false,8562,true),
+  ('operations.inventory.column.financialApproval','إظهار الموافقة المالية','operations','inventory','financialApproval','إظهار الموافقة المالية','إظهار عمود الموافقة المالية بمخزون السيارات','action',false,8563,true),
+  ('operations.inventory.column.administrativeApproval','إظهار الموافقة الإدارية','operations','inventory','administrativeApproval','إظهار الموافقة الإدارية','إظهار عمود الموافقة الإدارية بمخزون السيارات','action',false,8564,true),
+  ('operations.inventory.column.tracking','إظهار التراكينج','operations','inventory','tracking','إظهار التراكينج','إظهار عمود التراكينج بمخزون السيارات','action',false,8565,true)
+on conflict(code) do update set name=excluded.name,system_code=excluded.system_code,page_code=excluded.page_code,action_code=excluded.action_code,name_ar=excluded.name_ar,description_ar=excluded.description_ar,category=excluded.category,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order,is_active=true;
+
+insert into core.role_permissions(role_id,permission_id)
+select rp.role_id,col.id from core.role_permissions rp
+join core.permissions base on base.id=rp.permission_id and base.code='operations.inventory.view'
+join core.permissions col on col.code like 'operations.inventory.column.%'
+on conflict do nothing;
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r join core.permissions p on p.code='operations.inventory.tajyeer.update'
+where r.code in ('admin','system_admin')
+on conflict do nothing;
+`;
 
 export const ACCESS_CONTROL_SQL = String.raw`-- MZJ centralized access control. Safe and idempotent.
 
@@ -50,6 +84,9 @@ alter table core.users add column if not exists permission_version bigint not nu
 alter table core.users add column if not exists disabled_at timestamptz;
 alter table core.users add column if not exists disabled_by uuid references core.users(id);
 alter table core.users add column if not exists disabled_reason text;
+alter table core.users add column if not exists is_archived boolean not null default false;
+alter table core.users add column if not exists archived_at timestamptz;
+alter table core.users add column if not exists archived_by uuid references core.users(id);
 alter table core.sessions add column if not exists permission_version bigint not null default 1;
 update core.sessions s set permission_version=u.permission_version from core.users u where u.id=s.user_id;
 
@@ -130,21 +167,25 @@ insert into core.systems(code,name_ar,sort_order,is_active) values
 ('operations','العمليات',10,true),
 ('tracking','التراكينج',20,true),
 ('marketing','التسويق',30,true),
-('crm','CRM',40,true)
+('crm','CRM',40,true),
+('website','الموقع الإلكتروني',50,true)
 on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sort_order,is_active=true,updated_at=now();
 
 insert into core.systems(code,name_ar,sort_order,is_active) values ('core','المنصة المركزية',0,true) on conflict(code) do update set name_ar=excluded.name_ar,is_active=true,updated_at=now();
 
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('core','dashboard','الداش بورد الموحد','/',10,true),
+('core','attendance','الحضور والانصراف','/attendance',15,true),
 ('core','reports','التقارير الموحدة','/reports',20,true),
 ('core','database','قاعدة البيانات الموحدة','/database',30,true),
 ('core','settings','الإعدادات','/settings',40,true),
 ('core','activity','سجل النشاط','/activity',50,true),
+('core','owners_community','MZJ Club Community','/owners-community',60,true),
+('website','stock','الاستوك في الموقع','/website',10,true),
 ('crm','dashboard','الداش بورد','/crm',10,true),
 ('crm','database','قاعدة البيانات','/crm/database',20,true),
 ('crm','manual_leads','إضافة العملاء','/crm/manual-leads',30,true),
-('crm','finance_history','سجل عملاء التمويل','/crm/finance-history',40,true),
+('crm','finance_history','سجل العملاء','/crm/finance-history',40,true),
 ('crm','inbox','رسائل غير مصنفة','/crm/inbox',50,true),
 ('crm','contacts','جهات الاتصال','/crm/contacts',60,true),
 ('crm','inbox_agent','وكيل صندوق الوارد','/crm/inbox-agent',70,true),
@@ -162,7 +203,8 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('marketing','calendar','التقويم','/marketing/calendar',90,true),
 ('marketing','receipt_calendar','تقويم الاستلام','/marketing/receipt-calendar',100,true),
 ('marketing','stock','الاستوك','/marketing/stock',110,true),
-('marketing','attendance','الحضور والانصراف','/marketing/attendance',120,true),
+('marketing','subscriptions','الاشتراكات','/marketing/subscriptions',120,true),
+('marketing','lead_forms','فورم المنصات','/marketing/lead-forms',125,true),
 ('operations','inventory','مخزون السيارات','/operations',10,true),
 ('operations','manage','إدارة السيارات','/operations/manage',20,true),
 ('operations','movement','الحركة','/operations/movement',30,true),
@@ -202,11 +244,17 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('settings.operations.manage','تعديل إعدادات العمليات','core','settings','operations_manage','تعديل إعدادات العمليات','تعديل إعدادات العمليات التشغيلية','settings',true,220,true),
 ('settings.tracking.view','مشاهدة إعدادات التتبع','core','settings','tracking_view','مشاهدة إعدادات التتبع','مشاهدة إعدادات التتبع','settings',false,230,true),
 ('settings.tracking.manage','تعديل إعدادات التتبع','core','settings','tracking_manage','تعديل إعدادات التتبع','تعديل إعدادات التتبع التشغيلية','settings',true,240,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Club Community','core','settings','owners_view','مشاهدة إعدادات MZJ Club Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,241,true),
+('settings.owners.manage','تعديل إعدادات MZJ Club Community','core','settings','owners_manage','تعديل إعدادات MZJ Club Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,242,true),
+('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,243,true),
+('owners.community.manage','إدارة MZJ Club Community','core','owners_community','manage','إدارة MZJ Club Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,244,true),
+('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,245,true),
+('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,246,true),
 ('system.crm.access','دخول نظام CRM','crm','dashboard','access','دخول نظام CRM','دخول نظام CRM','system',false,250,true),
 ('crm.dashboard.view','مشاهدة داش بورد CRM','crm','dashboard','view','مشاهدة داش بورد CRM','مشاهدة داش بورد CRM','page',false,260,true),
 ('crm.database.view','مشاهدة قاعدة بيانات CRM','crm','database','view','مشاهدة قاعدة بيانات CRM','مشاهدة قاعدة بيانات CRM','page',false,270,true),
 ('crm.manual_leads.view','فتح إضافة العملاء','crm','manual_leads','view','فتح إضافة العملاء','فتح إضافة العملاء','page',false,280,true),
-('crm.finance_history.view','مشاهدة سجل عملاء التمويل','crm','finance_history','view','مشاهدة سجل عملاء التمويل','مشاهدة سجل عملاء التمويل','page',false,290,true),
+('crm.finance_history.view','مشاهدة سجل العملاء','crm','finance_history','view','مشاهدة سجل العملاء','مشاهدة سجل العملاء','page',false,290,true),
 ('crm.inbox.view','مشاهدة الرسائل غير المصنفة','crm','inbox','view','مشاهدة الرسائل غير المصنفة','مشاهدة الرسائل غير المصنفة','page',false,300,true),
 ('crm.contacts.view','مشاهدة جهات الاتصال','crm','contacts','view','مشاهدة جهات الاتصال','مشاهدة جهات الاتصال','page',false,310,true),
 ('crm.inbox_agent.view','فتح وكيل صندوق الوارد','crm','inbox_agent','view','فتح وكيل صندوق الوارد','فتح وكيل صندوق الوارد','page',false,320,true),
@@ -264,6 +312,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('operations.movement.view','فتح صفحة الحركة','operations','movement','view','فتح صفحة الحركة','فتح صفحة الحركة','page',false,840,true),
 ('operations.transfers.view','مشاهدة طلبات العمليات','operations','transfers','view','مشاهدة طلبات العمليات','مشاهدة طلبات العمليات','page',false,850,true),
 ('operations.approvals.view','مشاهدة الموافقات','operations','approvals','view','مشاهدة الموافقات','مشاهدة الموافقات','page',false,860,true),
+('attendance.records.correct','تصحيح سجلات الحضور والانصراف','core','attendance','correct','تصحيح سجلات الحضور والانصراف','تعديل بصمات الحضور والانصراف بمنح مباشر موثق','action',true,8651,true),
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','مشاهدة صفحة متابعة طلبات البيع المرتبطة بالتراكينج والموافقات','page',false,865,true),
 ('operations.all.view','مشاهدة جميع السيارات','operations','all','view','مشاهدة جميع السيارات','مشاهدة جميع السيارات','page',false,870,true),
 ('operations.movements.view','مشاهدة سجل الحركات','operations','movements','view','مشاهدة سجل الحركات','مشاهدة سجل الحركات','page',false,880,true),
@@ -335,7 +384,18 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.calendar.view','مشاهدة تقويم التسويق','marketing','calendar','view','مشاهدة تقويم التسويق','مشاهدة تقويم التسويق','page',false,1520,true),
 ('marketing.receipt_calendar.view','مشاهدة تقويم الاستلام','marketing','receipt_calendar','view','مشاهدة تقويم الاستلام','مشاهدة تقويم الاستلام','page',false,1530,true),
 ('marketing.stock.view','مشاهدة استوك التسويق','marketing','stock','view','مشاهدة استوك التسويق','مشاهدة استوك التسويق','page',false,1540,true),
-('marketing.attendance.view','مشاهدة الحضور والانصراف','marketing','attendance','view','مشاهدة الحضور والانصراف','مشاهدة الحضور والانصراف','page',false,1550,true),
+('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
+('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
+('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
+('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
+('marketing.lead_forms.create','إنشاء فورم','marketing','lead_forms','create','إنشاء فورم','إنشاء فورم جديد','action',true,1571,true),
+('marketing.lead_forms.edit','تعديل فورم','marketing','lead_forms','edit','تعديل فورم','تعديل محتوى وتصميم الفورم','action',true,1572,true),
+('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
+('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
+('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.leads.delete','حذف بيانات فورم المنصات','marketing','lead_forms','leads_delete','حذف بيانات فورم المنصات','حذف ليد محدد أو مسح بيانات الزيارات والليدات','action',true,1578,true),
+('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
+('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
 ('marketing.campaign.create','إنشاء حملة','marketing','create_campaign','create','إنشاء حملة','إنشاء حملة جديدة','action',true,1570,true),
 ('marketing.campaign.edit','تعديل حملة','marketing','database','edit','تعديل حملة','تعديل بيانات حملة','action',true,1580,true),
 ('marketing.campaign.delete','حذف حملة','marketing','database','delete','حذف حملة','حذف حملة','action',true,1590,true),
@@ -367,7 +427,6 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.publish.now','النشر الآن','marketing','publish_prep','publish_now','النشر الآن','تنفيذ النشر المباشر','action',true,1850,true),
 ('marketing.photo_request.create','إنشاء طلب تصوير','marketing','stock','photo_request_create','إنشاء طلب تصوير','إنشاء طلب تصوير مرتبط بالعمليات','action',true,1860,true),
 ('marketing.photo_request.complete','إنهاء طلب تصوير','marketing','stock','photo_request_complete','إنهاء طلب تصوير','إنهاء طلب تصوير','workflow',false,1870,true),
-('marketing.attendance.manage','إدارة الحضور والانصراف','marketing','attendance','manage','إدارة الحضور والانصراف','تعديل إعدادات وتقارير الحضور','action',true,1880,true),
 ('marketing.connections.manage','إدارة ربط المنصات','marketing','platforms','manage','إدارة ربط المنصات','حفظ وفصل التوكنات','settings',true,1890,true),
 ('tracking.stage.01.complete','تنفيذ المرحلة 1','tracking','orders','stage_01_complete','تنفيذ المرحلة 1','إكمال مرحلة التتبع رقم 1','workflow',false,1910,true),
 ('tracking.stage.01.rollback','التراجع عن المرحلة 1','tracking','orders','stage_01_rollback','التراجع عن المرحلة 1','التراجع عن مرحلة التتبع رقم 1','workflow',true,1920,true),
@@ -401,6 +460,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('tracking.stage.10.sms','إرسال SMS للمرحلة 10','tracking','orders','stage_10_sms','إرسال SMS للمرحلة 10','إرسال رسالة المرحلة رقم 10','workflow',true,2200,true)
 on conflict(code) do update set name=excluded.name,system_code=excluded.system_code,page_code=excluded.page_code,action_code=excluded.action_code,name_ar=excluded.name_ar,description_ar=excluded.description_ar,category=excluded.category,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order,is_active=true;
 
+
 update core.permissions
 set is_active=false
 where code in ('marketing.manage','tracking.orders.delete','crm.settings.manage','crm.settings.view','marketing.settings.manage','marketing.settings.view','operations.settings.manage','operations.settings.view','tracking.settings.manage','tracking.settings.view');
@@ -428,11 +488,11 @@ insert into core.roles(code,name,description_ar,is_system,is_active) values
 on conflict(code) do update set name=excluded.name,description_ar=excluded.description_ar,is_system=excluded.is_system,is_active=true,updated_at=now();
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.automation.manage','crm.contacts.purge','crm.contacts.view','crm.conversation.classify','crm.conversation.download','crm.conversation.link','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_all','crm.conversation.view_assigned','crm.customer.bulk_transfer','crm.customer.call_center.change','crm.customer.create','crm.customer.delete','crm.customer.export','crm.customer.history.view','crm.customer.note.add','crm.customer.owner.change','crm.customer.ownership.view','crm.customer.restore','crm.customer.status.update','crm.customer.transfer','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox.view','crm.inbox_agent.view','crm.kpi.rate_all','crm.kpi.rate_branch','crm.kpi.rating.create','crm.kpi.rating.delete','crm.kpi.rating.update','crm.kpi.view','crm.manual_lead.delete','crm.manual_lead.duplicate.approve','crm.manual_lead.redistribute','crm.manual_lead.reject','crm.manual_lead.request','crm.manual_lead.view_all','crm.manual_lead.view_own','crm.manual_leads.view','crm.reports.agents','crm.reports.customer_details','crm.reports.departments','crm.reports.export','crm.reports.view','crm.routing.manage','settings.crm.manage','settings.crm.view','marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.attendance.manage','marketing.attendance.view','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','operations.all.view','operations.approval.administrative','operations.approval.financial','operations.approvals.view','operations.sales_orders_followup.view','operations.archive.view','operations.inventory.view','operations.manage.view','operations.movement.create','operations.movement.delivered','operations.movement.export','operations.movement.view','operations.movements.view','operations.request.finish_order','operations.request.receive_car','operations.request.receive_order','operations.request.rollback','operations.request.send_car','operations.request.skip','settings.operations.manage','settings.operations.view','operations.transfer.attachment.manage','operations.transfer.cancel','operations.transfer.create','operations.transfer.delete','operations.transfer.edit','operations.transfer.export','operations.transfer.note.add','operations.transfer.print','operations.transfer.reopen','operations.transfer.send','operations.transfers.view','operations.vehicle.archive','operations.vehicle.checklist.update','operations.vehicle.create','operations.vehicle.delete','operations.vehicle.edit','operations.vehicle.export','operations.vehicle.import','operations.vehicle.location.update','operations.vehicle.notes.update','operations.vehicle.restore','operations.vehicle.status.update','operations.vehicle.template.download','operations.vehicle.view','platform.activity.view','platform.dashboard.view','platform.database.view','platform.reports.view','platform.superadmin','settings.audit.view','settings.branches.manage','settings.departments.manage','settings.permissions.manage','settings.roles.manage','settings.security.view','settings.tracking.manage','settings.tracking.view','settings.users.create','settings.users.disable','settings.users.update','settings.users.view','settings.view','system.crm.access','system.marketing.access','system.operations.access','system.tracking.access','tracking.archive.view','tracking.delete.view','tracking.link.copy','tracking.link.create','tracking.order.archive','tracking.order.delete','tracking.order.deleted.restore','tracking.order.open','tracking.order.restore','tracking.order.search','tracking.orders.view','tracking.sms.send','tracking.stage.01.complete','tracking.stage.01.rollback','tracking.stage.01.sms','tracking.stage.02.complete','tracking.stage.02.rollback','tracking.stage.02.sms','tracking.stage.03.complete','tracking.stage.03.rollback','tracking.stage.03.sms','tracking.stage.04.complete','tracking.stage.04.rollback','tracking.stage.04.sms','tracking.stage.05.complete','tracking.stage.05.rollback','tracking.stage.05.sms','tracking.stage.06.complete','tracking.stage.06.rollback','tracking.stage.06.sms','tracking.stage.07.complete','tracking.stage.07.rollback','tracking.stage.07.sms','tracking.stage.08.complete','tracking.stage.08.rollback','tracking.stage.08.sms','tracking.stage.09.complete','tracking.stage.09.rollback','tracking.stage.09.sms','tracking.stage.10.complete','tracking.stage.10.rollback','tracking.stage.10.sms','tracking.stage.skip','tracking.vehicle.select') where r.code='admin'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.automation.manage','crm.contacts.purge','crm.contacts.view','crm.conversation.classify','crm.conversation.download','crm.conversation.link','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_all','crm.conversation.view_assigned','crm.customer.bulk_transfer','crm.customer.call_center.change','crm.customer.create','crm.customer.delete','crm.customer.export','crm.customer.history.view','crm.customer.note.add','crm.customer.owner.change','crm.customer.ownership.view','crm.customer.restore','crm.customer.status.update','crm.customer.transfer','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox.view','crm.inbox_agent.view','crm.kpi.rate_all','crm.kpi.rate_branch','crm.kpi.rating.create','crm.kpi.rating.delete','crm.kpi.rating.update','crm.kpi.view','crm.manual_lead.delete','crm.manual_lead.duplicate.approve','crm.manual_lead.redistribute','crm.manual_lead.reject','crm.manual_lead.request','crm.manual_lead.view_all','crm.manual_lead.view_own','crm.manual_leads.view','crm.reports.agents','crm.reports.customer_details','crm.reports.departments','crm.reports.export','crm.reports.view','crm.routing.manage','settings.crm.manage','settings.crm.view','marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.subscriptions.view','marketing.subscriptions.renew','marketing.subscriptions.manage','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','operations.all.view','operations.approval.administrative','operations.approval.financial','operations.approvals.view','operations.sales_orders_followup.view','operations.archive.view','operations.inventory.view','operations.manage.view','operations.movement.create','operations.movement.delivered','operations.movement.export','operations.movement.view','operations.movements.view','operations.request.finish_order','operations.request.receive_car','operations.request.receive_order','operations.request.rollback','operations.request.send_car','operations.request.skip','settings.operations.manage','settings.operations.view','operations.transfer.attachment.manage','operations.transfer.cancel','operations.transfer.create','operations.transfer.delete','operations.transfer.edit','operations.transfer.export','operations.transfer.note.add','operations.transfer.print','operations.transfer.reopen','operations.transfer.send','operations.transfers.view','operations.vehicle.archive','operations.vehicle.checklist.update','operations.vehicle.create','operations.vehicle.delete','operations.vehicle.edit','operations.vehicle.export','operations.vehicle.import','operations.vehicle.location.update','operations.vehicle.notes.update','operations.vehicle.restore','operations.vehicle.status.update','operations.vehicle.template.download','operations.vehicle.view','platform.activity.view','platform.dashboard.view','platform.database.view','platform.reports.view','platform.superadmin','settings.audit.view','settings.branches.manage','settings.departments.manage','settings.permissions.manage','settings.roles.manage','settings.security.view','settings.tracking.manage','settings.tracking.view','settings.users.create','settings.users.disable','settings.users.update','settings.users.view','settings.view','system.crm.access','system.marketing.access','system.operations.access','system.tracking.access','tracking.archive.view','tracking.delete.view','tracking.link.copy','tracking.link.create','tracking.order.archive','tracking.order.delete','tracking.order.deleted.restore','tracking.order.open','tracking.order.restore','tracking.order.search','tracking.orders.view','tracking.sms.send','tracking.stage.01.complete','tracking.stage.01.rollback','tracking.stage.01.sms','tracking.stage.02.complete','tracking.stage.02.rollback','tracking.stage.02.sms','tracking.stage.03.complete','tracking.stage.03.rollback','tracking.stage.03.sms','tracking.stage.04.complete','tracking.stage.04.rollback','tracking.stage.04.sms','tracking.stage.05.complete','tracking.stage.05.rollback','tracking.stage.05.sms','tracking.stage.06.complete','tracking.stage.06.rollback','tracking.stage.06.sms','tracking.stage.07.complete','tracking.stage.07.rollback','tracking.stage.07.sms','tracking.stage.08.complete','tracking.stage.08.rollback','tracking.stage.08.sms','tracking.stage.09.complete','tracking.stage.09.rollback','tracking.stage.09.sms','tracking.stage.10.complete','tracking.stage.10.rollback','tracking.stage.10.sms','tracking.stage.skip','tracking.vehicle.select') where r.code='admin'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.automation.manage','crm.contacts.purge','crm.contacts.view','crm.conversation.classify','crm.conversation.download','crm.conversation.link','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_all','crm.conversation.view_assigned','crm.customer.bulk_transfer','crm.customer.call_center.change','crm.customer.create','crm.customer.delete','crm.customer.export','crm.customer.history.view','crm.customer.note.add','crm.customer.owner.change','crm.customer.ownership.view','crm.customer.restore','crm.customer.status.update','crm.customer.transfer','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox.view','crm.inbox_agent.view','crm.kpi.rate_all','crm.kpi.rate_branch','crm.kpi.rating.create','crm.kpi.rating.delete','crm.kpi.rating.update','crm.kpi.view','crm.manual_lead.delete','crm.manual_lead.duplicate.approve','crm.manual_lead.redistribute','crm.manual_lead.reject','crm.manual_lead.request','crm.manual_lead.view_all','crm.manual_lead.view_own','crm.manual_leads.view','crm.reports.agents','crm.reports.customer_details','crm.reports.departments','crm.reports.export','crm.reports.view','crm.routing.manage','settings.crm.manage','settings.crm.view','marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.attendance.manage','marketing.attendance.view','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','operations.all.view','operations.approval.administrative','operations.approval.financial','operations.approvals.view','operations.sales_orders_followup.view','operations.archive.view','operations.inventory.view','operations.manage.view','operations.movement.create','operations.movement.delivered','operations.movement.export','operations.movement.view','operations.movements.view','operations.request.finish_order','operations.request.receive_car','operations.request.receive_order','operations.request.rollback','operations.request.send_car','operations.request.skip','settings.operations.manage','settings.operations.view','operations.transfer.attachment.manage','operations.transfer.cancel','operations.transfer.create','operations.transfer.delete','operations.transfer.edit','operations.transfer.export','operations.transfer.note.add','operations.transfer.print','operations.transfer.reopen','operations.transfer.send','operations.transfers.view','operations.vehicle.archive','operations.vehicle.checklist.update','operations.vehicle.create','operations.vehicle.delete','operations.vehicle.edit','operations.vehicle.export','operations.vehicle.import','operations.vehicle.location.update','operations.vehicle.notes.update','operations.vehicle.restore','operations.vehicle.status.update','operations.vehicle.template.download','operations.vehicle.view','platform.activity.view','platform.dashboard.view','platform.database.view','platform.reports.view','platform.superadmin','settings.audit.view','settings.branches.manage','settings.departments.manage','settings.permissions.manage','settings.roles.manage','settings.security.view','settings.tracking.manage','settings.tracking.view','settings.users.create','settings.users.disable','settings.users.update','settings.users.view','settings.view','system.crm.access','system.marketing.access','system.operations.access','system.tracking.access','tracking.archive.view','tracking.delete.view','tracking.link.copy','tracking.link.create','tracking.order.archive','tracking.order.delete','tracking.order.deleted.restore','tracking.order.open','tracking.order.restore','tracking.order.search','tracking.orders.view','tracking.sms.send','tracking.stage.01.complete','tracking.stage.01.rollback','tracking.stage.01.sms','tracking.stage.02.complete','tracking.stage.02.rollback','tracking.stage.02.sms','tracking.stage.03.complete','tracking.stage.03.rollback','tracking.stage.03.sms','tracking.stage.04.complete','tracking.stage.04.rollback','tracking.stage.04.sms','tracking.stage.05.complete','tracking.stage.05.rollback','tracking.stage.05.sms','tracking.stage.06.complete','tracking.stage.06.rollback','tracking.stage.06.sms','tracking.stage.07.complete','tracking.stage.07.rollback','tracking.stage.07.sms','tracking.stage.08.complete','tracking.stage.08.rollback','tracking.stage.08.sms','tracking.stage.09.complete','tracking.stage.09.rollback','tracking.stage.09.sms','tracking.stage.10.complete','tracking.stage.10.rollback','tracking.stage.10.sms','tracking.stage.skip','tracking.vehicle.select') where r.code='system_admin'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.automation.manage','crm.contacts.purge','crm.contacts.view','crm.conversation.classify','crm.conversation.download','crm.conversation.link','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_all','crm.conversation.view_assigned','crm.customer.bulk_transfer','crm.customer.call_center.change','crm.customer.create','crm.customer.delete','crm.customer.export','crm.customer.history.view','crm.customer.note.add','crm.customer.owner.change','crm.customer.ownership.view','crm.customer.restore','crm.customer.status.update','crm.customer.transfer','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox.view','crm.inbox_agent.view','crm.kpi.rate_all','crm.kpi.rate_branch','crm.kpi.rating.create','crm.kpi.rating.delete','crm.kpi.rating.update','crm.kpi.view','crm.manual_lead.delete','crm.manual_lead.duplicate.approve','crm.manual_lead.redistribute','crm.manual_lead.reject','crm.manual_lead.request','crm.manual_lead.view_all','crm.manual_lead.view_own','crm.manual_leads.view','crm.reports.agents','crm.reports.customer_details','crm.reports.departments','crm.reports.export','crm.reports.view','crm.routing.manage','settings.crm.manage','settings.crm.view','marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.subscriptions.view','marketing.subscriptions.renew','marketing.subscriptions.manage','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','operations.all.view','operations.approval.administrative','operations.approval.financial','operations.approvals.view','operations.sales_orders_followup.view','operations.archive.view','operations.inventory.view','operations.manage.view','operations.movement.create','operations.movement.delivered','operations.movement.export','operations.movement.view','operations.movements.view','operations.request.finish_order','operations.request.receive_car','operations.request.receive_order','operations.request.rollback','operations.request.send_car','operations.request.skip','settings.operations.manage','settings.operations.view','operations.transfer.attachment.manage','operations.transfer.cancel','operations.transfer.create','operations.transfer.delete','operations.transfer.edit','operations.transfer.export','operations.transfer.note.add','operations.transfer.print','operations.transfer.reopen','operations.transfer.send','operations.transfers.view','operations.vehicle.archive','operations.vehicle.checklist.update','operations.vehicle.create','operations.vehicle.delete','operations.vehicle.edit','operations.vehicle.export','operations.vehicle.import','operations.vehicle.location.update','operations.vehicle.notes.update','operations.vehicle.restore','operations.vehicle.status.update','operations.vehicle.template.download','operations.vehicle.view','platform.activity.view','platform.dashboard.view','platform.database.view','platform.reports.view','platform.superadmin','settings.audit.view','settings.branches.manage','settings.departments.manage','settings.permissions.manage','settings.roles.manage','settings.security.view','settings.tracking.manage','settings.tracking.view','settings.users.create','settings.users.disable','settings.users.update','settings.users.view','settings.view','system.crm.access','system.marketing.access','system.operations.access','system.tracking.access','tracking.archive.view','tracking.delete.view','tracking.link.copy','tracking.link.create','tracking.order.archive','tracking.order.delete','tracking.order.deleted.restore','tracking.order.open','tracking.order.restore','tracking.order.search','tracking.orders.view','tracking.sms.send','tracking.stage.01.complete','tracking.stage.01.rollback','tracking.stage.01.sms','tracking.stage.02.complete','tracking.stage.02.rollback','tracking.stage.02.sms','tracking.stage.03.complete','tracking.stage.03.rollback','tracking.stage.03.sms','tracking.stage.04.complete','tracking.stage.04.rollback','tracking.stage.04.sms','tracking.stage.05.complete','tracking.stage.05.rollback','tracking.stage.05.sms','tracking.stage.06.complete','tracking.stage.06.rollback','tracking.stage.06.sms','tracking.stage.07.complete','tracking.stage.07.rollback','tracking.stage.07.sms','tracking.stage.08.complete','tracking.stage.08.rollback','tracking.stage.08.sms','tracking.stage.09.complete','tracking.stage.09.rollback','tracking.stage.09.sms','tracking.stage.10.complete','tracking.stage.10.rollback','tracking.stage.10.sms','tracking.stage.skip','tracking.vehicle.select') where r.code='system_admin'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
@@ -456,11 +516,11 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.co
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.attendance.manage','marketing.attendance.view','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','system.marketing.access') where r.code='marketing_admin'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('marketing.agenda.create','marketing.agenda.delete','marketing.agenda.edit','marketing.assignment_action.admin','marketing.assignment_action.execute','marketing.assignment_actions.approve','marketing.calendar.view','marketing.campaign.archive','marketing.campaign.create','marketing.campaign.delete','marketing.campaign.edit','marketing.connections.manage','marketing.create_agenda.view','marketing.create_campaign.view','marketing.dashboard.view','marketing.database.view','marketing.file.delete','marketing.file.download','marketing.file.upload','marketing.file.view_others','marketing.monitoring.view','marketing.packages.view','marketing.photo_request.complete','marketing.photo_request.create','marketing.platforms.view','marketing.publish.now','marketing.publish_prep.manage','marketing.publish_prep.view','marketing.engagement.view','marketing.engagement.subscribe','marketing.engagement.status.view','marketing.engagement.webhook.view','marketing.engagement.refresh','marketing.receipt_calendar.view','settings.marketing.manage','settings.marketing.view','marketing.stock.view','marketing.structure.approve','marketing.structure.reject','marketing.task.final_file.upload','marketing.task.receive','marketing.task.reopen','marketing.task.view_all','marketing.task.view_assigned','marketing.task_template.approve','marketing.task_template.download','marketing.task_template.reject','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','system.marketing.access') where r.code='marketing_admin'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('marketing.assignment_action.execute','marketing.attendance.view','marketing.calendar.view','marketing.dashboard.view','marketing.database.view','marketing.file.download','marketing.file.upload','marketing.photo_request.complete','marketing.receipt_calendar.view','marketing.stock.view','marketing.task.final_file.upload','marketing.task.receive','marketing.task.view_assigned','marketing.task_template.download','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','system.marketing.access') where r.code='marketing_user'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('marketing.assignment_action.execute','marketing.calendar.view','marketing.dashboard.view','marketing.database.view','marketing.file.download','marketing.file.upload','marketing.photo_request.complete','marketing.receipt_calendar.view','marketing.stock.view','marketing.task.final_file.upload','marketing.task.receive','marketing.task.view_assigned','marketing.task_template.download','marketing.task_template.reupload','marketing.task_template.upload','marketing.task_template.view_feedback','system.marketing.access') where r.code='marketing_user'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
@@ -503,7 +563,7 @@ select u.id,s.code,true,
     else 'branch_and_department'
   end
 from core.users u cross join core.systems s
-where s.code in ('crm','marketing','operations','tracking')
+where s.code in ('crm','marketing','operations','tracking','website')
   and (
     exists(select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=u.id and r.code in ('admin','system_admin'))
     or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.system_code=s.code)
@@ -540,16 +600,25 @@ create table if not exists core.access_control_schema_state (
   updated_at timestamptz not null default now()
 );
 insert into core.access_control_schema_state(id,version,updated_at)
-values(1,1192,now())
+values(1,1193,now())
 on conflict(id) do update set version=greatest(core.access_control_schema_state.version,excluded.version),updated_at=now();
 
+${OPERATIONS_INVENTORY_ACCESS_SQL}
 `;
 
 
 const REQUIRED_PAGE_PERMISSION_CATALOG_SQL = String.raw`
+insert into core.systems(code,name_ar,sort_order,is_active) values
+('website','الموقع الإلكتروني',50,true)
+on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sort_order,is_active=true,updated_at=now();
+
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
-('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true)
+('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
+('marketing','subscriptions','الاشتراكات','/marketing/subscriptions',120,true),
+('marketing','lead_forms','فورم المنصات','/marketing/lead-forms',125,true),
+('core','owners_community','MZJ Club Community','/owners-community',60,true),
+('website','stock','الاستوك في الموقع','/website',10,true)
 on conflict(system_code,code) do update set
   name_ar=excluded.name_ar,
   route=excluded.route,
@@ -559,7 +628,25 @@ on conflict(system_code,code) do update set
 
 insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','التحكم في فتح صفحة متابعة طلبات البيع داخل سيستم العمليات','page',false,865,true),
-('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true)
+('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true),
+('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
+('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
+('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
+('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
+('marketing.lead_forms.create','إنشاء فورم','marketing','lead_forms','create','إنشاء فورم','إنشاء فورم جديد','action',true,1571,true),
+('marketing.lead_forms.edit','تعديل فورم','marketing','lead_forms','edit','تعديل فورم','تعديل محتوى وتصميم الفورم','action',true,1572,true),
+('marketing.lead_forms.publish','نشر وإيقاف الفورم','marketing','lead_forms','publish','نشر وإيقاف الفورم','تفعيل وتعطيل الرابط العام','action',true,1573,true),
+('marketing.lead_forms.leads.view','عرض بيانات الليدات','marketing','lead_forms','leads_view','عرض بيانات الليدات','مشاهدة بيانات العملاء وإجاباتهم','action',true,1574,true),
+('marketing.lead_forms.leads.export','تصدير بيانات الليدات','marketing','lead_forms','leads_export','تصدير بيانات الليدات','تحميل بيانات العملاء','action',true,1575,true),
+('marketing.lead_forms.leads.delete','حذف بيانات فورم المنصات','marketing','lead_forms','leads_delete','حذف بيانات فورم المنصات','حذف ليد محدد أو مسح بيانات الزيارات والليدات','action',true,1578,true),
+('marketing.lead_forms.reports.view','مشاهدة تقارير الفورم','marketing','lead_forms','reports_view','مشاهدة تقارير الفورم','تحليل الزيارات والتحويلات','action',false,1576,true),
+('marketing.lead_forms.sheets.manage','ربط Google Sheets','marketing','lead_forms','sheets_manage','ربط Google Sheets','إعدادات الشيت والمزامنة','settings',true,1577,true),
+('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
+('owners.community.manage','إدارة MZJ Club Community','core','owners_community','manage','إدارة MZJ Club Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Club Community','core','settings','owners_view','مشاهدة إعدادات MZJ Club Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
+('settings.owners.manage','تعديل إعدادات MZJ Club Community','core','settings','owners_manage','تعديل إعدادات MZJ Club Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true),
+('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,1940,true),
+('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,1950,true)
 on conflict(code) do update set
   name=excluded.name,
   system_code=excluded.system_code,
@@ -571,10 +658,73 @@ on conflict(code) do update set
   is_sensitive=excluded.is_sensitive,
   sort_order=excluded.sort_order,
   is_active=true;
+
+update core.system_pages
+set is_active=false,updated_at=now()
+where system_code='crm' and code='owners_community';
+
+update core.permissions
+set is_active=false
+where code='crm.owners_community.view';
+
+delete from core.role_permissions rp
+using core.permissions p
+where rp.permission_id=p.id and p.code='crm.owners_community.view';
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id
+from core.roles r
+join core.permissions p on p.code in ('system.website.access','website.stock.view')
+where r.code in ('admin','system_admin')
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id
+from core.roles r
+join core.permissions p on p.code in ('marketing.subscriptions.view','marketing.subscriptions.renew','marketing.subscriptions.manage')
+where r.code in ('admin','system_admin')
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r join core.permissions p on p.code like 'marketing.lead_forms.%'
+where r.code in ('admin','system_admin','marketing_admin')
+on conflict do nothing;
+
+insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
+select u.id,'website',true,null,'all'
+from core.users u
+where exists(
+  select 1 from core.user_roles ur
+  join core.roles r on r.id=ur.role_id
+  where ur.user_id=u.id and r.code in ('admin','system_admin')
+)
+on conflict(user_id,system_code) do update set is_enabled=true,data_scope='all',updated_at=now();
 `;
 
 
-const ACCESS_CONTROL_SCHEMA_VERSION = 1192;
+const MERSAL_USER_LINK_SQL = String.raw`
+begin;
+
+alter table core.users add column if not exists mersal_user_id text;
+create unique index if not exists core_users_mersal_user_id_unique
+  on core.users(lower(trim(mersal_user_id)))
+  where nullif(trim(mersal_user_id),'') is not null;
+
+create table if not exists core.mersal_users (
+  mersal_user_id text primary key,
+  full_name text not null,
+  email text,
+  role_name text,
+  status text,
+  is_active boolean not null default true,
+  synced_at timestamptz not null default now()
+);
+create index if not exists core_mersal_users_email_idx on core.mersal_users(lower(email));
+
+commit;
+`;
+
+const ACCESS_CONTROL_SCHEMA_VERSION = 1193;
 let accessControlSchemaPromise: Promise<void> | null = null;
 
 async function accessControlSchemaReady() {
@@ -585,6 +735,7 @@ async function accessControlSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_systems')
       and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_permission_overrides')
       and exists(select 1 from information_schema.columns where table_schema='core' and table_name='users' and column_name='permission_version')
+      and exists(select 1 from information_schema.columns where table_schema='core' and table_name='users' and column_name='is_archived')
       and exists(select 1 from information_schema.columns where table_schema='core' and table_name='sessions' and column_name='permission_version')
       and exists(select 1 from information_schema.columns where table_schema='audit' and table_name='activity_log' and column_name='permission_code')
       as ready
@@ -594,6 +745,38 @@ async function accessControlSchemaReady() {
     select version::int from core.access_control_schema_state where id=1
   `;
   return Number(state?.version || 0) >= ACCESS_CONTROL_SCHEMA_VERSION;
+}
+
+
+async function mersalUserLinkSchemaReady() {
+  const sql = getSql();
+  const [state] = await sql<{ ready: boolean }[]>`
+    select
+      exists(
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='users' and column_name='mersal_user_id'
+      )
+      and exists(
+        select 1 from information_schema.tables
+        where table_schema='core' and table_name='mersal_users'
+      )
+      as ready
+  `;
+  return Boolean(state?.ready);
+}
+
+async function ensureMersalUserLinkSchema() {
+  if (await mersalUserLinkSchemaReady()) return;
+  await withDatabaseAdvisoryLock(
+    'mzj:access-control-mersal-user-link:v1',
+    async () => {
+      if (await mersalUserLinkSchemaReady()) return;
+      await runSqlScript(MERSAL_USER_LINK_SQL);
+      if (!(await mersalUserLinkSchemaReady())) {
+        throw new Error('ACCESS_CONTROL_MERSAL_USER_LINK_SCHEMA_NOT_READY');
+      }
+    },
+  );
 }
 
 
@@ -622,7 +805,82 @@ async function requiredPagePermissionCatalogReady() {
           and system_code='marketing'
           and page_code='engagement'
           and is_active=true
-      ) as ready
+      )
+      and exists(
+        select 1 from core.system_pages
+        where system_code='marketing' and code='subscriptions' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='marketing.subscriptions.view'
+          and system_code='marketing'
+          and page_code='subscriptions'
+          and is_active=true
+      )
+      and exists(select 1 from core.permissions where code='attendance.records.correct' and system_code='core' and is_active=true)
+      and exists(select 1 from core.permissions where code='marketing.subscriptions.renew' and system_code='marketing' and is_active=true)
+      and exists(select 1 from core.permissions where code='marketing.subscriptions.manage' and system_code='marketing' and is_active=true)
+      and not exists(
+        select 1
+        from core.roles r
+        cross join (values ('marketing.subscriptions.view'),('marketing.subscriptions.renew'),('marketing.subscriptions.manage')) as required_permission(code)
+        where r.code in ('admin','system_admin')
+          and not exists(
+            select 1
+            from core.role_permissions rp
+            join core.permissions p on p.id=rp.permission_id
+            where rp.role_id=r.id and p.code=required_permission.code
+          )
+      )
+      and exists(select 1 from core.system_pages where system_code='marketing' and code='lead_forms' and is_active=true)
+      and exists(select 1 from core.permissions where code='marketing.lead_forms.leads.delete' and is_active=true and is_sensitive=true)
+      and exists(
+        select 1 from core.system_pages
+        where system_code='core' and code='owners_community' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='owners.community.view'
+          and system_code='core'
+          and page_code='owners_community'
+          and is_active=true
+      )
+      and exists(select 1 from core.permissions where code='owners.community.manage' and is_active=true)
+      and exists(select 1 from core.permissions where code='settings.owners.view' and is_active=true)
+      and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true)
+      and exists(select 1 from core.systems where code='website' and is_active=true)
+      and exists(
+        select 1 from core.system_pages
+        where system_code='website' and code='stock' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='system.website.access' and system_code='website' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='website.stock.view' and system_code='website' and page_code='stock' and is_active=true
+      )
+      and not exists(
+        select 1 from core.system_pages
+        where system_code='crm' and code='owners_community' and is_active=true
+      )
+      and not exists(
+        select 1 from core.permissions
+        where code='crm.owners_community.view' and is_active=true
+      )
+      and not exists(
+        select 1 from core.users u
+        where exists(
+          select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id
+          where ur.user_id=u.id and r.code in ('admin','system_admin')
+        )
+        and not exists(
+          select 1 from core.user_systems us
+          where us.user_id=u.id and us.system_code='website' and us.is_enabled=true
+        )
+      )
+      as ready
   `;
   return Boolean(state?.ready);
 }
@@ -630,7 +888,7 @@ async function requiredPagePermissionCatalogReady() {
 async function ensureRequiredPagePermissionCatalog() {
   if (await requiredPagePermissionCatalogReady()) return;
   await withDatabaseAdvisoryLock(
-    "mzj:access-control-required-page-permissions:v1",
+    "mzj:access-control-required-page-permissions:v2",
     async () => {
       if (await requiredPagePermissionCatalogReady()) return;
       await runSqlScript(REQUIRED_PAGE_PERMISSION_CATALOG_SQL);
@@ -646,6 +904,25 @@ async function ensureRequiredPagePermissionCatalog() {
  * The readiness check is cheap; the full idempotent migration runs only when required.
  * An advisory lock prevents concurrent serverless instances from applying DDL together.
  */
+let operationsInventoryAccessPromise: Promise<void> | null = null;
+async function ensureOperationsInventoryPermissionCatalog() {
+  if (!operationsInventoryAccessPromise) {
+    operationsInventoryAccessPromise = (async () => {
+      const sql = getSql();
+      const [row] = await sql<{ total: number; notes_ready: boolean | null }[]>`
+        select count(*)::int as total, bool_or(code='operations.inventory.column.notes') as notes_ready from core.permissions
+        where system_code='operations' and page_code='inventory'
+          and is_active=true and (code='operations.inventory.tajyeer.update' or code like 'operations.inventory.column.%')
+      `;
+      if (Number(row?.total || 0) >= 17 && row?.notes_ready === true) return;
+      await withDatabaseAdvisoryLock('mzj:operations-inventory-fields:v1', async () => {
+        await runSqlScript(OPERATIONS_INVENTORY_ACCESS_SQL);
+      });
+    })().catch((error) => { operationsInventoryAccessPromise = null; throw error; });
+  }
+  return operationsInventoryAccessPromise;
+}
+
 export function ensureAccessControlSchema() {
   if (!accessControlSchemaPromise) {
     accessControlSchemaPromise = (async () => {
@@ -661,7 +938,10 @@ export function ensureAccessControlSchema() {
           },
         );
       }
+      await ensureMersalUserLinkSchema();
       await ensureRequiredPagePermissionCatalog();
+      await ensureOperationsInventoryPermissionCatalog();
+      await ensureMarketingWorkflowAccess();
     })().catch((error) => {
       accessControlSchemaPromise = null;
       throw error;

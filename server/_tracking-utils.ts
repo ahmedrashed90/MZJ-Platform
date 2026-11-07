@@ -1,4 +1,5 @@
 import { getSql } from "./_db.js";
+import { syncTrackingApprovalStagesForTrackingVehicle } from "./_tracking-approval-sync.js";
 
 export function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -37,13 +38,67 @@ export function publicTrackingUrl(requestOrigin: string, trackingToken: string) 
 
 export async function ensureVehicleStageRows(vehicleId: string) {
   const sql = getSql();
+
+  // Manual Tracking stages belong to this *specific* sale vehicle. A new
+  // vehicle never inherits another VIN's actions, including during ERP sync.
+  // Existing rows without a matching event are deliberately preserved.
   await sql`
-    insert into tracking.vehicle_stages(vehicle_id, stage_id)
-    select ${vehicleId}::uuid, s.id
+    with latest_stage_events as (
+      select distinct on (e.stage_id)
+        e.stage_id,e.action,e.actor_id,e.created_at
+      from tracking.stage_events e
+      join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
+      where e.vehicle_id=${vehicleId}::uuid
+      order by e.stage_id,e.created_at desc,e.id desc
+    )
+    insert into tracking.vehicle_stages(
+      vehicle_id,stage_id,status,completed_by,completed_at,reverted_by,reverted_at
+    )
+    select
+      ${vehicleId}::uuid,s.id,
+      case when le.action='completed' then 'completed' else 'pending' end,
+      case when le.action='completed' then le.actor_id else null end,
+      case when le.action='completed' then le.created_at else null end,
+      case when le.action='reverted' then le.actor_id else null end,
+      case when le.action='reverted' then le.created_at else null end
     from tracking.stages s
-    where s.is_active = true
+    left join latest_stage_events le on le.stage_id=s.id
+    where s.is_active=true
     on conflict (vehicle_id, stage_id) do nothing
   `;
+
+  // Repair a stale materialized stage only from its own VIN's explicit event.
+  // A sibling's completion/reversal is not evidence for this vehicle.
+  await sql`
+    with latest_stage_events as (
+      select distinct on (e.stage_id)
+        e.stage_id,e.action,e.actor_id,e.created_at
+      from tracking.stage_events e
+      join tracking.stages stage_info on stage_info.id=e.stage_id and stage_info.sort_order not in (6,7)
+      where e.vehicle_id=${vehicleId}::uuid
+      order by e.stage_id,e.created_at desc,e.id desc
+    )
+    update tracking.vehicle_stages vs
+    set
+      status=case when le.action='completed' then 'completed' else 'pending' end,
+      completed_by=case when le.action='completed' then le.actor_id else null end,
+      completed_at=case when le.action='completed' then le.created_at else null end,
+      reverted_by=case when le.action='reverted' then le.actor_id else null end,
+      reverted_at=case when le.action='reverted' then le.created_at else null end,
+      updated_at=greatest(vs.updated_at,le.created_at)
+    from latest_stage_events le
+    where vs.vehicle_id=${vehicleId}::uuid
+      and vs.stage_id=le.stage_id
+      and (
+        (le.action='completed' and vs.status<>'completed')
+        or (le.action='reverted' and vs.status<>'pending')
+      )
+  `;
+
+  // Approval-driven stages are never healed from manual Tracking events.
+  // Their canonical values come from Operations inventory approvals or
+  // the sales-order approval record for cars supplied outside inventory.
+  await syncTrackingApprovalStagesForTrackingVehicle(sql, vehicleId);
 }
 
 export async function recalculateTrackingOrder(orderId: string) {

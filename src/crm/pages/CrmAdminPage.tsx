@@ -20,6 +20,7 @@ import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
 import { CrmKpiAccessSettings } from "../components/CrmKpiAccessSettings";
+import { CrmCashQrSettings } from "../components/CrmCashQrSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 import { useAuth } from "../../auth/AuthContext";
@@ -28,6 +29,7 @@ import { hasPermission } from "../../systemAccess";
 const tabs = [
   { key: "automation", label: "إعدادات الأوتوميشن", description: "قواعد استقبال الرسائل ومسارات التنفيذ التلقائي", group: "workflow" },
   { key: "entry_routing", label: "دخول العملاء", description: "بوابات الدخول والتوجيه الأولي للعملاء", group: "workflow" },
+  { key: "cash_qr", label: "إنشاء QR كود", description: "تسجيل عملاء الكاش بالاسم ورقم الجوال وربطهم بالموقع الإلكتروني", group: "workflow" },
   { key: "distribution", label: "توزيع العملاء", description: "قواعد الدور والمندوبين المؤهلين للتوزيع", group: "workflow" },
   { key: "statuses", label: "حالات العملاء", description: "حالات الداش بورد وترتيبها حسب القسم", group: "customer" },
   { key: "customer_fields", label: "بيانات العميل", description: "الحقول الإضافية ونسبة اكتمال الملف", group: "customer" },
@@ -56,8 +58,8 @@ const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text",
 const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", reportGroup: "other", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
-const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", isActive: true };
-const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCode: "", sourceCodes: [] as string[], memberIds: [] as string[], sortOrder: 10, preventConsecutive: true, isActive: true };
+const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", mersalToken: "", mersalTokenConfigured: false, isActive: true };
+const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCodes: [] as string[], sourceCodes: [] as string[], memberIds: [] as string[], assignmentMode: "round_robin", memberPercentages: {} as Record<string, number>, sortOrder: 10, preventConsecutive: true, isActive: true };
 
 function dbToQuality(raw: any) {
   return {
@@ -163,7 +165,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const [endpointForm, setEndpointForm] = useState(blankEndpoint);
   const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
-  const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false });
+  const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false, trackingFinalDeliveryWelcomeEnabled: false });
   const [dataReview, setDataReview] = useState<any | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewPreview, setReviewPreview] = useState<any | null>(null);
@@ -171,6 +173,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncingMersal, setSyncingMersal] = useState(false);
+  const [syncingMersalUsers, setSyncingMersalUsers] = useState(false);
   const [bulkAgentIds, setBulkAgentIds] = useState<string[]>([]);
   const [bulkPreview, setBulkPreview] = useState<any | null>(null);
   const [bulkConfirmCount, setBulkConfirmCount] = useState("");
@@ -190,6 +193,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       setAutomaticTemplates({
         cashTotalCustomersEnabled: result.automaticTemplateSettings?.cash_total_customers_template_enabled === true,
         financeCallCenterEnabled: result.automaticTemplateSettings?.finance_call_center_template_enabled === true,
+        trackingFinalDeliveryWelcomeEnabled: result.automaticTemplateSettings?.tracking_final_delivery_welcome_enabled === true,
       });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات CRM");
@@ -307,6 +311,31 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
     }
   }
 
+  async function syncMersalUsers() {
+    if (!["whatsapp", "mersal"].includes(endpointForm.sourceCode)) {
+      setNotice("اختار واتساب أولاً");
+      return;
+    }
+    setSyncingMersalUsers(true);
+    setNotice("جاري الاتصال بمرسال وتحديث المستخدمين...");
+    try {
+      const result = await crmFetch<any>("/api/crm/mersal-users", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceCode: endpointForm.sourceCode,
+          token: endpointForm.mersalToken || undefined,
+        }),
+      });
+      setEndpointForm((current) => ({ ...current, mersalToken: "", mersalTokenConfigured: true }));
+      setNotice(result.message || `تم تحديث ${result.count || 0} مستخدم من مرسال`);
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تحديث مستخدمي مرسال");
+    } finally {
+      setSyncingMersalUsers(false);
+    }
+  }
+
   function updateBulkAgentIds(next: string[]) {
     setBulkAgentIds(next);
     setBulkPreview(null);
@@ -382,13 +411,62 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const eligibleRuleUsers = useMemo(() => (data.assignmentUsers || []).filter((row: any) => {
     if (!row.is_active || !row.can_receive_leads) return false;
     if (!(row.department_codes || []).includes(ruleForm.departmentCode)) return false;
-    if (ruleForm.branchCode && !(row.branch_codes || []).includes(ruleForm.branchCode)) return false;
+    if (!ruleForm.branchCodes.length) return false;
+    if (!(row.branch_codes || []).some((code: string) => ruleForm.branchCodes.includes(code))) return false;
     return true;
-  }), [data.assignmentUsers, ruleForm.departmentCode, ruleForm.branchCode]);
+  }), [data.assignmentUsers, ruleForm.departmentCode, ruleForm.branchCodes]);
 
+  const eligibleRuleUserIds = useMemo(() => new Set(eligibleRuleUsers.map((row: any) => row.id)), [eligibleRuleUsers]);
   const selectedRuleUsers = useMemo(() => ruleForm.memberIds
+    .filter((id) => eligibleRuleUserIds.has(id))
     .map((id) => (data.assignmentUsers || []).find((row: any) => row.id === id))
-    .filter(Boolean), [data.assignmentUsers, ruleForm.memberIds]);
+    .filter(Boolean), [data.assignmentUsers, eligibleRuleUserIds, ruleForm.memberIds]);
+
+  const selectedPercentageTotal = useMemo(() => selectedRuleUsers.reduce((sum: number, row: any) => sum + Number(ruleForm.memberPercentages[row.id] || 0), 0), [selectedRuleUsers, ruleForm.memberPercentages]);
+
+  const percentageTotalsByBranch = useMemo(() => ruleForm.branchCodes.map((branchCode) => {
+    const eligibleIds = new Set<string>((data.assignmentUsers || []).filter((row: any) => (
+      row.is_active
+      && row.can_receive_leads
+      && (row.department_codes || []).includes(ruleForm.departmentCode)
+      && (row.branch_codes || []).includes(branchCode)
+      && ruleForm.memberIds.includes(row.id)
+    )).map((row: any) => row.id));
+    const total = [...eligibleIds].reduce((sum, userId) => sum + Number(ruleForm.memberPercentages[userId] || 0), 0);
+    return { branchCode, total };
+  }), [data.assignmentUsers, ruleForm.branchCodes, ruleForm.departmentCode, ruleForm.memberIds, ruleForm.memberPercentages]);
+
+  function toggleRuleMember(userId: string) {
+    setRuleForm((current) => {
+      const selected = current.memberIds.includes(userId);
+      const memberIds = selected ? current.memberIds.filter((id) => id !== userId) : [...current.memberIds, userId];
+      const memberPercentages = { ...current.memberPercentages };
+      if (selected) delete memberPercentages[userId];
+      else if (memberPercentages[userId] == null) memberPercentages[userId] = 0;
+      return { ...current, memberIds, memberPercentages };
+    });
+  }
+
+  function setRuleMemberPercentage(userId: string, value: string) {
+    const numeric = Math.max(0, Math.min(100, Number(value || 0)));
+    setRuleForm((current) => ({ ...current, memberPercentages: { ...current.memberPercentages, [userId]: Number.isFinite(numeric) ? numeric : 0 } }));
+  }
+
+  function toggleRuleBranch(branchCode: string) {
+    setRuleForm((current) => {
+      const branchCodes = toggleList(current.branchCodes, branchCode);
+      const eligibleIds = new Set((data.assignmentUsers || []).filter((row: any) => (
+        row.is_active
+        && row.can_receive_leads
+        && (row.department_codes || []).includes(current.departmentCode)
+        && branchCodes.length > 0
+        && (row.branch_codes || []).some((code: string) => branchCodes.includes(code))
+      )).map((row: any) => row.id));
+      const memberIds = current.memberIds.filter((id) => eligibleIds.has(id));
+      const memberPercentages = Object.fromEntries(Object.entries(current.memberPercentages).filter(([id]) => memberIds.includes(id))) as Record<string, number>;
+      return { ...current, branchCodes, memberIds, memberPercentages };
+    });
+  }
 
   const distributionSummary = useMemo(() => ({
     activeRules: (data.assignmentRules || []).filter((row: any) => row.is_active).length,
@@ -428,11 +506,13 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       id: row.id,
       name: row.name,
       departmentCode: row.department_code,
-      branchCode: row.branch_code || "",
+      branchCodes: row.branch_code ? [row.branch_code] : [],
       sourceCodes: row.source_codes || [],
       memberIds: (row.members || []).filter((member: any) => member.is_active).map((member: any) => member.user_id),
+      assignmentMode: row.assignment_mode === "percentage" ? "percentage" : "round_robin",
+      memberPercentages: Object.fromEntries((row.members || []).filter((member: any) => member.is_active).map((member: any) => [member.user_id, Number(member.allocation_percentage || 0)])),
       sortOrder: row.sort_order || 0,
-      preventConsecutive: row.prevent_consecutive !== false,
+      preventConsecutive: row.assignment_mode === "percentage" ? false : row.prevent_consecutive !== false,
       isActive: row.is_active !== false,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -463,6 +543,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       <fieldset className="settings-readonly-fieldset" disabled={readOnly && tab !== "data_review" && tab !== "entry_routing"}>
       {tab === "automation" ? <fieldset className="settings-readonly-fieldset" disabled={!canManageAutomation}><CrmAutomationSettings /></fieldset> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
+      {tab === "cash_qr" ? <CrmCashQrSettings /> : null}
       {tab === "kpi_access" ? <CrmKpiAccessSettings users={data.assignmentUsers || []} value={data.kpiSectionPermissions} onSaved={load} /> : null}
 
       {tab === "statuses" ? (
@@ -604,10 +685,11 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
       {tab === "automatic_templates" ? (
         <section className="crm-panel crm-form-panel">
-          <header><div><h2>الإرسال التلقائي للقالب</h2><p>الإعدادان مستقلان، والقيمة الافتراضية بعد النشر غير نشطة. الإرسال اليدوي يظل متاحًا دائمًا.</p></div></header>
+          <header><div><h2>الإرسال التلقائي للقالب</h2><p>الإعدادات مستقلة، والقيمة الافتراضية بعد النشر غير نشطة. الإرسال اليدوي يظل متاحًا دائمًا.</p></div></header>
           <div className="crm-form-grid crm-form-grid-wide">
             <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.cashTotalCustomersEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, cashTotalCustomersEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل جديد إلى إجمالي العملاء في مبيعات الكاش</span></label>
             <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.financeCallCenterEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, financeCallCenterEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل تمويل جديد إلى كارت الكول سنتر</span></label>
+            <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.trackingFinalDeliveryWelcomeEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, trackingFinalDeliveryWelcomeEnabled: event.target.checked }))} /><span>إرسال ترحيب MZJ Club Community تلقائيًا مع SMS+ عند مرحلة إتمام عملية التسليم بنجاح</span></label>
           </div>
           <div className="crm-form-actions"><button className="crm-primary-button" onClick={() => void save("automatic_template_settings", automaticTemplates)}><FloppyDisk size={18} />حفظ إعدادات الإرسال التلقائي</button></div>
         </section>
@@ -621,8 +703,8 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
           </section>
 
           <section className="crm-panel quality-card crm-quality-definition-card">
-            <header><div><h2>إجمالي العملاء</h2><p>حدد هل يتم حساب الإجمالي من كل العملاء بعد الفلاتر مع استبعاد خدمة العملاء، أو من حالات محددة فقط.</p></div></header>
-            <label className="crm-form-label crm-quality-mode-field"><span>طريقة الحساب</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
+            <header><div><h2>إجمالي العملاء</h2><p>إجمالي العملاء في الداش بورد وتقارير الفترة يشمل جميع الأقسام بما فيها خدمة العملاء؛ إعداد حالات المقام يُستخدم للتقارير التاريخية الأخرى فقط.</p></div></header>
+            <label className="crm-form-label crm-quality-mode-field"><span>طريقة الحساب</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر (يشمل خدمة العملاء)</option><option value="statuses">حالات محددة</option></select></label>
             {quality.totalMode === "statuses" ? <><strong>الحالات التي تُحسب ضمن إجمالي العملاء</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`total-${status}`}><input type="checkbox" checked={quality.totalStatuses.includes(status)} onChange={() => toggleQuality("totalStatuses", status)} />{status}</label>)}</div></> : null}
           </section>
 
@@ -638,19 +720,12 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
             <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`qualified-${status}`}><input type="checkbox" checked={quality.qualifiedStatuses.includes(status)} onChange={() => toggleQuality("qualifiedStatuses", status)} />{status}</label>)}</div>
           </section>
 
-          {["marketing", "sales"].map((type) => {
-            const marketing = type === "marketing";
-            const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses";
-            const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses";
-            const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode";
-            return <section className="crm-panel quality-card crm-quality-formula-card" key={type}>
-              <header><div><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><p>النسبة = عدد العملاء الموجودين في {marketing ? "حالات البسط" : "حالات البيع المختارة"} ÷ المقام المحدد × 100.</p></div></header>
-              <strong>{marketing ? "حالات البسط" : "حالات البيع المختارة"}</strong>
-              <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-num-${status}`}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div>
-              <label className="crm-form-label crm-quality-mode-field"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
-              {(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-den-${status}`}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}
-            </section>;
-          })}
+          <section className="crm-panel quality-card crm-quality-formula-card">
+            <header><div><h2>جودة التسويق</h2><p>جودة التسويق = (مؤهل + تم البيع) ÷ إجمالي العملاء × 100. «مؤهل» مجموعة الحالات المحددة بالأعلى، و«تم البيع» من عمليات البيع بتاريخها الفعلي.</p></div></header>
+          </section>
+          <section className="crm-panel quality-card crm-quality-formula-card">
+            <header><div><h2>جودة المبيعات</h2><p>جودة المبيعات = تم البيع ÷ إجمالي العملاء × 100. لا تدخل مبيعات الشهور السابقة عند اختيار شهر جديد.</p></div></header>
+          </section>
 
           <section className="crm-panel quality-card">
             <h2>ترتيب وإظهار كروت النتائج</h2>
@@ -689,10 +764,14 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
                   mediaSendUrl: row.media_send_url || row.text_send_url || row.template_send_url || row.send_url || "",
                   templatesSyncUrl: row.templates_sync_url || "",
                   inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
-                  healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
+                  healthUrl: row.health_url || "", secretName: row.secret_name || "", mersalToken: "", mersalTokenConfigured: row.mersal_token_configured === true, isActive: row.is_active,
                 } : { ...blankEndpoint, sourceCode: event.target.value, displayName: data.sources.find((item: any) => item.code === event.target.value)?.name || "" });
               }}><option value="">اختار المصدر</option>{endpointSources.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
               <label><span>الاسم الظاهر</span><input value={endpointForm.displayName} onChange={(event) => setEndpointForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
+              {["whatsapp", "mersal"].includes(endpointForm.sourceCode) ? <>
+                <label className="crm-field-wide"><span>Mersal Token</span><input type="password" autoComplete="off" placeholder={endpointForm.mersalTokenConfigured ? "التوكن محفوظ — اكتب قيمة جديدة فقط للتغيير" : "أدخل Mersal Token"} value={endpointForm.mersalToken} onChange={(event) => setEndpointForm((current) => ({ ...current, mersalToken: event.target.value }))} /></label>
+                <div className="crm-field-wide crm-form-actions"><button type="button" className="crm-secondary-button" disabled={syncingMersalUsers || (!endpointForm.mersalToken.trim() && !endpointForm.mersalTokenConfigured)} onClick={() => void syncMersalUsers()}><ArrowClockwise size={18} className={syncingMersalUsers ? "crm-spin" : ""} />{syncingMersalUsers ? "جاري جلب المستخدمين..." : "GET المستخدمين"}</button>{endpointForm.mersalTokenConfigured ? <span className="crm-system-field-note">Mersal Token محفوظ. زر GET يحدث قائمة مستخدمي مرسال بدون إعادة إدخال التوكن.</span> : null}</div>
+              </> : null}
               <label className="crm-field-wide"><span>مسار إرسال النص والقوالب</span><input placeholder="https://worker.example.com/send/mersal" value={endpointForm.sendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, sendUrl: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>مسار إرسال المرفقات</span><input placeholder="https://worker.example.com/send/mersal" value={endpointForm.mediaSendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, mediaSendUrl: event.target.value }))} /></label>
               <div className="crm-field-wide crm-system-field-note">المرفق يُرفع أولًا إلى التخزين الآمن، ثم يرسله Worker مرسال إلى Endpoint <b>/api/wpbox/sendmessage</b> بصيغة multipart/form-data.</div>
@@ -710,7 +789,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
               sourceCode: row.source_code, displayName: row.display_name,
               sendUrl: row.text_send_url || row.template_send_url || row.send_url || "", mediaSendUrl: row.media_send_url || row.text_send_url || row.send_url || "",
               templatesSyncUrl: row.templates_sync_url || "", inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
-              healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
+              healthUrl: row.health_url || "", secretName: row.secret_name || "", mersalToken: "", mersalTokenConfigured: row.mersal_token_configured === true, isActive: row.is_active,
             })}><strong>{sourceLabel(row.source_code, row.display_name)}</strong><span>{row.text_send_url || row.template_send_url || row.send_url || "لم يتم إضافة مسار إرسال"}</span></button>)}</div>
           </section>
         </div>
@@ -782,11 +861,13 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
               <div className="crm-distribution-section-title"><span>1</span><div><strong>بيانات القاعدة</strong><small>القسم والفرع والمصدر وطريقة التشغيل.</small></div></div>
               <div className="crm-form-grid crm-form-grid-wide">
                 <label><span>اسم القاعدة</span><input placeholder="مثال: تمويل الأونلاين" value={ruleForm.name} onChange={(event) => setRuleForm((current) => ({ ...current, name: event.target.value }))} /></label>
-                <label><span>القسم</span><select value={ruleForm.departmentCode} onChange={(event) => setRuleForm((current) => ({ ...current, departmentCode: event.target.value, memberIds: [] }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">الكول سنتر</option></select></label>
-                <label><span>الفرع</span><select value={ruleForm.branchCode} onChange={(event) => setRuleForm((current) => ({ ...current, branchCode: event.target.value, memberIds: [] }))}><option value="">كل الفروع</option>{data.branches.filter((row: any) => row.is_active).map((row: any) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
+                <label><span>القسم</span><select value={ruleForm.departmentCode} onChange={(event) => setRuleForm((current) => ({ ...current, departmentCode: event.target.value, memberIds: [], memberPercentages: {} }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">الكول سنتر</option></select></label>
+                <div className="crm-field-wide"><span className="crm-field-caption">الفروع</span><p className="crm-field-help">اختر فرعًا واحدًا أو أكثر لتحديد المناديب المؤهلين. عند دخول العميل يختار النظام المندوب أولًا ثم يسجل على العميل فرع المندوب المختار.</p><div className="crm-check-grid crm-distribution-source-grid">{data.branches.filter((row: any) => row.is_active).map((row: any) => <label key={row.code}><input type="checkbox" checked={ruleForm.branchCodes.includes(row.code)} onChange={() => toggleRuleBranch(row.code)} />{row.name}</label>)}</div></div>
+                <label><span>طريقة التوزيع</span><select value={ruleForm.assignmentMode} onChange={(event) => setRuleForm((current) => ({ ...current, assignmentMode: event.target.value, preventConsecutive: event.target.value === "percentage" ? false : current.preventConsecutive }))}><option value="round_robin">التوزيع الحالي</option><option value="percentage">التوزيع بالنسبة المئوية</option></select></label>
                 <label><span>ترتيب القاعدة</span><input type="number" value={ruleForm.sortOrder} onChange={(event) => setRuleForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
-                <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.preventConsecutive} onChange={(event) => setRuleForm((current) => ({ ...current, preventConsecutive: event.target.checked }))} /><span>منع تكرار نفس المندوب</span></label>
+                <label className={`crm-switch-row${ruleForm.assignmentMode === "percentage" ? " disabled" : ""}`}><input type="checkbox" disabled={ruleForm.assignmentMode === "percentage"} checked={ruleForm.assignmentMode === "percentage" ? false : ruleForm.preventConsecutive} onChange={(event) => setRuleForm((current) => ({ ...current, preventConsecutive: event.target.checked }))} /><span>منع تكرار نفس المندوب</span></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.isActive} onChange={(event) => setRuleForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>القاعدة نشطة</span></label>
+                {ruleForm.assignmentMode === "percentage" ? <div className="crm-field-wide crm-percentage-mode-note"><strong>التوزيع بالنسبة المئوية</strong><span>اكتب نسبة كل مندوب من 0 إلى 100. نسبة 0% تبقي المندوب داخل القاعدة بدون استقبال عملاء، ويجب أن يكون مجموع نسب المناديب المؤهلين داخل كل فرع 100%.</span></div> : null}
               </div>
             </div>
 
@@ -796,27 +877,29 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
             </div>
 
             <div className="crm-distribution-section">
-              <div className="crm-distribution-section-title"><span>3</span><div><strong>الموظفون وترتيب الدور</strong><small>يظهر فقط الموظفون النشطون والمسموح لهم باستقبال العملاء والمربوطون بالقسم والفرع.</small></div></div>
+              <div className="crm-distribution-section-title"><span>3</span><div><strong>{ruleForm.assignmentMode === "percentage" ? "الموظفون ونسب التوزيع" : "الموظفون وترتيب الدور"}</strong><small>{ruleForm.assignmentMode === "percentage" ? "حدد نسبة كل مندوب؛ التوزيع الفعلي يتوازن مع النسب بمرور العملاء الجدد." : "يظهر فقط الموظفون النشطون والمسموح لهم باستقبال العملاء والمربوطون بالقسم والفرع."}</small></div></div>
               <div className="crm-distribution-members-layout">
                 <div className="crm-distribution-available">
                   <header><strong>الموظفون المؤهلون</strong><span>{eligibleRuleUsers.length}</span></header>
-                  <div className="crm-member-picker">{eligibleRuleUsers.map((row: any) => <label key={row.id} className={ruleForm.memberIds.includes(row.id) ? "selected" : ""}><input type="checkbox" checked={ruleForm.memberIds.includes(row.id)} onChange={() => setRuleForm((current) => ({ ...current, memberIds: toggleList(current.memberIds, row.id) }))} /><span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "كل الفروع"}</small></span></label>)}</div>
-                  {!eligibleRuleUsers.length ? <div className="crm-empty-state">لا يوجد موظفون مؤهلون لهذه القاعدة. فعّل استقبال العملاء واربط المستخدم بالقسم والفرع.</div> : null}
+                  <div className="crm-member-picker">{eligibleRuleUsers.map((row: any) => <label key={row.id} className={ruleForm.memberIds.includes(row.id) ? "selected" : ""}><input type="checkbox" checked={ruleForm.memberIds.includes(row.id)} onChange={() => toggleRuleMember(row.id)} /><span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "بدون فرع"}</small></span></label>)}</div>
+                  {!eligibleRuleUsers.length ? <div className="crm-empty-state">{ruleForm.branchCodes.length ? "لا يوجد موظفون مؤهلون للقسم والفروع المختارة. فعّل استقبال العملاء واربط المستخدم بالفرع الصحيح." : "اختر فرعًا واحدًا على الأقل لعرض المناديب المؤهلين."}</div> : null}
                 </div>
                 <div className="crm-distribution-order">
-                  <header><strong>ترتيب التوزيع</strong><span>{selectedRuleUsers.length}</span></header>
-                  <div className="crm-distribution-order-list">{selectedRuleUsers.map((row: any, index: number) => <article key={row.id}><b>{index + 1}</b><div><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "كل الفروع"}</small></div><nav><button type="button" disabled={index === 0} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, -1) }))}><CaretUp size={15} /></button><button type="button" disabled={index === selectedRuleUsers.length - 1} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, 1) }))}><CaretDown size={15} /></button><button type="button" onClick={() => setRuleForm((current) => ({ ...current, memberIds: current.memberIds.filter((id) => id !== row.id) }))}><Trash size={15} /></button></nav></article>)}</div>
-                  {!selectedRuleUsers.length ? <div className="crm-empty-state">اختر الموظفين من القائمة ليظهر ترتيب التوزيع هنا.</div> : null}
+                  <header><strong>{ruleForm.assignmentMode === "percentage" ? "نسب التوزيع" : "ترتيب التوزيع"}</strong><span>{selectedRuleUsers.length}</span></header>
+                  {ruleForm.assignmentMode === "percentage" && selectedRuleUsers.length && ruleForm.branchCodes.length <= 1 ? <div className={`crm-percentage-total${Math.abs(selectedPercentageTotal - 100) < 0.01 ? " valid" : " invalid"}`}><span>إجمالي النسب المختارة</span><strong>{selectedPercentageTotal.toFixed(2).replace(/\.00$/, "")}%</strong></div> : null}
+                  <div className={`crm-distribution-order-list${ruleForm.assignmentMode === "percentage" ? " percentage" : ""}`}>{selectedRuleUsers.map((row: any, index: number) => <article key={row.id}><b>{index + 1}</b><div><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "بدون فرع"}</small></div>{ruleForm.assignmentMode === "percentage" ? <label className="crm-member-percentage"><input type="number" min="0" max="100" step="0.01" inputMode="decimal" value={ruleForm.memberPercentages[row.id] ?? 0} onChange={(event) => setRuleMemberPercentage(row.id, event.target.value)} /><span>%</span></label> : <nav><button type="button" disabled={index === 0} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, -1) }))}><CaretUp size={15} /></button><button type="button" disabled={index === selectedRuleUsers.length - 1} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, 1) }))}><CaretDown size={15} /></button><button type="button" onClick={() => toggleRuleMember(row.id)}><Trash size={15} /></button></nav>}{ruleForm.assignmentMode === "percentage" ? <button type="button" className="crm-member-remove" onClick={() => toggleRuleMember(row.id)}><Trash size={15} /></button> : null}</article>)}</div>
+                  {!selectedRuleUsers.length ? <div className="crm-empty-state">اختر الموظفين من القائمة ليظهر {ruleForm.assignmentMode === "percentage" ? "تحديد النسب" : "ترتيب التوزيع"} هنا.</div> : null}
+                  {ruleForm.assignmentMode === "percentage" && percentageTotalsByBranch.length ? <div className="crm-percentage-branch-totals">{percentageTotalsByBranch.map((row) => <span key={row.branchCode} className={Math.abs(row.total - 100) < 0.01 ? "valid" : "invalid"}><small>{data.branches.find((branch: any) => branch.code === row.branchCode)?.name || row.branchCode}</small><b>{row.total.toFixed(2).replace(/\.00$/, "")}%</b></span>)}</div> : null}
                 </div>
               </div>
             </div>
 
             <div className="crm-distribution-preview">
               <span><small>القسم</small><strong>{departmentLabel(ruleForm.departmentCode)}</strong></span>
-              <span><small>الفرع</small><strong>{data.branches.find((row: any) => row.code === ruleForm.branchCode)?.name || "كل الفروع"}</strong></span>
+              <span><small>الفروع</small><strong>{ruleForm.branchCodes.length ? ruleForm.branchCodes.map((code) => data.branches.find((row: any) => row.code === code)?.name || code).join("، ") : "لم يتم الاختيار"}</strong></span>
               <span><small>المصادر</small><strong>{ruleForm.sourceCodes.length || "الكل"}</strong></span>
-              <span><small>الموظفون</small><strong>{ruleForm.memberIds.length}</strong></span>
-              <span><small>أول دور</small><strong>{selectedRuleUsers[0]?.full_name || "—"}</strong></span>
+              <span><small>الموظفون</small><strong>{selectedRuleUsers.length}</strong></span>
+              <span><small>طريقة التوزيع</small><strong>{ruleForm.assignmentMode === "percentage" ? "بالنسبة المئوية" : "التوزيع الحالي"}</strong></span>
             </div>
 
             <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setRuleForm(blankRule)}><Plus size={18} />قاعدة جديدة</button><button className="crm-primary-button" onClick={async () => { if (await save("assignment_rule", ruleForm)) setRuleForm(blankRule); }}><FloppyDisk size={18} />حفظ قاعدة التوزيع</button></div>
@@ -824,10 +907,10 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
           <section className="crm-panel crm-list-panel crm-distribution-rules-panel">
             <header><h2>قواعد التوزيع</h2><span>{data.assignmentRules.length}</span></header>
-            <div className="crm-rule-list">{data.assignmentRules.map((row: any) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><header><div><strong>{row.name}</strong><span>{departmentLabel(row.department_code)} · {row.branch_name || "كل الفروع"}</span></div><b>{row.is_active ? "نشطة" : "موقوفة"}</b></header><div className="crm-rule-stats"><span><small>الموظفون</small><strong>{(row.members || []).filter((member: any) => member.is_active).length}</strong></span><span><small>آخر توزيع</small><strong>{row.last_user_name || "لا يوجد"}</strong></span><span><small>التالي</small><strong>{row.next_user_name || "لا يوجد"}</strong></span></div><p>المصادر: {(row.source_codes || []).length ? row.source_codes.map((code: string) => data.sources.find((source: any) => source.code === code)?.name || code).join("، ") : "كل المصادر"}</p><div className="crm-rule-members">{(row.members || []).map((member: any, index: number) => <span key={member.user_id}><i>{index + 1}</i>{member.full_name}<b>{member.assignment_count || 0}</b></span>)}</div><footer><button onClick={() => editRule(row)}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("assignment_rule", row.id)}><Trash size={16} />إيقاف</button></footer></article>)}</div>
+            <div className="crm-rule-list">{data.assignmentRules.map((row: any) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><header><div><strong>{row.name}</strong><span>{departmentLabel(row.department_code)} · {row.branch_name || "حسب فرع المندوب"}</span></div><b>{row.is_active ? "نشطة" : "موقوفة"}</b></header><div className="crm-rule-stats"><span><small>الموظفون</small><strong>{(row.members || []).filter((member: any) => member.is_active).length}</strong></span><span><small>طريقة التوزيع</small><strong>{row.assignment_mode === "percentage" ? "بالنسبة" : "الحالي"}</strong></span><span><small>آخر توزيع</small><strong>{row.last_user_name || "لا يوجد"}</strong></span><span><small>التالي</small><strong>{row.next_user_name || "لا يوجد"}</strong></span></div><p>المصادر: {(row.source_codes || []).length ? row.source_codes.map((code: string) => data.sources.find((source: any) => source.code === code)?.name || code).join("، ") : "كل المصادر"}</p><div className="crm-rule-members">{(row.members || []).map((member: any, index: number) => <span key={member.user_id}><i>{index + 1}</i>{member.full_name}<b>{row.assignment_mode === "percentage" ? `${Number(member.allocation_percentage || 0).toFixed(2).replace(/\.00$/, "")}%` : member.assignment_count || 0}</b></span>)}</div><footer><button onClick={() => editRule(row)}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("assignment_rule", row.id)}><Trash size={16} />إيقاف</button></footer></article>)}</div>
           </section>
 
-          <section className="crm-panel crm-list-panel crm-assignment-log-panel"><header><h2>سجل التوزيع</h2><span>آخر 100 عملية</span></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>التاريخ</th><th>القاعدة</th><th>القسم</th><th>الفرع</th><th>المصدر</th><th>المندوب</th><th>العملية</th></tr></thead><tbody>{data.assignmentLogs.map((row: any) => <tr key={row.id}><td>{formatDate(row.created_at)}</td><td>{row.rule_name || "التوزيع الافتراضي"}</td><td>{departmentLabel(row.department_code)}</td><td>{data.branches.find((branch: any) => branch.code === row.branch_code)?.name || row.branch_code || "—"}</td><td>{data.sources.find((source: any) => source.code === row.source_code)?.name || sourceLabel(row.source_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.action === "automatic_assignment" ? "توزيع تلقائي" : row.action}</td></tr>)}</tbody></table></div></section>
+          <section className="crm-panel crm-list-panel crm-assignment-log-panel"><header><h2>سجل التوزيع</h2><span>آخر 100 عملية</span></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>التاريخ</th><th>القاعدة</th><th>القسم</th><th>الفرع</th><th>المصدر</th><th>المندوب</th><th>العملية</th></tr></thead><tbody>{data.assignmentLogs.map((row: any) => <tr key={row.id}><td>{formatDate(row.created_at)}</td><td>{row.rule_name || "توزيع سابق بدون قاعدة"}</td><td>{departmentLabel(row.department_code)}</td><td>{data.branches.find((branch: any) => branch.code === row.branch_code)?.name || row.branch_code || "—"}</td><td>{data.sources.find((source: any) => source.code === row.source_code)?.name || sourceLabel(row.source_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.action === "automatic_assignment" ? "توزيع تلقائي" : row.action}</td></tr>)}</tbody></table></div></section>
         </div>
         </fieldset>
       ) : null}

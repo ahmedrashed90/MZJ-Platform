@@ -45,7 +45,7 @@ check("operations API reads vehicle approvals", operationsApi.includes("operatio
 check("operations API excludes cancelled orders", operationsApi.includes("coalesce(o.is_cancelled,false)=false"));
 check("remaining amount uses total including tax minus advance paid", operationsApi.includes("(coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0))") && operationsPage.includes("Number(row.total_incl_vat || 0) - Number(row.advance_paid || 0)"));
 check("followup completion is stored canonically on tracking orders", trackingSchema.includes("sales_followup_completed_at") && trackingSchema.includes("sales_followup_completed_by"));
-check("followup page defaults to incomplete and exposes completed orders", operationsApi.includes("sales_followup_completed_at is null") && operationsApi.includes("sales_followup_completed_at is not null") && operationsPage.includes("الطلبات غير المكتملة") && operationsPage.includes("الطلبات المكتملة"));
+check("followup page is limited to incomplete orders and the completed tab is removed", operationsApi.includes("sales_followup_completed_at is null") && operationsPage.includes("completed: false") && !operationsPage.includes("الطلبات المكتملة"));
 check("complete action moves the order without duplicating it", operationsApi.includes("complete_sales_order_followup") && operationsApi.includes("update tracking.orders set") && operationsPage.includes("مكتمل"));
 check("operations page uses exact requested labels", [
   "رقم الطلب", "اسم العميل", "رقم الهيكل", "الإجمالي شامل الضريبة", "الدفعة المقدمة", "المتبقي",

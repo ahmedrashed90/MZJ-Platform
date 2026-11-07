@@ -3,6 +3,7 @@ export type OperationsMeta = {
   locations: Array<{ id: string; code: string; name: string; branch_code?: string | null; is_agency: boolean; sort_order?: number }>;
   statuses: Array<{ code: string; name: string; sort_order?: number; is_actual_stock: boolean; is_delivery_status: boolean; is_terminal: boolean }>;
   checkItems: Array<{ code: string; name: string; sort_order: number }>;
+  inventoryVisibleColumns: string[];
   permissions: Record<string, boolean>;
 };
 
@@ -25,6 +26,9 @@ export type VehicleRow = {
   status_name: string;
   source_type?: string | null;
   has_notes: boolean;
+  is_tajyeer?: boolean;
+  tajyeer_updated_at?: string | null;
+  tajyeer_updated_by_name?: string | null;
   notes?: string | null;
   state_note?: string | null;
   shortage_note?: string | null;
@@ -124,6 +128,7 @@ export type TransferRow = {
   destination_location_code?: string | null;
   requested_at: string;
   completed_at?: string | null;
+  photography_date?: string | null;
   cancelled_at?: string | null;
   cancellation_reason?: string | null;
   source_location_name?: string | null;
@@ -172,6 +177,7 @@ export type SalesOrderFollowupRow = {
   location_name?: string | null;
   location_branch_code?: string | null;
   operations_status_code?: string | null;
+  order_archived?: boolean;
   total_incl_vat: number | string;
   advance_paid: number | string;
   remaining_amount: number | string;

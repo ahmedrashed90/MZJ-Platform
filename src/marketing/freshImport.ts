@@ -403,6 +403,7 @@ function resolveCreative(creative: FreshImportCreative, mappings: FreshImportUse
   return {
     tempId: creative.legacyId,
     creativeTypeId: creativeType.id,
+    name: creativeType.name,
     quantity: Math.max(1, Number(creative.quantity || 1)),
     cars,
     contentAssignments,

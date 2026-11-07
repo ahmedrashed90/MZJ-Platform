@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, CalendarBlank, CheckCircle, CurrencyCircleDollar
 import { Modal } from "../../components/Modal";
 import { marketingFetch } from "../api";
 import { CreativeEditor, newCreativeDraft } from "./CreativeEditor";
+import { FunnelSelect } from "./FunnelSelect";
 import { MarketingAlert } from "./MarketingPage";
 import type { CreativeDraft, MarketingMeta } from "../types";
 
@@ -28,6 +29,7 @@ function creativeDraftFromRow(row: any): CreativeDraft {
   return {
     tempId: String(row?.id || uid()),
     creativeTypeId: String(row?.creative_type_id || ""),
+    name: String(row?.name || row?.creative_type_name || row?.creative_type || ""),
     quantity: Math.max(1, Number(row?.quantity || 1)),
     cars: asArray<any>(row?.cars),
     contentAssignments: asArray<any>(row?.content_assignments),
@@ -76,9 +78,11 @@ function scheduleFromDetail(detail: any, creativeId: string): ScheduleDraft[] {
   return [...unique.values()];
 }
 
-function validateCreative(creative: CreativeDraft, meta: MarketingMeta) {
+function validateCreative(creative: CreativeDraft, meta: MarketingMeta, requireName = false) {
   const creativeType = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId);
   if (!creative.creativeTypeId) return "اختر نوع الكرييتيف";
+  if (requireName && !creative.name.trim()) return "اكتب اسم الكرييتيف";
+  if (requireName && creative.name.trim().length > 160) return "اسم الكرييتيف يجب ألا يزيد عن 160 حرف";
   if (!creative.contentAssignments.length) return "اختر يوزر قسم المحتوى";
   if (creativeType?.primary_department_id && !creative.primaryAssignments.length) return `اختر يوزر القسم الأساسي ${creativeType.primary_department_name || ""}`;
   const executions = [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)];
@@ -98,6 +102,7 @@ export function EntityCreativeManager({
   creativeRow,
   onClose,
   onSaved,
+  onFunnelCreated,
 }: {
   open: boolean;
   source: any;
@@ -106,6 +111,7 @@ export function EntityCreativeManager({
   creativeRow?: any | null;
   onClose: () => void;
   onSaved: (message: string) => Promise<void> | void;
+  onFunnelCreated?: (funnel: MarketingMeta["funnels"][number]) => void;
 }) {
   const sourceType = source?.source_type === "agenda" ? "agenda" : "campaign";
   const editing = Boolean(creativeRow?.id);
@@ -114,6 +120,7 @@ export function EntityCreativeManager({
   const [creative, setCreative] = useState<CreativeDraft>(newCreativeDraft());
   const [budgets, setBudgets] = useState<BudgetDraft[]>([]);
   const [schedule, setSchedule] = useState<ScheduleDraft[]>([]);
+  const [funnels, setFunnels] = useState(meta.funnels);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -127,14 +134,18 @@ export function EntityCreativeManager({
     setError("");
   }, [open, creativeRow, detail]);
 
+  useEffect(() => {
+    setFunnels(meta.funnels);
+  }, [meta.funnels]);
+
   const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + item.platformAmounts.reduce((part, platform) => part + Number(platform.amount || 0), 0), 0), [budgets]);
-  const creativeName = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "كرييتيف جديد";
+  const creativeName = creative.name.trim() || meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "كرييتيف جديد";
   const executionCount = creative.primaryAssignments.length + creative.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0);
   const publishStart = String(detail?.entity?.publish_start || "").slice(0, 10);
   const publishEnd = String(detail?.entity?.publish_end || "").slice(0, 10);
 
   function validateStep() {
-    if (step === 0) return validateCreative(creative, meta);
+    if (step === 0) return validateCreative(creative, meta, sourceType === "campaign");
     if (sourceType === "campaign" && step === 1) {
       if (!budgets.length) return "أضف بند ميزانية للكرييتيف";
       if (budgets.some((item) => !item.platformAmounts.length)) return "حدد منصة واحدة على الأقل لكل بند ميزانية";
@@ -155,7 +166,7 @@ export function EntityCreativeManager({
   }
 
   async function save() {
-    const issue = validateCreative(creative, meta);
+    const issue = validateCreative(creative, meta, sourceType === "campaign");
     if (issue) { setError(issue); setStep(0); return; }
     if (!schedule.length || schedule.some((item) => !item.date || !item.platforms.some((platform) => platform.postTypeIds.length))) {
       setError("أكمل جدول النشر قبل الحفظ");
@@ -199,6 +210,12 @@ export function EntityCreativeManager({
     setSchedule((current) => [...current, { id: uid(), date: publishStart, platforms: [] }]);
   }
 
+  function registerFunnel(funnel: MarketingMeta["funnels"][number]) {
+    setFunnels((current) => [...current.filter((item) => item.id !== funnel.id), funnel]
+      .sort((a, b) => a.name.localeCompare(b.name, "ar")));
+    onFunnelCreated?.(funnel);
+  }
+
   const stepDetails = sourceType === "campaign"
     ? [
         { label: "الكرييتيف", description: "بيانات التكليف واليوزرات والسيارات المرتبطة.", icon: editing ? <PencilSimple size={22} weight="duotone" /> : <PlusCircle size={22} weight="duotone" /> },
@@ -236,8 +253,8 @@ export function EntityCreativeManager({
           <span>{editing ? <PencilSimple size={25} weight="duotone" /> : <PlusCircle size={25} weight="duotone" />}</span>
           <div><small>{editing ? "كرييتيف قائم" : "كرييتيف جديد"}</small><h3>{creativeName}</h3><p>{sourceType === "campaign" ? "داخل الحملة" : "داخل الأجندة"}</p></div>
         </div>
-        <div className="marketing-entity-side-stats">
-          <div><small>العدد</small><strong>{creative.quantity}</strong></div>
+        <div className={`marketing-entity-side-stats${sourceType === "campaign" ? " compact" : ""}`}>
+          {sourceType === "agenda" ? <div><small>العدد</small><strong>{creative.quantity}</strong></div> : null}
           <div><small>Task Template</small><strong>{creative.contentAssignments.length}</strong></div>
           <div><small>تنفيذي</small><strong>{executionCount}</strong></div>
         </div>
@@ -258,14 +275,14 @@ export function EntityCreativeManager({
         {error ? <MarketingAlert>{error}</MarketingAlert> : null}
 
         <section className="marketing-entity-creative-body">
-          {step === 0 ? <div className="marketing-entity-creative-editor"><CreativeEditor value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary carsModal carsModalLevel={3} onChange={setCreative} onDelete={() => undefined} /></div> : null}
+          {step === 0 ? <div className="marketing-entity-creative-editor"><CreativeEditor value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary showNameField={sourceType === "campaign"} showQuantity={sourceType === "agenda"} carsModal carsModalLevel={3} onChange={setCreative} onDelete={() => undefined} /></div> : null}
 
           {sourceType === "campaign" && step === 1 ? <div className="marketing-budget-list marketing-campaign-budget-step">
             <div className="marketing-campaign-step-head"><div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div><div><h2>ميزانية الكرييتيف</h2><p>تُضاف أو تُحدّث داخل ميزانية نفس الحملة فقط.</p></div></div>
             {budgets.length ? budgets.map((budget, index) => <article key={budget.id} className="marketing-budget-card">
               <header className="marketing-budget-card-head"><div><span>بند الميزانية</span><strong>{index + 1}</strong></div><button type="button" className="marketing-card-delete" aria-label={`حذف بند الميزانية ${index + 1}`} onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button></header>
               <div className="marketing-budget-fields marketing-entity-budget-fields">
-                <label><span>Funnel</span><select value={budget.funnelId} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId: event.target.value } : item))}><option value="">اختر Funnel</option>{meta.funnels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+                <FunnelSelect value={budget.funnelId} funnels={funnels} onCreated={registerFunnel} onChange={(funnelId) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId } : item))} />
                 <label><span>الكرييتيف</span><input value={creativeName} readOnly /></label>
                 <label><span>عدد الإعلانات</span><input type="number" min={1} value={budget.adsCount} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, adsCount: Math.max(1, Number(event.target.value) || 1) } : item))} /></label>
                 <label><span>هدف المحتوى</span><input value={budget.contentGoal} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, contentGoal: event.target.value } : item))} /></label>
@@ -295,7 +312,7 @@ export function EntityCreativeManager({
 
           {step === steps.length - 1 ? <div className="marketing-review marketing-entity-creative-review">
             <div className="marketing-entity-review-heading"><span><CheckCircle size={24} weight="duotone" /></span><div><h2>مراجعة بيانات الكرييتيف</h2><p>راجع التكليف والميزانية وجدول النشر قبل الحفظ.</p></div></div>
-            <div className="marketing-review-grid"><article><small>الإجراء</small><strong>{editing ? "تعديل كرييتيف" : "إضافة كرييتيف"}</strong></article><article><small>الكرييتيف</small><strong>{creativeName}</strong></article><article><small>العدد</small><strong>{creative.quantity}</strong></article><article><small>Task Templates</small><strong>{creative.contentAssignments.length}</strong></article><article><small>التاسكات التنفيذية</small><strong>{executionCount}</strong></article>{sourceType === "campaign" ? <article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></article> : null}<article><small>مواعيد النشر</small><strong>{schedule.length}</strong></article></div>
+            <div className="marketing-review-grid"><article><small>الإجراء</small><strong>{editing ? "تعديل كرييتيف" : "إضافة كرييتيف"}</strong></article><article><small>الكرييتيف</small><strong>{creativeName}</strong></article>{sourceType === "agenda" ? <article><small>العدد</small><strong>{creative.quantity}</strong></article> : null}<article><small>Task Templates</small><strong>{creative.contentAssignments.length}</strong></article><article><small>التاسكات التنفيذية</small><strong>{executionCount}</strong></article>{sourceType === "campaign" ? <article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></article> : null}<article><small>مواعيد النشر</small><strong>{schedule.length}</strong></article></div>
             {editing ? <MarketingAlert type="info">عند تغيير بيانات التكليف بعد اعتماد Task Template، تُنشأ مراجعة جديدة ويظل التاسك التنفيذي متوقفًا حتى إعادة الاعتماد.</MarketingAlert> : null}
           </div> : null}
         </section>

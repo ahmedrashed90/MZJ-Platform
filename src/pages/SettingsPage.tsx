@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CaretDown, CaretUp, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { Bell, CaretDown, CaretUp, Clock, Crown, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { UsersPermissionsPanel } from "../access-control/UsersPermissionsPanel";
 import { useAuth } from "../auth/AuthContext";
 import { CrmAdminPage } from "../crm/pages/CrmAdminPage";
 import { MarketingSettingsPanel } from "../marketing/components/MarketingSettingsPanel";
 import { NotificationSettingsPanel } from "../notifications/NotificationSettingsPanel";
+import { OwnersSettingsPanel } from "../owners/OwnersSettingsPanel";
 import { OperationsSettingsPanel } from "../operations/components/OperationsSettingsPanel";
 import { hasPermission } from "../systemAccess";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 import { DataManagementPanel } from "../settings/DataManagementPanel";
+import { AttendanceSettingsPanel } from "../attendance/AttendanceSettingsPanel";
 
-type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "data";
+type Section = "users" | "notifications" | "attendance" | "crm" | "marketing" | "operations" | "tracking" | "owners" | "data";
 
 type SectionDefinition = {
   key: Section;
@@ -26,10 +28,12 @@ type SectionDefinition = {
 const sectionDefinitions: SectionDefinition[] = [
   { key: "users", label: "المستخدمون والصلاحيات", description: "الحسابات والأدوار والفروع والأقسام والسجلات الأمنية", keywords: "المستخدمون الأدوار قوالب الصلاحيات الفروع الأقسام دليل سجل النشاط الأمني NEXT ERP", icon: UsersThree, permissions: ["settings.users.view","settings.users.create","settings.users.update","settings.users.disable","settings.roles.manage","settings.permissions.manage","settings.branches.manage","settings.departments.manage","settings.audit.view","settings.security.view"] },
   { key: "notifications", label: "إعدادات الإشعارات", description: "الصوت والكارت المؤقت ومدة الظهور وتنبيهات الأنظمة", keywords: "الإشعارات الجرس الصوت الكارت البادج التنبيه", icon: Bell, permissions: [], personal: true },
+  { key: "attendance", label: "إعدادات الحضور والانصراف", description: "جداول الفترات ومواعيد اليوزرات وإعدادات الحضور", keywords: "الحضور الانصراف الفترات الدوام السماح الموظفين", icon: Clock, permissions: ["platform.superadmin"] },
   { key: "operations", label: "إعدادات العمليات", description: "حالات السيارات والمواقع ومسارات العمل", keywords: "العمليات السيارات المواقع", icon: Wrench, permissions: ["settings.operations.view", "settings.operations.manage"] },
   { key: "tracking", label: "إعدادات التتبع", description: "المراحل والرسائل وإعدادات التراكينج", keywords: "التتبع التراكينج المراحل الرسائل", icon: Path, permissions: ["settings.tracking.view", "settings.tracking.manage"] },
-  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view"] },
+  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات والاشتراكات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات الاشتراكات الخدمات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view", "marketing.subscriptions.manage"] },
   { key: "crm", label: "إعدادات CRM", description: "مسارات العملاء والأتمتة والتوزيع والتقارير", keywords: "CRM العملاء الأتمتة التوزيع السرعة الكفاءة", icon: GearSix, permissions: ["settings.crm.view", "settings.crm.manage"] },
+  { key: "owners", label: "MZJ Club Community", description: "OTP والنقاط والمكافآت وإعدادات الدعوات", keywords: "owners community العملاء النقاط المكافآت otp واتساب الدعوات", icon: Crown, permissions: ["settings.owners.view", "settings.owners.manage", "owners.community.manage"] },
   { key: "data", label: "البيانات والنسخ الاحتياطية", description: "استيراد وتصدير العملاء والنسخ الاحتياطية ومسح بيانات التجربة", keywords: "البيانات النسخة الاحتياطية استيراد تصدير العملاء مسح التجربة", icon: Database, permissions: ["platform.superadmin"] },
 ];
 
@@ -94,10 +98,12 @@ export function SettingsPage() {
           <div className="unified-settings-content">
             {section === "users" ? <UsersPermissionsPanel /> : null}
             {section === "notifications" ? <NotificationSettingsPanel /> : null}
+            {section === "attendance" ? <AttendanceSettingsPanel /> : null}
             {section === "crm" ? <CrmAdminPage embedded readOnly={!hasPermission(user, "settings.crm.manage")} /> : null}
             {section === "marketing" ? <MarketingSettingsPanel readOnly={!hasPermission(user, "settings.marketing.manage")} /> : null}
             {section === "operations" ? <OperationsSettingsPanel /> : null}
             {section === "tracking" ? <TrackingSettingsPanel readOnly={!hasPermission(user, "settings.tracking.manage")} /> : null}
+            {section === "owners" ? <OwnersSettingsPanel /> : null}
             {section === "data" ? <DataManagementPanel /> : null}
           </div>
         ) : (
