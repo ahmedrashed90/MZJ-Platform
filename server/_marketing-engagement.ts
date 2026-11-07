@@ -2,6 +2,7 @@ import { getSql } from "./_db.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { ensureMarketingSchema } from "./_marketing-schema.js";
 import { classifyConversationService, ensureContactIdentity } from "./_crm-lifecycle.js";
+import { appendCrmSourceHistory } from "./_crm-utils.js";
 import { decryptPlatformToken, getYouTubeAccessToken } from "./_platform-connections.js";
 import type { SessionUser } from "./_auth.js";
 import { emitSocialEngagementLeadNotification } from "./_notifications.js";
@@ -1528,6 +1529,10 @@ async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>,
       messagingReady: false,
     },
   });
+  const [existingCustomer] = await sql<any[]>`
+    select id::text from crm.leads where contact_id=${contact.id}::uuid and is_deleted=false
+    order by created_at limit 1
+  `;
   const conversation = await socialEngagementConversation(sql, contact.id, post, item);
   const classification = await classifyConversationService({
     conversationId: conversation.id,
@@ -1544,8 +1549,25 @@ async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>,
     : await sql<any[]>`select name from marketing.campaigns where id=${post.source_id}::uuid`;
   const leadId = clean(classification.leadId || classification.request?.lead_id);
   if (!leadId) throw new Error("تعذر تحديد عميل CRM بعد توزيع التفاعل");
+  const [leadSources] = await sql<any[]>`
+    select source_code,source_name,source_history,registered_at,created_at
+    from crm.leads where id=${leadId}::uuid and is_deleted=false
+  `;
+  if (!leadSources) throw new Error("عميل التفاعل غير موجود في CRM");
+  const originalSource = clean(leadSources.source_code);
+  const originalAt = leadSources.registered_at || leadSources.created_at || item.engagedAt;
+  const originalTimestamp = originalAt instanceof Date ? originalAt.toISOString() : clean(originalAt);
+  const history = originalSource
+    ? appendCrmSourceHistory(leadSources.source_history, originalSource, clean(leadSources.source_name) || originalSource, originalTimestamp)
+    : (Array.isArray(leadSources.source_history) ? leadSources.source_history : []);
+  const updatedHistory = appendCrmSourceHistory(history, source.code, source.name, item.engagedAt);
   await sql`
-    update crm.leads set source_code=${source.code},source_name=${source.name},platform_code=${item.platform},campaign_name=${clean(campaign?.name) || null},
+    update crm.leads set
+      source_code=coalesce(nullif(source_code,''),${source.code}),
+      source_name=coalesce(nullif(source_name,''),${originalSource ? clean(leadSources.source_name) || originalSource : source.name}),
+      platform_code=coalesce(nullif(platform_code,''),${originalSource ? null : item.platform}),
+      campaign_name=coalesce(nullif(campaign_name,''),${clean(campaign?.name) || null}),
+      source_history=${sql.json(updatedHistory)},
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
         socialEngagement: true,
         engagementType: item.engagementType,
@@ -1561,7 +1583,7 @@ async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>,
       } as any)}::jsonb,updated_at=now()
     where id=${leadId}::uuid
   `;
-  return { leadId, reused: Boolean(classification.reused) };
+  return { leadId, reused: Boolean(existingCustomer || classification.reused) };
 }
 
 async function ensureExistingSocialLeadAssignment(

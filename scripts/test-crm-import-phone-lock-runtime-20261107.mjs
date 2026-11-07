@@ -111,6 +111,13 @@ function makeHarness(existingCustomer) {
     './_crm-utils.js': {
       clean: value => String(value ?? '').trim(), normalizePhone,
       resolveSourceName: async code => ({ snapchat_lead: 'سناب شات', facebook_lead: 'فيسبوك', tiktok_lead: 'تيك توك' })[code] || code,
+      appendCrmSourceHistory: (value, code, name, at) => {
+        const sources = Array.isArray(value) ? [...value] : [];
+        if (!sources.some(source => String(source?.sourceCode || source?.source || source).toLowerCase() === code.toLowerCase())) {
+          sources.push({ source: code, sourceCode: code, sourceName: name, at });
+        }
+        return sources;
+      },
     },
     './_crm-import-campaign.js': { resolveSheetImportCampaign: () => ({ campaignName: null, sheetCampaignName: null, metaPlatform: null }) },
     './_db.js': { getSql: () => sql, withDatabaseAdvisoryLock: locks },

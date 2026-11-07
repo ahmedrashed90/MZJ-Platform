@@ -10,7 +10,12 @@ const requiredLifecycle = [
   "request_state='closed'",
   "العميل اختار قسمًا آخر",
   "service_request_reclassified",
-  "status_label='عميل جديد',status_code=null",
+  "customerStatusPreserved: true",
+  'newRequestStatus: "عميل جديد"',
+  "withDatabaseAdvisoryLock(`mzj:crm:service-classification:",
+  'const customerStatus = clean(lockedLead.status_label) || "عميل جديد";',
+  "source_code=coalesce(nullif(source_code,''),${sourceCode})",
+  "sql.begin(async (tx) => {",
   "إعادة توزيع بعد اختيار قسم جديد",
 ];
 for (const token of requiredLifecycle) {

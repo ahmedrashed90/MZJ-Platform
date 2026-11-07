@@ -521,8 +521,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       values: {
         ...current.values,
         department_code: departmentCodeFor(next),
-        status_label: "عميل جديد",
-        follow_up_at: "",
+        // Department transfer never changes the customer's existing status.
+        status_label: current.values.status_label,
+        follow_up_at: current.values.follow_up_at,
         finance_type: next === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
       },
     };
@@ -533,10 +534,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       if (!current) return current;
       const option = databaseDepartmentOptions.find((item) => item.value === nextDepartmentCode) || databaseDepartmentOptions[0];
       const nextServiceKey = option.serviceKey;
-      const nextStatuses = (meta?.statuses || [])
-        .filter((item) => item.department_code === nextServiceKey && item.is_active !== false)
-        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-      const statusStillValid = nextStatuses.some((item) => item.value === current.values.status_label);
+      // Status belongs to the customer, not to the destination department's
+      // list of status options. Keep even statuses not configured there.
       const departmentUsers = (meta?.users || []).filter((user) => userMatchesDepartment(user, nextDepartmentCode));
       const allowedBranchCodes = new Set(departmentUsers.flatMap((user) => user.branch_codes || []));
       const candidateBranches = (meta?.branches || []).filter((branch) => {
@@ -567,8 +566,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         values: {
           ...current.values,
           department_code: nextDepartmentCode,
-          status_label: statusStillValid ? current.values.status_label : (nextStatuses.find((item) => item.value === "عميل جديد")?.value || nextStatuses[0]?.value || "عميل جديد"),
-          follow_up_at: statusStillValid && isPostponed(current.values.status_label) ? current.values.follow_up_at : "",
+          status_label: current.values.status_label,
+          follow_up_at: current.values.follow_up_at,
           finance_type: nextServiceKey === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
         },
       };
@@ -797,7 +796,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   function renderField(field: CrmCustomerField) {
     const currentValue = fieldValue(field);
     const label = <span>{field.label}{field.is_required ? <b className="crm-required-mark"> *</b> : null}</span>;
-    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
+    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{currentValue && !statuses.some((status) => status.value === currentValue) ? <option value={currentValue}>{currentValue}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
     if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} disabled={showConversation} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
     if (field.field_type === "department") return <label key={field.id}>{label}<input value={departmentLabel(activeForm.departmentCode)} readOnly /></label>;
     if (field.field_type === "transfer") return <label key={field.id}>{label}<select value={activeForm.serviceKey} onChange={(event) => setField(field, event.target.value)}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>;

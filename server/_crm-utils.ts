@@ -13,6 +13,27 @@ export function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+/** Preserve the first CRM source and append later platform interactions once. */
+export function appendCrmSourceHistory(value: unknown, sourceCode: string, sourceName: string, occurredAt: string) {
+  const history = Array.isArray(value) ? [...value] : [];
+  const normalizedCode = clean(sourceCode).toLowerCase();
+  const normalizedName = clean(sourceName).toLowerCase();
+  if (!normalizedCode) return history;
+  const exists = history.some((item) => {
+    if (typeof item === "string") {
+      const text = clean(item).toLowerCase();
+      return text === normalizedCode || text === normalizedName;
+    }
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    const code = [record.sourceCode, record.source_code, record.source, record.name, record.label]
+      .map(clean).find(Boolean)?.toLowerCase() || "";
+    return code === normalizedCode || code === normalizedName;
+  });
+  if (!exists) history.push({ source: sourceCode, sourceCode, sourceName, at: occurredAt });
+  return history;
+}
+
 export function departmentKey(value: unknown) {
   const raw = clean(value).toLowerCase();
   if (raw.includes("call_center") || raw.includes("callcenter") || raw.includes("كول")) return "finance";

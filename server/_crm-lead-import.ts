@@ -1,4 +1,4 @@
-import { clean, normalizePhone, resolveSourceName } from "./_crm-utils.js";
+import { appendCrmSourceHistory as sourceHistory, clean, normalizePhone, resolveSourceName } from "./_crm-utils.js";
 import { resolveSheetImportCampaign } from "./_crm-import-campaign.js";
 import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { publishBackgroundEvent } from "./_crm-background-jobs.js";
@@ -164,24 +164,6 @@ function toJsonValue(value: unknown): JsonValue {
 function objectValue(value: unknown): JsonObject {
   const normalized = toJsonValue(value);
   return normalized && typeof normalized === "object" && !Array.isArray(normalized) ? normalized : {};
-}
-
-function sourceHistory(value: unknown, sourceCode: string, sourceName: string, occurredAt: string) {
-  const history = Array.isArray(value) ? [...value] : [];
-  const normalizedCode = clean(sourceCode).toLowerCase();
-  const normalizedName = clean(sourceName).toLowerCase();
-  const exists = history.some((item) => {
-    if (typeof item === "string") {
-      const text = clean(item).toLowerCase();
-      return text === normalizedCode || text === normalizedName;
-    }
-    if (!item || typeof item !== "object") return false;
-    const record = item as Record<string, unknown>;
-    const text = first(record.sourceCode, record.source_code, record.source, record.name, record.label).toLowerCase();
-    return text === normalizedCode || text === normalizedName;
-  });
-  if (!exists) history.push({ source: sourceCode, sourceCode, sourceName, at: occurredAt });
-  return history;
 }
 
 export function isLeadImportEvent(routeSource: string, payload: any) {

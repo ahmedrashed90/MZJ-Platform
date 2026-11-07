@@ -327,10 +327,15 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   }
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
-  if (departmentChanged && !databaseEdit) {
-    input.statusLabel = "عميل جديد";
-    input.statusCode = "";
-    input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+  if (departmentChanged) {
+    // Every department transfer preserves the customer's status, including
+    // database edits and requests sent by an older/stale CRM client. A status
+    // update, if intended, must be submitted independently from the transfer.
+    input.statusLabel = clean(before.status_label) || "عميل جديد";
+    input.statusCode = clean(before.status_code);
+    if (!databaseEdit) {
+      input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+    }
   } else if (databaseEdit && clean(before.status_label) !== input.statusLabel) {
     input.statusCode = "";
   }
@@ -367,7 +372,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const callCenterChangeRequested = databaseEdit
     && callCenterFieldProvided
     && clean(providedValue(body, ["callCenterAssignedTo", "call_center_assigned_to"])) !== clean(before.call_center_assigned_to);
-  const statusChangeRequested = changedText(body, ["status", "statusLabel", "status_label"], previousStatusLabel)
+  const statusChangeRequested = previousStatusLabel !== input.statusLabel
     || changedDate(body, ["followUpAt", "follow_up_at"], before.follow_up_at)
     || changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
   const sourceChangeRequested = changedText(body, ["sourceCode", "source_code", "source"], before.source_code);

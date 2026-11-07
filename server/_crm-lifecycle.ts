@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { SessionUser } from "./_auth.js";
 import {
+  appendCrmSourceHistory,
   branchForDepartment,
   chooseAssignment,
   chooseSheetImportAssignment,
@@ -12,7 +13,7 @@ import {
   normalizePhone,
   resolveSourceName,
 } from "./_crm-utils.js";
-import { getSql } from "./_db.js";
+import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { dispatchAutomaticEntryTemplate } from "./_crm-auto-template.js";
 
 export type ContactIdentityInput = {
@@ -238,183 +239,230 @@ export async function classifyConversationService(input: {
   `;
   if (!conversation) throw new Error("المحادثة غير موجودة");
 
-  const existing = await findOpenServiceRequest(conversation.contact_id);
-  const existingServiceKey = existing ? departmentKey(existing.service_key || existing.department_code) : "";
+  // Service selections for the same contact must not race to close/create
+  // requests, or overwrite each other's customer/request links.
+  return withDatabaseAdvisoryLock(`mzj:crm:service-classification:${conversation.contact_id}`, async () => {
+    const existing = await findOpenServiceRequest(conversation.contact_id);
+    const existingServiceKey = existing ? departmentKey(existing.service_key || existing.department_code) : "";
 
-  // Selecting the same service must not create another request. It only completes a
-  // missing assignment, then keeps the current request, lead and conversation linked.
-  if (existing && existingServiceKey === serviceKey) {
-    let activeRequest = existing;
-    const needsPrimaryAssignment = input.assignPrimary !== false && !existing.assigned_to;
-    const needsCallCenterAssignment = existingServiceKey === "finance" && input.assignCallCenter !== false && !existing.call_center_assigned_to;
-    if (needsPrimaryAssignment || needsCallCenterAssignment) {
-      const requestedBranchCode = clean(input.requestedBranchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
-      const assignment = needsPrimaryAssignment
-        ? (input.marketingFormImportRouting && (existingServiceKey === 'cash' || existingServiceKey === 'finance')
-          ? await chooseSheetImportAssignment(existingServiceKey, input.sourceCode || existing.source_code || conversation.channel_code || 'website')
-          : input.financeImportRouting && existingServiceKey === "finance"
-            ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
-            : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
-        : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
-      if (input.marketingFormImportRouting && needsPrimaryAssignment && !assignment.assignedTo) {
-        throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
-      }
-      const callCenter = needsCallCenterAssignment
-        ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
-        : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
-      const branchCode = assignment.branchCode || existing.branch_code || branchForDepartment(existingServiceKey) || null;
-      const [updatedRequest] = await sql<any[]>`
-        update crm.service_requests set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
-          branch_code=${branchCode},updated_at=now()
-        where id=${existing.id}::uuid and request_state='open'
-        returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+    // An ad, message, social interaction, or source mapping is NOT the customer
+    // selecting a new department. Only an explicit user/agent/automation-flow
+    // service choice can close the current request and redistribute it.
+    const explicitServiceChange = ["customer_service_selection", "automation_flow", "manual"].includes(input.classificationMethod);
+    if (existing && existingServiceKey !== serviceKey && !explicitServiceChange) {
+      await sql`
+        update crm.conversations set service_request_id=${existing.id}::uuid,lead_id=${existing.lead_id||null}::uuid,
+          service_key=${existing.service_key},department_code=${existing.department_code},branch_code=${existing.branch_code},
+          assigned_to=${existing.assigned_to||null}::uuid,call_center_assigned_to=${existing.call_center_assigned_to||null}::uuid,
+          classification_state='classified',closed_at=null,updated_at=now()
+        where id=${conversation.id}::uuid
       `;
-      activeRequest = { ...existing, ...updatedRequest, assigned_name: assignment.assignedName, call_center_name: callCenter.assignedName };
-      if (existing.lead_id) {
-        await sql`
-          update crm.leads set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
-            branch_code=${branchCode},responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
-          where id=${existing.lead_id}::uuid and is_deleted=false
+      return { request: existing, leadId: existing.lead_id, reused: true, reclassified: false };
+    }
+
+    // Selecting the same service must not create another request. It only completes a
+    // missing assignment, then keeps the current request, lead and conversation linked.
+    if (existing && existingServiceKey === serviceKey) {
+      let activeRequest = existing;
+      const needsPrimaryAssignment = input.assignPrimary !== false && !existing.assigned_to;
+      const needsCallCenterAssignment = existingServiceKey === "finance" && input.assignCallCenter !== false && !existing.call_center_assigned_to;
+      if (needsPrimaryAssignment || needsCallCenterAssignment) {
+        const requestedBranchCode = clean(input.requestedBranchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
+        const assignment = needsPrimaryAssignment
+          ? (input.marketingFormImportRouting && (existingServiceKey === 'cash' || existingServiceKey === 'finance')
+            ? await chooseSheetImportAssignment(existingServiceKey, input.sourceCode || existing.source_code || conversation.channel_code || 'website')
+            : input.financeImportRouting && existingServiceKey === "finance"
+              ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
+              : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
+          : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
+        if (input.marketingFormImportRouting && needsPrimaryAssignment && !assignment.assignedTo) {
+          throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+        }
+        const callCenter = needsCallCenterAssignment
+          ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
+          : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
+        const branchCode = assignment.branchCode || existing.branch_code || branchForDepartment(existingServiceKey) || null;
+        const [updatedRequest] = await sql<any[]>`
+          update crm.service_requests set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+            branch_code=${branchCode},updated_at=now()
+          where id=${existing.id}::uuid and request_state='open'
+          returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+        `;
+        activeRequest = { ...existing, ...updatedRequest, assigned_name: assignment.assignedName, call_center_name: callCenter.assignedName };
+        if (existing.lead_id) {
+          await sql`
+            update crm.leads set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+              branch_code=${branchCode},responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
+            where id=${existing.lead_id}::uuid and is_deleted=false
+          `;
+        }
+        await recordOwnershipEvent({
+          contactId: conversation.contact_id, requestId: existing.id, leadId: existing.lead_id,
+          previousAssignedTo: null, previousAssignedName: "غير موزع",
+          newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
+          previousDepartmentCode: existing.department_code, newDepartmentCode: existing.department_code,
+          previousBranchCode: existing.branch_code, newBranchCode: branchCode,
+          actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "استكمال توزيع طلب خدمة مفتوح غير موزع",
+          metadata: { reusedRequest: true, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
+        });
+      }
+      await sql`
+        update crm.conversations set service_request_id=${activeRequest.id}::uuid,lead_id=${activeRequest.lead_id||null}::uuid,
+          service_key=${activeRequest.service_key},department_code=${activeRequest.department_code},branch_code=${activeRequest.branch_code},
+          assigned_to=${activeRequest.assigned_to||null}::uuid,call_center_assigned_to=${activeRequest.call_center_assigned_to||null}::uuid,
+          classification_state='classified',closed_at=null,updated_at=now() where id=${conversation.id}::uuid
+      `;
+      return { request: activeRequest, leadId: activeRequest.lead_id, reused: true, reclassified: false };
+    }
+
+    const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
+    const sourceName = await resolveSourceName(sourceCode);
+    const requestedBranchCode = clean(input.requestedBranchCode) || branchForDepartment(serviceKey);
+    const assignment = input.assignPrimary === false
+      ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
+      : (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
+        ? await chooseSheetImportAssignment(serviceKey, sourceCode)
+        : input.financeImportRouting && serviceKey === "finance"
+          ? await chooseFinanceImportAssignment(sourceCode)
+          : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
+    // A newly submitted marketing form must never be saved as "غير موزع".
+    // Fail the CRM sync and allow an explicit retry instead of silently creating
+    // a lead with a missing owner; existing CRM customers are not redistributed.
+    if (input.marketingFormImportRouting && !assignment.assignedTo) {
+      throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+    }
+    const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
+      ? await chooseCallCenterAssignment(sourceCode, "online")
+      : { assignedTo: null, assignedName: "" };
+    const departmentCode = departmentCodeFromKey(serviceKey);
+    const branchCode = assignment.branchCode || requestedBranchCode || null;
+    const lead = await ensureLeadForContact({
+      contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
+      phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
+      sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
+    });
+
+    // The customer status is independent of the service request status. A new
+    // request starts at "عميل جديد", but the existing lead must retain its
+    // previous status (and status_code) across service selections, transfers,
+    // repeat contacts and automation. Commit all core routing writes together.
+    const request = await sql.begin(async (tx) => {
+      const [lockedLead] = await tx<any[]>`
+        select status_label,source_code,source_name,source_history,registered_at,created_at from crm.leads
+        where id=${lead.id}::uuid and is_deleted=false for update
+      `;
+      if (!lockedLead) throw new Error("العميل غير موجود أثناء تصنيف طلب الخدمة");
+      const customerStatus = clean(lockedLead.status_label) || "عميل جديد";
+      const originalSource = clean(lockedLead.source_code);
+      const originalSourceAt = lockedLead.registered_at || lockedLead.created_at || new Date();
+      const originalSourceTimestamp = originalSourceAt instanceof Date ? originalSourceAt.toISOString() : clean(originalSourceAt);
+      const previousSources = originalSource
+        ? appendCrmSourceHistory(lockedLead.source_history, originalSource, clean(lockedLead.source_name) || originalSource, originalSourceTimestamp)
+        : (Array.isArray(lockedLead.source_history) ? lockedLead.source_history : []);
+      const nextSourceHistory = appendCrmSourceHistory(previousSources, sourceCode, sourceName, new Date().toISOString());
+
+      if (existing && existingServiceKey !== serviceKey) {
+        const closed = await tx<any[]>`
+          update crm.service_requests set request_state='closed',closed_at=now(),closed_by=${input.actor?.id||null}::uuid,
+            closure_reason='العميل اختار قسمًا آخر',
+            metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({
+              reclassifiedTo: serviceKey,
+              reclassifiedToDepartment: departmentCode,
+              reclassificationEventKey: input.eventKey || null,
+            })}::jsonb,
+            updated_at=now()
+          where id=${existing.id}::uuid and request_state='open'
+          returning id::text
+        `;
+        if (closed.length !== 1) throw new Error("طلب الخدمة تغيّر أثناء إعادة التصنيف؛ لم يتم حفظ طلب جديد");
+        await tx`
+          insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,note,details)
+          values (${lead.id}::uuid,'service_request_reclassified',${customerStatus},${customerStatus},${existing.department_code||null},${departmentCode},
+            ${existing.branch_code||null},${branchCode},${input.actor?.id||null}::uuid,${input.actor?.fullName||"Automation Engine"},
+            'غيّر العميل القسم المطلوب وتم إغلاق الطلب السابق وإعادة التوزيع مع الحفاظ على حالة العميل',${tx.json({
+              previousRequestId: existing.id,
+              previousServiceKey: existingServiceKey,
+              newServiceKey: serviceKey,
+              previousRequestStatus: existing.status_label || "عميل جديد",
+              newRequestStatus: "عميل جديد",
+              customerStatusPreserved: true,
+              eventKey: input.eventKey || null,
+            })})
         `;
       }
-      await recordOwnershipEvent({
-        contactId: conversation.contact_id, requestId: existing.id, leadId: existing.lead_id,
-        previousAssignedTo: null, previousAssignedName: "غير موزع",
-        newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
-        previousDepartmentCode: existing.department_code, newDepartmentCode: existing.department_code,
-        previousBranchCode: existing.branch_code, newBranchCode: branchCode,
-        actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "استكمال توزيع طلب خدمة مفتوح غير موزع",
-        metadata: { reusedRequest: true, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
-      });
-    }
-    await sql`
-      update crm.conversations set service_request_id=${activeRequest.id}::uuid,lead_id=${activeRequest.lead_id||null}::uuid,
-        service_key=${activeRequest.service_key},department_code=${activeRequest.department_code},branch_code=${activeRequest.branch_code},
-        assigned_to=${activeRequest.assigned_to||null}::uuid,call_center_assigned_to=${activeRequest.call_center_assigned_to||null}::uuid,
-        classification_state='classified',closed_at=null,updated_at=now() where id=${conversation.id}::uuid
-    `;
-    return { request: activeRequest, leadId: activeRequest.lead_id, reused: true, reclassified: false };
-  }
 
-  const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
-  const sourceName = await resolveSourceName(sourceCode);
-  const requestedBranchCode = clean(input.requestedBranchCode) || branchForDepartment(serviceKey);
-  const assignment = input.assignPrimary === false
-    ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
-    : (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
-      ? await chooseSheetImportAssignment(serviceKey, sourceCode)
-      : input.financeImportRouting && serviceKey === "finance"
-        ? await chooseFinanceImportAssignment(sourceCode)
-        : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
-  // A newly submitted marketing form must never be saved as "غير موزع".
-  // Fail the CRM sync and allow an explicit retry instead of silently creating
-  // a lead with a missing owner; existing CRM customers are not redistributed.
-  if (input.marketingFormImportRouting && !assignment.assignedTo) {
-    throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
-  }
-  const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
-    ? await chooseCallCenterAssignment(sourceCode, "online")
-    : { assignedTo: null, assignedName: "" };
-  const departmentCode = departmentCodeFromKey(serviceKey);
-  const branchCode = assignment.branchCode || requestedBranchCode || null;
-  const lead = await ensureLeadForContact({
-    contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
-    phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
-    sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
-  });
-
-  // A different explicit selection ends only the current service request. The customer,
-  // lead, messages and history remain; a fresh request is then distributed to the new
-  // department according to its own assignment rules.
-  if (existing && existingServiceKey !== serviceKey) {
-    await sql`
-      update crm.service_requests set request_state='closed',closed_at=now(),closed_by=${input.actor?.id||null}::uuid,
-        closure_reason='العميل اختار قسمًا آخر',
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
-          reclassifiedTo: serviceKey,
-          reclassifiedToDepartment: departmentCode,
-          reclassificationEventKey: input.eventKey || null,
-        })}::jsonb,
-        updated_at=now()
-      where id=${existing.id}::uuid and request_state='open'
-    `;
-    await sql`
-      insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,note,details)
-      values (${lead.id}::uuid,'service_request_reclassified',${existing.status_label||"عميل جديد"},'عميل جديد',${existing.department_code||null},${departmentCode},
-        ${existing.branch_code||null},${branchCode},${input.actor?.id||null}::uuid,${input.actor?.fullName||"Automation Engine"},
-        'غيّر العميل القسم المطلوب وتم إغلاق الطلب السابق وإعادة التوزيع',${sql.json({
-          previousRequestId: existing.id,
-          previousServiceKey: existingServiceKey,
-          newServiceKey: serviceKey,
-          eventKey: input.eventKey || null,
-        })})
-    `;
-  }
-
-  const [request] = await sql<any[]>`
-    insert into crm.service_requests(
-      contact_id,lead_id,conversation_id,service_key,department_code,branch_code,status_label,request_state,source_code,
-      classification_method,assigned_to,call_center_assigned_to,metadata
-    ) values (
-      ${conversation.contact_id}::uuid,${lead.id}::uuid,${conversation.id}::uuid,${serviceKey},${departmentCode},${branchCode},'عميل جديد','open',
-      ${sourceCode},${input.classificationMethod},${assignment.assignedTo}::uuid,${callCenter.assignedTo}::uuid,${sql.json({
-        eventKey: input.eventKey || null,
+      const [createdRequest] = await tx<any[]>`
+        insert into crm.service_requests(
+          contact_id,lead_id,conversation_id,service_key,department_code,branch_code,status_label,request_state,source_code,
+          classification_method,assigned_to,call_center_assigned_to,metadata
+        ) values (
+          ${conversation.contact_id}::uuid,${lead.id}::uuid,${conversation.id}::uuid,${serviceKey},${departmentCode},${branchCode},'عميل جديد','open',
+          ${sourceCode},${input.classificationMethod},${assignment.assignedTo}::uuid,${callCenter.assignedTo}::uuid,${tx.json({
+            eventKey: input.eventKey || null,
+            previousRequestId: existing?.id || null,
+            reclassifiedFrom: existingServiceKey || null,
+          })}
+        ) returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+      `;
+      await tx`
+        update crm.leads set contact_id=${conversation.contact_id}::uuid,current_request_id=${createdRequest.id}::uuid,service_key=${serviceKey},
+          department_code=${departmentCode},branch_code=${branchCode},
+          payment_type=${serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش"},
+          source_code=coalesce(nullif(source_code,''),${sourceCode}),
+          source_name=coalesce(nullif(source_name,''),${originalSource ? clean(lockedLead.source_name) || originalSource : sourceName}),
+          platform_code=coalesce(nullif(platform_code,''),${originalSource ? null : conversation.channel_code || sourceCode}),
+          source_history=${tx.json(nextSourceHistory)},
+          assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+          unread_count=greatest(coalesce(unread_count,0),${Number(conversation.unread_count||0)}),
+          dashboard_unread=${Number(conversation.unread_count||0)>0},has_unread_message=${Number(conversation.unread_count||0)>0},has_unread_messages=${Number(conversation.unread_count||0)>0},
+          last_incoming_message_at=coalesce(${conversation.last_customer_message_at||null}::timestamptz,last_incoming_message_at),last_message_at=greatest(coalesce(last_message_at,'epoch'),coalesce(${conversation.last_message_at||null}::timestamptz,'epoch')),
+          responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
+        where id=${lead.id}::uuid and is_deleted=false
+      `;
+      await tx`
+        update crm.conversations set lead_id=${lead.id}::uuid,service_request_id=${createdRequest.id}::uuid,service_key=${serviceKey},
+          department_code=${departmentCode},branch_code=${branchCode},assigned_to=${assignment.assignedTo}::uuid,
+          call_center_assigned_to=${callCenter.assignedTo}::uuid,classification_state='classified',closed_at=null,updated_at=now()
+        where id=${conversation.id}::uuid
+      `;
+      // Historical status reporting reads lead_events.new_status. Log the lead's
+      // unchanged status here; the fresh REQUEST status belongs in details.
+      await tx`
+        insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note,details)
+        values (${lead.id}::uuid,'service_request_created',${customerStatus},${departmentCode},${branchCode},${input.actor?.id||null}::uuid,
+          ${input.actor?.fullName||"Automation Engine"},${existing ? 'تم إنشاء طلب خدمة جديد بعد تغيير القسم مع الحفاظ على حالة العميل' : 'تم إنشاء طلب خدمة وتصنيف المحادثة'},
+          ${tx.json({ requestId: createdRequest.id, requestStatus: "عميل جديد", customerStatusPreserved: true, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null, previousRequestId: existing?.id || null })})
+      `;
+      return createdRequest;
+    });
+    await recordOwnershipEvent({
+      contactId: conversation.contact_id, requestId: request.id, leadId: lead.id,
+      previousAssignedTo: existing?.assigned_to || null, previousAssignedName: existing?.assigned_name || null,
+      newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
+      previousDepartmentCode: existing?.department_code || null, newDepartmentCode: departmentCode,
+      previousBranchCode: existing?.branch_code || null, newBranchCode: branchCode,
+      actor: input.actor, actorType: input.actor ? "user" : "automation",
+      reason: existing ? "إعادة توزيع بعد اختيار قسم جديد" : "توزيع طلب خدمة جديد",
+      metadata: {
+        classificationMethod: input.classificationMethod,
         previousRequestId: existing?.id || null,
-        reclassifiedFrom: existingServiceKey || null,
-      })}
-    ) returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
-  `;
-  await sql`
-    update crm.leads set contact_id=${conversation.contact_id}::uuid,current_request_id=${request.id}::uuid,service_key=${serviceKey},
-      department_code=${departmentCode},branch_code=${branchCode},status_label='عميل جديد',status_code=null,
-      payment_type=${serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش"},
-      source_code=${sourceCode},source_name=${sourceName},platform_code=${conversation.channel_code || sourceCode},
-      assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
-      unread_count=greatest(coalesce(unread_count,0),${Number(conversation.unread_count||0)}),
-      dashboard_unread=${Number(conversation.unread_count||0)>0},has_unread_message=${Number(conversation.unread_count||0)>0},has_unread_messages=${Number(conversation.unread_count||0)>0},
-      last_incoming_message_at=coalesce(${conversation.last_customer_message_at||null}::timestamptz,last_incoming_message_at),last_message_at=greatest(coalesce(last_message_at,'epoch'),coalesce(${conversation.last_message_at||null}::timestamptz,'epoch')),
-      responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
-    where id=${lead.id}::uuid
-  `;
-  await sql`
-    update crm.conversations set lead_id=${lead.id}::uuid,service_request_id=${request.id}::uuid,service_key=${serviceKey},
-      department_code=${departmentCode},branch_code=${branchCode},assigned_to=${assignment.assignedTo}::uuid,
-      call_center_assigned_to=${callCenter.assignedTo}::uuid,classification_state='classified',closed_at=null,updated_at=now()
-    where id=${conversation.id}::uuid
-  `;
-  await sql`
-    insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note,details)
-    values (${lead.id}::uuid,'service_request_created','عميل جديد',${departmentCode},${branchCode},${input.actor?.id||null}::uuid,
-      ${input.actor?.fullName||"Automation Engine"},${existing ? 'تم إنشاء طلب خدمة جديد بعد تغيير القسم' : 'تم إنشاء طلب خدمة وتصنيف المحادثة'},
-      ${sql.json({ requestId: request.id, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null, previousRequestId: existing?.id || null })})
-  `;
-  await recordOwnershipEvent({
-    contactId: conversation.contact_id, requestId: request.id, leadId: lead.id,
-    previousAssignedTo: existing?.assigned_to || null, previousAssignedName: existing?.assigned_name || null,
-    newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
-    previousDepartmentCode: existing?.department_code || null, newDepartmentCode: departmentCode,
-    previousBranchCode: existing?.branch_code || null, newBranchCode: branchCode,
-    actor: input.actor, actorType: input.actor ? "user" : "automation",
-    reason: existing ? "إعادة توزيع بعد اختيار قسم جديد" : "توزيع طلب خدمة جديد",
-    metadata: {
-      classificationMethod: input.classificationMethod,
-      previousRequestId: existing?.id || null,
-      previousServiceKey: existingServiceKey || null,
-      callCenterAssignedTo: callCenter.assignedTo,
-      callCenterName: callCenter.assignedName,
-    },
+        previousServiceKey: existingServiceKey || null,
+        callCenterAssignedTo: callCenter.assignedTo,
+        callCenterName: callCenter.assignedName,
+      },
+    });
+    const automaticTemplate = input.skipAutomaticTemplate
+      ? { skipped: true, reason: "automation_flow_owns_customer_messages" }
+      : await dispatchAutomaticEntryTemplate({
+          contactId: conversation.contact_id,
+          conversationId: conversation.id,
+          serviceRequestId: request.id,
+          leadId: lead.id,
+          serviceKey,
+          callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
+        });
+    return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
   });
-  const automaticTemplate = input.skipAutomaticTemplate
-    ? { skipped: true, reason: "automation_flow_owns_customer_messages" }
-    : await dispatchAutomaticEntryTemplate({
-        contactId: conversation.contact_id,
-        conversationId: conversation.id,
-        serviceRequestId: request.id,
-        leadId: lead.id,
-        serviceKey,
-        callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
-      });
-  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
 }
 
 export async function syncLeadConversationContext(sql: any, leadId: string) {
