@@ -45,6 +45,8 @@ export type WorkTask = {
   status: 'active' | 'completed' | 'empty'; due_from: string | null; due_to: string | null; product_count: number;
   approved_count: number; readiness: number; version: number; completed_at?: string | null; items?: WorkItem[];
   submitted_on_time_count?: number; submitted_late_count?: number;
+  /** Permission-scoped executor names, ideas and requirement dates for dashboard keyword search. */
+  assignee_names?: string[]; search_ideas?: string[]; search_briefs?: string[]; due_dates?: string[];
 };
 export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string };
 export type WorkPlanLine = {

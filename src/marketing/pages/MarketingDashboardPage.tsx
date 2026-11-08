@@ -1,9 +1,8 @@
-import { Fragment } from 'react';
-import { useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle } from '@phosphor-icons/react';
+import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle, MagnifyingGlass, X } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
-import { W, Empty, Readiness, Search, WorkAlert, WorkHeader } from '../workflow/components';
+import { W, Empty, Readiness, WorkAlert, WorkHeader } from '../workflow/components';
 import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
 import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
@@ -14,6 +13,8 @@ import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
+import { searchMarketingDashboard } from '../workflow/dashboardSearch';
+import { DashboardSearchResults } from '../components/DashboardSearchResults';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -69,15 +70,20 @@ export function MarketingDashboardPage() {
 
   const taskId = params.get('task') || '';
   const planId = params.get('plan') || '';
-  const term = search.trim().toLocaleLowerCase();
-  const tasks = (query.data?.tasks || []).filter(task => `${task.name} ${task.task_no} ${task.type_name}`.toLocaleLowerCase().includes(term));
-  const lines = (query.data?.lines || []).filter(line => `${line.name} ${line.plan_no} ${line.idea_name} ${line.product_idea || ''} ${line.task_name}`.toLocaleLowerCase().includes(term));
-  const groups = new Map<string, WorkPlanLine[]>();
-  const visiblePlanIds = new Set(lines.map(line => line.plan_id));
-  // A search matches whole plans; preparation and totals must never lose other
-  // rows of the same campaign when a product name is used as the query.
-  for (const line of (query.data?.lines || [])) if (visiblePlanIds.has(line.plan_id))
-    groups.set(line.plan_id, [...(groups.get(line.plan_id) || []), line]);
+  // Keep the normal execution/publishing cards unchanged. Search renders a
+  // separate, keyword-matched result list with exact publication dates.
+  const tasks = query.data?.tasks || [];
+  const lines = query.data?.lines || [];
+  const searchResults = useMemo(() => searchMarketingDashboard(tasks, lines, search), [tasks, lines, search]);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, WorkPlanLine[]>();
+    for (const line of lines) {
+      const group = grouped.get(line.plan_id);
+      if (group) group.push(line);
+      else grouped.set(line.plan_id, [line]);
+    }
+    return grouped;
+  }, [lines]);
 
   function openTask(id: string, filter: '' | 'on_time' | 'late' = '') { setDeliveryFilter(filter); setParams({ task: id }); }
   function openPreparation(group: WorkPlanLine[]) {
@@ -117,7 +123,15 @@ export function MarketingDashboardPage() {
       <span>يتوفر تحسين لفهارس قاعدة بيانات التسويق لتسريع تحميل تفاصيل التاسكات والمراجعات.</span>
       <button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحسين قاعدة البيانات...' : 'تحسين سرعة تحميل التسويق'}</button>
     </div>}
-    <div className="mkw-toolbar mkw-dashboard-search"><Search value={search} onChange={setSearch}/></div>
+    <div className="mkw-toolbar mkw-dashboard-search" role="search">
+      <div className="mkw-search mkw-dashboard-search-input"><MagnifyingGlass size={19} aria-hidden="true" />
+        <input aria-label="بحث" placeholder="بحث..." type="search" autoComplete="off" value={search} onChange={event => setSearch(event.target.value)} />
+        {search && <button type="button" className="mkw-dashboard-search-clear" aria-label="مسح البحث" onClick={() => setSearch('')}><X size={17}/></button>}
+      </div>
+    </div>
+    <DashboardSearchResults query={search} results={searchResults} loading={query.loading}
+      onOpenTask={id => openTask(id)} onOpenPlan={id => setParams({ plan: id })}
+      onOpenPublication={id => setTableId(id)} />
     <div className="mkw-board mkw-dashboard-board">
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
         <div className="mkw-column-body">{!tasks.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}

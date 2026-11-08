@@ -322,6 +322,11 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     -- only these requirements, so its readiness uses the same exact shared
     -- final-file coverage rules as the detail view, without N+1 queries.
     coalesce(array_agg(i.id::text) filter(where i.id is not null),'{}'::text[]) as visible_item_ids,
+    -- Search only the same permission-scoped requirements as the dashboard.
+    coalesce(array_agg(distinct assignee.full_name) filter(where assignee.full_name is not null),'{}'::text[]) as assignee_names,
+    coalesce(array_agg(distinct i.idea_name) filter(where nullif(btrim(i.idea_name),'') is not null),'{}'::text[]) as search_ideas,
+    coalesce(array_agg(distinct left(i.idea,3000)) filter(where nullif(btrim(i.idea),'') is not null),'{}'::text[]) as search_briefs,
+    coalesce(array_agg(distinct i.due_on::text) filter(where i.due_on is not null),'{}'::text[]) as due_dates,
     -- Show delivery badges only after final approval. Classify punctuality by
     -- the executor's original submission date in Riyadh, not admin review time.
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
@@ -336,6 +341,7 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
       or i.assigned_to=${user.id}::uuid or exists(
         select 1 from core.departments visible_department where visible_department.id=i.department_id
         and visible_department.code=any(${scopes}::text[])))
+    left join core.users assignee on assignee.id=i.assigned_to
     where t.is_deleted=false and (${!activeOnly} or t.status='active') and (
       ${isManager(user)} or (t.created_by=${user.id}::uuid and ${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))})
       or exists(select 1 from marketing.work_items own
