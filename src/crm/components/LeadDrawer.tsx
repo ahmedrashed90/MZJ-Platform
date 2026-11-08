@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
+  ArrowRight,
   CalendarBlank,
+  CaretDown,
+  CaretUp,
   ChatCircleDots,
   PaperPlaneTilt,
   Paperclip,
@@ -228,10 +231,27 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [mobilePanel, setMobilePanel] = useState<"conversation" | "details">(showConversation ? "conversation" : "details");
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [statusNotice, setStatusNotice] = useState("");
+  const [compactComposerViewport, setCompactComposerViewport] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches);
+  const [composerExpanded, setComposerExpanded] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 760px)").matches);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [salesHistory, setSalesHistory] = useState<CrmSaleTransaction[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const messagesListRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const syncViewport = () => {
+      setCompactComposerViewport(media.matches);
+      if (!media.matches) setComposerExpanded(true);
+    };
+    syncViewport();
+    media.addEventListener("change", syncViewport);
+    return () => media.removeEventListener("change", syncViewport);
+  }, []);
 
   useEffect(() => {
     if (!lead) {
@@ -260,6 +280,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setNoteDraft("");
     setNotice("");
     setPendingFile(null);
+    setMobilePanel(showConversation ? "conversation" : "details");
+    setSavingStatus(false);
+    setStatusNotice("");
+    setComposerExpanded(typeof window === "undefined" || !window.matchMedia("(max-width: 760px)").matches);
     setMediaUrls({});
     setSalesHistory([]);
     if (showSalesHistory) void loadSalesHistory(lead.id);
@@ -658,6 +682,59 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     }
   }
 
+  async function changeConversationStatus(nextStatus: string) {
+    if (!nextStatus || nextStatus === activeForm.values.status_label || savingStatus) return;
+    const previousStatus = activeForm.values.status_label;
+    const previousFollowUpAt = activeForm.values.follow_up_at;
+    const previousSoldAt = activeForm.values.sold_at;
+    const nextForm: CustomerForm = {
+      ...activeForm,
+      values: {
+        ...activeForm.values,
+        status_label: nextStatus,
+        follow_up_at: isPostponed(nextStatus) ? activeForm.values.follow_up_at : "",
+        sold_quantity: nextStatus === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
+        sold_at: nextStatus === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
+      },
+    };
+
+    setForm(nextForm);
+    applyStatusTemplate(nextForm);
+    setSavingStatus(true);
+    setStatusNotice("");
+    try {
+      const payload: Record<string, unknown> = { id: nextForm.id, statusLabel: nextStatus };
+      if (!isPostponed(nextStatus) && previousFollowUpAt) payload.followUpAt = null;
+      if (nextStatus === "تم البيع") payload.soldQuantity = Math.max(1, Math.floor(Number(nextForm.values.sold_quantity || 1)));
+      const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          status_label: value(result.row.status_label || nextStatus),
+          follow_up_at: result.row.follow_up_at ? comparableDate(result.row.follow_up_at) : current.values.follow_up_at,
+          sold_quantity: value(result.row.sold_quantity || current.values.sold_quantity || "1"),
+          sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : current.values.sold_at,
+        },
+      } : current);
+      onSaved(result.row);
+      setStatusNotice("تم تحديث حالة العميل");
+    } catch (error) {
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          status_label: previousStatus,
+          follow_up_at: previousFollowUpAt,
+          sold_at: previousSoldAt,
+        },
+      } : current);
+      setStatusNotice(error instanceof Error ? error.message : "تعذر تحديث حالة العميل");
+    } finally {
+      setSavingStatus(false);
+    }
+  }
+
   function mediaTypeForFile(file: File) {
     if (file.type.startsWith("image/")) return "image";
     if (file.type.startsWith("audio/")) return "audio";
@@ -811,41 +888,91 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   return (
     <div className={`crm-drawer-backdrop crm-customer-workspace-backdrop ${showConversation ? "" : "crm-edit-customer-backdrop"}`} onMouseDown={onClose}>
-      <aside className={`crm-lead-drawer crm-customer-workspace ${showConversation ? "" : "crm-edit-customer-workspace"}`} onMouseDown={(event) => event.stopPropagation()}>
+      <aside className={`crm-lead-drawer crm-customer-workspace crm-mobile-panel-${mobilePanel} ${showConversation ? "" : "crm-edit-customer-workspace"}`} onMouseDown={(event) => event.stopPropagation()}>
         <header className="crm-drawer-head crm-customer-workspace-head">
-          <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>{showConversation ? "محادثة العميل" : "تعديل بيانات العميل"}</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
+          {showConversation ? (
+            <button className="crm-customer-title crm-customer-title-button" type="button" onClick={() => setMobilePanel("details")} aria-label="فتح بيانات العميل">
+              <span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span>
+              <div><span>محادثة العميل</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div>
+            </button>
+          ) : (
+            <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>تعديل بيانات العميل</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
+          )}
           <div className="crm-customer-head-meta"><span><b>المسؤول:</b> {lead.assigned_name || "غير موزع"}</span>{department === "finance" ? <span><b>الكول سنتر:</b> {lead.call_center_name || "غير موزع"}</span> : null}<span><CalendarBlank size={14} /><b>دخول السيستم:</b> {formatDate(lead.registered_at || lead.created_at)}</span></div>
-          <button className="crm-icon-button" type="button" onClick={onClose}><X size={21} /></button>
+          <button className="crm-icon-button crm-customer-workspace-close" type="button" onClick={onClose} aria-label="إغلاق"><X size={21} /></button>
         </header>
 
         <div className={`crm-drawer-grid crm-customer-workspace-grid ${showConversation ? "" : "crm-edit-customer-grid"}`}>
           {showConversation ? <section className="crm-conversation-panel crm-customer-conversation">
-            <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)}><ArrowClockwise size={18} /></button></header>
+            <header className="crm-conversation-toolbar">
+              <div className="crm-mobile-workspace-nav">
+                <button className="crm-mobile-drawer-back" type="button" onClick={onClose}><ArrowRight size={18} />رجوع</button>
+                <label className="crm-mobile-conversation-status-control">
+                  <span>تغيير الحالة</span>
+                  <select value={activeForm.values.status_label} disabled={savingStatus || activeForm.values.status_label === "تم البيع"} onChange={(event) => void changeConversationStatus(event.target.value)} aria-label="تغيير حالة العميل">
+                    {activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}
+                    {statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}
+                  </select>
+                </label>
+                <button className="crm-mobile-open-details" type="button" onClick={() => setMobilePanel("details")}><UserCircle size={18} />بيانات العميل</button>
+              </div>
+              <div className="crm-conversation-header-content">
+                <div className="crm-conversation-route"><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div>
+                <div className="crm-conversation-header-actions">
+                  <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)} aria-label="تحديث المحادثة"><ArrowClockwise size={18} /></button>
+                  {statusNotice ? <small className={`crm-conversation-status-notice ${statusNotice.includes("تعذر") || statusNotice.includes("لا توجد صلاحية") ? "error" : ""}`}>{statusNotice}</small> : null}
+                </div>
+              </div>
+            </header>
             <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
               {messages.map((message) => <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {visibleProviderStatus(message) ? `• ${visibleProviderStatus(message)}` : ""}</small></div>)}
             </div>
-            <div className="crm-message-composer">
-              <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
-              <textarea value={messageText} onChange={(event) => {
-                const nextText = event.target.value;
-                setMessageText(nextText);
-                if (selectedTemplate) {
-                  const template = (meta?.templates || []).find((item) => item.id === selectedTemplate);
-                  const rendered = renderTemplateInComposer(template);
-                  if (!editedTextStillMatchesTemplate(rendered, nextText)) setSelectedTemplate("");
-                }
-              }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <div className="crm-composer-attachments">
-                <label className="crm-attachment-button" title="إرفاق صورة أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
-              </div>
-              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+            <div className={`crm-message-composer-shell ${composerExpanded ? "is-expanded" : "is-collapsed"}`}>
+              {compactComposerViewport ? <button className="crm-message-composer-toggle" type="button" onClick={() => setComposerExpanded((current) => !current)} aria-expanded={composerExpanded} aria-controls="crm-message-composer-body">
+                <span className="crm-message-composer-toggle-main">
+                  <span className="crm-message-composer-toggle-icon"><ChatCircleDots size={20} weight="duotone" /></span>
+                  <span><strong>{composerExpanded ? "إخفاء منطقة الكتابة" : "كتابة رسالة"}</strong><small>{messageText.trim() || pendingFile ? "يوجد مسودة محفوظة" : "اضغط لفتح الإرسال والمرفقات"}</small></span>
+                </span>
+                {composerExpanded ? <CaretDown size={19} /> : <CaretUp size={19} />}
+              </button> : null}
+              {(!compactComposerViewport || composerExpanded) ? <div className="crm-message-composer" id="crm-message-composer-body">
+                <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
+                <textarea value={messageText} onChange={(event) => {
+                  const nextText = event.target.value;
+                  setMessageText(nextText);
+                  if (selectedTemplate) {
+                    const template = (meta?.templates || []).find((item) => item.id === selectedTemplate);
+                    const rendered = renderTemplateInComposer(template);
+                    if (!editedTextStillMatchesTemplate(rendered, nextText)) setSelectedTemplate("");
+                  }
+                }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={5} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+                <div className="crm-composer-actions">
+                  <div className="crm-composer-attachments">
+                    <label className="crm-attachment-button" title="إرفاق صورة أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
+                  </div>
+                  <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+                </div>
+              </div> : null}
             </div>
           </section> : null}
 
           <section className="crm-drawer-details crm-customer-details-panel">
-            <header className="crm-customer-details-title"><h3>بيانات العميل</h3><span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span></header>
+            <header className="crm-customer-details-title">
+              <div className="crm-customer-details-nav">
+                {showConversation ? <button className="crm-mobile-back-to-chat" type="button" onClick={() => setMobilePanel("conversation")}><ArrowRight size={18} />العودة للمحادثة</button> : <button className="crm-mobile-back-to-chat" type="button" onClick={onClose}><ArrowRight size={18} />رجوع</button>}
+              </div>
+              <div className="crm-customer-details-heading">
+                <div><span>ملف العميل</span><h3>بيانات العميل</h3></div>
+                <span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span>
+              </div>
+            </header>
+            <section className="crm-customer-details-summary" aria-label="ملخص بيانات العميل">
+              <div className="crm-customer-summary-main"><span className="crm-customer-summary-avatar"><UserCircle size={30} weight="duotone" /></span><div><small>العميل</small><strong>{activeForm.values.customer_name || lead.customer_name || "عميل"}</strong><span><Phone size={13} /> {activeForm.values.phone || lead.phone || lead.phone_normalized || "بدون رقم جوال"}</span></div></div>
+              <div className="crm-customer-summary-meta"><span><b>الحالة الحالية</b>{activeForm.values.status_label || "غير محدد"}</span><span><b>المسؤول</b>{lead.assigned_name || "غير موزع"}</span></div>
+            </section>
+            <div className="crm-customer-details-form-shell">
             {!showConversation ? (
               <section className="crm-database-edit-routing" aria-label="تعديل بيانات توزيع العميل">
                 <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
@@ -893,6 +1020,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
             {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA-u-nu-latn")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
+            </div>
           </section>
         </div>
       </aside>

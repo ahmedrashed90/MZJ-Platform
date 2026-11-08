@@ -5,7 +5,7 @@ import { showDate, useWorkQuery } from './api';
 import { PublicationTiming, planStatusName } from './PlanDetail';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
-import { CampaignOverview, agendaPublicationSummary, campaignLinesByPlatform, preparationLinesByDate } from './campaignOverview';
+import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform, campaignLinesByPlatform } from './campaignOverview';
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
@@ -28,7 +28,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
   const [pdfError, setPdfError] = useState('');
   const plan = query.data?.plan;
   const lines = query.data?.lines || [];
-  const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : preparationLinesByDate(lines);
+  const displayLines = plan?.kind === 'campaign' ? campaignLinesByPlatform(lines) : agendaReportLinesByPlatform(lines);
   const published = lines.filter(line => line.published_ready).length;
   const isCampaign = plan?.kind === 'campaign';
   const approval = ['publishing', 'published'].includes(plan?.review_status || '')
@@ -113,27 +113,29 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
           <h3>تفاصيل النشر حسب المنصة ونوع المنشور ({lines.length})</h3>
           <div className="mkw-table-wrap mkw-plan-report-table"><table>
             <thead><tr>
-              <th scope="col">{isCampaign ? 'تاريخ النشر المخطط' : 'تاريخ النشر'}</th>
+              <th scope="col">تاريخ النشر المخطط</th>
               <th scope="col">المنتج</th>
               <th scope="col">الفكرة (فكرة المطلوب)</th>
               <th scope="col">المنصة</th>
               <th scope="col">نوع النشر</th>
-              {isCampaign && <th scope="col">الميزانية (ر.س)</th>}
+              <th scope="col">الميزانية (ر.س)</th>
               <th scope="col">الكابشن</th>
               <th scope="col">الهاشتاج</th>
               <th scope="col">الالتزام بالموعد</th>
               <th scope="col">الحالة</th>
               <th scope="col">رابط المنشور</th>
             </tr></thead>
-            <tbody>{displayLines.map((line, index) => <Fragment key={line.id}>{isCampaign && (index === 0 || displayLines[index - 1]?.platform_name !== line.platform_name) &&
-              <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}`}><th scope="rowgroup" colSpan={11}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
+            <tbody>{displayLines.map((line, index) => <Fragment key={line.id}>{(index === 0 || displayLines[index - 1]?.platform_name !== line.platform_name) &&
+              <tr className="mkw-platform-row-heading" key={`platform-${index}`}><th scope="rowgroup" colSpan={11}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
               <tr key={line.id}>
               <td>{showDate(line.scheduled_on)}</td>
               <td className="mkw-plan-report-product"><ProductReference title={line.idea_name} details={line}/></td>
               <td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td>
               <td>{line.platform_name || '—'}</td>
               <td>{line.post_type_name || '—'}</td>
-              {isCampaign && <td>{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}
+              <td className="mkw-budget-value">{isCampaign || Number(line.budget_amount || 0) !== 0
+                ? Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : <span className="mkw-muted">—</span>}</td>
               <td><div className="mkw-plan-report-copy" title={line.caption || 'لم يتم تجهيز الكابشن'}>{line.caption || 'لم يتم تجهيز الكابشن'}</div></td>
               <td><div className="mkw-plan-report-copy" title={line.hashtags || 'لم يتم تجهيز الهاشتاج'}>{line.hashtags || 'لم يتم تجهيز الهاشتاج'}</div></td>
               <td><PublicationTiming line={line}/></td>

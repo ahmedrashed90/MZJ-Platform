@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ArrowClockwise,
+  CaretDown,
   ChatCircleDots,
   CheckCircle,
   MagnifyingGlass,
@@ -146,6 +147,7 @@ export function CrmDashboardPage() {
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
   const [leads, setLeads] = useState<CrmLead[]>([]);
   const [selected, setSelected] = useState<CrmLead | null>(null);
+  const [expandedStatusIds, setExpandedStatusIds] = useState<Set<string>>(() => new Set());
   const [reportSummary, setReportSummary] = useState<DashboardReportSummary | null>(null);
   const [summaryView, setSummaryView] = useState<{ title: string; subtitle: string; leads: CrmLead[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,6 +163,7 @@ export function CrmDashboardPage() {
     setBranch("");
     setAgent("");
     setSelected(null);
+    setExpandedStatusIds(new Set());
     setReportSummary(null);
     openedRequestedLead.current = "";
     try { window.sessionStorage.setItem(departmentStorageKey, requestedDepartment); } catch {}
@@ -249,6 +252,7 @@ export function CrmDashboardPage() {
     setBranch("");
     setAgent("");
     setSelected(null);
+    setExpandedStatusIds(new Set());
     setReportSummary(null);
     openedRequestedLead.current = "";
     try { window.sessionStorage.setItem(departmentStorageKey, nextDepartment); } catch {}
@@ -431,43 +435,60 @@ export function CrmDashboardPage() {
 
       {!loading ? (
         <div className="crm-board crm-board-five">
-          {groups.map((group) => (
-            <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
-              <header>
-                <div><h2>{group.label}</h2></div>
-                <strong>{group.leads.length.toLocaleString("ar-SA-u-nu-latn")}</strong>
-              </header>
-              <div className="crm-status-cards">
-                {group.leads.map((lead) => {
-                  const followUpState = leadFollowUpState(lead, department);
-                  const followUpLabel = followUpState === "today" ? "متابعة اليوم" : followUpState === "overdue" ? "تأخر المتابعة" : "";
-                  return (
-                    <button
-                      type="button"
-                      key={lead.id}
-                      className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
-                      onClick={() => openLead(lead)}
-                    >
-                      <div className="crm-lead-card-head compact">
-                        <div className="crm-lead-name-block">
-                          <strong>{lead.customer_name || "عميل"}</strong>
-                          <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
+          {groups.map((group) => {
+            const groupId = String(group.id);
+            const expanded = expandedStatusIds.has(groupId);
+            return (
+              <section className={`crm-status-column ${expanded ? "is-expanded" : "is-collapsed"} ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
+                <header>
+                  <button
+                    type="button"
+                    className="crm-status-toggle"
+                    aria-expanded={expanded}
+                    aria-controls={`crm-status-cards-${groupId}`}
+                    onClick={() => setExpandedStatusIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(groupId)) next.delete(groupId);
+                      else next.add(groupId);
+                      return next;
+                    })}
+                  >
+                    <div><CaretDown className="crm-status-toggle-icon" size={18} weight="bold" /><h2>{group.label}</h2></div>
+                    <strong>{group.leads.length.toLocaleString("ar-SA-u-nu-latn")}</strong>
+                  </button>
+                </header>
+                <div className="crm-status-cards" id={`crm-status-cards-${groupId}`}>
+                  {group.leads.map((lead) => {
+                    const followUpState = leadFollowUpState(lead, department);
+                    const followUpLabel = followUpState === "today" ? "متابعة اليوم" : followUpState === "overdue" ? "تأخر المتابعة" : "";
+                    return (
+                      <button
+                        type="button"
+                        key={lead.id}
+                        className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
+                        onClick={() => openLead(lead)}
+                      >
+                        <div className="crm-lead-card-head compact">
+                          <div className="crm-lead-name-block">
+                            <strong>{lead.customer_name || "عميل"}</strong>
+                            <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
+                          </div>
+                          <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
+                          {followUpState !== "none" ? <span className={`crm-follow-up-badge ${followUpState}`} aria-label={followUpLabel} title={followUpLabel}>{followUpLabel}</span> : null}
+                          {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
                         </div>
-                        <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
-                        {followUpState !== "none" ? <span className={`crm-follow-up-badge ${followUpState}`} aria-label={followUpLabel} title={followUpLabel}>{followUpLabel}</span> : null}
-                        {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
-                      </div>
-                      <div className="crm-lead-card-grid compact">
-                        <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
-                      </div>
-                      <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
-                    </button>
-                  );
-                })}
-                {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}
-              </div>
-            </section>
-          ))}
+                        <div className="crm-lead-card-grid compact">
+                          <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
+                        </div>
+                        <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
+                      </button>
+                    );
+                  })}
+                  {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}
+                </div>
+              </section>
+            );
+          })}
         </div>
       ) : null}
 

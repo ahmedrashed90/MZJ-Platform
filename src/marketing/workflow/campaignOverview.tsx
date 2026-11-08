@@ -87,10 +87,8 @@ export function campaignLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[]
     String(a.id).localeCompare(String(b.id)));
 }
 
-/** Agenda reports and dashboard preparation: publish date first, then platform
- * and post type. Unscheduled legacy rows come last. Preserve deterministic ties
- * without mutating plan rows or altering the platform-grouped campaign report.
- */
+/** Preparation stays date-first; unscheduled legacy rows come last. Keep
+ * this order independent from the read-only reports' platform grouping. */
 export function preparationLinesByDate<T extends WorkPlanLine>(lines: T[]): T[] {
   return [...lines].sort((a, b) =>
     (String(a.scheduled_on || '').slice(0, 10) || '9999-12-31')
@@ -98,6 +96,15 @@ export function preparationLinesByDate<T extends WorkPlanLine>(lines: T[]): T[] 
     String(a.platform_name || '').localeCompare(String(b.platform_name || ''), 'ar') ||
     String(a.post_type_name || '').localeCompare(String(b.post_type_name || ''), 'ar') ||
     String(a.id).localeCompare(String(b.id)));
+}
+
+/** Display an agenda report like the campaign report: one continuous section
+ * per platform, then date and post type inside that section. Reuse the stable
+ * preparation order for chronological ties and to put undated rows last; this
+ * never mutates the saved plan or changes the date-first preparation screen. */
+export function agendaReportLinesByPlatform<T extends WorkPlanLine>(lines: T[]): T[] {
+  return preparationLinesByDate(lines).sort((a, b) =>
+    String(a.platform_name || '').localeCompare(String(b.platform_name || ''), 'ar'));
 }
 
 export function moneySAR(value: number): string {
