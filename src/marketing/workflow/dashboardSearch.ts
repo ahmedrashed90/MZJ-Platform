@@ -109,6 +109,30 @@ function timelineOrder(left: string, right: string, today: string): number {
   return leftUpcoming ? left.localeCompare(right) : right.localeCompare(left);
 }
 
+/** Return the executors whose names match a dashboard keyword search. When a
+ * query also includes a date/product, use the strongest name match. A task
+ * found by name/code/idea alone keeps its normal, unfiltered detail view. */
+export function matchingTaskExecutors(task: WorkTask, query: string): string[] {
+  const text = normalizeDashboardSearch(query);
+  if (text.length < 2) return [];
+  const names = [...new Set((task.assignee_names || []).map(name => String(name || '').trim()).filter(Boolean))];
+  const exact = names.filter(name => normalizeDashboardSearch(name).includes(text));
+  if (exact.length) return exact;
+  const terms = text.split(/\s+/).filter(term => term.length >= 2 && !/^\d/.test(term));
+  if (!terms.length) return [];
+  const scored = names.map(name => ({ name, score: terms.filter(term => normalizeDashboardSearch(name).includes(term)).length }));
+  const highest = Math.max(0, ...scored.map(entry => entry.score));
+  return highest ? scored.filter(entry => entry.score === highest).map(entry => entry.name) : [];
+}
+
+/** Scope only the visible requirements (and archived requirements) to the
+ * matched executor. This is a view filter, never authentication/impersonation. */
+export function filterDashboardExecutorItems<T extends { assignee_name: string }>(items: T[], assigneeNames?: string[]): T[] {
+  if (!assigneeNames?.length) return items;
+  const allowed = new Set(assigneeNames.map(normalizeDashboardSearch));
+  return items.filter(item => allowed.has(normalizeDashboardSearch(item.assignee_name)));
+}
+
 function taskDates(task: WorkTask) {
   return [task.due_from, task.due_to, ...(task.due_dates || []), task.created_at];
 }

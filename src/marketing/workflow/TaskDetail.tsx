@@ -6,6 +6,7 @@ import { hasPermission } from '../../systemAccess';
 import { finalCoverage, ideaFileAllowed, workFileMatches, workItemReadiness, workReviewableFormats, type WorkCapabilities, type WorkItem, type WorkTask, type WorkEvaluationSettings, workRatingLevel, isBinaryProductDecisionCriterion, supportsWorkMedia, type WorkFormat, type WorkItemRating } from '../../../shared/marketing-workflow';
 import { W, Empty, Field, FileLink, FilesPreview, Formats, FormatSelector, MediaLabel, Readiness, Status, WorkAlert } from './components';
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
+import { filterDashboardExecutorItems } from './dashboardSearch';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 
 function submittedDayInRiyadh(value: string | null | undefined) {
@@ -38,7 +39,7 @@ function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
   return item.status === 'approved' || item.status === 'rejected';
 }
 
-export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
+export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
   const [ratingItemId, setRatingItemId] = useState('');
@@ -49,9 +50,24 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
   const [savedBriefItemId, setSavedBriefItemId] = useState('');
   const focusedRequirementRef = useRef('');
   const focusedRatingRef = useRef('');
+  const openedSearchRequirementRef = useRef('');
   const task = query.data?.task;
-  const items = task?.items.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved'))) || [];
-  const rejectedItems = !deliveryFilter ? (query.data?.rejectedItems || []).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
+  const executorScoped = Boolean(searchAssigneeNames?.length);
+  const visibleItems = filterDashboardExecutorItems(task?.items || [], searchAssigneeNames);
+  const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved')));
+  const rejectedItems = !deliveryFilter ? filterDashboardExecutorItems(query.data?.rejectedItems || [], searchAssigneeNames).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
+  const dueDates = executorScoped ? items.map(item => item.due_on).filter(Boolean).sort() : [];
+  const scopedReadiness = items.length ? Math.round(items.reduce((total, item) => total + workItemReadiness(item), 0) / items.length) : 0;
+  const visibleHistoryIds = new Set([...items, ...rejectedItems].map(item => item.id));
+  const visibleEvents = executorScoped ? (query.data?.events || []).filter(event => event.item_id && visibleHistoryIds.has(event.item_id)) : query.data?.events || [];
+  // A single executor requirement opens directly; the executor can still close it.
+  useEffect(() => {
+    if (!executorScoped || items.length !== 1) return;
+    const key = `${id}:${items[0].id}`;
+    if (openedSearchRequirementRef.current === key) return;
+    openedSearchRequirementRef.current = key;
+    setOpenedRequirementId(items[0].id);
+  }, [id, executorScoped, items.length, items[0]?.id]);
   async function refresh() { await query.reload(); onChanged?.(); }
   const selectedRatingItem = task?.items.find(item => item.id === ratingItemId)
     || query.data?.rejectedItems?.find(item => item.id === ratingItemId);
@@ -106,11 +122,14 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
       {!task ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
         <section className="mkw-detail-overview">
           <div className="mkw-detail-title"><div><span className="mkw-code">{task.task_no}</span><h2>{task.name}</h2></div><Status value={task.status} /></div>
-          <div className="mkw-summary"><div><small>{W.taskNo}</small><strong dir="ltr">{task.task_no}</strong></div><div><small>{W.taskType}</small><strong>{task.type_name}</strong></div><div><small>{W.createdAt}</small><strong>{showDate(task.created_at, true)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
-          <Readiness value={task.readiness} />
+          <div className="mkw-summary"><div><small>{W.taskNo}</small><strong dir="ltr">{task.task_no}</strong></div><div><small>{W.taskType}</small><strong>{task.type_name}</strong></div><div><small>{W.createdAt}</small><strong>{showDate(task.created_at, true)}</strong></div><div><small>{W.dueOn}</small><strong>{executorScoped ? showRange(dueDates[0] || null, dueDates[dueDates.length - 1] || null) : showRange(task.due_from, task.due_to)}</strong></div><div><small>{executorScoped ? 'عدد مطلوبات المنفذ' : W.productCount}</small><strong>{executorScoped ? items.length : task.product_count}</strong></div></div>
+          {executorScoped && <div className="mkw-task-search-executor-scope" role="status"><UserCircle size={18}/>
+            عرض المطلوبات الخاصة بالمنفذ: <strong>{searchAssigneeNames!.join('، ')}</strong>
+          </div>}
+          {(!executorScoped || items.length > 0) && <Readiness value={executorScoped ? scopedReadiness : task.readiness} />}
         </section>
         <section className="mkw-detail-items"><div className="mkw-section-title"><h2>{deliveryFilter === 'on_time' ? W.deliveryOnTime : deliveryFilter === 'late' ? W.deliveryLate : W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></div>
-          {!items.length ? <Empty>{W.emptyTask}</Empty> : <div className="mkw-requirement-review-list">
+          {!items.length ? <Empty>{executorScoped ? 'لا توجد مطلوبات مرتبطة بهذا المنفذ حاليًا.' : W.emptyTask}</Empty> : <div className="mkw-requirement-review-list">
             {items.map((item, index) => {
               const opened = openedRequirementId === item.id;
               const reviews = item.format_reviews || [];
@@ -169,7 +188,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, deliveryFilter =
             </section>)}
           </div>}
         </section>
-        <details className="mkw-history"><summary>{W.history}</summary>{query.data!.events.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
+        <details className="mkw-history"><summary>{W.history}</summary>{visibleEvents.map(event => <article key={event.id}><div className="mkw-section-title"><strong>{event.actor_name}</strong><small>{showDate(event.created_at, true)}</small></div><Status value={event.action} />{event.note && <p>{event.note}</p>}</article>)}</details>
       </>}
       <Modal open={Boolean(ratingItemId && selectedRatingItem)} title={`تقييم المنفذ — ${selectedRatingItem?.assignee_name || ''}`}
         onClose={() => setRatingItemId('')} className="mkw-rating-modal">

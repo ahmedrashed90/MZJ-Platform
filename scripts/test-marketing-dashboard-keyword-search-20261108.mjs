@@ -61,6 +61,6 @@ const view = readFileSync(new URL('../src/marketing/components/DashboardSearchRe
 check('existing dashboard cards stay independent of the search query', () => assert.match(front, /const tasks = query\.data\?\.tasks \|\| \[\];\s*const lines = query\.data\?\.lines \|\| \[\];/));
 check('executor names are returned under item-level permission scope', () => assert.match(server, /left join core\.users assignee on assignee\.id=i\.assigned_to/));
 check('search has no visible old heading', () => assert(!front.includes('بحث شامل في الداش بورد') && !view.includes('بحث شامل في الداش بورد')));
-check('search opens existing task, report and plan views', () => { assert.match(front, /onOpenTask=\{id => openTask\(id\)\}/); assert.match(front, /onOpenPublication=\{id => setTableId\(id\)\}/); assert.match(front, /onOpenPlan=\{id => setParams\(\{ plan: id \}\)\}/); });
+check('search opens existing task, report and plan views', () => { assert.match(front, /onOpenTask=\{\(id, assigneeNames\) => openTask\(id, '', assigneeNames\)\}/); assert.match(front, /onOpenPublication=\{id => setTableId\(id\)\}/); assert.match(front, /onOpenPlan=\{id => setParams\(\{ plan: id \}\)\}/); });
 check('dates are labelled separately', () => { assert.match(view, /تاريخ النشر المخطط/); assert.match(view, /تاريخ النشر الفعلي/); assert.match(view, /تاريخ التسليم/); });
 console.log(`\n${checks} dashboard keyword-search checks passed`);

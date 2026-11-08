@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CalendarBlank, ClipboardText, ImageSquare, Megaphone, CaretLeft } from '@phosphor-icons/react';
 import type { WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
-import type { DashboardSearchPlan, DashboardSearchResults as Results } from '../workflow/dashboardSearch';
+import { matchingTaskExecutors, type DashboardSearchPlan, type DashboardSearchResults as Results } from '../workflow/dashboardSearch';
 import { showDate, showRange } from '../workflow/api';
 import { Status } from '../workflow/components';
 import '../workflow/dashboardSearch.css';
@@ -31,7 +31,7 @@ export function DashboardSearchResults({ query, results, loading, onOpenTask, on
   query: string;
   results: Results;
   loading: boolean;
-  onOpenTask: (id: string) => void;
+  onOpenTask: (id: string, assigneeNames: string[]) => void;
   onOpenPlan: (id: string) => void;
   onOpenPublication: (planId: string) => void;
 }) {
@@ -53,16 +53,20 @@ export function DashboardSearchResults({ query, results, loading, onOpenTask, on
 
     {results.tasks.length > 0 && <section className="mkw-dashboard-result-group" aria-label="نتائج التاسكات">
       <h3><ClipboardText size={19} /> التاسكات <small>({results.tasks.length})</small></h3>
-      <div className="mkw-dashboard-result-list">{results.tasks.slice(0, limits.tasks).map((task: WorkTask) => <article key={task.id} className="mkw-dashboard-result-row">
+      <div className="mkw-dashboard-result-list">{results.tasks.slice(0, limits.tasks).map((task: WorkTask) => {
+        const matchedAssignees = matchingTaskExecutors(task, query);
+        const visibleAssignees = matchedAssignees.length ? matchedAssignees : task.assignee_names || [];
+        return <article key={task.id} className="mkw-dashboard-result-row">
         <div className="mkw-dashboard-result-primary"><span className="mkw-code">{task.task_no}</span><strong>{task.name}</strong></div>
         <div className="mkw-dashboard-result-details">
-          <span>المنفذ: <b>{task.assignee_names?.length ? task.assignee_names.join('، ') : '—'}</b></span>
+          <span>المنفذ: <b>{visibleAssignees.length ? visibleAssignees.join('، ') : '—'}</b></span>
           <span>تاريخ التسليم: <b>{showRange(task.due_from, task.due_to)}</b></span>
           <span>تاريخ الإنشاء: <b>{showDate(task.created_at)}</b></span>
           <Status value={task.status} />
         </div>
-        <button type="button" className="mkw-dashboard-result-open" onClick={() => onOpenTask(task.id)} aria-label={`فتح التاسك ${task.task_no}`}>فتح <CaretLeft size={16}/></button>
-      </article>)}</div>
+        <button type="button" className="mkw-dashboard-result-open" onClick={() => onOpenTask(task.id, matchedAssignees)} aria-label={`فتح التاسك ${task.task_no}${matchedAssignees.length ? ` لمطلوبات ${matchedAssignees.join('، ')}` : ''}`}>فتح <CaretLeft size={16}/></button>
+      </article>;
+      })}</div>
       {more('tasks', results.tasks.length)}
     </section>}
 
@@ -74,7 +78,7 @@ export function DashboardSearchResults({ query, results, loading, onOpenTask, on
           <span>المنصة: <b>{line.platform_name || '—'}</b></span>
           <span>نوع النشر: <b>{line.post_type_name || '—'}</b></span>
           <span><CalendarBlank size={15}/> تاريخ النشر المخطط: <b>{showDate(line.scheduled_on)}</b></span>
-          <span className={line.publication_timing === 'overdue' || line.publication_timing === 'late' ? 'mkw-dashboard-result-late' : ''}>{publicationStatus(line)}</span>
+          <span className={`mkw-dashboard-publication-status ${line.published_ready ? line.publication_timing === 'late' ? 'is-late' : 'is-published' : line.publication_timing === 'overdue' ? 'is-overdue' : 'is-pending'}`}>{publicationStatus(line)}</span>
           {line.published_ready && <span>تاريخ النشر الفعلي: <b>{line.published_on ? showDate(line.published_on) : 'غير مسجل'}</b></span>}
           {line.assignee_name && <span>المنفذ: <b>{line.assignee_name}</b></span>}
         </div>

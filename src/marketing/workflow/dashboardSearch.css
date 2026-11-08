@@ -51,6 +51,22 @@
 .mkw-dashboard-result-details>span:not(.mkw-status) { display:inline-flex; align-items:center; gap:4px; }
 .mkw-dashboard-result-details b { font-weight:800; color:var(--ink); unicode-bidi:plaintext; }
 .mkw-dashboard-result-details .mkw-dashboard-result-late { color:var(--red); font-weight:800; }
+/* Publication state is independent of the planning/review state. */
+.mkw-dashboard-publication-status {
+  display:inline-flex!important; align-items:center; justify-content:center;
+  border:1px solid; border-radius:999px; padding:4px 10px;
+  font-size:12px; font-weight:800; white-space:nowrap;
+}
+.mkw-dashboard-publication-status.is-pending { background:#fff7e5; color:#986008; border-color:#eacb81; }
+.mkw-dashboard-publication-status.is-published { background:#edf9ef; color:#15783c; border-color:#a9dabb; }
+.mkw-dashboard-publication-status.is-late,
+.mkw-dashboard-publication-status.is-overdue { background:#fff0ee; color:#b42318; border-color:#eeb5ac; }
+.mkw-task-search-executor-scope {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:10px 13px; background:#f8efe8; border:1px solid var(--line-strong);
+  border-radius:10px; color:var(--brand); font-size:13px;
+}
+.mkw-task-search-executor-scope strong { font-weight:800; }
 .mkw-dashboard-result-open,.mkw-dashboard-results-more {
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   border:1px solid var(--line-strong); border-radius:9px; background:var(--surface);

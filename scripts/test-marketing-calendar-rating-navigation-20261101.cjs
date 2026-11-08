@@ -105,6 +105,7 @@ const taskModule=loadTsx('src/marketing/workflow/TaskDetail.tsx',{
   './components':{W:{...labels,task:'تاسك',assignments:'المطلوبات',taskNo:'رقم التاسك',taskType:'النوع',createdAt:'إنشاء',dueOn:'تسليم',productCount:'المنتجات',assignee:'المنفذ',image:'صورة',video:'فيديو',history:'السجل',emptyTask:'فارغ'},...markers,Field(){},FileLink(){},FilesPreview(){},Formats(){},FormatSelector(){}},
   './api':{showDate:()=>'',showRange:()=>'',uploadWorkFile:async()=>{},useWorkQuery:(resource)=> resource==='task'?taskData():{data:{criteria},reload:async()=>{},error:'',loading:false},workPost:async(action,body)=>{saved.push({action,body});return {ok:true};}},
   '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
+  './dashboardSearch':{filterDashboardExecutorItems:(items,names)=>!names?.length ? items : items.filter(item=>names.includes(item.assignee_name))},
 });
 function renderTask(){hooks.next();const tree=taskModule.TaskDetail({id:'task-1',onlyItems:['missing-other-date'],focusItemId:'missing-other-date',openRatingOnLoad:true,onClose:()=>{},onChanged:()=>{}});hooks.commit();return tree;}
 function testModal(tree){return find(tree,node=>node.type===TaskModal && node.props.className==='mkw-rating-modal')[0];}
@@ -144,6 +145,7 @@ function scenario(status, permission){
     './components':{W:labels,...markers,Field(){},FileLink(){},FilesPreview(){},Formats(){},FormatSelector(){}},
     './api':{showDate:()=>'',showRange:()=>'',uploadWorkFile:async()=>{},useWorkQuery:resource=>resource==='task'?taskData():{data:{criteria},reload:async()=>{},error:'',loading:false},workPost:async()=>({ok:true})},
     '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
+  './dashboardSearch':{filterDashboardExecutorItems:(items,names)=>!names?.length ? items : items.filter(item=>names.includes(item.assignee_name))},
   });
   const render=()=>{freshHooks.next();const tree=freshTaskModule.TaskDetail({id:'task-1',onlyItems:[item.id],focusItemId:item.id,openRatingOnLoad:true,onClose:()=>{}});freshHooks.commit();return tree;};
   render();return render();

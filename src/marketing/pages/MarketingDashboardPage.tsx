@@ -33,6 +33,7 @@ function uniqueValues(values: Array<string | null | undefined>) {
 export function MarketingDashboardPage() {
   const [params, setParams] = useSearchParams(), [search, setSearch] = useState('');
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
+  const [searchTaskAssignees, setSearchTaskAssignees] = useState<string[]>([]);
   const [tableId, setTableId] = useState('');
   const [pdfError, setPdfError] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
@@ -85,7 +86,11 @@ export function MarketingDashboardPage() {
     return grouped;
   }, [lines]);
 
-  function openTask(id: string, filter: '' | 'on_time' | 'late' = '') { setDeliveryFilter(filter); setParams({ task: id }); }
+  function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = []) {
+    setDeliveryFilter(filter);
+    setSearchTaskAssignees(assigneeNames);
+    setParams({ task: id });
+  }
   function openPreparation(group: WorkPlanLine[]) {
     setPdfError('');
     // Campaigns always show the complete funding/creative budget overview,
@@ -130,7 +135,7 @@ export function MarketingDashboardPage() {
       </div>
     </div>
     <DashboardSearchResults query={search} results={searchResults} loading={query.loading}
-      onOpenTask={id => openTask(id)} onOpenPlan={id => setParams({ plan: id })}
+      onOpenTask={(id, assigneeNames) => openTask(id, '', assigneeNames)} onOpenPlan={id => setParams({ plan: id })}
       onOpenPublication={id => setTableId(id)} />
     <div className="mkw-board mkw-dashboard-board">
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
@@ -248,7 +253,8 @@ export function MarketingDashboardPage() {
         </div>}
       </section>
     </div>
-    {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} onClose={() => { setParams({}); setDeliveryFilter(''); }} onChanged={() => void query.reload()}/>}
+    {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} searchAssigneeNames={searchTaskAssignees}
+      onClose={() => { setParams({}); setDeliveryFilter(''); setSearchTaskAssignees([]); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
