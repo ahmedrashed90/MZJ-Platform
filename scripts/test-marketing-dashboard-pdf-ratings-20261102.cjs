@@ -53,8 +53,8 @@ check('Agenda PDF includes periods, unique media requirements, ideas, and approv
   assert.match(agenda, /تاريخ نشر الأجندة إلى/);
   assert.match(agenda, /3 يوم/);
   assert.match(agenda, /المطلوبات المختلفة \(2\)/);
-  assert.match(agenda, /صورة — تعريف بالبراند/);
-  assert.match(agenda, /فيديو — تعريف بالبراند/);
+  assert.match(agenda, /جدول النشر المختصر \(2\)/);
+  assert.match(agenda, /<th>التاريخ<\/th><th>المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>المنصة<\/th>/);
   assert.match(agenda, /الأفكار المختلفة \(2\)/);
   assert.match(agenda, /المراجع/);
   assert.doesNotMatch(agenda, /الكابشن|الهاشتاج|تفاصيل النشر حسب المنصة/);

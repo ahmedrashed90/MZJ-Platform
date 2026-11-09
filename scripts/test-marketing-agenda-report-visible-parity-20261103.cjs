@@ -81,13 +81,16 @@ check('All configured platforms appear on report and PDF, even if zero posts',()
     assert(pdf.includes(`<td>${platform.name}</td><td>${platform.count}</td>`),platform.name+' PDF count');
   }
 });
-check('Requirement and idea summaries dedupe exactly like printable PDF',()=>{
+check('Report preserves unique requirement media; PDF shows compact product/idea schedule without repeated lists',()=>{
   assert.equal(summary.requirements.length,2);assert.equal(summary.ideas.length,2);
-  for(const item of [...summary.requirements,...summary.ideas]){
-    assert(text.includes(item),item+' report');assert(pdf.includes(item),item+' PDF');
+  for(const item of summary.requirements) assert(text.includes(item),item+' on-screen requirement');
+  for(const item of summary.ideas) {
+    assert(text.includes(item),item+' report');assert(pdf.includes(item),item+' PDF idea');
   }
   assert(text.includes('المطلوبات المختلفة ( 2 )'));
   assert(text.includes('الأفكار المختلفة ( 2 )'));
+  assert(pdf.includes('المطلوبات المختلفة (2)') && pdf.includes('الأفكار المختلفة (2)'));
+  assert(pdf.includes('جدول النشر المختصر (2)'));
 });
 check('Agenda detail rows are grouped by platform, then scheduled date and post type',()=>{
   const originalLines=data.lines;

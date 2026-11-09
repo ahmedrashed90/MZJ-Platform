@@ -168,6 +168,10 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
   const archived = boolValue(request.query.archived);
   const all = boolValue(request.query.all);
   const activeOnly = !archived && !all;
+  // The stock inventory defaults to un-transferred vehicles first. Apply this
+  // before LIMIT/OFFSET so every page and Excel export uses the same order;
+  // archived/all-vehicle and other operational views keep their original order.
+  const prioritizeUntajyeer = activeOnly && boolValue(request.query.inventory);
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "l");
@@ -243,7 +247,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       and (${tajyeer}='' or v.is_tajyeer=(${tajyeer}='yes'))
       and ${scope}
       and ${statusScope}
-    order by v.updated_at desc,v.vin
+    order by case when ${prioritizeUntajyeer} then (case when v.is_tajyeer then 1 else 0 end) else 0 end,
+      v.updated_at desc,v.vin
     limit ${pageSize} offset ${offset}
   `;
   // Field-level inventory visibility applies only to stock queries. Movement and

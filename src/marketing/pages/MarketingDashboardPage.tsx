@@ -11,7 +11,7 @@ import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState, planStateLabels } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
-import { exportCampaignSummaryPdf } from '../workflow/campaignPdfExport';
+import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
@@ -258,22 +258,24 @@ export function MarketingDashboardPage() {
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
-      {chooserIsCampaign && <div className="mkw-campaign-chooser-toolbar">
-        <strong>ملخص الحملة وجدول تجهيز المنشورات</strong>
+      {!!chooserSourceLines.length && <div className="mkw-campaign-chooser-toolbar">
+        <strong>{chooserIsCampaign ? 'ملخص الحملة وجدول تجهيز المنشورات' : 'ملخص الأجندة وجدول تجهيز المنشورات'}</strong>
         <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
           const first = chooserSourceLines[0];
           if (!first) return;
           try {
             setPdfError('');
-            exportCampaignSummaryPdf({ planName: first.name, planNo: first.plan_no,
+            const options = { planName: first.name, planNo: first.plan_no,
               creatorName: first.creator_name, createdAt: first.plan_created_at,
               fundingFrom: first.funding_from, fundingTo: first.funding_to, platformGoals:first.campaign_platform_goals,
               approvedByName: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_by_name : null,
               approvedAt: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_at : null,
               publishState: planStateLabels[planDisplayState(first.review_status || 'in_progress', chooserSourceLines.filter(line => line.published_ready).length, chooserSourceLines.length)],
-              lines: chooserSourceLines });
+              lines: chooserSourceLines };
+            if (chooserIsCampaign) exportCampaignSummaryPdf(options);
+            else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: first.agenda_from, agendaTo: first.agenda_to });
           } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
-        }}>تصدير PDF — ملخص الحملة</button>
+        }}>{chooserIsCampaign ? 'تصدير PDF — ملخص الحملة' : 'تصدير PDF — ملخص الأجندة'}</button>
       </div>}
       <WorkAlert>{pdfError}</WorkAlert>
       {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to} platformGoals={chooserSourceLines[0]?.campaign_platform_goals}/>}
