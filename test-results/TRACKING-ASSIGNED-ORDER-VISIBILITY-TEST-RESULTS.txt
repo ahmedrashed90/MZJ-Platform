@@ -1,6 +1,0 @@
-PASS: Modified TypeScript files transpile successfully.
-PASS: Tracking native module checks passed.
-PASS: Tracking assigned-order visibility checks passed.
-PASS: Central access-control checks passed: 90/90.
-PASS: NEXT ERP tracking branch routing and data-management build checks passed.
-NOTE: Full pnpm build was not run because the execution environment could not reach registry.npmjs.org to download pnpm/dependencies.
