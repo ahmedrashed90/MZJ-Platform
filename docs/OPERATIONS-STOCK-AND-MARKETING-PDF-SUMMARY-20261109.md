@@ -11,7 +11,7 @@
 
 - `src/marketing/workflow/campaignPdfExport.ts`: the summary includes a five-column RTL table **التاريخ | المنتج | الفكرة | المنفذ | المنصة**.
 - A normalized **product + creative idea** pair appears in one display row rather than once for every scheduled publication. Different ideas for the same product remain distinct so that no genuine creative idea disappears.
-- Dates, platforms and assignees stay aligned in repeated sub-lines inside the same row. Duplicate display entries on the same date/platform/assignee collapse, without changing publication counts, budgets, source plan lines or schedule data.
+- The condensed table has **one row per date within each product/idea group**. Each date appears once; each distinct executor name and platform name appears **once per day**, even if the same person posts more than once or across multiple platforms. Executors and platforms are independent unique lists in this *summary* rather than paired line-by-line. The underlying publication records and the detailed report retain the exact platform-to-executor association, post counts, budgets, source plan lines and dates.
 - Missing/invalid dates display **غير محدد** rather than an invented date. Dates are the **planned publish dates** (`scheduled_on`).
 - The old separate printable idea/requirement lists are represented by their counts in the compact-table caption instead of reproducing their names again below the new table.
 - Agenda and campaign PDF exports use the same grouping rules. `PlanReport` already offered both buttons; the dashboard preparation chooser now also offers **تصدير PDF — ملخص الأجندة** for multi-post agendas, using the existing client-side print flow.
@@ -20,6 +20,7 @@
 ## Verification
 
 - `node scripts/test-operations-inventory-order-and-marketing-pdf-summary-20261109.cjs` - 13 targeted checks.
+- `node scripts/test-marketing-pdf-schedule-day-merge-20261109.cjs` - 8 tests for unique date/platform/executor names in the compact PDF.
 - `node scripts/check-operations-inventory-tajyeer-clean.mjs` - 29 checks.
 - `node scripts/check-operations-inventory-row-presentation-clean.mjs` - 9 checks.
 - `node scripts/test-marketing-campaign-summary-export-fullscreen-20261101.cjs` - 11 checks.

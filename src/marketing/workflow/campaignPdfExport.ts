@@ -132,11 +132,45 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
   const goalTableRows = goalRows.map(row=>`<tr><td>${htmlText(row.platformName)}</td><td>${row.goals.length ? row.goals.map(goal=>htmlText(goal.name)).join('، ') : 'لم تُحدَّد أهداف بعد'}</td></tr>`).join('');
   const requirements = campaign ? summary.products.map(product => product.name) : agendaSummary?.requirements || [];
   const scheduleRows = planPdfScheduleRows(input.lines);
+  // The compact PDF has one row per scheduled day in each product/idea group.
+  // The names in each day are independent *unique lists*, not aligned pairs:
+  // the full publication lines retain the exact executor/platform assignments.
+  // No underlying plan data, budget, or scheduled post is changed by this view.
   const scheduleTableRows = scheduleRows.map(row => {
-    const days = row.publications.map(item => `<div class="schedule-entry">${htmlText(item.date ? summaryDate(item.date) : 'غير محدد')}</div>`).join('');
-    const executors = row.publications.map(item => `<div class="schedule-entry">${htmlText(item.executor)}</div>`).join('');
-    const platforms = row.publications.map(item => `<div class="schedule-entry">${htmlText(item.platform)}</div>`).join('');
-    return `<tr><td class="schedule-dates">${days}</td><td>${htmlText(row.product)}</td><td>${htmlText(row.idea)}</td><td class="schedule-executors">${executors}</td><td class="schedule-platforms">${platforms}</td></tr>`;
+    type DaySummary = {
+      date: string | null;
+      executors: string[];
+      platforms: string[];
+      executorKeys: Set<string>;
+      platformKeys: Set<string>;
+    };
+    const byDate = new Map<string, DaySummary>();
+    for (const item of row.publications) {
+      const key = item.date || '';
+      let day = byDate.get(key);
+      if (!day) {
+        day = { date: item.date, executors: [], platforms: [], executorKeys: new Set(), platformKeys: new Set() };
+        byDate.set(key, day);
+      }
+      const executorKey = campaignSummaryNameKey(item.executor);
+      if (!day.executorKeys.has(executorKey)) {
+        day.executorKeys.add(executorKey);
+        day.executors.push(item.executor);
+      }
+      const platformKey = campaignSummaryNameKey(item.platform);
+      if (!day.platformKeys.has(platformKey)) {
+        day.platformKeys.add(platformKey);
+        day.platforms.push(item.platform);
+      }
+    }
+    const days = [...byDate.values()];
+    const uniqueNames = (values: string[]) => values.map(value => `<div class="schedule-unique-name">${htmlText(value)}</div>`).join('');
+    return `<tbody class="schedule-product-group">${days.map((day, index) => {
+      const groupCells = index === 0
+        ? `<td class="schedule-product" rowspan="${days.length}">${htmlText(row.product)}</td><td class="schedule-idea" rowspan="${days.length}">${htmlText(row.idea)}</td>`
+        : '';
+      return `<tr><td class="schedule-dates">${htmlText(day.date ? summaryDate(day.date) : 'غير محدد')}</td>${groupCells}<td class="schedule-executors">${uniqueNames(day.executors)}</td><td class="schedule-platforms">${uniqueNames(day.platforms)}</td></tr>`;
+    }).join('')}</tbody>`;
   }).join('');
   const title = campaign ? 'الحملة' : 'الأجندة';
   const periodTitle = campaign ? 'التمويل والميزانية' : 'فترة نشر الأجندة';
@@ -171,11 +205,15 @@ h2{font-size:11pt;margin:0 0 6px;border-right:4px solid #4a211c;padding-right:10
 table{width:100%;border-collapse:collapse;text-align:right;direction:rtl}th,td{padding:6px 9px;border:1px solid #e5d7cd}
 th{background:#f3e8dc}tr{break-inside:avoid}.money{font-weight:800;white-space:nowrap}
 .schedule-section{break-inside:auto}.schedule-section thead{display:table-header-group}
-.schedule-section th{font-size:9pt}.schedule-section td{vertical-align:top;overflow-wrap:anywhere;font-size:9pt}
+.schedule-section .schedule-product-group{break-inside:avoid;page-break-inside:avoid}
+.schedule-section th{font-size:9pt}.schedule-section td{vertical-align:middle;overflow-wrap:anywhere;font-size:9pt}
 .schedule-section th:nth-child(1){width:19%}.schedule-section th:nth-child(2){width:22%}
 .schedule-section th:nth-child(3){width:25%}.schedule-section th:nth-child(4){width:16%}
-.schedule-section th:nth-child(5){width:18%}.schedule-entry{min-height:1.65em;padding:1px 0}
-.schedule-entry:not(:last-child){border-bottom:1px dotted #e9ddd5}
+.schedule-section th:nth-child(5){width:18%}
+.schedule-section td.schedule-dates{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.schedule-section td.schedule-product,.schedule-section td.schedule-idea{vertical-align:top}
+.schedule-section td.schedule-executors,.schedule-section td.schedule-platforms{padding-top:5px;padding-bottom:5px}
+.schedule-unique-name{line-height:1.5;padding:2px 0}.schedule-unique-name+.schedule-unique-name{border-top:1px dotted #e9ddd5}
 .schedule-note{margin:0 0 6px;color:#80665c;font-size:8pt}
 ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1px solid #eee3da;overflow-wrap:anywhere;break-inside:avoid}
 .empty{color:#80665c}@media screen{body{background:#eee8e2;padding:24px}main{background:#fff;padding:26px;box-shadow:0 8px 24px #0002}}
@@ -187,9 +225,9 @@ ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1p
 <tbody>${platformRows || `<tr><td colspan="${campaign ? 3 : 2}">لا توجد منصات</td></tr>`}</tbody></table></section>
 ${campaign ? `<section><h2>الهدف من الحملة حسب المنصة</h2><table><thead><tr><th>المنصة</th><th>الأهداف</th></tr></thead><tbody>${goalTableRows || '<tr><td colspan="2">لا توجد منصات</td></tr>'}</tbody></table></section>` : ''}
 <section class="schedule-section"><h2>جدول النشر المختصر (${scheduleRows.length})</h2>
-<p class="schedule-note">المطلوبات المختلفة (${requirements.length}) · الأفكار المختلفة (${summary.ideas.length}) — كل منتج وفكرته مرة واحدة؛ وتبقى التواريخ والمنصات والمنفذون متقابلين في سطورهم.</p>
+<p class="schedule-note">المطلوبات المختلفة (${requirements.length}) · الأفكار المختلفة (${summary.ideas.length}) — كل منتج وفكرة وتاريخ مرة واحدة لكل يوم، وأسماء المنفذين والمنصات بلا تكرار داخل اليوم.</p>
 <table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الفكرة</th><th>المنفذ</th><th>المنصة</th></tr></thead>
-<tbody>${scheduleTableRows || '<tr><td colspan="5">لا توجد منشورات</td></tr>'}</tbody></table></section>
+${scheduleTableRows || '<tbody><tr><td colspan="5">لا توجد منشورات</td></tr></tbody>'}</table></section>
 
 </main></body></html>`;
 }

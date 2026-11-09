@@ -76,10 +76,11 @@ check('PDF columns match request in exact RTL order, with a compact unique sched
   const html=planPdfSummaryHtml({kind:'agenda',planName:'جدول نوفمبر',planNo:'AGD-1',lines:sample,agendaFrom:'2026-11-08',agendaTo:'2026-11-10'});
   assert.match(html,/<th>التاريخ<\/th><th>المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>المنصة<\/th>/);
   const section=html.split('<section class="schedule-section">')[1].split('</section>')[0];
-  assert.equal((section.match(/<tr><td class="schedule-dates">/g)||[]).length,2);
-  assert.equal((section.match(/<td>إعلان تمويل [—-] سوناتا<\/td>/g)||[]).length,2); // two DIFFERENT ideas
-  assert.equal((section.match(/<td>فكرة تمويل السيارة<\/td>/g)||[]).length,1);
-  assert.equal((section.match(/<td>فكرة ثانية<\/td>/g)||[]).length,1);
+  assert.equal((section.match(/<td class="schedule-dates">/g)||[]).length,3); // three distinct group/day combinations
+  assert.equal((section.match(/<td class="schedule-product" rowspan="/g)||[]).length,2); // two DIFFERENT ideas
+  assert.equal((section.match(/<td class="schedule-idea" rowspan="/g)||[]).length,2);
+  assert.equal((section.match(/<td class="schedule-idea" rowspan="2">فكرة تمويل السيارة<\/td>/g)||[]).length,1);
+  assert.equal((section.match(/<td class="schedule-idea" rowspan="1">فكرة ثانية<\/td>/g)||[]).length,1);
   assert.match(section,/2026-11-08/);assert.match(section,/2026-11-09/);assert.match(section,/2026-11-10/);
   assert.match(section,/محمود/);assert.match(section,/بلال/);
   assert.match(section,/انستجرام/);assert.match(section,/تيك توك/);
