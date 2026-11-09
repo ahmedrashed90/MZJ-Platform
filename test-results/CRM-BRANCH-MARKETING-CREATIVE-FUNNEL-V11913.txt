@@ -1,0 +1,60 @@
+MZJ Platform v1.19.13
+CRM Branch + Marketing Creative Name + Funnel Budget
+=====================================================
+
+المصدر
+------
+تم التنفيذ مباشرة على النسخة النظيفة المعتمدة:
+MZJ-Platform-v1.19.12-CRM-SOLD-DATE-REPORT-CANONICAL-FIX-CLEAN(1).zip
+
+نطاق التنفيذ
+------------
+1) توحيد فرع عملية البيع القديمة عند غياب branch_code، مع بقاء crm.sales_transactions مصدر البيع الوحيد.
+2) إضافة اسم كرييتيف الحملة وإزالة العدد من كرييتيفات الحملات فقط.
+3) استخدام الاسم المركزي في الميزانية وجدول النشر وقاعدة البيانات والداش بورد وتجهيز النشر وتفاعل النشر.
+4) حساب بند الميزانية/Funnel مرة واحدة دون ضربه في عدد الكرييتيفات المرتبطة.
+5) إضافة Funnel جديد من خطوة الميزانية ومن تعديل الكرييتيف.
+6) لا توجد Migration جديدة ولا SQL يدوي مطلوب.
+
+نتائج الفحص المخصص
+------------------
+PASS 33/33
+scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs
+
+الفحوص المرتبطة
+---------------
+PASS 8/8   CRM canonical sold single source
+PASS 14/14 CRM sold-date/report correction
+PASS 6/6   CRM report sold-quantity alignment
+PASS 16/16 CRM reports and KPI
+PASS 29/29 Marketing entity creative management
+PASS 16/16 Marketing creative UI, multiselect and reports
+PASS 12/12 Marketing database reports and creative UI
+PASS 19/19 Marketing Task Template
+PASS 16/16 Marketing UI batch
+PASS 90/90 Central access control
+PASS 20/20 ERPNext cancel/tracking compatibility
+
+إجمالي الفحوص المختارة المرتبطة: PASS 279/279
+
+الفحص الثابت الكامل للمشروع
+---------------------------
+PASS lines: 729
+FAIL lines: 0
+اكتملت جميع Scripts الفحص الثابتة قبل مرحلة TypeScript build.
+
+فحص تركيب الملفات المعدلة
+-------------------------
+PASS 10/10 عبر TypeScript transpile للملفات TS/TSX المعدلة.
+
+حدود بيئة البناء
+----------------
+لم يكتمل فحص tsc -b المعتمد على Dependencies ولا Vite production build لأن النسخة المرفوعة لا تحتوي node_modules، والحزم/الأنواع التالية غير متاحة داخل بيئة العمل:
+- react
+- react-dom
+- react-router-dom
+- @phosphor-icons/react
+- recharts
+- @types/node
+
+هذا القيد متعلق بغياب Dependencies في بيئة العمل. لم يظهر FAIL في أي Script فحص ثابت، ولم يظهر خطأ تركيب في الملفات العشرة المعدلة عند فحصها منفردة.

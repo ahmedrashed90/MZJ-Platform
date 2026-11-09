@@ -1,0 +1,14 @@
+DATA MANAGEMENT CUSTOMER XLSX + FINANCE IMPORT CHECKS
+====================================================
+
+PASS: Customer Excel writer compiles as strict TypeScript.
+PASS: Finance, cash, and customer-service workbooks open with openpyxl without repair.
+PASS: Empty customer exports keep the full fixed header set and remain valid XLSX files.
+PASS: XML 1.0 invalid control characters are removed before worksheet generation.
+PASS: Formula-like text is exported as text, not as an executable spreadsheet formula.
+PASS: Finance customer export is limited to finance_sales records.
+PASS: Finance customer imports always store call_center_assigned_to as null.
+PASS: Finance customer imports do not call the call-center distribution function.
+PASS: Existing CRM, API import, CRM settings, and assigned-tracking checks still pass.
+
+Full pnpm build was not run because the package registry was unreachable in the execution environment.

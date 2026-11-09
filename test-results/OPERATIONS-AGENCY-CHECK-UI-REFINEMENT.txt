@@ -1,0 +1,24 @@
+Operations movement tablet and agency check defaults
+====================================================
+
+Source:
+MZJ-Platform-v1.19.4-operations-agency-check-ui-refinement-CLEAN.zip
+
+Checks:
+- MovementPage.tsx TypeScript/TSX syntax: PASS
+- scripts/check-operations-native-v2.mjs: PASS
+- scripts/check-dashboard-operations-v1161.mjs: PASS
+- scripts/check-operations-workflow-v1162.mjs: PASS
+- scripts/check-operations-fk-delete-v1163.mjs: PASS
+- scripts/check-vehicle-inventory-status-notifications-v1211.mjs: PASS (13/13)
+
+Scope verification:
+- Tablet layout groups search, destination, and new status correctly: PASS
+- Agency check items default to ok: PASS
+- Untouched default items are included in the movement payload: PASS
+- Wrong selection remains mapped to missing: PASS
+- No API schema, database schema, permissions, or unrelated system logic changed: PASS
+
+Build note:
+- Full production build was not completed because node_modules are not included in the uploaded source.
+- Direct TSX parsing of the modified page succeeded.

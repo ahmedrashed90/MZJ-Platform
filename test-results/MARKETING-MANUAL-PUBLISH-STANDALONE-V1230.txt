@@ -1,0 +1,22 @@
+MZJ Platform — Marketing Manual Publish Standalone V1230
+
+Scope verified:
+- Manual publishing does not request or store a campaign/agenda association.
+- Creative type is loaded from active marketing.creative_types settings.
+- Manual media upload remains device-based.
+- Multi-image photo posts and stories remain enabled and ordered.
+- Standalone manual entries use source_type=manual and do not affect campaign/agenda progress.
+- Existing Instagram resumable upload remains intact.
+
+Results:
+- Dedicated V1230 checks: 14/14 passed.
+- Publishing types / manual / engagement checks: 20/20 passed.
+- Publish prep / errors / files checks: 9/9 passed.
+- Instagram resumable static checks: 10/10 passed.
+- Instagram resumable behavior tests: 2/2 passed.
+- All package static check scripts: 69/69 passed.
+- TypeScript/TSX transpile syntax validation: 214/214 passed.
+
+Limitations:
+- A live deployment/database publish was not executed in this environment.
+- Full Vite production build was not run because node_modules were not included in the uploaded source.

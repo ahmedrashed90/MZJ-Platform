@@ -1,0 +1,17 @@
+MZJ Platform MZJ Club Design Switch CLEAN v94
+
+Focused checks:
+- MZJ Owners Community: 83/83 PASS
+- MZJ Club design switch v92: PASS
+- portal_design migration v93: 6/6 PASS
+- Owners production points reset v37: 12/12 PASS
+
+Full package typecheck-chain static checks runnable without installed dependencies:
+- 98 commands PASS
+- 0 logical failures
+
+Not executable in this sandbox because local node_modules cannot be installed (registry DNS/network unavailable):
+- 6 checks that import the local TypeScript package
+- final tsc -b / vite build
+
+The Vercel environment shown by the deployment log does install dependencies successfully, so the corrected source removes the two stale source-check failures that stopped the submitted build before TypeScript compilation.

@@ -1,0 +1,30 @@
+MZJ Platform 1.19.12 - CRM sold-date and report correction
+============================================================
+
+Source baseline
+- MZJ-Platform-v1.19.11-CRM-DISTRIBUTION-AGENT-BRANCH-ERP-SALES-ON-CONFLICT-FIX-CLEAN(1).zip
+- Work was performed from a fresh extraction of that archive.
+
+Implemented checks
+- New sold-date/report regression script: 14/14 passed.
+- CRM database customer-edit regression script: 10/10 passed.
+- Existing CRM sold-date alignment script: 12/12 passed.
+- Existing CRM automatic sales-history script: 16/16 passed.
+- Existing canonical sold single-source script: 8/8 passed.
+- Existing CRM report sold-quantity alignment script: all checks passed.
+- Existing ERPNext canonical transaction script: 12/12 passed.
+- Existing ERPNext duplicate reconciliation script: 12/12 passed.
+- Full package static regression command set before TypeScript build: 74/74 commands passed.
+- Targeted TypeScript server check for all changed server files: passed.
+- Targeted TypeScript application check for LeadDrawer and its local dependencies: passed.
+- TypeScript isolated syntax/transpile check for five changed TS/TSX files: 5/5 passed.
+
+Scope verification
+- No manual sale creation was introduced.
+- No customer-status transition logic was changed.
+- No migration or schema change is required.
+- The canonical source remains crm.sales_transactions.
+- No production database was connected to or modified during these tests.
+
+Environment limitation
+- A full pnpm/Vite production build could not be run in this container because the configured package registry did not provide @phosphor-icons/react. Targeted TypeScript checks and all repository static regressions listed above passed.

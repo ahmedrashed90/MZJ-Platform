@@ -1,0 +1,31 @@
+MZJ Marketing Platform Connections Clean Rebuild
+Static verification date: 2026-07-30
+
+PASS - Dedicated platform connections checker: 23/23
+PASS - API/server ESM import extension checker
+PASS - Marketing UI batch checker: 16/16
+PASS - Marketing dashboard build regression checker: 2/2
+PASS - Central access-control checker: 90/90
+PASS - Syntax transpilation for all changed TS/TSX files
+PASS - ZIP integrity verification (performed after packaging)
+
+Verified areas:
+- Meta/TikTok/YouTube UI cards and actions
+- No manual token form
+- OAuth popup/callback flow
+- PostgreSQL OAuth state and connection drafts
+- AES-256-GCM token encryption with mandatory key
+- Public API mapper never returns tokens
+- Provider scope verification
+- Meta/TikTok/Google revoke paths
+- TikTok/YouTube refresh paths
+- Meta page selection preserving the current connection
+- API permission boundaries and authenticated callbacks
+- Legacy manual connection actions removed
+- Migration cleanly invalidates old manual-token connections
+
+Not executed against live provider accounts:
+- Real Meta/TikTok/Google OAuth callbacks require deployment URLs, application credentials, approved scopes and real accounts.
+
+Environment limitation:
+- A full pnpm install/Vite production build was not run because node_modules was not present and Corepack could not reach the package registry (EAI_AGAIN). Existing project-specific static checkers and changed-file TypeScript syntax transpilation completed successfully.

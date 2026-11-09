@@ -1,0 +1,87 @@
+PASS: Readiness is parent-level approved/final-file ratio
+PASS: Final upload alone never counts as approval
+PASS: Approval without a ready file never counts
+PASS: All formats need final coverage
+PASS: Wrong image/video file type is rejected
+PASS: Carousel requires at least two images
+PASS: Two-image carousel final coverage
+PASS: Video requires exactly one final file per format
+PASS: Final media can be reused across platforms only for an identical output size
+PASS: Cross-platform reuse does not mix the assets of unrelated task formats
+PASS: Auto-publishing rejects missing, null, unsupported platform codes safely
+PASS: Marketing dashboard uses the safe auto-publishing platform check
+PASS: Dashboard includes completed tasks and orders by newest creation first
+PASS: Campaign and agenda platform choices come from active marketing catalog, not task formats
+PASS: Scheduled preparation checks cross-platform media links against approved final assets
+PASS: Publishing page starts collapsed with a compact row table
+PASS: Deletion shrinks the readiness denominator
+PASS: An empty task is never 100 percent complete
+PASS: Rounding is stable
+PASS: Video format filter: Reels
+PASS: Video format filter: video
+PASS: Video format filter: Shorts
+PASS: Image format filter: Photo
+PASS: Image format filter: image
+PASS: Image format filter: carousel
+PASS: Generic story supports both declared media kinds
+PASS: Idea attachment doc
+PASS: Idea attachment docx
+PASS: Idea attachment xls
+PASS: Idea attachment xlsx
+PASS: Idea extension double-extension bypass denied
+PASS: Real leap date accepted and impossible dates rejected
+PASS: SQL Date values normalize consistently
+PASS: Terminal approval name recognition
+PASS: Explicit deny beats platform admin review
+PASS: Executors cannot review
+PASS: Calendar rejects impossible date before any query
+PASS: Calendar bounds excessive ranges
+PASS: Calendar always binds current user, even for admin
+PASS: Executor cannot invoke reviewer API
+PASS: Revision needs a note
+PASS: Stale review cannot overwrite concurrent changes
+PASS: Approve checks actual final files before updating state
+PASS: Approval completes a fully delivered single-output task
+PASS: Reject hard-deletes only selected output and recalculates rest
+PASS: Rejecting last output leaves empty task, not a product
+PASS: Submitting someone else output is denied
+PASS: Pending uploads block submission
+PASS: Upload item/reservation identity is mutually exclusive
+PASS: Upload to someone else output is denied
+PASS: Staging final upload holds task and item locks atomically
+PASS: Removing an unrelated file is denied
+PASS: Products require whole-task completion and newest-first order
+PASS: Unreleased products cannot be selected by ID
+PASS: Funding plan never triggers organic publication or spend
+PASS: Already published target is idempotent
+PASS: Public write blocked for processing
+PASS: Public write blocked for verification_required
+PASS: Public write blocked for cancelled
+PASS: Public write blocked for unknown
+PASS: Preflight error never claims publication
+PASS: Ambiguous public failure requires explicit verification, no retry
+PASS: Explicit retry requires confirmation of external state
+PASS: Task preview filters other executors on server
+PASS: Additive workflow schema contains no destructive reset
+PASS: Terminal approval is excluded from ordinary department sum
+PASS: Old creation endpoints are retired instead of wrapped
+PASS: Live version refresh is visibility-aware and non-destructive
+PASS: Database is one table and three type filters
+PASS: Products has exactly the agreed three headers
+PASS: Selected calendar day only passes its outputs to the detail view
+PASS: Native publish engines are used for prepared outputs
+PASS: Marketing schema and workflow share a serial DDL lock
+PASS: Marketing does not trigger operations DDL and workflow skips legacy Marketing migration
+PASS: Small additive draft migration runs without resetting marketing
+PASS: Executor has no permission to prepare a product draft
+PASS: Publishing preparation is inside the product view with format, caption and hashtags
+PASS: Prepared drafts persist on the product and copy into a plan at creation
+PASS: Task opens full screen without legacy assignment checkboxes
+PASS: Task creator groups multiple deliverables by executor without duplicate assignment selectors
+PASS: New marketing navigation is centered in the workflow stylesheet
+PASS: Deleting a task atomically removes every related campaign/agenda schedule, not sibling source tasks
+PASS: Task deletion refuses provider operations that may already be in flight
+PASS: Scheduled publisher is protected and respects plan activation
+PASS: Bulk tracking stages update only selected vehicle IDs and log each changed VIN
+PASS: Only permitted campaign deletions show an admin confirmation
+86/86 workflow checks passed (domain + mocked SQL boundary; no live DB/provider).
