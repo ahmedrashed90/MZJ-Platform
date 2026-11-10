@@ -399,7 +399,7 @@ async function validateFormats(db: any, kind: 'image' | 'video', ids: string[]):
   if (rows.length !== uniqueIds.length || rows.some((r: WorkFormat) => !supportsWorkMedia(kind, r.name))) throw new Error(W.selectFormats);
   return rows as WorkFormat[];
 }
-async function createTask(sql: Sql, body: Row, user: SessionUser) {
+async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker?: { planId: string; ideaCodes: string[]; requestKey: string; clientKeys: string[] }) {
   requirePermission(user, 'marketing.task.create');
   const reservationId = id(body.reservationId), typeId = id(body.typeId), name = text(body.name, 250);
   const incoming = list(body.items);
@@ -439,12 +439,50 @@ async function createTask(sql: Sql, body: Row, user: SessionUser) {
       audiences.push(assigneeId);
       await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn, explanation: text(input.explanation, 20000) });
     }
+    // Strategy assignments have an audit marker in the SAME transaction as
+    // all work items and reservation consumption. A retry cannot convert a
+    // pre-existing ordinary task to a strategy-origin task.
+    if (strategyMarker) await history(tx, user, reservationId, null, 'strategy_assigned', '', {
+      source: 'mzj-content-strategy', ...strategyMarker,
+    });
     await tx`update marketing.work_reservations set used_at=now() where id=${reservationId}::uuid`;
     return { ok: true, id: reservationId, taskNo, message: W.saved, existed: false };
   });
   if (!result.existed) await notify(user, 'created', reservationId, `${W.task}: ${name}`, audiences, W.execution, reservationId);
   return result;
 }
+/** The only Marketing mutation exposed by the independent strategy bridge. */
+export async function createStrategyWorkflowTask(sql: Sql, input: {
+  requestKey: string;
+  typeId: string;
+  name: string;
+  source: { planId: string; ideaCodes: string[] };
+  items: Array<{ clientKey: string; departmentId: string; assigneeId: string; mediaKind: 'image' | 'video';
+    ideaName: string; idea: string; explanation: string; dueOn: string; formatIds: string[] }>;
+}, user: SessionUser) {
+  const reservation = await reserveTask(sql, { requestKey: input.requestKey }, user);
+  const marker = { planId: input.source.planId, ideaCodes: input.source.ideaCodes,
+    requestKey: input.requestKey, clientKeys: input.items.map(item => item.clientKey) };
+  const result = await createTask(sql, {
+    reservationId: reservation.reservation.id, typeId: input.typeId, name: input.name, items: input.items,
+  }, user, marker);
+  // The reservation may already have been used by an ordinary Marketing task
+  // or a different strategy request. Never adopt it as this integration's task.
+  const [record] = await sql<any[]>`select data from marketing.work_history
+    where task_id=${result.id}::uuid and action='strategy_assigned' order by id desc limit 1`;
+  const audited = record?.data || {};
+  if (audited.source !== 'mzj-content-strategy' || audited.requestKey !== marker.requestKey ||
+      audited.planId !== marker.planId || JSON.stringify(audited.ideaCodes) !== JSON.stringify(marker.ideaCodes) ||
+      JSON.stringify(audited.clientKeys) !== JSON.stringify(marker.clientKeys)) {
+    throw new Error('Assignment idempotency conflict');
+  }
+  const items = await sql<any[]>`select id::text,client_key::text,assigned_to::text,media_kind,idea_name,
+    due_on::text,status,version from marketing.work_items
+    where task_id=${result.id}::uuid order by sort_order`;
+  return { ok: true, id: result.id, taskNo: ('taskNo' in result ? result.taskNo : '') || reservation.reservation.task_no,
+    existed: Boolean(result.existed), items };
+}
+
 async function saveItem(sql: Sql, body: Row, user: SessionUser) {
   const itemId = id(body.itemId);
   return sql.begin(async tx => {

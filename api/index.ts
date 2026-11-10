@@ -58,6 +58,7 @@ import googleDriveIntegrationHandler from "../server/integrations/google-drive.j
 import operationsHandler from "../server/operations/index.js";
 import legacyOperationsHistoryHandler from "../server/operations/legacy-history.js";
 import marketingHandler from "../server/marketing/index.js";
+import strategyIntegrationHandler from "../server/strategy-integration.js";
 import marketingLeadFormsHandler from "../server/marketing/lead-forms.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import instagramMediaHandler from "../server/marketing/instagram-media.js";
@@ -181,6 +182,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (!route || route === "index") {
     return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.19.0" });
+  }
+
+  if (route.startsWith("strategy-integration/")) {
+    return strategyIntegrationHandler(request, response, route.slice("strategy-integration/".length));
   }
 
   if (route === "integrations/media") {
