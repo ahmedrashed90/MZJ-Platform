@@ -32,7 +32,7 @@ Each endpoint accepts `Authorization: Bearer <key>` but these keys **must never 
 
 ## Deploy order
 
-1. Back up the existing **Marketing** source and keep its current Postgres database. Unzip `MZJ-MARKETING-STRATEGY-INTEGRATION-...zip` and deploy this **whole Marketing source** to the existing Vercel project for `mzj-platform.vercel.app`. Do not change its existing `DATABASE_URL` or any other current environment setting.
+1. Back up the existing **Marketing** source and keep its current Postgres database. Unzip `MZJ-MARKETING-STRATEGY-API-CLEAN-REBUILT-20261111.zip` and deploy this **whole Marketing source** to the existing Vercel project for `mzj-platform.vercel.app`. Do not change its existing `DATABASE_URL` or any other current environment setting.
 2. On the **Marketing Vercel project**, set new server-side Environment Variables:
    - `MZJ_STRATEGY_READ_KEY` = a unique randomly generated secret with at least 32 characters.
    - `MZJ_STRATEGY_ASSIGN_KEY` = a **different** randomly generated secret with at least 32 characters.

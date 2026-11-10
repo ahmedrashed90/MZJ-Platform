@@ -451,15 +451,27 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
   if (!result.existed) await notify(user, 'created', reservationId, `${W.task}: ${name}`, audiences, W.execution, reservationId);
   return result;
 }
-/** The only Marketing mutation exposed by the independent strategy bridge. */
-export async function createStrategyWorkflowTask(sql: Sql, input: {
+/** Strict contract shared by the strategy input validator and Marketing work-task creation. */
+export type StrategyWorkflowTaskInput = {
   requestKey: string;
   typeId: string;
   name: string;
   source: { planId: string; ideaCodes: string[] };
-  items: Array<{ clientKey: string; departmentId: string; assigneeId: string; mediaKind: 'image' | 'video';
-    ideaName: string; idea: string; explanation: string; dueOn: string; formatIds: string[] }>;
-}, user: SessionUser) {
+  items: Array<{
+    clientKey: string;
+    departmentId: string;
+    assigneeId: string;
+    mediaKind: 'image' | 'video';
+    ideaName: string;
+    idea: string;
+    explanation: string;
+    dueOn: string;
+    formatIds: string[];
+  }>;
+};
+
+/** The only Marketing mutation exposed by the independent strategy bridge. */
+export async function createStrategyWorkflowTask(sql: Sql, input: StrategyWorkflowTaskInput, user: SessionUser) {
   const reservation = await reserveTask(sql, { requestKey: input.requestKey }, user);
   const marker = { planId: input.source.planId, ideaCodes: input.source.ideaCodes,
     requestKey: input.requestKey, clientKeys: input.items.map(item => item.clientKey) };

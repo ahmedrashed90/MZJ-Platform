@@ -5,7 +5,7 @@ import { loadUserProfile } from './_auth.js';
 import { hasPermission, canAccessSystem } from '../shared/system-access.js';
 import { supportsWorkMedia } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
-import { createStrategyWorkflowTask } from './marketing/workflow.js';
+import { createStrategyWorkflowTask, type StrategyWorkflowTaskInput } from './marketing/workflow.js';
 
 // Dedicated, server-to-server API. Never proxy the ordinary Marketing API.
 // READ can only SELECT approved fields. ASSIGN can only create a workflow task.
@@ -41,7 +41,7 @@ function bodyValue(request: VercelRequest): Record<string, unknown> | null {
 function keysOnly(record: Record<string, unknown>, accepted: readonly string[]): boolean {
   return Object.keys(record).every(key => accepted.includes(key));
 }
-function normalizeAssignment(body: Record<string, unknown>) {
+function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTaskInput {
   if (!keysOnly(body, ['requestKey', 'typeId', 'name', 'source', 'items'])) throw Error('Unsupported assignment fields');
   const requestKey = body.requestKey, typeId = body.typeId, name = stringValue(body.name, 250);
   if (!isUuid(requestKey) || !isUuid(typeId) || !name) throw Error('Invalid assignment identification');
@@ -57,7 +57,7 @@ function normalizeAssignment(body: Record<string, unknown>) {
   if (new Set(ideaCodes).size !== ideaCodes.length || !Array.isArray(items) || ideaCodes.length !== items.length) throw Error('Strategy ideas must match assignment items');
   if (!Array.isArray(items) || !items.length || items.length > 30) throw Error('Invalid assignment item count');
   const clientKeys = new Set<string>();
-  const normalizedItems = items.map((item: unknown) => {
+  const normalizedItems: StrategyWorkflowTaskInput['items'] = items.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw Error('Invalid assignment item');
     const entry = item as Record<string, unknown>;
     if (!keysOnly(entry, ['clientKey', 'departmentId', 'assigneeId', 'mediaKind', 'ideaName', 'idea', 'explanation', 'dueOn', 'formatIds'])) throw Error('Unsupported item fields');

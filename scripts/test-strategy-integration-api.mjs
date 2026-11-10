@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
-const ts=require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');
+const ts=require('typescript');
 const root=new URL('../server/strategy-integration.ts',import.meta.url);
 const workspace=await mkdtemp(join(tmpdir(),'mzj-strategy-api-test-'));
 const queries=[];

@@ -1,0 +1,16 @@
+MZJ Marketing API clean rebuild - 2026-11-11
+
+Base: full source MZJ-OPERATIONS-MARKETING-PDF-CHRONOLOGICAL-CLEAN-FULL-20261109.zip
+No patch installer and no nested overwrite archive. Only the strategy API integration and its canonical TypeScript contract are new.
+
+Root cause addressed: server/strategy-integration.ts originally inferred assignment items mediaKind as string; workflow expects literal union image | video. The shared StrategyWorkflowTaskInput is now the canonical contract; JSON parsing has a typed result and normalizedItems has the workflow item type.
+
+Local verification:
+- Targeted TypeScript semantic typecheck of the actual strategy-integration.ts against the actual workflow type contract (external modules stubbed): PASS
+- 376 TS/TSX files syntax-parsed: PASS (0 parse diagnostics)
+- 165/165 node-based steps from the package typecheck chain: PASS (using local TypeScript installation for existing test scripts)
+- Marketing work-task domain/mocked SQL tests: PASS 134/134
+- Integration request/permission tests: PASS
+- Existing API import resolution test: PASS
+
+Limits: Full project `pnpm run build` was NOT executed in this sandbox because project dependencies and pnpm were unavailable. The Vercel build after uploading this full source is the definitive end-to-end build check. No live database, production site, or external service was modified by these tests.
