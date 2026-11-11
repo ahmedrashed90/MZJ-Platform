@@ -74,7 +74,20 @@ test('Incomplete carousel can be revised but cannot be approved as 100%',()=>{
   assert.equal(domain.workReviewableFormats(partial,'approve').length,0);
 });
 test('Parent task progress mirrors the detailed requirement milestone',()=>assert.equal(domain.workReadiness([item]).percent,domain.workItemReadiness(item)));
-test('Each requirement displays its idea and readiness without opening detail',()=>{const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');assert(front.includes('({item.idea?.trim() ||'));assert(front.includes('<Readiness value={workItemReadiness(item)} />'));assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'));});
+test('Requirement header displays its name, media and readiness without duplicating full brief',()=>{
+  const front=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+  const summary=front.slice(front.indexOf('mkw-requirement-review-identify'),front.indexOf('<Status value={item.status}/>'));
+  assert(summary.includes('{item.idea_name}'),'Summary must display the required idea name');
+  assert(summary.includes('item.media_kind'),'Summary must identify photo/video');
+  assert(!summary.includes('{item.idea?.trim()'),'Summary must not duplicate the entire long brief in the header');
+  assert(front.includes('<Readiness value={workItemReadiness(item)} />'),'Requirement readiness must remain visible');
+  assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'),'Readiness must appear before expanding requirement');
+  assert(front.includes('<StrategyIdeaBrief value={idea}/>'),'The full brief must render as a structured preview when the requirement is opened');
+  assert(front.includes('function StrategyIdeaBrief'),'Strategy brief must have its own structured renderer');
+  assert(front.includes("if(!text.includes('بريف إبداعي:'))"),'Non-strategy tasks must retain their plain-text fallback');
+  assert(front.includes('const image=clean.match(')&&front.includes('const scene=clean.match('),'Image cards and video scenes must each be recognized');
+  assert(front.includes('current={heading:clean.replace('),'Legacy internal slide codes must be stripped from headings');
+});
 test('Approval without a ready file never counts',()=>assert.equal(domain.workReadiness([{...item,status:'approved',files:[]}]).percent,0));
 test('All formats need final coverage',()=>assert.equal(domain.finalCoverage({...item,formats:[format,{...format,id:uid(11)}]}),false));
 test('Wrong image/video file type is rejected',()=>assert.equal(domain.finalCoverage({...item,media_kind:'video'}),false));
