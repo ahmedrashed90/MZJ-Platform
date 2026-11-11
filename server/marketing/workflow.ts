@@ -456,7 +456,7 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
       }
       audiences.push(assigneeId);
       await history(tx, user, reservationId, item.id, 'created', '', {
-        assigneeId,kind,dueOn,explanation:text(input.explanation,20000),
+        assigneeId,kind,dueOn,explanation: text(input.explanation, 20000),
         deliveryKind,creativeBrief:text(input.creativeBrief,50000)
       });
     }
