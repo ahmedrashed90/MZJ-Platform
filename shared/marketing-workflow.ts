@@ -15,6 +15,7 @@ export type WorkFile = { id: string; name: string; mime_type: string; file_size:
 export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
   media_kind: WorkMediaKind; idea_name: string; idea: string; explanation?: string; caption?: string; hashtags?: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
+  delivery_kind?: 'shooting_link' | 'final_files'; shooting_url?: string | null; creative_brief?: string;
   files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
   review_notes?: WorkItemReviewNote[];
   latest_review_event?: { action: string; note: string; actor_name: string; created_at: string } | null;
@@ -45,6 +46,7 @@ export type WorkTask = {
   status: 'active' | 'completed' | 'empty'; due_from: string | null; due_to: string | null; product_count: number;
   approved_count: number; readiness: number; version: number; completed_at?: string | null; items?: WorkItem[];
   submitted_on_time_count?: number; submitted_late_count?: number;
+  shooting_on_time_count?: number; shooting_late_count?: number;
   /** Permission-scoped executor names, ideas and requirement dates for dashboard keyword search. */
   assignee_names?: string[]; search_ideas?: string[]; search_briefs?: string[]; due_dates?: string[];
 };
@@ -139,10 +141,11 @@ export function matchingWorkflowPublishFiles(
  * (terminal decision), but never becomes an approved product. Both screens
  * use these same milestones.
  */
-export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>): number {
+export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews' | 'delivery_kind'>>): number {
   // Rejection closes the requirement without producing an approved product.
   // Retain its denominator and record the terminal decision as 100% readiness.
   if (item.status === 'rejected') return 100;
+  if (item.delivery_kind === 'shooting_link') return item.status === 'approved' ? 100 : 0;
   if (!item.formats.length) return 0;
   const byFormat = new Map((item.format_reviews || []).map(format => [format.format_id, format.status]));
   const total = item.formats.reduce((sum, format) => {
@@ -171,7 +174,7 @@ export function workReviewableFormats(
   });
 }
 
-export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>>) {
+export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews' | 'delivery_kind'>>>) {
   const total = items.length;
   let approved = 0;
   let resolved = 0;
