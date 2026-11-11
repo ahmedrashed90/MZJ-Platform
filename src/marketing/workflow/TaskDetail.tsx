@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { downloadCreativeBriefDocx } from './creativeBriefDocx';
 import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, PencilSimple, Trash, Plus } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
@@ -527,7 +526,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           {!!item.creative_brief && <section className="mkw-brief-download">
             <h4>المعالجة الإبداعية والهوك والنص والفويس أوفر والسيناريو التفصيلي</h4>
             <p className="mkw-muted">البريف الإبداعي الكامل كما ورد في الاستراتيجية، بدون اختصار.</p>
-            <button type="button" className="primary" onClick={() => void downloadCreativeBriefDocx(item.idea_name,item.creative_brief||'')
+            <button type="button" className="primary" onClick={() => void import('./creativeBriefDocx').then(module=>module.downloadCreativeBriefDocx(item.idea_name,item.creative_brief||''))
               .catch(error=>setError(error instanceof Error?error.message:'تعذر تحميل ملف Word'))}>
               <FileArrowDown size={18}/> تحميل البريف الإبداعي DOCX
             </button>
