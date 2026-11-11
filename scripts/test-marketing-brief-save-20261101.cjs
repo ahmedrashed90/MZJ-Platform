@@ -118,6 +118,18 @@ test('Executors and requirements overview hides explanation but keeps it in the 
   assert.match(ui, /fromStrategy \? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'/);
   assert.match(ui,/onChange=\{event => \{ setExplanation\(event\.target\.value\)/);
 });
+test('The creative brief is shown only once and can switch between preview and editing',()=>{
+  const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
+  const part=ui.split('<div className="mkw-idea-brief-field">')[1]?.split('            <Field label={fromStrategy ?')[0];
+  assert.ok(part,'The creative brief has a single dedicated field');
+  assert.match(part,/canEditBrief && editingIdea\s*\? <textarea/);
+  assert.match(part,/: <StrategyIdeaBrief value=\{idea\}\/>/);
+  assert.doesNotMatch(part,/<textarea[^>]*\/>\s*<StrategyIdeaBrief/,'A raw textarea and the formatted preview must never be visible simultaneously');
+  assert.match(part,/إلغاء تعديل الفكرة/);
+  assert.match(part,/تعديل الفكرة/);
+  assert.match(ui,/setIdea\(item\.idea\)/,'Cancel restores the last saved idea');
+  assert.match(ui,/if \(saved\) \{ setEditingIdea\(false\); onBriefSaved\(\); \}/,'Successful save returns to one clean preview');
+});
 test('The idea and explanation fields have a visible standalone Save action',()=>{
   const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
   assert.match(ui,/className="mkw-idea-save-actions"/);

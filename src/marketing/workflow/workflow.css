@@ -1125,6 +1125,11 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
   .mkw-preparation-full-content>.mkw-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
+/* Show the approved creative brief once: preview by default, editable textarea on demand. */
+.mkw-idea-brief-field{display:grid;gap:9px;min-width:0;align-content:start}
+.mkw-idea-brief-field>.mkw-field{min-width:0}
+.mkw-idea-edit-toggle{justify-self:start;min-height:34px;padding:6px 12px;font-size:12px}
+
 /* Keep the idea and explanation save action beside the editable brief. */
 .mkw-idea-save-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0 16px}
 .mkw-idea-save-actions .primary{min-width:154px}

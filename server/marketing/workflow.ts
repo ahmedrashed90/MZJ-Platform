@@ -790,7 +790,9 @@ async function decideDeadlineException(sql: Sql, body: Row, user: SessionUser, d
 /** Executor response to an immutable review request. Accept => editing,
  * decline => review of the EXISTING ready files. Never approve automatically. */
 async function respondToItemRevision(sql: Sql, body: Row, user: SessionUser, accept: boolean) {
-  requirePermission(user, 'marketing.task.final_file.upload');
+  // Accepting or declining a requested revision is an assignee response, NOT
+  // a final-file upload. The upload permission remains mandatory for file changes.
+  if (!getSystemAccess(user, 'marketing')?.enabled) throw new Error(W.denied);
   const itemId = id(body.itemId), reason = text(body.reason, 2000);
   const result = await sql.begin(async tx => {
     await tx`set local lock_timeout = '3s'`;
@@ -803,8 +805,36 @@ async function respondToItemRevision(sql: Sql, body: Row, user: SessionUser, acc
     if (locked.status !== 'revision') throw new Error('لا يوجد تعديل مطلوب في انتظار رد المنفذ');
     const pending = await tx<any[]>`select format_id::text from marketing.work_format_reviews
       where item_id=${itemId}::uuid and status='revision' for update`;
-    if (!pending.length) throw new Error('لا يوجد تعديل مطلوب لقبوله أو رفضه');
-    const formatIds = pending.map(row => String(row.format_id));
+    let formatIds = pending.map(row => String(row.format_id));
+    if (!formatIds.length) {
+      // Historical revision notes survive schema upgrades even when the
+      // corresponding format_review row is absent or left as 'submitted'.
+      // Never discard the executor's response to a genuine outstanding note.
+      const [unanswered] = await tx<any[]>`select id::text from marketing.work_item_review_notes
+        where item_id=${itemId}::uuid and deleted_at is null and executor_response is null
+        order by created_at desc,id desc limit 1 for update`;
+      if (!unanswered) throw new Error('لا يوجد تعديل مطلوب لقبوله أو رفضه');
+      const [request] = await tx<any[]>`select data from marketing.work_history
+        where item_id=${itemId}::uuid and action='revision'
+        order by created_at desc,id desc limit 1`;
+      const assignedFormats = new Set(list(locked.formats).map(format => String(format.id)));
+      formatIds = [...new Set(list(request?.data?.formatIds).map(String))]
+        .filter(formatId => assignedFormats.has(formatId));
+      if (!formatIds.length) {
+        const submittedFormats = await tx<any[]>`select format_id::text from marketing.work_format_reviews
+          where item_id=${itemId}::uuid and status='submitted' for update`;
+        formatIds = submittedFormats.map(row => String(row.format_id))
+          .filter(formatId => assignedFormats.has(formatId));
+      }
+      if (accept && formatIds.length) {
+        // Restore editable state for only the formats of this old request.
+        // Approved formats remain protected, and no saved file is deleted.
+        await tx`update marketing.work_format_reviews set status='revision',
+          approved_at=null,approved_by=null,updated_at=now()
+          where item_id=${itemId}::uuid and status='submitted'
+            and format_id=any(${formatIds}::text[])`;
+      }
+    }
     const response = accept ? 'accepted' : 'declined';
     await tx`update marketing.work_item_review_notes set executor_response=${response},responded_at=now()
       where item_id=${itemId}::uuid and executor_response is null and deleted_at is null`;

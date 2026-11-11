@@ -348,6 +348,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on);
+  const [editingIdea, setEditingIdea] = useState(false);
   const fromStrategy = Boolean(item.creative_treatment);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
@@ -376,7 +377,11 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const categories = settings?.categories || [];
   const rating = item.rating;
   const revisionPending = (item.format_reviews || []).some(row => row.status === 'revision');
-  const canRespondRevision = own && hasPermission(user, 'marketing.task.final_file.upload') && item.status === 'revision' && revisionPending;
+  // The item and unanswered review note are the durable revision request.
+  // An older task may have a valid outstanding note but no matching format
+  // review row after an upgrade. Upload permission is NOT response permission.
+  const hasUnansweredRevision = (item.review_notes || []).some(note => !note.executor_response);
+  const canRespondRevision = own && item.status === 'revision' && (revisionPending || hasUnansweredRevision);
   const awaitingDecision = item.status === 'submitted' && item.latest_review_event?.action === 'revision_declined';
   const revisionNotes = [...(item.review_notes || [])].sort((a,b) => (a.revision_number || 0) - (b.revision_number || 0) || a.created_at.localeCompare(b.created_at));
   const revisionsLeft = Math.max(0, 3 - revisionNotes.length);
@@ -556,7 +561,15 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           <div className="mkw-execution-quick-row">
             <Field label={W.required}>{fromStrategy ? <p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p> : <input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} />}</Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
-            <Field label={W.idea}>{canEditBrief ? <><textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/><StrategyIdeaBrief value={idea}/></> : <StrategyIdeaBrief value={idea}/>}</Field>
+            <div className="mkw-idea-brief-field">
+              <Field label={W.idea}>{canEditBrief && editingIdea
+                ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/>
+                : <StrategyIdeaBrief value={idea}/>}</Field>
+              {canEditBrief && <button type="button" className="secondary mkw-idea-edit-toggle" disabled={busy}
+                onClick={() => { if (editingIdea) { setIdea(item.idea); onBriefChanged(); } setEditingIdea(!editingIdea); }}>
+                {editingIdea ? 'إلغاء تعديل الفكرة' : 'تعديل الفكرة'}
+              </button>}
+            </div>
             <Field label={fromStrategy ? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'}>{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
             {fromStrategy && <section className="mkw-creative-treatment"><strong>المعالجة الإبداعية</strong>
               <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
@@ -567,7 +580,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           </div>
           {canEditBrief && <div className="mkw-idea-save-actions">
             <button type="button" className="primary" disabled={busy || (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on)}
-              onClick={() => void run(persist).then(saved => { if (saved) onBriefSaved(); })}>حفظ الفكرة والشرح</button>
+              onClick={() => void run(persist).then(saved => { if (saved) { setEditingIdea(false); onBriefSaved(); } })}>حفظ الفكرة والشرح</button>
             <small className="mkw-muted">يتم حفظ النصين في التاسك مباشرة دون الحاجة لرفع ملف أو إرسال المطلوب للمراجعة.</small>
           </div>}
           <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}

@@ -51,9 +51,10 @@ test('Executor accept and decline share one authoritative response handler',()=>
  assert(source.includes("action === 'work_accept_revision'"));
  assert(source.includes("action === 'work_decline_revision'"));
 });
-test('Executor response validates owner, permission, pending revision and version',()=>{
+test('Executor response validates assignee, active marketing scope, outstanding note and version',()=>{
  const section=source.slice(source.indexOf('async function respondToItemRevision('),source.indexOf('async function reviewItem('));
- for(const term of ["requirePermission(user, 'marketing.task.final_file.upload')","current.assigned_to !== user.id","locked.version !== Number(body.version)","locked.status !== 'revision'",'for update']) assert(section.includes(term));
+ for(const term of ["getSystemAccess(user, 'marketing')?.enabled","current.assigned_to !== user.id","locked.version !== Number(body.version)","locked.status !== 'revision'",'work_item_review_notes','for update']) assert(section.includes(term));
+ assert(!section.includes("requirePermission(user, 'marketing.task.final_file.upload')"));
 });
 test('Revision limit is enforced under SQL row lock, not just UI',()=>{
  const section=source.slice(source.indexOf('async function reviewItem('),source.indexOf('async function unapproveItem('));
