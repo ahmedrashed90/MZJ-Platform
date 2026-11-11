@@ -1276,3 +1276,17 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw .mkw-product-reference small{display:block;color:var(--muted);font-size:11px;font-weight:500;line-height:1.7;white-space:normal}
 .mkw .mkw-product-reference small [dir="ltr"]{unicode-bidi:isolate;display:inline-block}
 .mkw .mkw-publish-legacy-link-warning{display:block;color:#9a3412;font-weight:700;line-height:1.7}
+
+
+/* MZJ strategy creative brief: scene-style production cards, no duplicated idea text in item heading. */
+.mkw .mkw-strategy-brief {display:grid;gap:14px;text-align:right;min-width:0;max-width:100%;white-space:normal}
+.mkw .mkw-brief-intro,.mkw .mkw-brief-visual-card {min-width:0;overflow-wrap:anywhere}
+.mkw .mkw-brief-intro {padding:10px 12px;border:1px solid var(--mkw-line,#e4d6ca);border-radius:12px}
+.mkw .mkw-brief-visual-card {padding:15px 16px;border:1px solid #dbc7b7;border-radius:15px;background:rgba(243,232,220,.32)}
+.mkw .mkw-brief-visual-card h5 {margin:0 0 12px;color:#4a211c;font-size:1rem;font-weight:800}
+.mkw .mkw-brief-contents {display:grid;gap:8px}
+.mkw .mkw-brief-line {margin:0;line-height:1.9;white-space:pre-wrap}
+.mkw .mkw-brief-line strong {font-weight:750;color:#4a211c}
+.mkw .mkw-brief-line-break {height:4px}
+.mkw .mkw-idea-text {overflow-wrap:anywhere;white-space:pre-wrap}
+@media (max-width:700px) {.mkw .mkw-brief-visual-card {padding:12px}.mkw .mkw-strategy-brief {gap:10px}}

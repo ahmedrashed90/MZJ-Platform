@@ -39,6 +39,40 @@ function canEvaluateItem(item: WorkItem | RejectedRatingItem): boolean {
   return item.status === 'approved' || item.status === 'rejected';
 }
 
+// Read-only structured presentation of Strategy creative briefs.
+// The original idea text stays editable and unchanged in Marketing storage.
+function StrategyIdeaBrief({ value }: { value: string }) {
+  const text = String(value || '');
+  if(!text.includes('بريف إبداعي:'))return <p className="mkw-idea-text">{text}</p>;
+  const lines = text.split(/\r?\n/);
+  const sections: { heading: string; lines: string[]; visual: boolean }[] = [];
+  let current = { heading: 'ملخص الفكرة', lines: [] as string[], visual: false };
+  for(const line of lines){
+    const clean=line.trim();
+    const image=clean.match(/^الصورة\s+\d+\s+من\s+\d+(?:\s+[—-]\s+.*)?$/);
+    const scene=clean.match(/^المشهد\s+\d+\s*[:：].*$/);
+    if(image||scene){
+      if(current.lines.length||current.heading!=='ملخص الفكرة')sections.push(current);
+      current={heading:clean.replace(/\s*\(I\d+\)/g,''),lines:[],visual:true};
+    }else current.lines.push(line);
+  }
+  if(current.lines.length||current.visual)sections.push(current);
+  const renderLines=(content:string[])=>content.map((line,index)=>{
+    const trimmed=line.trim();
+    if(!trimmed)return <div key={index} className="mkw-brief-line-break"/>;
+    const match=trimmed.match(/^([^:：]{2,55})[:：]\s*(.*)$/);
+    return <p key={index} className="mkw-brief-line">{match
+       ? <><strong>{match[1]}:</strong> {match[2]}</>
+       : trimmed}</p>;
+  });
+  return <div className="mkw-strategy-brief" dir="rtl">
+    {sections.map((section,index)=><section key={index} className={section.visual?'mkw-brief-visual-card':'mkw-brief-intro'}>
+      {section.visual && <h5>{section.heading}</h5>}
+      <div className="mkw-brief-contents">{renderLines(section.lines)}</div>
+    </section>)}
+  </div>;
+}
+
 export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
@@ -139,7 +173,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} <span className="mkw-requirement-review-idea">({item.idea?.trim() || 'لم تُحدد الفكرة'})</span></strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
                   <Status value={item.status}/>
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
                   {pending > 0 && <span className="mkw-requirement-waiting">{pending} قيد المراجعة</span>}
@@ -474,7 +508,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           <div className="mkw-execution-quick-row">
             <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} /></Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
-            <Field label={W.idea}>{canEditBrief ? <textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{idea}</p>}</Field>
+            <Field label={W.idea}>{canEditBrief ? <><textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/><StrategyIdeaBrief value={idea}/></> : <StrategyIdeaBrief value={idea}/>}</Field>
             <Field label="الشرح — شرح الفكرة أو المطلوب">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
             <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
           </div>
