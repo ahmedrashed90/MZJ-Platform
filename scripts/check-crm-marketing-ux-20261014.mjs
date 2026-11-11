@@ -26,7 +26,7 @@ assert.match(detail,/workPost\('review', \{ itemId: item\.id, version: version\.
 // must never re-enter approval, revision or final-file review actions.
 assert.match(detail,/const reviewableFormats = item\.status === 'rejected' \? \[\] : workReviewableFormats\(item, 'revise'\)/);
 assert.match(detail,/const approvableFormats = item\.status === 'rejected' \? \[\] : workReviewableFormats\(item, 'approve'\)/);
-assert.match(detail,/\{capabilities\.review && item\.status !== 'rejected' && \(item\.status !== 'approved' \|\| approvedFormatIds\.size > 0\) && <section/);
+assert.match(detail,/\{!shooting && capabilities\.review && item\.status !== 'rejected' && \(item\.status !== 'approved' \|\| approvedFormatIds\.size > 0\) && <section/);
 assert.match(detail,/onClick=\{\(\) => void review\('reject'\)\}/);
 assert.doesNotMatch(detail,/const hasSubmitted =/);
 assert.match(workflow,/const reviewable = decision === 'reject' \? \[\] : workReviewableFormats\(item, decision === 'approve' \? 'approve' : 'revise'\)/);
