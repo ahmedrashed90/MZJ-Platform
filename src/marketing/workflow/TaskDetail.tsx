@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { downloadCreativeBriefDocx } from './creativeBriefDocx';
 import { CaretDown, CheckCircle, Clock, FileArrowDown, PaperPlaneTilt, UploadSimple, UserCircle, X, Star, PencilSimple, Trash, Plus } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { useAuth } from '../../auth/AuthContext';
@@ -73,7 +74,7 @@ function StrategyIdeaBrief({ value }: { value: string }) {
   </div>;
 }
 
-export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
+export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late' | 'shooting_on_time' | 'shooting_late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
   const [ratingItemId, setRatingItemId] = useState('');
@@ -88,7 +89,11 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
   const task = query.data?.task;
   const executorScoped = Boolean(searchAssigneeNames?.length);
   const visibleItems = filterDashboardExecutorItems(task?.items || [], searchAssigneeNames);
-  const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved')));
+  const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) &&
+    (!deliveryFilter || (deliveryFilter==='shooting_on_time'?item.delivery_kind==='shooting_link'&&item.delivery_status==='on_time'
+      :deliveryFilter==='shooting_late'?item.delivery_kind==='shooting_link'&&item.delivery_status==='late'
+      :item.delivery_kind!=='shooting_link'&&(item.delivery_status===deliveryFilter||
+        deliveryFilter==='on_time'&&item.delivery_status==='exception_approved'))));
   const rejectedItems = !deliveryFilter ? filterDashboardExecutorItems(query.data?.rejectedItems || [], searchAssigneeNames).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
   const dueDates = executorScoped ? items.map(item => item.due_on).filter(Boolean).sort() : [];
   const scopedReadiness = items.length ? Math.round(items.reduce((total, item) => total + workItemReadiness(item), 0) / items.length) : 0;
@@ -297,10 +302,12 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const own = user?.id === item.assigned_to;
   const editable = !['approved','revision','rejected'].includes(item.status) && (own || capabilities.editTask);
   const canEditBrief = item.status !== 'rejected' && (editable || capabilities.editTask);
-  const canUpload = !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
+  const shooting=item.delivery_kind==='shooting_link';
+  const canUpload = !shooting && !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on);
+  const [shootingUrl,setShootingUrl]=useState(item.shooting_url||'');
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
@@ -507,7 +514,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
           <div className="mkw-execution-quick-row">
             <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} /></Field>
-            <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
+            {!shooting && <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>}
             <Field label={W.idea}>{canEditBrief ? <><textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/><StrategyIdeaBrief value={idea}/></> : <StrategyIdeaBrief value={idea}/>}</Field>
             <Field label="الشرح — شرح الفكرة أو المطلوب">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
             <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
@@ -517,12 +524,37 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
               onClick={() => void run(persist).then(saved => { if (saved) onBriefSaved(); })}>حفظ الفكرة والشرح</button>
             <small className="mkw-muted">يتم حفظ النصين في التاسك مباشرة دون الحاجة لرفع ملف أو إرسال المطلوب للمراجعة.</small>
           </div>}
+          {!!item.creative_brief && <section className="mkw-brief-download">
+            <h4>المعالجة الإبداعية والهوك والنص والفويس أوفر والسيناريو التفصيلي</h4>
+            <p className="mkw-muted">البريف الإبداعي الكامل كما ورد في الاستراتيجية، بدون اختصار.</p>
+            <button type="button" className="primary" onClick={() => void downloadCreativeBriefDocx(item.idea_name,item.creative_brief||'')
+              .catch(error=>setError(error instanceof Error?error.message:'تعذر تحميل ملف Word'))}>
+              <FileArrowDown size={18}/> تحميل البريف الإبداعي DOCX
+            </button>
+          </section>}
           <section className="mkw-upload-section"><h4>{W.ideaFile}</h4>{ideaFiles.map(file => <FileLink key={file.id} file={file} onRemove={editable && !busy ? () => void run(async () => { await persist(); await workPost('remove_upload', { itemId: item.id, fileId: file.id }); }) : undefined} />)}
             {editable && <input type="file" aria-label={W.ideaFile} accept=".doc,.docx,.xls,.xlsx" multiple disabled={busy} onChange={event => { void upload(event.target.files, 'idea'); event.target.value = ''; }} />}
             {!ideaFiles.length && !editable && <span className="mkw-muted">—</span>}
           </section>
         </section>
-        <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><div className="mkw-actions"><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span>
+        {shooting ? <section className="mkw-item-finals mkw-shooting-delivery">
+          <div className="mkw-section-title"><h4>رابط ملفات التصوير على Google Drive</h4></div>
+          <p className="mkw-muted">أرسل رابط المجلد أو الملفات بعد رفع المشاهد. يتم احتساب موعد التسليم من لحظة تسجيل الرابط، ولا يتطلب رفع ملفات نهائية.</p>
+          {item.shooting_url ? <div className="mkw-shooting-link-result">
+            <a href={item.shooting_url} target="_blank" rel="noopener noreferrer">فتح ملفات التصوير في Google Drive</a>
+            <strong className={item.delivery_status==='late'?'is-late':'is-on-time'}>
+              {item.delivery_status==='late'?'تأخر في التصوير':'التصوير في الموعد'}</strong>
+          </div> : own&&item.status==='in_progress' ?
+            <div className="mkw-shooting-link-form">
+              <input type="url" value={shootingUrl} placeholder="https://drive.google.com/..." dir="ltr"
+                aria-label="رابط Google Drive لملفات التصوير" disabled={busy} onChange={event=>setShootingUrl(event.target.value)}/>
+              <button type="button" className="primary" disabled={busy||!shootingUrl.trim()}
+                onClick={()=>void run(()=>workPost('submit_shooting',{itemId:item.id,version:version.current,url:shootingUrl}))}>
+                حفظ رابط التصوير وإتمام التسليم
+              </button>
+            </div> : <span className="mkw-muted">بانتظار تسليم رابط التصوير من المصور</span>}
+          {!item.shooting_url && item.due_on<riyadhToday() && <strong className="mkw-shooting-overdue">تأخر في التصوير — تجاوز موعد التسليم</strong>}
+        </section> : <section className="mkw-item-finals"><div className="mkw-section-title"><h4>{W.finalFiles}</h4><div className="mkw-actions"><span className="mkw-muted"><Clock size={16} /> {finals.length} / {item.formats.length}</span>
           {capabilities.review && item.status !== 'rejected' && <button type="button" className="secondary" disabled={busy} onClick={() => { setShowFormatPicker(open => !open); setNewFormatIds([]); setError(''); }}><Plus size={17}/>{W.addFormats}</button>}</div></div>
           {showFormatPicker && capabilities.review && item.status !== 'rejected' && <div className="mkw-upload-format">
             <strong>{W.addFormats} — {item.media_kind === 'image' ? W.image : W.video}</strong>
@@ -546,10 +578,10 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
           {item.pending_uploads?.map(file => <div className="mkw-file-link" key={file.id}><span>{file.name}</span><span className="mkw-muted">{W.loading}</span>{canUpload && <button type="button" className="icon-button" aria-label={W.cancel} disabled={busy} onClick={() => void run(() => workPost('remove_upload', { itemId: item.id, fileId: file.id }))}><X size={15} /></button>}</div>)}
           {progress && <div className="mkw-upload-format"><span>{progress.name} {progress.percent}%</span><progress max={100} value={progress.percent} /><button type="button" className="secondary" onClick={() => controller.current?.abort()}>{W.cancel}</button></div>}
           {!!finals.length && <details><summary><FileArrowDown size={17} />{item.status === 'rejected' ? 'معاينة الملفات المرفوضة' : W.viewProduct}</summary><FilesPreview files={finals} /></details>}
-        </section>
+        </section>}
       </div>
       {(editable || canSubmit) && <footer className="mkw-actions">{canSubmit && <><button type="button" className="primary" disabled={busy || !readyToSubmit || !!item.pending_uploads?.length} onClick={() => void run(async () => { const nextVersion = await persist(); await workPost('submit', { itemId: item.id, version: nextVersion }); })}><PaperPlaneTilt size={18} />{W.submit}</button>{item.status === 'submitted' && lateForSubmission && item.deadline_exception?.status !== 'approved' && item.deadline_exception?.status !== 'pending' && <button type="button" className="secondary" disabled={busy} onClick={() => void requestDeadlineException()}>{W.deadlineException}</button>}</>}</footer>}
-      {capabilities.review && item.status !== 'rejected' && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && item.status !== 'revision' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
+      {!shooting && capabilities.review && item.status !== 'rejected' && (item.status !== 'approved' || approvedFormatIds.size > 0) && <section className="mkw-review-controls"><div className="mkw-actions">{item.status !== 'approved' && item.status !== 'revision' && reviewableFormats.length > 0 && <><button type="button" className="primary" disabled={busy || approvableFormats.length === 0} onClick={() => void review('approve')}>{W.approve} الملفات المرفوعة</button></>}{approvedFormatIds.size > 0 && <button type="button" className="secondary" disabled={busy} onClick={() => void undoApproval()}>تراجع عن اعتماد - المنتج 100% الملفات المرفوعة</button>}{item.status !== 'approved' && <button type="button" className="secondary danger" disabled={busy} onClick={() => void review('reject')}>{W.reject}</button>}</div></section>}
     </div>
 
   </article>;
