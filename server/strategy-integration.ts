@@ -54,26 +54,28 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
   if (!planId || !Array.isArray(ideaCodes) || ideaCodes.length < 1 || ideaCodes.length > 30 ||
       !ideaCodes.every(value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value))) throw Error('Invalid strategy idea identifiers');
   const items = body.items;
-  if (new Set(ideaCodes).size !== ideaCodes.length || !Array.isArray(items) || ideaCodes.length !== items.length) throw Error('Strategy ideas must match assignment items');
+  if (!Array.isArray(items) || ideaCodes.length !== items.length) throw Error('Strategy ideas must match assignment items');
   if (!Array.isArray(items) || !items.length || items.length > 30) throw Error('Invalid assignment item count');
   const clientKeys = new Set<string>();
   const normalizedItems: StrategyWorkflowTaskInput['items'] = items.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw Error('Invalid assignment item');
     const entry = item as Record<string, unknown>;
-    if (!keysOnly(entry, ['clientKey', 'departmentId', 'assigneeId', 'mediaKind', 'ideaName', 'idea', 'explanation', 'dueOn', 'formatIds'])) throw Error('Unsupported item fields');
+    if (!keysOnly(entry, ['clientKey', 'departmentId', 'assigneeId', 'mediaKind', 'ideaName', 'idea', 'explanation', 'dueOn', 'formatIds', 'deliveryKind', 'creativeBrief'])) throw Error('Unsupported item fields');
     const clientKey = entry.clientKey, departmentId = entry.departmentId, assigneeId = entry.assigneeId;
     const mediaKind = entry.mediaKind;
     const ideaName = stringValue(entry.ideaName, 250), idea = stringValue(entry.idea, 20000), explanation = stringValue(entry.explanation || '', 20000);
     const dueOn = stringValue(entry.dueOn, 10);
+    const deliveryKind = entry.deliveryKind || 'final_files';
+    const creativeBrief = stringValue(entry.creativeBrief || '', 50000);
     const formatIds = entry.formatIds;
     if (!isUuid(clientKey) || !isUuid(departmentId) || !isUuid(assigneeId) || clientKeys.has(clientKey) ||
         (mediaKind !== 'image' && mediaKind !== 'video') || !ideaName || !idea ||
         !/^20\d\d-\d\d-\d\d$/.test(dueOn) || !Number.isFinite(Date.parse(`${dueOn}T12:00:00Z`)) || new Date(`${dueOn}T12:00:00Z`).toISOString().slice(0,10)!==dueOn ||
-        !Array.isArray(formatIds) || !formatIds.length || formatIds.length > 30 || !formatIds.every(isUuid) || new Set(formatIds).size !== formatIds.length) {
+        !['shooting_link','final_files'].includes(String(deliveryKind)) || !Array.isArray(formatIds) || (deliveryKind==='final_files'&&!formatIds.length) || (deliveryKind==='shooting_link'&&formatIds.length>0) || formatIds.length > 30 || !formatIds.every(isUuid) || new Set(formatIds).size !== formatIds.length || (deliveryKind==='shooting_link'&&mediaKind!=='video')) {
       throw Error('Invalid assignment item values');
     }
     clientKeys.add(clientKey);
-    return { clientKey, departmentId, assigneeId, mediaKind, ideaName, idea, explanation, dueOn, formatIds };
+    return { clientKey, departmentId, assigneeId, mediaKind, ideaName, idea, explanation, dueOn, formatIds, deliveryKind:deliveryKind as 'shooting_link'|'final_files', creativeBrief };
   });
   return { requestKey, typeId, name, source: { planId, ideaCodes }, items: normalizedItems };
 }
