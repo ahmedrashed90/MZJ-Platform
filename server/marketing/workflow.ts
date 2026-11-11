@@ -337,10 +337,10 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     -- the executor's original submission date in Riyadh, not admin review time.
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and not exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='created' and shot.data->>'deliveryKind'='shooting_link')
-      and not exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='created' and shot.data->>'deliveryKind'='shooting_link')
       and ((i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on or exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved')))::int as submitted_on_time_count,
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on
+      and not exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='created' and shot.data->>'deliveryKind'='shooting_link')
       and not exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved'))::int as submitted_late_count,
     count(i.id) filter(where i.submitted_at is not null and
       (i.submitted_at at time zone 'Asia/Riyadh')::date<=i.due_on
