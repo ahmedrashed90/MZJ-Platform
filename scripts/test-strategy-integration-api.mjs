@@ -46,6 +46,26 @@ try {
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,payload);assert.equal(r.status,201);assert.equal(mock.calls.length,1);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,vehicles:[{vin:'SENSITIVE'}]});assert.equal(r.status,400);assert.equal(mock.calls.length,1);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,items:[{...payload.items[0],dueOn:'2026-02-31'}]});assert.equal(r.status,400);
+  // One original approved idea may produce two independently due requirements
+  // in the SAME Marketing task, with a photographer link-only delivery.
+  const multi={...payload,requestKey:uuid(12),source:{planId:'plan-test',ideaCodes:['V01','V01']},
+    items:[
+      {...payload.items[0],clientKey:uuid(13),ideaName:'فيديو',deliveryKind:'shooting_link',
+        creativeBrief:'الهوك: اختر السيارة\nالمشهد 1: التصوير',formatIds:[],dueOn:'2026-12-01'},
+      {...payload.items[0],clientKey:uuid(14),ideaName:'فيديو',deliveryKind:'final_files',
+        creativeBrief:'الهوك: اختر السيارة\nالمشهد 1: التصوير',dueOn:'2026-12-05'}
+    ]};
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,multi);
+  assert.equal(r.status,201);
+  assert.equal(mock.calls.at(-1).items.length,2);
+  assert.equal(mock.calls.at(-1).items[0].deliveryKind,'shooting_link');
+  assert.equal(mock.calls.at(-1).items[1].dueOn,'2026-12-05');
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,
+    {...multi,items:[{...multi.items[0],formatIds:[uuid(30)]},multi.items[1]]});
+  assert.equal(r.status,400);
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,
+    {...multi,items:[{...multi.items[0],mediaKind:'image'},multi.items[1]]});
+  assert.equal(r.status,400);
   r=await req('GET','agenda-products',process.env.MZJ_STRATEGY_READ_KEY);
   assert.equal(r.status,200);assert.deepEqual(r.result.products,[]);
   const agenda={requestKey:uuid(9),sourcePlanId:'plan-test',name:'Agenda',
