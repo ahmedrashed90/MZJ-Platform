@@ -1290,3 +1290,17 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw .mkw-brief-line-break {height:4px}
 .mkw .mkw-idea-text {overflow-wrap:anywhere;white-space:pre-wrap}
 @media (max-width:700px) {.mkw .mkw-brief-visual-card {padding:12px}.mkw .mkw-strategy-brief {gap:10px}}
+
+
+/* Native independent shooting requirement and printable creative brief. */
+.mkw-shooting-delivery{display:grid;gap:14px;align-content:start}
+.mkw-shooting-link-form{display:grid;gap:12px}
+.mkw-shooting-link-form input{padding:13px;border:1px solid #d9c0b0;border-radius:10px;background:#fffaf6;color:#4a211c;font-size:14px;min-height:46px;direction:ltr;text-align:left}
+.mkw-shooting-link-result{display:flex;flex-direction:column;gap:12px;overflow-wrap:anywhere}
+.mkw-shooting-link-result a{color:#4a211c;font-weight:800;text-decoration:underline}
+.mkw-shooting-link-result strong{display:inline-flex;align-self:start;padding:7px 10px;border-radius:8px;border:1px solid #b0c6a8;background:#edf7ed;color:#2b7034}
+.mkw-shooting-link-result strong.is-late,.mkw-shooting-overdue{color:#a32727!important;background:#fff0ee!important;border-color:#dfaaaa!important}
+.mkw-shooting-overdue{padding:11px;border:1px solid;border-radius:9px}
+.mkw-brief-download{display:grid;gap:9px;margin:14px 0;padding:15px 17px;background:#f3e8dc;border:1px solid #dac4b5;border-radius:12px;color:#4a211c}
+.mkw-brief-download h4{margin:0;color:#4a211c}
+.mkw-brief-download button{justify-self:start}
