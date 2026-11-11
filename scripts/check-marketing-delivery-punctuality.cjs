@@ -29,12 +29,14 @@ test('after approval, admin timestamp does not affect punctuality', () => assert
 test('dashboard counts require approval and derive punctuality from Riyadh submission date', () => {
   assert.match(server, /i\.submitted_at at time zone 'Asia\/Riyadh'/g);
   assert.match(server, /i\.status='approved' and i\.approved_at is not null/g);
-  assert.match(server, /::date <= i\.due_on\)::int as submitted_on_time_count/);
-  assert.match(server, /::date > i\.due_on\)::int as submitted_late_count/);
+  assert.match(server, /submitted_on_time_count/);
+  assert.match(server, /i\.submitted_at at time zone 'Asia\/Riyadh'\)\:\:date <= i\.due_on/);
+  assert.match(server, /submitted_late_count/);
+  assert.match(server, /i\.submitted_at at time zone 'Asia\/Riyadh'\)\:\:date > i\.due_on/);
 });
 test('approved delivery status provided within task details', () => {
   assert.match(server, /else null end as delivery_status/);
-  assert.match(types, /delivery_status\?: 'on_time' \| 'late' \| null/);
+  assert.match(types, /delivery_status\?: 'on_time' \| 'late' \| 'exception_approved' \| null/);
   assert.match(taskDetail, /item\.assignee_name/);
   assert.match(taskDetail, /item\.delivery_status/);
   assert.match(taskDetail, /W\.deliveredAt/);

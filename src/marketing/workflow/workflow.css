@@ -1290,3 +1290,19 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw .mkw-brief-line-break {height:4px}
 .mkw .mkw-idea-text {overflow-wrap:anywhere;white-space:pre-wrap}
 @media (max-width:700px) {.mkw .mkw-brief-visual-card {padding:12px}.mkw .mkw-strategy-brief {gap:10px}}
+
+/* Strategy photography deliverables remain separate from publishable final files. */
+.mkw-capture-editor { display: grid; gap: 16px; }
+.mkw-capture-info { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 12px; }
+.mkw-capture-info > * { min-width: 0; }
+.mkw-capture-link-section { background: var(--surface-soft); border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px; display: grid; gap: 12px; }
+.mkw-capture-link-section h4 { margin: 0; }
+.mkw-capture-link-form { display: grid; gap: 12px; }
+.mkw-capture-link-form input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--line-strong); }
+.mkw-capture-timing { display: inline-flex; align-items: center; width: fit-content; font-weight: 700; padding: 7px 12px; border-radius: 9px; }
+.mkw-capture-timing.is-on-time { color: #137835; border: 1px solid #33ad67; background: #f1fff5; }
+.mkw-capture-timing.is-late { color: #ae2424; border: 1px solid #e9a9a9; background: #fff5f5; }
+.mkw-creative-treatment { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border-radius: 11px; border: 1px solid var(--line-strong); background: var(--surface-soft); }
+.mkw-creative-treatment small { width: 100%; color: #8d6959; }
+.mkw-idea-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mkw-photography-delivery { padding-top: 0; }

@@ -211,8 +211,10 @@ async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkIt
     coalesce((select h.data->>'explanation' from marketing.work_history h where h.item_id=i.id
       and h.action in ('created','edited') and h.data ? 'explanation'
       order by h.created_at desc,h.id desc limit 1),'') as explanation,
-    case when i.status='approved' and i.approved_at is not null and i.submitted_at is not null
-      then case when exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved') then 'exception_approved'
+    case when i.delivery_mode='drive_link' and i.capture_submitted_at is not null then
+      case when (i.capture_submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
+      when i.status='approved' and i.approved_at is not null and i.submitted_at is not null then
+      case when exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved') then 'exception_approved'
         when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
       else null end as delivery_status,
     (select jsonb_build_object('id',de.id::text,'status',de.status,'request_note',de.request_note,
@@ -264,7 +266,7 @@ async function recalculateTask(db: any, taskId: string) {
   await db`select id from marketing.work_tasks where id=${taskId}::uuid for update`;
   const items = await loadItems(db, taskId);
   const readiness = workReadiness(items);
-  await db`update marketing.work_tasks set status=${readiness.complete ? 'completed' : readiness.total ? 'active' : 'empty'},
+  await db`update marketing.work_tasks set status=${readiness.complete ? 'completed' : items.length ? 'active' : 'empty'},
     completed_at=case when ${readiness.complete} then coalesce(completed_at,now()) else null end,
     updated_at=now(),version=version+1 where id=${taskId}::uuid`;
   return readiness;
@@ -277,7 +279,9 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const scopes = departmentScope(user);
   const permittedDepartments = scopes.length ? await db`select id::text from core.departments where code=any(${scopes}::text[]) and system_code='marketing'` : [];
   const departmentIds = new Set(permittedDepartments.map((d: any) => d.id));
-  const items = canSeeAll ? all : all.filter(i => i.assigned_to === user.id || departmentIds.has(i.department_id));
+  const isColleagueOnTask = all.some(i => i.assigned_to === user.id);
+  const items = canSeeAll ? all : all.filter(i => i.assigned_to === user.id || departmentIds.has(i.department_id) ||
+    (isColleagueOnTask && i.delivery_mode === 'drive_link'));
   // Legacy rejections from earlier versions have a separate rating archive.
   // New rejections remain in work_items and count in task readiness.
   let rejectedItems: any[] = [];
@@ -329,11 +333,15 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     coalesce(array_agg(distinct i.due_on::text) filter(where i.due_on is not null),'{}'::text[]) as due_dates,
     -- Show delivery badges only after final approval. Classify punctuality by
     -- the executor's original submission date in Riyadh, not admin review time.
-    count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
+    count(i.id) filter(where i.delivery_mode='files' and i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and ((i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on or exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved')))::int as submitted_on_time_count,
-    count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
+    count(i.id) filter(where i.delivery_mode='files' and i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on
       and not exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved'))::int as submitted_late_count,
+    count(i.id) filter(where i.delivery_mode='drive_link' and i.capture_submitted_at is not null
+      and (i.capture_submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on)::int as capture_on_time_count,
+    count(i.id) filter(where i.delivery_mode='drive_link' and i.capture_submitted_at is not null
+      and (i.capture_submitted_at at time zone 'Asia/Riyadh')::date > i.due_on)::int as capture_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
     left join marketing.work_items i on i.task_id=t.id and (
@@ -354,7 +362,7 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
   if (visibleItemIds.length) {
     // Use the very same item status, configured formats and ready final
     // attachments as workItemReadiness. Scoped IDs came from the query above.
-    const readyItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+    const readyItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.delivery_mode,i.capture_url,i.formats,
       coalesce((select jsonb_agg(jsonb_build_object('name',f.original_name,'mime_type',f.mime_type,
         'category',j.category,'format_id',j.format_id,'status',f.status))
         from marketing.work_item_files j join marketing.files f on f.id=j.file_id
@@ -422,13 +430,15 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
       if (clientKeys.has(clientKey)) throw new Error(W.invalid);
       clientKeys.add(clientKey);
       const kind = input.mediaKind === 'image' || input.mediaKind === 'video' ? input.mediaKind : null;
+      const deliveryMode = strategyMarker && input.deliveryMode === 'drive_link' ? 'drive_link' : 'files';
       const idea = text(input.idea, 20000), dueOn = text(input.dueOn, 10), fileIds = [...new Set(list(input.ideaFileIds).map(id))];
       if (!kind || !isWorkDate(dueOn) || (!idea && !fileIds.length)) throw new Error(W.requiredFields);
       await validateAssignee(tx, departmentId, assigneeId);
       const formats = await validateFormats(tx, kind, list(input.formatIds));
-      const [item] = await tx<any[]>`insert into marketing.work_items(task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,sort_order)
+      const [item] = await tx<any[]>`insert into marketing.work_items(task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,sort_order,delivery_mode,creative_treatment)
         values(${reservationId}::uuid,${clientKey}::uuid,${departmentId}::uuid,${assigneeId}::uuid,${kind},
-          ${text(input.ideaName, 250) || idea.split('\n')[0].slice(0, 120) || `${name} - ${index + 1}`},${idea},${tx.json(json(formats))},${dueOn}::date,${index}) returning id::text`;
+          ${text(input.ideaName, 250) || idea.split('\n')[0].slice(0, 120) || `${name} - ${index + 1}`},${idea},${tx.json(json(formats))},${dueOn}::date,${index},
+          ${deliveryMode},${strategyMarker ? text(input.creativeTreatment, 20000) : ''}) returning id::text`;
       if (fileIds.length) {
         const files = await tx<any[]>`select f.id::text from marketing.files f join marketing.work_uploads up on up.file_id=f.id
           where f.id=any(${fileIds}::uuid[]) and up.reservation_id=${reservationId}::uuid and up.created_by=${user.id}::uuid
@@ -437,7 +447,7 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
         for (const fileId of fileIds) await tx`insert into marketing.work_item_files(item_id,file_id,category) values(${item.id}::uuid,${fileId}::uuid,'idea')`;
       }
       audiences.push(assigneeId);
-      await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn, explanation: text(input.explanation, 20000) });
+      await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn, deliveryMode, explanation: text(input.explanation, 20000) });
     }
     // Strategy assignments have an audit marker in the SAME transaction as
     // all work items and reservation consumption. A retry cannot convert a
@@ -459,6 +469,9 @@ export type StrategyWorkflowTaskInput = {
   source: { planId: string; ideaCodes: string[] };
   items: Array<{
     clientKey: string;
+    ideaCode?: string;
+    deliveryMode?: 'files' | 'drive_link';
+    creativeTreatment?: string;
     departmentId: string;
     assigneeId: string;
     mediaKind: 'image' | 'video';
@@ -488,7 +501,7 @@ export async function createStrategyWorkflowTask(sql: Sql, input: StrategyWorkfl
       JSON.stringify(audited.clientKeys) !== JSON.stringify(marker.clientKeys)) {
     throw new Error('Assignment idempotency conflict');
   }
-  const items = await sql<any[]>`select id::text,client_key::text,assigned_to::text,media_kind,idea_name,
+  const items = await sql<any[]>`select id::text,client_key::text,assigned_to::text,media_kind,delivery_mode,idea_name,
     due_on::text,status,version from marketing.work_items
     where task_id=${result.id}::uuid order by sort_order`;
   return { ok: true, id: result.id, taskNo: ('taskNo' in result ? result.taskNo : '') || reservation.reservation.task_no,
@@ -829,6 +842,7 @@ async function reviewItem(sql: Sql, body: Row, user: SessionUser) {
     await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
     const [locked] = await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
     if (!locked || locked.version !== Number(body.version)) throw new Error(W.conflict);
+    if (locked.delivery_mode === 'drive_link') throw new Error('التصوير يُسلّم برابط ولا يخضع لمراجعة الملفات النهائية');
     if (locked.status === 'approved' || locked.status === 'rejected') throw new Error(W.immutable);
     if (locked.status === 'revision' && decision === 'approve')
       throw new Error('يجب أن يقبل المنفذ التعديل أو يرفضه قبل اعتماد المنتج');
@@ -998,6 +1012,36 @@ async function toggleAction(sql: Sql, body: Row, user: SessionUser) {
   return { ok: true, message: W.saved };
 }
 
+/** The photographer records only the first Drive link and its timestamp.
+ * Unlike an uploaded product, this requirement can never be published. */
+async function submitCaptureLink(sql: Sql, body: Row, user: SessionUser) {
+  requirePermission(user, 'marketing.task.final_file.upload');
+  const itemId=id(body.itemId), raw=text(body.url,1600);
+  let url: URL;
+  try { url=new URL(raw); } catch { throw new Error('أدخل رابط Google Drive صحيحًا'); }
+  if(url.protocol!=='https:' || url.username || url.password ||
+     !['drive.google.com','docs.google.com'].includes(url.hostname) || url.pathname==='/' || raw.length>1500)
+    throw new Error('رابط التسليم يجب أن يكون رابطًا مباشرًا من Google Drive');
+  const result=await sql.begin(async tx=>{
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    const visible=await visibleItem(tx,user,itemId,true);
+    if(visible.assigned_to!==user.id)throw new Error(W.denied);
+    await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
+    const [item]=await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if(!item || item.version!==Number(body.version))throw new Error(W.conflict);
+    if(item.delivery_mode!=='drive_link'||item.capture_url||item.capture_submitted_at||item.status!=='in_progress')
+      throw new Error('تم تسجيل رابط التصوير بالفعل أو حالة المطلوب لا تسمح بالتسليم');
+    await tx`update marketing.work_items set capture_url=${raw},capture_submitted_at=now(),
+      submitted_at=now(),status='submitted',version=version+1,updated_at=now() where id=${itemId}::uuid`;
+    await history(tx,user,item.task_id,itemId,'capture_link_submitted','تم تسليم رابط التصوير',{url:raw});
+    await recalculateTask(tx,item.task_id);
+    return {ok:true,taskId:String(item.task_id),owner:visible.created_by,url:raw,message:'تم تسجيل تسليم التصوير'};
+  });
+  await notify(user,'capture_submitted',result.taskId,'تم تسليم التصوير',[result.owner]);
+  return result;
+}
+
 async function prepareUpload(sql: Sql, body: Row, user: SessionUser) {
   const category = text(body.category), itemId = body.itemId ? id(body.itemId) : null, reservationId = body.reservationId ? id(body.reservationId) : null;
   const fileName = text(body.fileName, 255).replace(/[\r\n/\\]/g, '_'), mimeType = text(body.mimeType, 120) || 'application/octet-stream';
@@ -1016,6 +1060,8 @@ async function prepareUpload(sql: Sql, body: Row, user: SessionUser) {
       await tx`select id from marketing.work_tasks where id=${visible.task_id}::uuid for update`;
       await tx`select id from marketing.work_items where id=${itemId}::uuid for update`;
       const item = await visibleItem(tx, user, itemId, true);
+      if (item.delivery_mode === 'drive_link') throw new Error('مطلوب التصوير يستقبل رابط Google Drive فقط');
+      if (item.status === 'revision') throw new Error('اقبل التعديل أولًا قبل حذف أو استبدال الملفات');
       if (category === 'final') {
         requirePermission(user, 'marketing.task.final_file.upload');
         if (item.assigned_to !== user.id) throw new Error(W.denied);
@@ -1078,7 +1124,8 @@ async function commitUpload(sql: Sql, body: Row, user: SessionUser) {
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select * from marketing.work_items where id=${upload.item_id}::uuid for update`;
       currentItem = { ...current, task_id: item.task_id, created_by: item.created_by, task_name: item.task_name };
-      if (!current || !['in_progress','editing','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','editing','submitted'].includes(current.status)) throw new Error('اقبل التعديل أولًا قبل تعديل الملفات');
+      if (current.delivery_mode === 'drive_link') throw new Error('مطلوب التصوير يستقبل رابط Google Drive فقط');
       await visibleItem(tx, user, upload.item_id, true);
       if (upload.category === 'final') { requirePermission(user, 'marketing.task.final_file.upload'); if (current.assigned_to !== user.id) throw new Error(W.denied); }
       else if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
@@ -1144,7 +1191,8 @@ async function removeUpload(sql: Sql, body: Row, user: SessionUser) {
       // Same ordering as submit/review/commit: task -> item -> upload.
       await tx`select id from marketing.work_tasks where id=${item.task_id}::uuid for update`;
       const [current] = await tx<any[]>`select status,assigned_to from marketing.work_items where id=${itemId}::uuid for update`;
-      if (!current || !['in_progress','editing','revision','submitted'].includes(current.status)) throw new Error(W.immutable);
+      if (!current || !['in_progress','editing','submitted'].includes(current.status))
+        throw new Error('يجب قبول طلب التعديل قبل حذف أو استبدال الملفات الحالية');
       await visibleItem(tx, user, itemId, true);
       if (current.assigned_to !== user.id && !hasPermission(user, 'marketing.task.edit')) throw new Error(W.denied);
       const [linked] = await tx<any[]>`select 1 from marketing.work_item_files where item_id=${itemId}::uuid and file_id=${fileId}::uuid`;
@@ -2773,6 +2821,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     if (action === 'work_reserve') result = await reserveTask(sql, body, user);
     else if (action === 'work_create_task') result = await createTask(sql, body, user);
     else if (action === 'work_save_item') result = await saveItem(sql, body, user);
+    else if (action === 'work_submit_capture_link') result = await submitCaptureLink(sql, body, user);
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_remove_item_format') result = await removeItemFormat(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);

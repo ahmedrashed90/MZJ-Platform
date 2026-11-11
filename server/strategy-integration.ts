@@ -54,27 +54,42 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
   if (!planId || !Array.isArray(ideaCodes) || ideaCodes.length < 1 || ideaCodes.length > 30 ||
       !ideaCodes.every(value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value))) throw Error('Invalid strategy idea identifiers');
   const items = body.items;
-  if (new Set(ideaCodes).size !== ideaCodes.length || !Array.isArray(items) || ideaCodes.length !== items.length) throw Error('Strategy ideas must match assignment items');
-  if (!Array.isArray(items) || !items.length || items.length > 30) throw Error('Invalid assignment item count');
+  if (new Set(ideaCodes).size !== ideaCodes.length || !Array.isArray(items) || !items.length || items.length > 100) throw Error('Invalid assignment item count');
+  const mappedCodes = new Set(ideaCodes as string[]);
   const clientKeys = new Set<string>();
   const normalizedItems: StrategyWorkflowTaskInput['items'] = items.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw Error('Invalid assignment item');
     const entry = item as Record<string, unknown>;
-    if (!keysOnly(entry, ['clientKey', 'departmentId', 'assigneeId', 'mediaKind', 'ideaName', 'idea', 'explanation', 'dueOn', 'formatIds'])) throw Error('Unsupported item fields');
+    if (!keysOnly(entry, ['clientKey', 'ideaCode', 'departmentId', 'assigneeId', 'deliveryMode', 'mediaKind', 'ideaName', 'idea', 'explanation', 'creativeTreatment', 'dueOn', 'formatIds'])) throw Error('Unsupported item fields');
     const clientKey = entry.clientKey, departmentId = entry.departmentId, assigneeId = entry.assigneeId;
     const mediaKind = entry.mediaKind;
+    const ideaCode = stringValue(entry.ideaCode, 40);
+    const deliveryMode = entry.deliveryMode === undefined ? 'files' : entry.deliveryMode;
     const ideaName = stringValue(entry.ideaName, 250), idea = stringValue(entry.idea, 20000), explanation = stringValue(entry.explanation || '', 20000);
+    const creativeTreatment = stringValue(entry.creativeTreatment || '', 20000);
     const dueOn = stringValue(entry.dueOn, 10);
     const formatIds = entry.formatIds;
     if (!isUuid(clientKey) || !isUuid(departmentId) || !isUuid(assigneeId) || clientKeys.has(clientKey) ||
-        (mediaKind !== 'image' && mediaKind !== 'video') || !ideaName || !idea ||
+        (mediaKind !== 'image' && mediaKind !== 'video') || (deliveryMode !== 'files' && deliveryMode !== 'drive_link') ||
+        (entry.ideaCode !== undefined && !mappedCodes.has(ideaCode)) || !ideaName || !idea ||
         !/^20\d\d-\d\d-\d\d$/.test(dueOn) || !Number.isFinite(Date.parse(`${dueOn}T12:00:00Z`)) || new Date(`${dueOn}T12:00:00Z`).toISOString().slice(0,10)!==dueOn ||
         !Array.isArray(formatIds) || !formatIds.length || formatIds.length > 30 || !formatIds.every(isUuid) || new Set(formatIds).size !== formatIds.length) {
       throw Error('Invalid assignment item values');
     }
     clientKeys.add(clientKey);
-    return { clientKey, departmentId, assigneeId, mediaKind, ideaName, idea, explanation, dueOn, formatIds };
+    return { clientKey, ideaCode: ideaCode || '', departmentId, assigneeId, deliveryMode, mediaKind, ideaName, idea, explanation, creativeTreatment, dueOn, formatIds };
   });
+  // A reused idea is allowed in a NEW request, including a capture-only task.
+  // Every executor must remain unique within each idea.
+  const byIdea = new Map<string, typeof normalizedItems>();
+  normalizedItems.forEach((item,index) => {
+    const code = item.ideaCode || (items.length === ideaCodes.length ? String(ideaCodes[index]) : '');
+    if (!mappedCodes.has(code)) throw Error('Assignment item has no matching idea code');
+    const rows = byIdea.get(code) || []; rows.push(item); byIdea.set(code, rows);
+  });
+  if (byIdea.size !== ideaCodes.length || [...byIdea.values()].some(rows =>
+      rows.length > 10 ||
+      new Set(rows.map(row => row.assigneeId)).size !== rows.length)) throw Error('Invalid executors for strategy ideas');
   return { requestKey, typeId, name, source: { planId, ideaCodes }, items: normalizedItems };
 }
 

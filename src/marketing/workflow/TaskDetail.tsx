@@ -8,6 +8,7 @@ import { W, Empty, Field, FileLink, FilesPreview, Formats, FormatSelector, Media
 import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './api';
 import { filterDashboardExecutorItems } from './dashboardSearch';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
+import { downloadCreativeTreatmentDocx } from './creativeDocx';
 
 function submittedDayInRiyadh(value: string | null | undefined) {
   if (!value) return '—';
@@ -73,7 +74,7 @@ function StrategyIdeaBrief({ value }: { value: string }) {
   </div>;
 }
 
-export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; focusItemId?: string; openRatingOnLoad?: boolean }) {
+export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', captureOnly = false, focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; captureOnly?: boolean; focusItemId?: string; openRatingOnLoad?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
   const [ratingItemId, setRatingItemId] = useState('');
@@ -88,8 +89,9 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
   const task = query.data?.task;
   const executorScoped = Boolean(searchAssigneeNames?.length);
   const visibleItems = filterDashboardExecutorItems(task?.items || [], searchAssigneeNames);
-  const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved')));
-  const rejectedItems = !deliveryFilter ? filterDashboardExecutorItems(query.data?.rejectedItems || [], searchAssigneeNames).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
+  const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (captureOnly ? item.delivery_mode === 'drive_link' : (!deliveryFilter || item.delivery_mode !== 'drive_link')) &&
+    (!deliveryFilter || item.delivery_status === deliveryFilter || (deliveryFilter === 'on_time' && item.delivery_status === 'exception_approved')));
+  const rejectedItems = !deliveryFilter && !captureOnly ? filterDashboardExecutorItems(query.data?.rejectedItems || [], searchAssigneeNames).filter(item => !onlyItems || onlyItems.includes(item.id)) : [];
   const dueDates = executorScoped ? items.map(item => item.due_on).filter(Boolean).sort() : [];
   const scopedReadiness = items.length ? Math.round(items.reduce((total, item) => total + workItemReadiness(item), 0) / items.length) : 0;
   const visibleHistoryIds = new Set([...items, ...rejectedItems].map(item => item.id));
@@ -162,7 +164,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
           </div>}
           {(!executorScoped || items.length > 0) && <Readiness value={executorScoped ? scopedReadiness : task.readiness} />}
         </section>
-        <section className="mkw-detail-items"><div className="mkw-section-title"><h2>{deliveryFilter === 'on_time' ? W.deliveryOnTime : deliveryFilter === 'late' ? W.deliveryLate : W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></div>
+        <section className="mkw-detail-items"><div className="mkw-section-title"><h2>{captureOnly ? (deliveryFilter === 'on_time' ? 'التصوير في الموعد' : deliveryFilter === 'late' ? 'تأخر في التصوير' : 'مطلوبات التصوير') : deliveryFilter === 'on_time' ? W.deliveryOnTime : deliveryFilter === 'late' ? W.deliveryLate : W.assignments}</h2><span className="mkw-muted">{items.length} {W.required}</span></div>
           {!items.length ? <Empty>{executorScoped ? 'لا توجد مطلوبات مرتبطة بهذا المنفذ حاليًا.' : W.emptyTask}</Empty> : <div className="mkw-requirement-review-list">
             {items.map((item, index) => {
               const opened = openedRequirementId === item.id;
@@ -173,8 +175,9 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.media_kind === 'video' ? W.video : W.image}</small></span>
-                  <Status value={item.status}/>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.delivery_mode === 'drive_link' ? 'التصوير' : item.media_kind === 'video' ? W.video : W.image}</small></span>
+                  {item.delivery_mode === 'drive_link' && item.capture_submitted_at ?
+                    <span className={`mkw-capture-timing ${item.delivery_status === 'late' ? 'is-late' : 'is-on-time'}`}>{item.delivery_status === 'late' ? 'تأخر في التصوير' : 'التصوير في الموعد'}</span> : <Status value={item.status}/>}
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
                   {pending > 0 && <span className="mkw-requirement-waiting">{pending} قيد المراجعة</span>}
                   {item.status === 'submitted' && item.latest_review_event?.action === 'revision_declined' && <span className="mkw-requirement-waiting">المنفذ رفض التعديل · بانتظار قرار المراجع</span>}
@@ -192,7 +195,8 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
                   {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100% أو رفض المطلوب</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
-                {opened && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
+                {opened && item.delivery_mode === 'drive_link' && <CaptureItemEditor key={`${item.id}:${item.version}`} item={item} refresh={refresh} />}
+                {opened && item.delivery_mode !== 'drive_link' && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
                   formatOptions={query.data!.formatOptions || []} canRate={query.data!.canRate} settings={settings.data} refresh={refresh}
                   onBriefSaved={() => setSavedBriefItemId(item.id)} onBriefChanged={() => setSavedBriefItemId('')} />}
                 {opened && savedBriefItemId === item.id && <p className="mkw-brief-save-success" role="status">تم حفظ الفكرة والشرح بنجاح في بيانات المطلوب.</p>}
@@ -288,6 +292,49 @@ function ReviewNoteDocument({ text }: { text: string }) {
   </div>;
 }
 
+/** Photography is a delivery link, not a publishable final file. */
+function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => Promise<void> }) {
+  const { user } = useAuth();
+  const own = user?.id === item.assigned_to;
+  const [url,setUrl] = useState('');
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState('');
+  const savedUrl = item.capture_url || '';
+  const safeUrl = /^https:\/\/(drive|docs)\.google\.com\//i.test(savedUrl) ? savedUrl : '';
+  async function submit() {
+    if (!own || savedUrl || busy) return;
+    setBusy(true); setError('');
+    try {
+      await workPost('submit_capture_link', {itemId:item.id,version:item.version,url:url.trim()});
+      await refresh();
+    } catch(e) { setError(e instanceof Error ? e.message : 'تعذر حفظ رابط التصوير'); }
+    finally { setBusy(false); }
+  }
+  return <article className="mkw-requirement-editor mkw-capture-editor" dir="rtl">
+    <WorkAlert>{error}</WorkAlert>
+    <div className="mkw-capture-info"><Field label="المطلوب"><p>تصوير {item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p></Field>
+      <Field label="المنفذ المكلف"><p>{item.assignee_name}</p></Field>
+      <Field label="تاريخ تسليم التصوير"><p>{showDate(item.due_on)}</p></Field></div>
+    <Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة"><StrategyIdeaBrief value={item.idea}/></Field>
+    <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
+    {!!item.creative_treatment && <div className="mkw-creative-treatment"><strong>المعالجة الإبداعية</strong>
+      <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
+        <FileArrowDown size={18}/>تحميل المعالجة الإبداعية DOCX</button></div>}
+    <section className="mkw-capture-link-section"><h4>رابط ملفات التصوير — Google Drive</h4>
+      {safeUrl ? <><a href={safeUrl} target="_blank" rel="noopener noreferrer">فتح ملفات التصوير على Google Drive</a>
+          <small>تم تسليم الرابط بتاريخ {showDate(item.capture_submitted_at,true)}</small>
+          <strong className={`mkw-capture-timing ${item.delivery_status === 'late' ? 'is-late' : 'is-on-time'}`}>
+            {item.delivery_status === 'late' ? 'تأخر في التصوير' : 'التصوير في الموعد'}</strong></> :
+        own ? <div className="mkw-capture-link-form"><p>ارفع ملفات التصوير على Google Drive ثم ضع رابط المشاركة هنا. يُحفظ وقت أول تسليم ولا يمكن تغييره بعد الحفظ.</p>
+          <input type="url" dir="ltr" aria-label="رابط ملفات التصوير" value={url} placeholder="https://drive.google.com/drive/folders/..." disabled={busy}
+            onChange={event => setUrl(event.target.value)} maxLength={1500}/>
+          <button type="button" className="primary" disabled={busy || !url.trim()} onClick={() => void submit()}>
+            {busy ? 'جارٍ حفظ رابط التصوير' : 'حفظ رابط التصوير وتسجيل التسليم'}</button></div> :
+        <p className="mkw-muted">بانتظار المصور لرفع ملفات التصوير ومشاركة الرابط.</p>}
+    </section>
+  </article>;
+}
+
 function ItemEditor({ item, number, capabilities, formatOptions, canRate, settings, refresh, onBriefSaved, onBriefChanged }: {
   item: WorkItem; number: number; capabilities: WorkCapabilities; formatOptions: WorkFormat[]; canRate: boolean;
   settings: WorkEvaluationSettings | null; refresh: () => Promise<void>;
@@ -297,10 +344,11 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const own = user?.id === item.assigned_to;
   const editable = !['approved','revision','rejected'].includes(item.status) && (own || capabilities.editTask);
   const canEditBrief = item.status !== 'rejected' && (editable || capabilities.editTask);
-  const canUpload = !['approved','rejected'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
+  const canUpload = !['approved','rejected','revision'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
   const lateForSubmission = item.due_on < riyadhToday();
   const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on);
+  const fromStrategy = Boolean(item.creative_treatment);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
   const [showNoteEditor, setShowNoteEditor] = useState(false);
   const [revisionFormat, setRevisionFormat] = useState<string | null>(null);
@@ -506,10 +554,15 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
       <div className="mkw-item-detail-grid">
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
           <div className="mkw-execution-quick-row">
-            <Field label={W.required}><input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} /></Field>
+            <Field label={W.required}>{fromStrategy ? <p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p> : <input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} />}</Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
             <Field label={W.idea}>{canEditBrief ? <><textarea value={idea} disabled={busy} maxLength={20000} onChange={event => { setIdea(event.target.value); onBriefChanged(); }}/><StrategyIdeaBrief value={idea}/></> : <StrategyIdeaBrief value={idea}/>}</Field>
-            <Field label="الشرح — شرح الفكرة أو المطلوب">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
+            <Field label={fromStrategy ? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'}>{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
+            {fromStrategy && <section className="mkw-creative-treatment"><strong>المعالجة الإبداعية</strong>
+              <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
+                <FileArrowDown size={18}/>تحميل المعالجة الإبداعية DOCX</button>
+              <small>الهوك · النص / الفويس أوفر · السيناريو التفصيلي</small>
+            </section>}
             <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
           </div>
           {canEditBrief && <div className="mkw-idea-save-actions">

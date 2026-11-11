@@ -44,13 +44,13 @@ check('Search result passes matched executor names on click', () => {
   assert.match(front, /onOpenTask=\{\(id, assigneeNames\) => openTask\(id, '', assigneeNames\)\}/);
 });
 check('Normal dashboard task open clears prior executor scoping', () => {
-  assert.match(front, /function openTask\(id: string, filter: '' \| 'on_time' \| 'late' = '', assigneeNames: string\[\] = \[\]\)/);
+  assert.match(front, /function openTask\(id: string, filter: '' \| 'on_time' \| 'late' = '', assigneeNames: string\[\] = \[\], capture = false\)/);
   assert.match(front, /setSearchTaskAssignees\(assigneeNames\)/);
   assert.match(front, /onClick=\{\(\) => openTask\(task.id\)\}/);
 });
 check('Task detail filters active and rejected requirements, not authentication', () => {
   assert.match(detail, /const visibleItems = filterDashboardExecutorItems\(task\?\.items \|\| \[\], searchAssigneeNames\)/);
-  assert.match(detail, /const rejectedItems = !deliveryFilter \? filterDashboardExecutorItems\(query.data\?\.rejectedItems \|\| \[\], searchAssigneeNames\)/);
+  assert.match(detail, /const rejectedItems = !deliveryFilter && !captureOnly \? filterDashboardExecutorItems\(query.data\?\.rejectedItems \|\| \[\], searchAssigneeNames\)/);
   assert.match(detail, /query.data!\.capabilities/);
 });
 check('Single matched requirement expands directly from search', () => {

@@ -19,7 +19,7 @@ const stubs = {
   // itself is tested against the real two-person table by the rating suite.
   './evaluations.js': {canGradeWorkItem:async()=>false},
 };
-const privateExports=['reserveTask','createTask','reviewItem','unapproveItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
+const privateExports=['submitCaptureLink','reserveTask','createTask','reviewItem','unapproveItem','submitItem','saveItem','addItemFormats','prepareUpload','commitUpload','removeUpload','calendar','productVisible','products','taskSummary','createPlan','publishTarget','resetPublicationAfterCheck','saveProductDraft','deleteWorkflowTask','taskList'];
 const load=createLoader(root,stubs,{'server/marketing/workflow.ts':'\nexport { '+privateExports.join(',')+' };'});
 const domain=load('shared/marketing-workflow.ts'), api=load('server/marketing/workflow.ts'), evaluations=load('server/marketing/evaluations.ts'), {W}=load('shared/marketing-workflow-labels.ts');
 const format={id:uid(10),platform_id:uid(20),name:'Photo',platform_name:'Instagram',platform_code:'instagram',width:1080,height:1080};
@@ -38,6 +38,61 @@ const planCalendarStub = (user, from, to) => step('select distinct p.id::text as
   assert.equal(Boolean(values[0]), user === admin);
 });
 const identitySql=scriptedSql([]);
+
+// 2026-11-11: photography links are required handoffs, not publishable products.
+test('Photographer and editor deadlines contribute separately to readiness without doubling product count',()=>{
+ const photo={...item,id:uid(55),delivery_mode:'drive_link',assigned_to:uid(3),status:'in_progress',files:[],capture_url:null};
+ const edit={...item,status:'in_progress',files:[]};
+ assert.equal(domain.workItemReadiness(photo),0);
+ assert.deepEqual(domain.workReadiness([photo,edit]),{total:1,approved:0,percent:0,complete:false});
+ const captured={...photo,capture_url:'https://drive.google.com/drive/folders/example',status:'submitted'};
+ assert.equal(domain.workItemReadiness(captured),100);
+ assert.deepEqual(domain.workReadiness([captured,edit]),{total:1,approved:0,percent:50,complete:false});
+ const approved={...edit,status:'approved',files:[file]};
+ assert.deepEqual(domain.workReadiness([captured,approved]),{total:1,approved:1,percent:100,complete:true});
+ assert.deepEqual(domain.workReadiness([captured]),{total:0,approved:0,percent:100,complete:true});
+});
+test('A photographer can submit one immutable Drive link and never create a publishable product',async()=>{
+ const photo={...item,id:uid(56),delivery_mode:'drive_link',capture_url:null,capture_submitted_at:null,
+   files:[],formats:[format],status:'in_progress',version:1};
+ const captured={...photo,capture_url:'https://drive.google.com/drive/folders/abc',capture_submitted_at:'2026-10-15T10:00:00Z',status:'submitted'};
+ const db=scriptedSql([
+   itemRead([photo]),taskLock(),itemLock([photo]),
+   step('update marketing.work_items set capture_url',[],(values,query)=>{
+     assert.equal(values[0],'https://drive.google.com/drive/folders/abc');
+     assert.match(query,/capture_submitted_at=now\(\)/);
+     assert.match(query,/status='submitted'/);
+   }),
+   step('insert into marketing.work_history',[],values=>assert.equal(values[2],'capture_link_submitted')),
+   ...recalc([captured],'completed')
+ ]);
+ const result=await api.submitCaptureLink(db,{itemId:photo.id,version:1,url:captured.capture_url},worker);
+ assert.equal(result.ok,true);db.assertDone();
+ const existing={...captured,version:2};
+ const db2=scriptedSql([itemRead([existing]),taskLock(),itemLock([existing])]);
+ await assert.rejects(()=>api.submitCaptureLink(db2,{itemId:photo.id,version:2,url:captured.capture_url},worker));
+ db2.assertDone();
+ const db3=scriptedSql([]);
+ for(const badUrl of ['http://drive.google.com/drive/folders/x','https://evil.google.com/folders/x','https://drive.google.com/','javascript:alert(1)'])
+   await assert.rejects(()=>api.submitCaptureLink(db3,{itemId:photo.id,version:1,url:badUrl},worker));
+ db3.assertDone();
+});
+test('Executor cannot stage final upload while review revision is awaiting acceptance',async()=>{
+ const revising={...item,status:'revision',version:2};
+ const db=scriptedSql([itemRead([revising]),taskLock(),step('select id from marketing.work_items'),itemRead([revising])]);
+ await assert.rejects(()=>api.prepareUpload(db,{itemId:item.id,category:'final',fileName:'fixed.jpg',fileSize:4,
+   mimeType:'image/jpeg',formatIds:[format.id]},worker),/اقبل التعديل/);
+ db.assertDone();
+});
+test('Executor cannot remove previously uploaded files while revision is awaiting acceptance',async()=>{
+ const revising={...item,status:'revision',version:2};
+ const db=scriptedSql([
+   step('select * from marketing.work_uploads',[{file_id:file.id,item_id:item.id,created_by:worker.id}]),
+   itemRead([revising]),taskLock(),step('select status,assigned_to',[{status:'revision',assigned_to:worker.id}])
+ ]);
+ await assert.rejects(()=>api.removeUpload(db,{itemId:item.id,fileId:file.id},worker),/قبول طلب التعديل/);
+ db.assertDone();
+});
 
 test('Parent readiness includes both approved and uploaded final outputs',()=>assert.deepEqual(domain.workReadiness([{...item,status:'approved'},item]),{total:2,approved:1,percent:75,complete:false}));
 test('Final upload counts half readiness but not final approval',()=>assert.deepEqual(domain.workReadiness([item]),{total:1,approved:0,percent:50,complete:false}));
@@ -81,7 +136,7 @@ test('Requirement header displays its name, media and readiness without duplicat
   assert(summary.includes('item.media_kind'),'Summary must identify photo/video');
   assert(!summary.includes('{item.idea?.trim()'),'Summary must not duplicate the entire long brief in the header');
   assert(front.includes('<Readiness value={workItemReadiness(item)} />'),'Requirement readiness must remain visible');
-  assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf('{opened && <ItemEditor'),'Readiness must appear before expanding requirement');
+  assert(front.indexOf('<Readiness value={workItemReadiness(item)} />')<front.indexOf("{opened && item.delivery_mode !== 'drive_link' && <ItemEditor"),'Readiness must appear before expanding requirement');
   assert(front.includes('<StrategyIdeaBrief value={idea}/>'),'The full brief must render as a structured preview when the requirement is opened');
   assert(front.includes('function StrategyIdeaBrief'),'Strategy brief must have its own structured renderer');
   assert(front.includes("if(!text.includes('بريف إبداعي:'))"),'Non-strategy tasks must retain their plain-text fallback');

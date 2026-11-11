@@ -99,7 +99,7 @@ const schema = load('server/_marketing-workflow-schema.ts');
   async function reviewUpgradeFixture(missingReviewTables = false) {
     const appliedCodes = new Set(Array.from({length:9}, (_,i) => `schema-${i+1}`)
       .filter(code => !missingReviewTables ? !['schema-8','schema-9'].includes(code) : true));
-    let reviewingReady = !missingReviewTables, terminalReady = !missingReviewTables;
+    let reviewingReady = !missingReviewTables, terminalReady = !missingReviewTables, captureReady = false;
     const executed = [];
     const modernSql = async (parts) => {
       const query = parts.join('?').replace(/\s+/g,' ');
@@ -116,7 +116,7 @@ const schema = load('server/_marketing-workflow-schema.ts');
         tasks:true,items:true,plans:true,drafts:true,files:true,ratings:true,formats:true,categories:true,
         notes:true,rejected:true,reviewers:reviewingReady,revisionNumbers:reviewingReady,
         executorResponse:reviewingReady,rejectedRevisionNotes:reviewingReady,deadlineExceptions:reviewingReady,
-        editingState:reviewingReady,rejectedState:terminalReady,
+        editingState:reviewingReady,rejectedState:terminalReady,captureMode:captureReady,
       }];
       throw new Error('Unexpected SQL in review upgrade fixture: '+query);
     };
@@ -133,12 +133,14 @@ const schema = load('server/_marketing-workflow-schema.ts');
             : script.includes("values('schema-13')") ? 'schema-13'
             : script.includes("values('schema-14')") ? 'schema-14'
             : script.includes("values('schema-15')") ? 'schema-15'
-            : script.includes("values('schema-16')") ? 'schema-16' : 'unexpected';
+            : script.includes("values('schema-16')") ? 'schema-16'
+            : script.includes("values('schema-17')") ? 'schema-17' : 'unexpected';
           assert.notEqual(code,'unexpected','Only additive workflow migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
           if(code==='schema-9') terminalReady=true;
           if(code==='schema-10') reviewingReady=true;
+          if(code==='schema-17') captureReady=true;
         },
         tryWithDatabaseAdvisoryLock:async(key,work) => {
           assert.equal(key,'mzj:marketing:schema-setup');
@@ -152,8 +154,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16']);
-  console.log('PASS: schema-7 to schema-16 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17']);
+  console.log('PASS: schema-7 to schema-17 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });

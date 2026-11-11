@@ -33,6 +33,7 @@ function uniqueValues(values: Array<string | null | undefined>) {
 export function MarketingDashboardPage() {
   const [params, setParams] = useSearchParams(), [search, setSearch] = useState('');
   const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
+  const [captureOnly,setCaptureOnly] = useState(false);
   const [searchTaskAssignees, setSearchTaskAssignees] = useState<string[]>([]);
   const [tableId, setTableId] = useState('');
   const [pdfError, setPdfError] = useState('');
@@ -86,7 +87,8 @@ export function MarketingDashboardPage() {
     return grouped;
   }, [lines]);
 
-  function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = []) {
+  function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = [], capture = false) {
+    setCaptureOnly(capture);
     setDeliveryFilter(filter);
     setSearchTaskAssignees(assigneeNames);
     setParams({ task: id });
@@ -147,6 +149,10 @@ export function MarketingDashboardPage() {
             {((task.submitted_on_time_count ?? 0) > 0 || (task.submitted_late_count ?? 0) > 0) && <div className="mkw-delivery-summary" aria-label="مواعيد تسليم المطلوبات">
               {(task.submitted_on_time_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-on-time" onClick={() => openTask(task.id, 'on_time')}><span>{W.deliveryOnTime}</span><strong>{task.submitted_on_time_count}</strong></button>}
               {(task.submitted_late_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-late" onClick={() => openTask(task.id, 'late')}><span>{W.deliveryLate}</span><strong>{task.submitted_late_count}</strong></button>}
+            </div>}
+            {((task.capture_on_time_count ?? 0) > 0 || (task.capture_late_count ?? 0) > 0) && <div className="mkw-delivery-summary mkw-photography-delivery" aria-label="مواعيد تسليم التصوير">
+              {(task.capture_on_time_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-on-time" onClick={() => openTask(task.id, 'on_time', [], true)}><span>التصوير في الموعد</span><strong>{task.capture_on_time_count}</strong></button>}
+              {(task.capture_late_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-late" onClick={() => openTask(task.id, 'late', [], true)}><span>تأخر في التصوير</span><strong>{task.capture_late_count}</strong></button>}
             </div>}
             <button type="button" className="mkw-dashboard-open" onClick={() => openTask(task.id)}>{W.open}<CaretLeft size={16}/></button>
           </article>)}
@@ -253,8 +259,8 @@ export function MarketingDashboardPage() {
         </div>}
       </section>
     </div>
-    {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} searchAssigneeNames={searchTaskAssignees}
-      onClose={() => { setParams({}); setDeliveryFilter(''); setSearchTaskAssignees([]); }} onChanged={() => void query.reload()}/>}
+    {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} captureOnly={captureOnly} searchAssigneeNames={searchTaskAssignees}
+      onClose={() => { setParams({}); setDeliveryFilter(''); setCaptureOnly(false); setSearchTaskAssignees([]); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">

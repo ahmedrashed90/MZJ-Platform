@@ -115,6 +115,21 @@ commit;`;
 // Do not re-run the initial full workflow DDL just because a new column/table
 // was introduced: ALTER/CREATE within the entire bootstrap may deadlock with
 // concurrent reads and leave every serverless request running for 120 seconds.
+/** Separate photography-link submissions from publishable creative files. The
+ * default is files, preserving every existing item without a data rewrite. */
+export const MARKETING_WORKFLOW_CAPTURE_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+alter table marketing.work_items add column if not exists delivery_mode text not null default 'files';
+alter table marketing.work_items add column if not exists capture_url text;
+alter table marketing.work_items add column if not exists capture_submitted_at timestamptz;
+alter table marketing.work_items add column if not exists creative_treatment text not null default '';
+alter table marketing.work_items drop constraint if exists work_items_delivery_mode_check;
+alter table marketing.work_items add constraint work_items_delivery_mode_check
+  check(delivery_mode in ('files','drive_link'));
+insert into marketing.workflow_migrations(code) values('schema-17') on conflict do nothing;
+commit;`;
+
 export const MARKETING_WORKFLOW_REJECTED_RATINGS_SQL = `-- Preserve a rejected executor's rating capability WITHOUT leaving the rejected
 -- requirement in the active task, readiness, product or publication pipeline.
 begin;
@@ -526,7 +541,7 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
     files: boolean; ratings: boolean; formats: boolean; categories: boolean;
     notes: boolean; rejected: boolean; reviewers: boolean; deadlineExceptions: boolean;
     revisionNumbers: boolean; executorResponse: boolean; rejectedRevisionNotes: boolean;
-    editingState: boolean; rejectedState: boolean;
+    editingState: boolean; rejectedState: boolean; captureMode: boolean;
   }[]>`
     select
       to_regclass('marketing.work_tasks') is not null as tasks,
@@ -550,7 +565,11 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
       exists (select 1 from pg_constraint where conrelid=to_regclass('marketing.work_items')
         and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%editing%') as "editingState",
       exists (select 1 from pg_constraint where conrelid=to_regclass('marketing.work_items')
-        and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%rejected%') as "rejectedState"
+        and conname='work_items_status_check' and pg_get_constraintdef(oid) like '%rejected%') as "rejectedState",
+      exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_items' and column_name='delivery_mode')
+        and exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_items' and column_name='capture_url')
+        and exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_items' and column_name='capture_submitted_at')
+        and exists (select 1 from information_schema.columns where table_schema='marketing' and table_name='work_items' and column_name='creative_treatment') as "captureMode"
   `;
   const missing = Object.entries(state || {}).filter(([,present]) => !present).map(([name]) => name);
   return {
@@ -562,6 +581,7 @@ export async function marketingWorkflowStructureStatus(sql = getSql()) {
     revisionReady: Boolean(state?.reviewers && state?.revisionNumbers && state?.executorResponse && state?.rejectedRevisionNotes && state?.editingState),
     terminalReady: Boolean(state?.rejectedState),
     deadlineExceptionsReady: Boolean(state?.deadlineExceptions),
+    captureReady: Boolean(state?.captureMode),
   };
 }
 
@@ -571,12 +591,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false, hasCampaignGoals: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15'), hasCampaignGoals: rows.some(x => x.code === 'schema-16') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false, hasCampaignGoals: false, hasCapture: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15'), hasCampaignGoals: rows.some(x => x.code === 'schema-16'), hasCapture: rows.some(x => x.code === 'schema-17') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers && existing.hasCampaignGoals
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers && existing.hasCampaignGoals && existing.hasCapture
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -598,6 +618,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasPublicationDates) await runSqlScript(MARKETING_WORKFLOW_PUBLICATION_DATES_SQL);
       if (!(await flags()).hasPlanReviewers) await runSqlScript(MARKETING_WORKFLOW_PLAN_REVIEWERS_SQL);
       if (!(await flags()).hasCampaignGoals) await runSqlScript(MARKETING_WORKFLOW_CAMPAIGN_GOALS_SQL);
+      if (!(await flags()).hasCapture || !(await marketingWorkflowStructureStatus(sql)).captureReady) await runSqlScript(MARKETING_WORKFLOW_CAPTURE_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');

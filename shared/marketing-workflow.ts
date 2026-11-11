@@ -14,7 +14,8 @@ export type WorkFormat = { id: string; platform_id: string; platform_name: strin
 export type WorkFile = { id: string; name: string; mime_type: string; file_size: number; category: 'idea' | 'final'; format_id: string; status: string; order_index?: number };
 export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
-  media_kind: WorkMediaKind; idea_name: string; idea: string; explanation?: string; caption?: string; hashtags?: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
+  media_kind: WorkMediaKind; delivery_mode?: 'files' | 'drive_link'; capture_url?: string | null; capture_submitted_at?: string | null; creative_treatment?: string;
+  idea_name: string; idea: string; explanation?: string; caption?: string; hashtags?: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
   files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
   review_notes?: WorkItemReviewNote[];
   latest_review_event?: { action: string; note: string; actor_name: string; created_at: string } | null;
@@ -45,6 +46,7 @@ export type WorkTask = {
   status: 'active' | 'completed' | 'empty'; due_from: string | null; due_to: string | null; product_count: number;
   approved_count: number; readiness: number; version: number; completed_at?: string | null; items?: WorkItem[];
   submitted_on_time_count?: number; submitted_late_count?: number;
+  capture_on_time_count?: number; capture_late_count?: number;
   /** Permission-scoped executor names, ideas and requirement dates for dashboard keyword search. */
   assignee_names?: string[]; search_ideas?: string[]; search_briefs?: string[]; due_dates?: string[];
 };
@@ -139,7 +141,8 @@ export function matchingWorkflowPublishFiles(
  * (terminal decision), but never becomes an approved product. Both screens
  * use these same milestones.
  */
-export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>): number {
+export function workItemReadiness(item: Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews' | 'delivery_mode' | 'capture_url'>>): number {
+  if (item.delivery_mode === 'drive_link') return item.capture_url ? 100 : 0;
   // Rejection closes the requirement without producing an approved product.
   // Retain its denominator and record the terminal decision as 100% readiness.
   if (item.status === 'rejected') return 100;
@@ -171,8 +174,8 @@ export function workReviewableFormats(
   });
 }
 
-export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews'>>>) {
-  const total = items.length;
+export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind' | 'format_reviews' | 'delivery_mode' | 'capture_url'>>>) {
+  const total = items.filter(item => item.delivery_mode !== 'drive_link').length;
   let approved = 0;
   let resolved = 0;
   let readinessPoints = 0;
@@ -181,11 +184,12 @@ export function workReadiness(items: Array<Pick<WorkItem, 'status' | 'formats' |
     readinessPoints += itemPercent;
     if (itemPercent === 100) {
       resolved += 1;
-      if (item.status !== 'rejected') approved += 1;
+      if (item.delivery_mode !== 'drive_link' && item.status !== 'rejected') approved += 1;
     }
   }
-  return { total, approved, percent: total ? Math.round(readinessPoints * 10 / total) / 10 : 0,
-    complete: total > 0 && resolved === total };
+  const requirementCount = items.length;
+  return { total, approved, percent: requirementCount ? Math.round(readinessPoints * 10 / requirementCount) / 10 : 0,
+    complete: requirementCount > 0 && resolved === requirementCount };
 }
 export function isWorkDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
