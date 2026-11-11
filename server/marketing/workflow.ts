@@ -208,6 +208,12 @@ async function visibleItem(db: any, user: SessionUser, itemId: string, forEdit =
 }
 async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkItem[]> {
   const rows = await db`select i.*,i.due_on::text,coalesce(d.name,'') as department_name,coalesce(u.full_name,'') as assignee_name,
+    coalesce((select h.data->>'deliveryKind' from marketing.work_history h where h.item_id=i.id
+      and h.action='created' order by h.created_at desc,h.id desc limit 1),'final_files') as delivery_kind,
+    coalesce((select h.data->>'creativeBrief' from marketing.work_history h where h.item_id=i.id
+      and h.action='created' order by h.created_at desc,h.id desc limit 1),'') as creative_brief,
+    (select h.data->>'url' from marketing.work_history h where h.item_id=i.id
+      and h.action='shooting_link_submitted' order by h.created_at desc,h.id desc limit 1) as shooting_url,
     coalesce((select h.data->>'explanation' from marketing.work_history h where h.item_id=i.id
       and h.action in ('created','edited') and h.data ? 'explanation'
       order by h.created_at desc,h.id desc limit 1),'') as explanation,
@@ -330,10 +336,18 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     -- Show delivery badges only after final approval. Classify punctuality by
     -- the executor's original submission date in Riyadh, not admin review time.
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
+      and not exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='created' and shot.data->>'deliveryKind'='shooting_link')
+      and not exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='created' and shot.data->>'deliveryKind'='shooting_link')
       and ((i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on or exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved')))::int as submitted_on_time_count,
     count(i.id) filter(where i.status='approved' and i.approved_at is not null and i.submitted_at is not null
       and (i.submitted_at at time zone 'Asia/Riyadh')::date > i.due_on
       and not exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved'))::int as submitted_late_count,
+    count(i.id) filter(where i.submitted_at is not null and
+      (i.submitted_at at time zone 'Asia/Riyadh')::date<=i.due_on
+      and exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='shooting_link_submitted'))::int as shooting_on_time_count,
+    count(i.id) filter(where i.submitted_at is not null and
+      (i.submitted_at at time zone 'Asia/Riyadh')::date>i.due_on
+      and exists(select 1 from marketing.work_history shot where shot.item_id=i.id and shot.action='shooting_link_submitted'))::int as shooting_late_count,
     min(i.due_on)::text as due_from,max(i.due_on)::text as due_to
     from marketing.work_tasks t join marketing.campaign_types ct on ct.id=t.type_id
     left join marketing.work_items i on i.task_id=t.id and (
@@ -355,6 +369,8 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
     // Use the very same item status, configured formats and ready final
     // attachments as workItemReadiness. Scoped IDs came from the query above.
     const readyItems = await sql<any[]>`select i.task_id::text as task_id,i.status,i.media_kind,i.formats,
+      case when exists(select 1 from marketing.work_history h where h.item_id=i.id and h.action='created' and h.data->>'deliveryKind'='shooting_link')
+        then 'shooting_link' else 'final_files' end as delivery_kind,
       coalesce((select jsonb_agg(jsonb_build_object('name',f.original_name,'mime_type',f.mime_type,
         'category',j.category,'format_id',j.format_id,'status',f.status))
         from marketing.work_item_files j join marketing.files f on f.id=j.file_id
@@ -422,10 +438,12 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
       if (clientKeys.has(clientKey)) throw new Error(W.invalid);
       clientKeys.add(clientKey);
       const kind = input.mediaKind === 'image' || input.mediaKind === 'video' ? input.mediaKind : null;
+      const deliveryKind=input.deliveryKind==='shooting_link'?'shooting_link':'final_files';
+      if(deliveryKind==='shooting_link'&&kind!=='video')throw new Error(W.invalid);
       const idea = text(input.idea, 20000), dueOn = text(input.dueOn, 10), fileIds = [...new Set(list(input.ideaFileIds).map(id))];
       if (!kind || !isWorkDate(dueOn) || (!idea && !fileIds.length)) throw new Error(W.requiredFields);
       await validateAssignee(tx, departmentId, assigneeId);
-      const formats = await validateFormats(tx, kind, list(input.formatIds));
+      const formats = deliveryKind==='shooting_link'?[]:await validateFormats(tx, kind, list(input.formatIds));
       const [item] = await tx<any[]>`insert into marketing.work_items(task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,sort_order)
         values(${reservationId}::uuid,${clientKey}::uuid,${departmentId}::uuid,${assigneeId}::uuid,${kind},
           ${text(input.ideaName, 250) || idea.split('\n')[0].slice(0, 120) || `${name} - ${index + 1}`},${idea},${tx.json(json(formats))},${dueOn}::date,${index}) returning id::text`;
@@ -437,7 +455,10 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
         for (const fileId of fileIds) await tx`insert into marketing.work_item_files(item_id,file_id,category) values(${item.id}::uuid,${fileId}::uuid,'idea')`;
       }
       audiences.push(assigneeId);
-      await history(tx, user, reservationId, item.id, 'created', '', { assigneeId, kind, dueOn, explanation: text(input.explanation, 20000) });
+      await history(tx, user, reservationId, item.id, 'created', '', {
+        assigneeId,kind,dueOn,explanation:text(input.explanation,20000),
+        deliveryKind,creativeBrief:text(input.creativeBrief,50000)
+      });
     }
     // Strategy assignments have an audit marker in the SAME transaction as
     // all work items and reservation consumption. A retry cannot convert a
@@ -467,6 +488,8 @@ export type StrategyWorkflowTaskInput = {
     explanation: string;
     dueOn: string;
     formatIds: string[];
+    deliveryKind?: 'shooting_link' | 'final_files';
+    creativeBrief?: string;
   }>;
 };
 
@@ -698,6 +721,40 @@ async function notifyItemSubmission(sql: Sql, user: SessionUser, itemId: string,
     try { await visibleItem(sql, reviewer, itemId); reviewers.push(candidate.id); } catch { /* Outside this reviewer's scope. */ }
   }
   await notify(user, 'submitted', result.taskId, `${W.submitted}: ${result.title}`, [...reviewers, result.owner]);
+}
+
+/** A photographer delivers the original Google Drive URL once.
+ * The first server timestamp is permanent and determines punctuality in Riyadh.
+ * Shooting is a task requirement, never a publishable final product. */
+async function submitShootingLink(sql:Sql,body:Row,user:SessionUser){
+  const itemId=id(body.itemId), raw=text(body.url,2048);
+  let url:URL;
+  try{url=new URL(raw);}catch{throw Error('أدخل رابط Google Drive صحيحًا');}
+  if(url.protocol!=='https:'||url.username||url.password||!['drive.google.com','docs.google.com'].includes(url.hostname)||
+     !url.pathname||url.pathname==='/')throw Error('أدخل رابط Google Drive صحيحًا');
+  const result=await sql.begin(async tx=>{
+    await tx`set local lock_timeout='3s'`;
+    const visible=await visibleItem(tx,user,itemId);
+    if(visible.assigned_to!==user.id)throw Error(W.denied);
+    const [row]=await tx<any[]>`select * from marketing.work_items where id=${itemId}::uuid for update`;
+    if(!row||row.version!==Number(body.version))throw Error(W.conflict);
+    const [created]=await tx<any[]>`select data from marketing.work_history where item_id=${itemId}::uuid
+       and action='created' order by created_at desc,id desc limit 1`;
+    if(created?.data?.deliveryKind!=='shooting_link')throw Error('هذا المطلوب لا يستقبل روابط التصوير');
+    const [prior]=await tx<any[]>`select id from marketing.work_history where item_id=${itemId}::uuid
+      and action='shooting_link_submitted' limit 1`;
+    if(prior||row.submitted_at||row.status!=='in_progress')throw Error('تم تسجيل رابط التصوير ولا يمكن تعديله');
+    const [saved]=await tx<any[]>`update marketing.work_items set status='approved',
+      submitted_at=now(),approved_at=now(),version=version+1,updated_at=now()
+      where id=${itemId}::uuid returning submitted_at,due_on`;
+    const submissionDate=String((await tx<any[]>`select (now() at time zone 'Asia/Riyadh')::date::text as day`)[0].day);
+    await history(tx,user,row.task_id,itemId,'shooting_link_submitted','',{
+      url:url.toString(),submittedOn:submissionDate,dueOn:workDate(saved.due_on)});
+    await recalculateTask(tx,row.task_id);
+    return {ok:true,taskId:row.task_id,url:url.toString(),onTime:submissionDate<=workDate(saved.due_on),
+      message:submissionDate<=workDate(saved.due_on)?'التصوير في الموعد':'تأخر في التصوير'};
+  });
+  return result;
 }
 
 async function submitItem(sql: Sql, body: Row, user: SessionUser) {
@@ -2776,6 +2833,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user);
     else if (action === 'work_remove_item_format') result = await removeItemFormat(sql, body, user);
     else if (action === 'work_submit') result = await submitItem(sql, body, user);
+    else if (action === 'work_submit_shooting') result = await submitShootingLink(sql,body,user);
     else if (action === 'work_request_deadline_exception') result = await requestDeadlineException(sql, body, user);
     else if (action === 'work_approve_deadline_exception') result = await decideDeadlineException(sql, body, user, 'approved');
     else if (action === 'work_reject_deadline_exception') result = await decideDeadlineException(sql, body, user, 'rejected');
