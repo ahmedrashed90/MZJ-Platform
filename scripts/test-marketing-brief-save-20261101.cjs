@@ -111,7 +111,10 @@ test('Executors and requirements overview hides explanation but keeps it in the 
   const overview=ui.split('<section className="mkw-detail-items">')[1]?.split('<details className="mkw-history">')[0];
   assert.ok(overview,'Executors and requirements section is present');
   assert.doesNotMatch(overview,/mkw-requirement-explanation-read|الشرح: \{item\.explanation\}/);
-  assert.match(overview,/\{item\.idea\?\.trim\(\) \|\| 'لم تُحدد الفكرة'\}/);
+  assert.match(overview,/\{item\.idea_name\}/,'Each requirement must keep its clear short name');
+  assert.doesNotMatch(overview,/\{item\.idea\?\.trim\(\)/,'The full creative brief must not be repeated in the summary');
+  assert.match(ui,/<StrategyIdeaBrief value=\{idea\}\/>/,'The full brief remains available inside the opened requirement');
+  assert.match(ui,/function StrategyIdeaBrief/,'Structured image/video brief renderer remains available');
   assert.match(ui,/<Field label="الشرح — شرح الفكرة أو المطلوب">/);
   assert.match(ui,/onChange=\{event => \{ setExplanation\(event\.target\.value\)/);
 });
