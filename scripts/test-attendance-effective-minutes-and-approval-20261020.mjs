@@ -200,11 +200,13 @@ check('Vacation can select morning and evening independently without editing tim
   assert.match(attendanceScreen, /periodId, fromTime: shift\?\.startTime \|\| '', toTime: shift\?\.endTime \|\| ''/);
   assert.match(attendanceServer, /on conflict\(user_id,work_date,period_id\) do update set/);
 });
-check('Marketing item badges require final approval, not merely submitted files', () => {
-  assert.match(workflow, /case when i\.status='approved' and i\.approved_at is not null and i\.submitted_at is not null/);
+check('Final-file delivery badges require approval, while capture links have their own status', () => {
+  assert.match(workflow, /when i\.status='approved' and i\.approved_at is not null and i\.submitted_at is not null/);
+  assert.match(workflow, /case when i\.delivery_mode='drive_link' and i\.capture_submitted_at is not null then/);
 });
-check('Marketing dashboard counters count only approved items', () => {
-  assert.equal((workflow.match(/count\(i\.id\) filter\(where i\.status='approved' and i\.approved_at is not null/g) || []).length, 2);
+check('Marketing dashboard counts only approved final files and separates photography submissions', () => {
+  assert.equal((workflow.match(/count\(i\.id\) filter\(where i\.delivery_mode='files' and i\.status='approved' and i\.approved_at is not null/g) || []).length, 2);
+  assert.equal((workflow.match(/count\(i\.id\) filter\(where i\.delivery_mode='drive_link' and i\.capture_submitted_at is not null/g) || []).length, 2);
 });
 check('Marketing punctuality is still determined by original submission date', () => {
   assert.match(workflow, /\(i\.submitted_at at time zone 'Asia\/Riyadh'\)::date <= i\.due_on/);
