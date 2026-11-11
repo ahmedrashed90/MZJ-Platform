@@ -82,7 +82,7 @@ function normalizeAgenda(body: Record<string, unknown>): StrategyAgendaInput {
   if(!keysOnly(body,['requestKey','sourcePlanId','name','agendaFrom','agendaTo','entries']))throw Error('Unsupported agenda fields');
   const requestKey=body.requestKey, sourcePlanId=stringValue(body.sourcePlanId,120),name=stringValue(body.name,250);
   const agendaFrom=stringValue(body.agendaFrom,10),agendaTo=stringValue(body.agendaTo,10);
-  const dates=(value:string)=>/^20\\d\\d-\\d\\d-\\d\\d$/.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&
+  const dates=(value:string)=>/^20\d\d-\d\d-\d\d$/.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&
     new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;
   if(!isUuid(requestKey)||!sourcePlanId||!name||!dates(agendaFrom)||!dates(agendaTo)||agendaFrom>agendaTo)throw Error('Invalid agenda identification');
   if(!Array.isArray(body.entries)||body.entries.length<1||body.entries.length>80)throw Error('Invalid agenda item count');
