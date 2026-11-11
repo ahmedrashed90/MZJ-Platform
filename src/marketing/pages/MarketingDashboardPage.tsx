@@ -32,7 +32,7 @@ function uniqueValues(values: Array<string | null | undefined>) {
 
 export function MarketingDashboardPage() {
   const [params, setParams] = useSearchParams(), [search, setSearch] = useState('');
-  const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late'>('');
+  const [deliveryFilter, setDeliveryFilter] = useState<'' | 'on_time' | 'late' | 'shooting_on_time' | 'shooting_late'>('');
   const [searchTaskAssignees, setSearchTaskAssignees] = useState<string[]>([]);
   const [tableId, setTableId] = useState('');
   const [pdfError, setPdfError] = useState('');
@@ -86,7 +86,7 @@ export function MarketingDashboardPage() {
     return grouped;
   }, [lines]);
 
-  function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = []) {
+  function openTask(id: string, filter: '' | 'on_time' | 'late' | 'shooting_on_time' | 'shooting_late' = '', assigneeNames: string[] = []) {
     setDeliveryFilter(filter);
     setSearchTaskAssignees(assigneeNames);
     setParams({ task: id });
@@ -148,6 +148,13 @@ export function MarketingDashboardPage() {
               {(task.submitted_on_time_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-on-time" onClick={() => openTask(task.id, 'on_time')}><span>{W.deliveryOnTime}</span><strong>{task.submitted_on_time_count}</strong></button>}
               {(task.submitted_late_count ?? 0) > 0 && <button type="button" className="mkw-delivery-summary-card is-late" onClick={() => openTask(task.id, 'late')}><span>{W.deliveryLate}</span><strong>{task.submitted_late_count}</strong></button>}
             </div>}
+            {((task.shooting_on_time_count??0)>0||(task.shooting_late_count??0)>0) &&
+              <div className="mkw-delivery-summary" aria-label="مواعيد تسليم التصوير">
+                {(task.shooting_on_time_count??0)>0 && <button type="button" className="mkw-delivery-summary-card is-on-time"
+                  onClick={()=>openTask(task.id,'shooting_on_time')}><span>التصوير في الموعد</span><strong>{task.shooting_on_time_count}</strong></button>}
+                {(task.shooting_late_count??0)>0 && <button type="button" className="mkw-delivery-summary-card is-late"
+                  onClick={()=>openTask(task.id,'shooting_late')}><span>تأخر في التصوير</span><strong>{task.shooting_late_count}</strong></button>}
+              </div>}
             <button type="button" className="mkw-dashboard-open" onClick={() => openTask(task.id)}>{W.open}<CaretLeft size={16}/></button>
           </article>)}
         </div>
