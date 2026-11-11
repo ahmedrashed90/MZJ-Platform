@@ -5,7 +5,7 @@ import { loadUserProfile } from './_auth.js';
 import { hasPermission, canAccessSystem } from '../shared/system-access.js';
 import { supportsWorkMedia } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
-import { createStrategyWorkflowTask, type StrategyWorkflowTaskInput } from './marketing/workflow.js';
+import { createStrategyWorkflowTask, listStrategyApprovedProducts, createStrategyWorkflowAgenda, type StrategyWorkflowTaskInput, type StrategyAgendaInput } from './marketing/workflow.js';
 
 // Dedicated, server-to-server API. Never proxy the ordinary Marketing API.
 // READ can only SELECT approved fields. ASSIGN can only create a workflow task.
@@ -78,19 +78,64 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
   return { requestKey, typeId, name, source: { planId, ideaCodes }, items: normalizedItems };
 }
 
+function normalizeAgenda(body: Record<string, unknown>): StrategyAgendaInput {
+  if(!keysOnly(body,['requestKey','sourcePlanId','name','agendaFrom','agendaTo','entries']))throw Error('Unsupported agenda fields');
+  const requestKey=body.requestKey, sourcePlanId=stringValue(body.sourcePlanId,120),name=stringValue(body.name,250);
+  const agendaFrom=stringValue(body.agendaFrom,10),agendaTo=stringValue(body.agendaTo,10);
+  const dates=(value:string)=>/^20\\d\\d-\\d\\d-\\d\\d$/.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&
+    new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;
+  if(!isUuid(requestKey)||!sourcePlanId||!name||!dates(agendaFrom)||!dates(agendaTo)||agendaFrom>agendaTo)throw Error('Invalid agenda identification');
+  if(!Array.isArray(body.entries)||body.entries.length<1||body.entries.length>80)throw Error('Invalid agenda item count');
+  const entries:StrategyAgendaInput['entries']=body.entries.map(value=>{
+    if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid agenda item');
+    const row=value as Record<string,unknown>;
+    if(!keysOnly(row,['ideaCode','productId','date','platforms']))throw Error('Unsupported agenda item');
+    const ideaCode=stringValue(row.ideaCode,44),productId=row.productId,date=stringValue(row.date,10);
+    if(!/^[A-Za-z0-9_-]{3,44}$/.test(ideaCode)||!isUuid(productId)||!dates(date)||
+      !Array.isArray(row.platforms)||row.platforms.length<1||row.platforms.length>15)throw Error('Invalid agenda item');
+    const platforms= row.platforms.map(value=>{
+      if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid platform');
+      const platform=value as Record<string,unknown>;
+      if(!keysOnly(platform,['platformId','postTypes'])||!isUuid(platform.platformId)||!Array.isArray(platform.postTypes)||
+        platform.postTypes.length<1||platform.postTypes.length>30)throw Error('Invalid agenda platform');
+      const postTypes=platform.postTypes.map(value=>{
+        if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid post type');
+        const post=value as Record<string,unknown>;
+        if(!keysOnly(post,['postTypeId','budget'])||!isUuid(post.postTypeId)||post.budget!==0)throw Error('Invalid agenda post type');
+        return {postTypeId:post.postTypeId as string,budget:0};
+      });
+      return {platformId:platform.platformId as string,postTypes};
+    });
+    return {ideaCode,productId,date,platforms};
+  });
+  const ids=entries.map(row=>row.productId);
+  if(new Set(ids).size!==ids.length)throw Error('Invalid duplicate agenda items');
+  return {requestKey,sourcePlanId,name,agendaFrom,agendaTo,entries};
+}
+
 export default async function strategyIntegrationHandler(request: VercelRequest, response: VercelResponse, resource: string) {
   response.setHeader('Cache-Control', 'no-store, max-age=0');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   const method = String(request.method || 'GET').toUpperCase();
-  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments'].includes(resource);
+  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'agenda-products'].includes(resource);
   const isAssignment = method === 'POST' && resource === 'assignments';
-  if (!isRead && !isAssignment) {
-    response.setHeader('Allow', resource === 'assignments' ? 'GET, POST' : 'GET');
+  const isAgenda = method === 'POST' && resource === 'agenda';
+  if (!isRead && !isAssignment && !isAgenda) {
+    response.setHeader('Allow', ['assignments','agenda'].includes(resource) ? 'GET, POST' : 'GET');
     return response.status(405).json({ ok: false, error: 'Only designated read endpoints and assignment creation are allowed' });
   }
   if (!verifyScope(request, isRead ? 'read' : 'assign')) return response.status(401).json({ ok: false, error: 'Unauthorized integration request' });
   try {
     const sql = getSql();
+    if (isRead && resource === 'agenda-products') {
+      const actorId=String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID||'').trim();
+      if(!isUuid(actorId))return response.status(503).json({ok:false,error:'Integration user is not configured'});
+      const user=await loadUserProfile(actorId);
+      if(!user || !canAccessSystem(user,'marketing') || !hasPermission(user,'marketing.products.view'))
+        return response.status(403).json({ok:false,error:'Integration user cannot read approved products'});
+      const payload=await listStrategyApprovedProducts(sql,user);
+      return response.status(200).json(payload);
+    }
     if (isRead) {
       const payload = await sql.begin(async tx => {
         await tx`set transaction read only`;
@@ -153,16 +198,19 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
     }
     const body = bodyValue(request);
     if (!body) return response.status(400).json({ ok:false,error:'JSON object is required' });
-    if (JSON.stringify(body).length > 100000) return response.status(413).json({ ok:false,error:'Assignment payload is too large' });
-    const input = normalizeAssignment(body);
+    if (JSON.stringify(body).length > 100000) return response.status(413).json({ ok:false,error:'Integration payload is too large' });
+    const input = isAgenda ? normalizeAgenda(body) : normalizeAssignment(body);
     const actorId = String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID || '').trim();
     if (!isUuid(actorId)) return response.status(503).json({ ok:false,error:'Integration task creator is not configured' });
     const user = await loadUserProfile(actorId);
-    if (!user || !canAccessSystem(user,'marketing') || !hasPermission(user,'marketing.task.create')) {
-      return response.status(403).json({ ok:false,error:'Integration user cannot create Marketing tasks' });
+    if (!user || !canAccessSystem(user,'marketing') ||
+      !hasPermission(user,isAgenda?'marketing.agenda.create':'marketing.task.create') ||
+      (isAgenda&&!hasPermission(user,'marketing.products.view'))) {
+      return response.status(403).json({ ok:false,error:'Integration user lacks the required Marketing permission' });
     }
     await assertMarketingWorkflowReady(sql);
-    const result = await createStrategyWorkflowTask(sql,input,user);
+    const result = isAgenda ? await createStrategyWorkflowAgenda(sql,input as StrategyAgendaInput,user)
+      : await createStrategyWorkflowTask(sql,input as StrategyWorkflowTaskInput,user);
     return response.status(result.existed ? 200 : 201).json(result);
   } catch (error: any) {
     const message = String(error?.message || 'Integration failed');
