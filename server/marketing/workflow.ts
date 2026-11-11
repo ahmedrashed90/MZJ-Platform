@@ -1756,6 +1756,144 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     return { ok: true, id: planId, planNo, message: W.saved };
   });
 }
+/**
+ * Strategy agenda candidates are real approved Marketing products. Historical
+ * strategy task assignments establish an immutable ideaCode -> clientKey link.
+ * No independent "publication draft" database and no unapproved files.
+ */
+export async function listStrategyApprovedProducts(sql: Sql, user: SessionUser) {
+  requirePermission(user, 'marketing.products.view');
+  const links = await sql<any[]>`
+    select i.id::text as product_id,i.client_key::text,
+      h.data as strategy_source
+    from marketing.work_items i
+    join marketing.work_tasks task on task.id=i.task_id
+    join marketing.work_history h on h.task_id=task.id and h.action='strategy_assigned'
+    where task.is_deleted=false and task.created_by=${user.id}::uuid
+      and i.status='approved' and h.data->>'source'='mzj-content-strategy'
+    order by i.created_at desc`;
+  const sourceByProduct = new Map<string,{ideaCode:string;sourcePlanId:string}>();
+  for (const link of links) {
+    const codes=Array.isArray(link.strategy_source?.ideaCodes)?link.strategy_source.ideaCodes:[];
+    const keys=Array.isArray(link.strategy_source?.clientKeys)?link.strategy_source.clientKeys:[];
+    const index=keys.indexOf(String(link.client_key));
+    const ideaCode=codes[index], sourcePlanId=link.strategy_source?.planId;
+    if (index < 0 || typeof ideaCode !== 'string' || typeof sourcePlanId !== 'string') continue;
+    sourceByProduct.set(String(link.product_id),{ideaCode,sourcePlanId});
+  }
+  if (!sourceByProduct.size) return {ok:true,products:[] as any[]};
+  // Native products() enforces approval status, final format coverage and scope.
+  const approved=(await products(sql,user)).filter(product=>sourceByProduct.has(String(product.id)));
+  const ids=approved.map(product=>String(product.id));
+  const planned=ids.length ? await sql<any[]>`
+    select line.product_id::text as product_id,line.scheduled_on::text as scheduled_on,
+      line.post_type_id::text as post_type_id,post_type.platform_id::text as platform_id,
+      plan.id::text as agenda_id,plan.plan_no,plan.kind
+    from marketing.work_plan_items line
+    join marketing.work_plans plan on plan.id=line.plan_id
+    join marketing.platform_post_types post_type on post_type.id=line.post_type_id
+    where line.product_id=any(${ids}::uuid[])
+      and line.is_deleted=false and plan.is_deleted=false
+    order by line.scheduled_on,plan.id` : [];
+  const scheduleByProduct=new Map<string,any[]>();
+  for(const row of planned){
+    scheduleByProduct.set(row.product_id,[...(scheduleByProduct.get(row.product_id)||[]),{
+      date:row.scheduled_on,postTypeId:row.post_type_id,platformId:row.platform_id,
+      agendaId:row.agenda_id,agendaNo:row.plan_no,kind:row.kind
+    }]);
+  }
+  return {ok:true,products:approved.map(product=>{
+    const source=sourceByProduct.get(String(product.id))!;
+    const formats=Array.isArray(product.formats)?product.formats:[];
+    return {
+      productId:String(product.id),ideaCode:source.ideaCode,sourcePlanId:source.sourcePlanId,
+      taskNo:String(product.task_no||''),taskName:String(product.task_name||''),
+      ideaName:String(product.idea_name||''),assigneeName:String(product.assignee_name||''),
+      mediaKind:product.media_kind,dueOn:String(product.due_on||'').slice(0,10),
+      approvedAt:product.approved_at||product.released_at||null,
+      formats:formats.map((format:WorkFormat)=>({
+        id:String(format.id),platformId:String(format.platform_id),platformName:String(format.platform_name||''),
+        platformCode:String(format.platform_code||''),name:String(format.name||''),
+        width:format.width??null,height:format.height??null
+      })),
+      captionReady:Boolean(String(product.caption||'').trim()),
+      hashtagsReady:Boolean(String(product.hashtags||'').trim()),
+      scheduled:scheduleByProduct.get(String(product.id))||[]
+    };
+  })};
+}
+
+export type StrategyAgendaInput = {
+  requestKey:string; sourcePlanId:string; name:string; agendaFrom:string; agendaTo:string;
+  entries:Array<{ideaCode:string;productId:string;date:string;
+    platforms:Array<{platformId:string;postTypes:Array<{postTypeId:string;budget:number}>}>}>;
+};
+/**
+ * Always use native createPlan() and changePlanReview() so that all existing
+ * agenda permissions, notifications, approvals and publication hooks apply.
+ * A repeated request key recovers the same agenda and review submission.
+ */
+export async function createStrategyWorkflowAgenda(sql:Sql,input:StrategyAgendaInput,user:SessionUser) {
+  requirePermission(user,'marketing.agenda.create');
+  requirePermission(user,'marketing.products.view');
+  const [existing]=await sql<any[]>`
+    select id::text,plan_no,review_status,name from marketing.work_plans
+    where created_by=${user.id}::uuid and request_key=${input.requestKey}::uuid
+      and kind='agenda' and is_deleted=false`;
+  if (existing) {
+    if (existing.review_status==='in_progress' || existing.review_status==='revision')
+      await changePlanReview(sql,user,{planId:existing.id,decision:'submitted',note:''});
+    return {ok:true,id:existing.id,planNo:existing.plan_no,
+      reviewStatus:existing.review_status==='in_progress'||existing.review_status==='revision'?'submitted':existing.review_status,
+      name:existing.name,existed:true};
+  }
+  if (!isWorkDate(input.agendaFrom)||!isWorkDate(input.agendaTo)||input.agendaFrom>input.agendaTo ||
+      input.agendaFrom<saudiCalendarDay()) throw Error('حدد فترة نشر تبدأ من اليوم أو بعده');
+  if (!input.entries.length||input.entries.length>80) throw Error('حدد من 1 إلى 80 منتجًا معتمدًا');
+  const productsResult=await listStrategyApprovedProducts(sql,user);
+  const byId=new Map(productsResult.products.map((item:any)=>[item.productId,item]));
+  const selected=new Set<string>();
+  for(const entry of input.entries) {
+    const product:any=byId.get(entry.productId);
+    if(!product||product.sourcePlanId!==input.sourcePlanId||product.ideaCode!==entry.ideaCode)
+      throw Error('المنتج غير معتمد أو لا يتبع استراتيجية المحتوى الحالية');
+    if(selected.has(entry.productId))throw Error('لا يمكن تكرار المنتج في نفس الأجندة');
+    selected.add(entry.productId);
+    const released=product.approvedAt?new Intl.DateTimeFormat('en-CA',{
+      timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'
+    }).format(new Date(product.approvedAt)):'';
+    if (!isWorkDate(entry.date)||entry.date<input.agendaFrom||entry.date>input.agendaTo ||
+       entry.date<product.dueOn||(released&&entry.date<released))
+       throw Error('تاريخ نشر غير مناسب لجاهزية المنتج: '+product.ideaName);
+    if(product.scheduled.length)throw Error('المنتج مرتبط بالفعل بأجندة أو حملة قائمة: '+product.ideaName);
+    if(!entry.platforms.length||entry.platforms.length>15)throw Error('اختر منصة نشر واحدة على الأقل');
+    const uniquePlatforms=new Set<string>();
+    for(const platform of entry.platforms){
+      if(uniquePlatforms.has(platform.platformId))throw Error('لا تكرر نفس المنصة للمنتج الواحد');
+      uniquePlatforms.add(platform.platformId);
+      if(!platform.postTypes.length)throw Error('اختر نوع نشر مناسبًا لكل منصة');
+      const selectedTypes=new Set<string>();
+      for(const type of platform.postTypes) {
+        if(selectedTypes.has(type.postTypeId))throw Error('نوع النشر مكرر');
+        selectedTypes.add(type.postTypeId);
+        if(!product.formats.some((format:any)=>format.id===type.postTypeId&&format.platformId===platform.platformId))
+          throw Error('نوع النشر غير مطابق للمقاسات النهائية المعتمدة: '+product.ideaName);
+      }
+    }
+  }
+  const result=await createPlan(sql,{
+    requestKey:input.requestKey,kind:'agenda',name:input.name,
+    agendaFrom:input.agendaFrom,agendaTo:input.agendaTo,
+    entries:input.entries.map(entry=>({
+      date:entry.date,productId:entry.productId,platforms:entry.platforms
+    }))
+  },user);
+  // Native createPlan uses an in_progress review state; submit automatically.
+  // No separate Strategy publishing draft is written or left in Firestore.
+  await changePlanReview(sql,user,{planId:result.id,decision:'submitted',note:''});
+  return {...result,reviewStatus:'submitted',name:input.name,existed:false};
+}
+
 async function planLines(sql: Sql, user: SessionUser, planId = '') {
   const scopes = departmentScope(user);
   const planReviewer = await canReviewPlan(sql,user);
