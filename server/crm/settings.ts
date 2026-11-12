@@ -75,6 +75,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         left join core.users last_user on last_user.id=state.last_user_id
         left join crm.assignment_rule_members m on m.rule_id=r.id
         left join core.users u on u.id=m.user_id
+        where r.is_active=true
         group by r.id,b.name,state.last_user_id,state.updated_at,last_user.full_name
         order by r.sort_order,r.created_at
       `,
@@ -94,6 +95,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             then coalesce(crm_departments.names,'{}'::text[]) else coalesce(global_departments.names,'{}'::text[]) end as departments,
           case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
             then coalesce(crm_branches.codes,'{}'::text[]) else coalesce(global_branches.codes,'{}'::text[]) end as branch_codes,
+          coalesce(crm_branches.primary_code,global_branches.primary_code) as primary_branch_code,
           case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
             then coalesce(crm_branches.names,'{}'::text[]) else coalesce(global_branches.names,'{}'::text[]) end as branches
         from core.users u
@@ -112,13 +114,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
         ) global_departments on true
         left join lateral (
           select array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name) as codes,
-            array_agg(b.name order by usb.is_primary desc,b.sort_order,b.name) as names
+            array_agg(b.name order by usb.is_primary desc,b.sort_order,b.name) as names,
+            (array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name))[1] as primary_code
           from core.user_system_branches usb
           join core.branches b on b.id=usb.branch_id and b.is_active=true
           where usb.user_id=u.id and usb.system_code='crm'
         ) crm_branches on true
         left join lateral (
-          select array_agg(distinct b.code) as codes,array_agg(distinct b.name) as names
+          select array_agg(distinct b.code) as codes,array_agg(distinct b.name) as names,
+            (array_agg(b.code order by ub.is_primary desc,b.sort_order,b.name))[1] as primary_code
           from core.user_branches ub
           join core.branches b on b.id=ub.branch_id and b.is_active=true
           where ub.user_id=u.id
@@ -143,7 +147,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const assignmentUser = assignmentUserById.get(member.user_id) as any;
         if (!assignmentUser?.is_active || !assignmentUser?.can_receive_leads) return false;
         if (!(assignmentUser.department_codes || []).includes(rule.department_code)) return false;
-        if (branchCode && !(assignmentUser.branch_codes || []).includes(branchCode)) return false;
+        if (branchCode && assignmentUser.primary_branch_code !== branchCode) return false;
         return true;
       });
       let next: any = null;
@@ -523,8 +527,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!hasPermission(user, "crm.routing.manage")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإدارة قواعد توزيع العملاء" });
     const id = clean(body.id);
     if (action === "delete") {
-      await sql`update crm.assignment_rules set is_active=false,updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
-      return response.status(200).json({ ok: true });
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return response.status(400).json({ ok: false, error: "رقم قاعدة التوزيع غير صالح" });
+      }
+      // Archive the exact rule, preserving assignment logs and the history of
+      // earlier leads. Archived rules are not selectable or shown as live rules.
+      const [archived] = await sql<any[]>`
+        update crm.assignment_rules set is_active=false,updated_by=${user.id}::uuid,updated_at=now()
+        where id=${id}::uuid and is_active=true
+        returning id::text,name,department_code,branch_code
+      `;
+      if (!archived) return response.status(404).json({ ok: false, error: "القاعدة غير موجودة ضمن القواعد النشطة" });
+      await audit(user, "assignment_rule_archived", "assignment_rule", id, archived);
+      return response.status(200).json({ ok: true, deactivated: true, message: "تم حذف القاعدة من قائمة التوزيع النشطة مع الحفاظ على سجلات التوزيع السابقة" });
     }
 
     const name = clean(body.name);
@@ -553,7 +568,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         case when exists(select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
           then coalesce(crm_departments.codes,'{}'::text[]) else coalesce(global_departments.codes,'{}'::text[]) end as department_codes,
         case when exists(select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
-          then coalesce(crm_branches.codes,'{}'::text[]) else coalesce(global_branches.codes,'{}'::text[]) end as branch_codes
+          then coalesce(crm_branches.codes,'{}'::text[]) else coalesce(global_branches.codes,'{}'::text[]) end as branch_codes,
+        coalesce(crm_branches.primary_code,global_branches.primary_code) as primary_branch_code
       from core.users u
       left join lateral (
         select array_agg(d.code order by usd.is_primary desc,d.created_at,d.code) as codes
@@ -568,13 +584,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
         where ud.user_id=u.id
       ) global_departments on true
       left join lateral (
-        select array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name) as codes
+        select array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name) as codes,
+          (array_agg(b.code order by usb.is_primary desc,b.sort_order,b.name))[1] as primary_code
         from core.user_system_branches usb
         join core.branches b on b.id=usb.branch_id and b.is_active=true
         where usb.user_id=u.id and usb.system_code='crm'
       ) crm_branches on true
       left join lateral (
-        select array_agg(distinct b.code) as codes
+        select array_agg(distinct b.code) as codes,
+          (array_agg(b.code order by ub.is_primary desc,b.sort_order,b.name))[1] as primary_code
         from core.user_branches ub
         join core.branches b on b.id=ub.branch_id and b.is_active=true
         where ub.user_id=u.id
@@ -590,12 +608,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
           assignmentUser?.is_active
           && assignmentUser?.can_receive_leads
           && (assignmentUser.department_codes || []).includes(departmentCode)
-          && (assignmentUser.branch_codes || []).includes(branchCode)
+          && assignmentUser.primary_branch_code === branchCode
         );
       });
       if (!eligibleIds.length) {
         const branchName = validBranchByCode.get(branchCode)?.name || branchCode;
-        return response.status(400).json({ ok: false, error: `اختر مندوبًا مؤهلًا واحدًا على الأقل لفرع ${branchName}` });
+        return response.status(400).json({ ok: false, error: `اختر مندوبًا نشطًا يكون ${branchName} فرعه الأساسي في CRM ومفعّلًا لاستقبال العملاء` });
       }
       if (assignmentMode === "percentage") {
         const invalidPercentageMember = eligibleIds.find((memberId) => {

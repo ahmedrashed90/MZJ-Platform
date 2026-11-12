@@ -268,15 +268,11 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   `;
   if (!matchingRules.length) return null;
 
-  const firstRule = matchingRules[0];
-  const activeRules = matchingRules.filter((rule) =>
-    Number(rule.branch_specificity) === Number(firstRule.branch_specificity)
-    && Number(rule.source_specificity) === Number(firstRule.source_specificity)
-    && Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)
-    && String(rule.assignment_mode || "round_robin") === String(firstRule.assignment_mode || "round_robin")
-  );
-  const ruleIds = activeRules.map((rule) => rule.id);
-  const ruleById = new Map(activeRules.map((rule) => [rule.id, rule]));
+  // Fetch every source-compatible rule before choosing the branch. The old
+  // priority-only pool ignored other branches whenever sort_order differed.
+  // Priority is still applied, but only AFTER an eligible branch is selected.
+  const ruleIds = matchingRules.map((rule) => rule.id);
+  const ruleById = new Map(matchingRules.map((rule) => [rule.id, rule]));
 
   const candidateRows = await sql<any[]>`
     select m.rule_id::text,u.id::text as user_id,u.full_name,m.priority,m.assignment_count,m.allocation_percentage,m.weighted_assignment_count,
@@ -363,10 +359,76 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
       )
     order by r.sort_order,m.priority,u.full_name,u.id::text,m.rule_id::text
   `;
-  if (!candidateRows.length) return null;
+  // The CRM manager dashboards use each assignee's CURRENT primary CRM
+  // branch. Do not route a branch-specific rule through a user whose primary
+  // branch belongs somewhere else (a secondary branch membership alone is not
+  // enough to make the lead visible in the correct manager's team).
+  const eligibleCandidateRows = candidateRows.filter((candidate) => {
+    const primary = clean(candidate.primary_branch_code);
+    const scopedBranch = clean(candidate.rule_branch_code);
+    return primary && (!scopedBranch || scopedBranch === primary);
+  });
+  if (!eligibleCandidateRows.length) return null;
 
+  // When no branch was requested, rotate across eligible physical branches of
+  // THIS department/source. Each branch then uses its own configured members,
+  // order/percentage and priority. Do not let one rule's sort_order reserve all
+  // leads for its branch.
+  let routingBranch = requested;
+  if (!routingBranch) {
+    const eligibleBranches = [...new Set(eligibleCandidateRows
+      .filter((candidate) => {
+        const rule = ruleById.get(candidate.rule_id);
+        return rule?.assignment_mode !== "percentage" || Number(candidate.allocation_percentage || 0) > 0;
+      })
+      .map((candidate) => clean(candidate.rule_branch_code) || clean(candidate.primary_branch_code))
+      .filter((branch) => branch && !["online", "website"].includes(branch))
+    )].sort();
+    if (!eligibleBranches.length) return null;
+
+    const branchPoolKey = `routing:branches:${departmentCode}`;
+    // Lock branch-state selection for this pool so concurrent leads cannot all
+    // consume the same 'next branch'. This does not mutate historical leads.
+    routingBranch = await sql.begin(async (tx: any) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${branchPoolKey}))`;
+      const [previous] = await tx`
+        select last_branch_code from crm.assignment_state where pool_key=${branchPoolKey} limit 1
+      `;
+      const previousIndex = eligibleBranches.indexOf(clean(previous?.last_branch_code));
+      const nextBranch = eligibleBranches[(previousIndex + 1) % eligibleBranches.length];
+      await tx`
+        insert into crm.assignment_state(pool_key,last_branch_code,updated_at)
+        values (${branchPoolKey},${nextBranch},now())
+        on conflict(pool_key) do update set last_branch_code=excluded.last_branch_code,updated_at=now()
+      `;
+      return nextBranch;
+    });
+  }
+
+  const branchCandidates = eligibleCandidateRows.filter((candidate) => {
+    const ruleBranch = clean(candidate.rule_branch_code);
+    return ruleBranch ? ruleBranch === routingBranch : clean(candidate.primary_branch_code) === routingBranch;
+  });
+  const eligibleRuleIds = new Set(branchCandidates.filter((candidate) => {
+    const rule = ruleById.get(candidate.rule_id);
+    return rule?.assignment_mode !== "percentage" || Number(candidate.allocation_percentage || 0) > 0;
+  }).map((candidate) => candidate.rule_id));
+  const availableRules = matchingRules.filter((rule) => eligibleRuleIds.has(rule.id));
+  // A branch-specific rule owns that branch; a global rule is a fallback only.
+  const branchRules = availableRules.filter((rule) => clean(rule.branch_code) === routingBranch);
+  const eligibleRules = branchRules.length
+    ? branchRules
+    : availableRules.filter((rule) => !clean(rule.branch_code));
+  if (!eligibleRules.length) return null;
+  const firstRule = eligibleRules[0];
+  const activeRules = eligibleRules.filter((rule) =>
+    Number(rule.source_specificity) === Number(firstRule.source_specificity)
+    && Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)
+    && String(rule.assignment_mode || "round_robin") === String(firstRule.assignment_mode || "round_robin")
+  );
+  const activeRuleIds = new Set(activeRules.map((rule) => rule.id));
   const candidateByUser = new Map<string, any>();
-  for (const candidate of candidateRows) {
+  for (const candidate of branchCandidates.filter((row) => activeRuleIds.has(row.rule_id))) {
     const existing = candidateByUser.get(candidate.user_id);
     if (!existing || (candidate.primary_branch_code && candidate.rule_branch_code === candidate.primary_branch_code && existing.rule_branch_code !== existing.primary_branch_code)) {
       candidateByUser.set(candidate.user_id, candidate);
@@ -387,7 +449,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     : [];
   let selected: any;
   let selectedRule: any;
-  let poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
+  let poolKey = `rules:${departmentCode}:${routingBranch}:${routingSource || source || "all"}:${activeRules.map((rule) => rule.id).sort().join(",")}`;
   if (percentageMode) {
     if (!percentageCandidates.length) return null;
     const totalWeight = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.allocation_percentage || 0), 0);
@@ -407,7 +469,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
     selectedRule = ruleById.get(selected.rule_id) || firstRule;
   }
-  const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested;
+  const selectedBranch = routingBranch || clean(selected.rule_branch_code) || clean(selected.primary_branch_code);
   if (requirePhysicalBranch && (!selectedBranch || ['online', 'website'].includes(selectedBranch))) return null;
 
   await sql`

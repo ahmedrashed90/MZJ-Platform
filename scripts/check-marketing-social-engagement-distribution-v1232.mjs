@@ -14,12 +14,14 @@ check('social post source aliases resolve to canonical distribution sources',
   && crmUtils.includes('if (source === "instagram_post") return "instagram"'));
 check('assignment rules match either stored source or canonical routing source',
   crmUtils.includes('${source}=any(r.source_codes) or ${routingSource}=any(r.source_codes)'));
-check('cash rules with the same configured order participate in one central round-robin pool',
-  crmUtils.includes('const activeRules = matchingRules.filter')
+check('central routing rotates eligible branches before applying each branch rule order',
+  crmUtils.includes('const branchPoolKey = `routing:branches:${departmentCode}`')
+  && crmUtils.includes('const branchCandidates = eligibleCandidateRows.filter')
+  && crmUtils.includes('const activeRules = eligibleRules.filter')
   && crmUtils.includes('Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)')
   && crmUtils.includes('m.rule_id=any(${ruleIds}::uuid[])'));
-check('selected branch comes from the selected eligible rep/rule, not from marketing hardcoding',
-  crmUtils.includes('const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested')
+check('selected branch comes from eligible configured CRM branch, not marketing hardcoding',
+  crmUtils.includes('const selectedBranch = routingBranch || clean(selected.rule_branch_code) || clean(selected.primary_branch_code)')
   && !engagement.includes('requestedBranchCode: "hall"')
   && !engagement.includes('requestedBranchCode: "multaqa"')
   && !engagement.includes('requestedBranchCode: "qadisiyah"'));

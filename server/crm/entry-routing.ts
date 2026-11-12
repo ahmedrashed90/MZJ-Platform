@@ -18,6 +18,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         count(m.user_id) filter(where m.is_active=true)::integer as active_member_count
       from crm.assignment_rules r
       left join crm.assignment_rule_members m on m.rule_id=r.id
+      where r.is_active=true
       group by r.id order by r.sort_order,r.name
     `,
     sql<any[]>`select count(*)::integer as total,count(*) filter(where is_active=true and can_receive_leads=true)::integer as eligible from core.users`,
