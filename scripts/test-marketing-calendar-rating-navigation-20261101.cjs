@@ -56,12 +56,16 @@ const useCalendarData = () => ({data:{
 },reload:async()=>{},loading:false,error:''});
 const calendarHooks=makeHooks();
 const CalendarTaskDetail = function CalendarTaskDetail(){};
+// Exercise the real shared task-title presenter. The isolated test harness must
+// supply newly imported local modules just like the application bundler does.
+const taskPresentation=loadTsx('src/marketing/workflow/taskPresentation.ts', {});
 const calendarModule=loadTsx('src/marketing/pages/ReceiptCalendarPage.tsx',{
   react:calendarHooks,
   '@phosphor-icons/react':{CaretLeft:()=>{},CaretRight:()=>{},ArrowSquareOut:()=>{}},
   '../workflow/components':{W:labels,...markers},
   '../workflow/api':{localDay(date=new Date(2026,10,1)){const y=date.getFullYear();const m=String(date.getMonth()+1).padStart(2,'0');const d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`;},showDate:()=>'',useWorkQuery:useCalendarData},
   '../workflow/TaskDetail':{TaskDetail:CalendarTaskDetail},
+  '../workflow/taskPresentation':taskPresentation,
   '../workflow/PlanDetail':{PlanDetail:()=>null},
 });
 function renderCalendar(){calendarHooks.next();const tree=calendarModule.ReceiptCalendarPage();calendarHooks.commit();return tree;}
@@ -106,6 +110,7 @@ const taskModule=loadTsx('src/marketing/workflow/TaskDetail.tsx',{
   './api':{showDate:()=>'',showRange:()=>'',uploadWorkFile:async()=>{},useWorkQuery:(resource)=> resource==='task'?taskData():{data:{criteria},reload:async()=>{},error:'',loading:false},workPost:async(action,body)=>{saved.push({action,body});return {ok:true};}},
   '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
   './creativeDocx':{downloadCreativeTreatmentDocx:()=>{}},
+  './taskPresentation':taskPresentation,
   './dashboardSearch':{filterDashboardExecutorItems:(items,names)=>!names?.length ? items : items.filter(item=>names.includes(item.assignee_name))},
 });
 function renderTask(){hooks.next();const tree=taskModule.TaskDetail({id:'task-1',onlyItems:['missing-other-date'],focusItemId:'missing-other-date',openRatingOnLoad:true,onClose:()=>{},onChanged:()=>{}});hooks.commit();return tree;}
@@ -147,6 +152,7 @@ function scenario(status, permission){
     './api':{showDate:()=>'',showRange:()=>'',uploadWorkFile:async()=>{},useWorkQuery:resource=>resource==='task'?taskData():{data:{criteria},reload:async()=>{},error:'',loading:false},workPost:async()=>({ok:true})},
     '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
   './creativeDocx':{downloadCreativeTreatmentDocx:()=>{}},
+  './taskPresentation':taskPresentation,
   './dashboardSearch':{filterDashboardExecutorItems:(items,names)=>!names?.length ? items : items.filter(item=>names.includes(item.assignee_name))},
   });
   const render=()=>{freshHooks.next();const tree=freshTaskModule.TaskDetail({id:'task-1',onlyItems:[item.id],focusItemId:item.id,openRatingOnLoad:true,onClose:()=>{}});freshHooks.commit();return tree;};

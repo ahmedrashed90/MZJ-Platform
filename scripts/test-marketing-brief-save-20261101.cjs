@@ -115,7 +115,13 @@ test('Executors and requirements overview hides explanation but keeps it in the 
   assert.doesNotMatch(overview,/\{item\.idea\?\.trim\(\)/,'The full creative brief must not be repeated in the summary');
   assert.match(ui,/<StrategyIdeaBrief value=\{idea\}\/>/,'The full brief remains available inside the opened requirement');
   assert.match(ui,/function StrategyIdeaBrief/,'Structured image/video brief renderer remains available');
-  assert.match(ui, /fromStrategy \? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'/);
+  // Strategy briefs share a row with the downloadable DOCX; ordinary briefs
+  // retain their existing explanation field. Verify the conditional render
+  // rather than the old ternary string, which was replaced by this layout.
+  assert.match(ui, /fromStrategy\s*\?\s*<div className="mkw-explanation-brief-row">/);
+  assert.match(ui, /<Field label="الشرح — الجمهور والهدف والرسالة">/);
+  assert.match(ui, /<CreativeBriefDownload item=\{item\}\/>/);
+  assert.match(ui, /:\s*<Field label="الشرح — شرح الفكرة أو المطلوب">/);
   assert.match(ui,/onChange=\{event => \{ setExplanation\(event\.target\.value\)/);
 });
 test('The creative brief is shown only once and can switch between preview and editing',()=>{
