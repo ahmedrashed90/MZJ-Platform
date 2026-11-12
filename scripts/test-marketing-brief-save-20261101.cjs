@@ -120,7 +120,7 @@ test('Executors and requirements overview hides explanation but keeps it in the 
 });
 test('The creative brief is shown only once and can switch between preview and editing',()=>{
   const ui=fs.readFileSync(path.join(root,'src/marketing/workflow/TaskDetail.tsx'),'utf8');
-  const part=ui.split('<div className="mkw-idea-brief-field">')[1]?.split('            <Field label={fromStrategy ?')[0];
+  const part=ui.split('function ItemEditor(')[1]?.split('<div className="mkw-idea-brief-field">')[1]?.split('            <Field label={fromStrategy ?')[0];
   assert.ok(part,'The creative brief has a single dedicated field');
   assert.match(part,/canEditBrief && editingIdea\s*\? <textarea/);
   assert.match(part,/: <StrategyIdeaBrief value=\{idea\}\/>/);

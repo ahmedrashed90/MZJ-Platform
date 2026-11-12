@@ -292,6 +292,17 @@ function ReviewNoteDocument({ text }: { text: string }) {
   </div>;
 }
 
+/** One downloadable brief for both photography and normal production requirements. */
+function CreativeBriefDownload({item}: {item: WorkItem}) {
+  if(!item.creative_treatment)return null;
+  return <section className="mkw-creative-treatment" aria-label="البريف">
+    <strong>البريف</strong>
+    <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
+      <FileArrowDown size={18}/>تحميل البريف DOCX</button>
+    <small>{item.media_kind === 'image' ? 'التصميم صورة بصورة · التصور البصري · تعليمات التنفيذ' : 'الهوك · النص / الفويس أوفر · السيناريو التفصيلي'}</small>
+  </section>;
+}
+
 /** Photography is a delivery link, not a publishable final file. */
 function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => Promise<void> }) {
   const { user } = useAuth();
@@ -312,14 +323,19 @@ function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => P
   }
   return <article className="mkw-requirement-editor mkw-capture-editor" dir="rtl">
     <WorkAlert>{error}</WorkAlert>
-    <div className="mkw-capture-info"><Field label="المطلوب"><p>تصوير {item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p></Field>
-      <Field label="المنفذ المكلف"><p>{item.assignee_name}</p></Field>
-      <Field label="تاريخ تسليم التصوير"><p>{showDate(item.due_on)}</p></Field></div>
-    <Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة"><StrategyIdeaBrief value={item.idea}/></Field>
-    <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
-    {!!item.creative_treatment && <div className="mkw-creative-treatment"><strong>المعالجة الإبداعية</strong>
-      <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
-        <FileArrowDown size={18}/>تحميل المعالجة الإبداعية DOCX</button></div>}
+    <div className="mkw-item-detail-grid">
+      <section className="mkw-item-idea">
+        <div className="mkw-section-title"><h4>{W.idea}</h4></div>
+        <div className="mkw-execution-quick-row">
+          <Field label={W.required}><p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p></Field>
+          <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
+          <div className="mkw-idea-brief-field"><Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة"><StrategyIdeaBrief value={item.idea}/></Field></div>
+          <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
+          <CreativeBriefDownload item={item}/>
+          <div className="mkw-prominent-due"><Field label="تاريخ تسليم التصوير"><strong>{showDate(item.due_on)}</strong></Field></div>
+        </div>
+      </section>
+    </div>
     <section className="mkw-capture-link-section"><h4>رابط ملفات التصوير — Google Drive</h4>
       {safeUrl ? <><a href={safeUrl} target="_blank" rel="noopener noreferrer">فتح ملفات التصوير على Google Drive</a>
           <small>تم تسليم الرابط بتاريخ {showDate(item.capture_submitted_at,true)}</small>
@@ -571,12 +587,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
               </button>}
             </div>
             <Field label={fromStrategy ? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'}>{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
-            {fromStrategy && <section className="mkw-creative-treatment"><strong>المعالجة الإبداعية</strong>
-              <button type="button" className="secondary" onClick={() => downloadCreativeTreatmentDocx(item.idea_name,item.creative_treatment || '')}>
-                <FileArrowDown size={18}/>تحميل المعالجة الإبداعية DOCX</button>
-              <small>الهوك · النص / الفويس أوفر · السيناريو التفصيلي</small>
-            </section>}
-            <Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field>
+            {fromStrategy && <CreativeBriefDownload item={item}/>}
+            <div className="mkw-prominent-due"><Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field></div>
           </div>
           {canEditBrief && <div className="mkw-idea-save-actions">
             <button type="button" className="primary" disabled={busy || (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on)}

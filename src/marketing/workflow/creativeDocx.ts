@@ -69,7 +69,7 @@ export function downloadCreativeTreatmentDocx(title: string, treatment: string) 
   const blob = new Blob([new Uint8Array(bytes)], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
   const url = URL.createObjectURL(blob), link = document.createElement('a');
   link.href = url;
-  link.download = `المعالجة الإبداعية - ${title.replace(/[\\/:*?"<>|]/g, '').slice(0, 90)}.docx`;
+  link.download = `البريف - ${title.replace(/[\\/:*?"<>|]/g, '').slice(0, 90)}.docx`;
   document.body.append(link); link.click(); link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

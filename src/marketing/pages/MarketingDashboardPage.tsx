@@ -20,6 +20,15 @@ import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/m
 
 type ReviewState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
 
+/** Execution cards show the strategy category; the full task name remains in the task detail and database. */
+const strategyCategories = ['تعريفي - مواصفات السيارات', 'تعريفي - بالويب سايت', 'تعريفي - بالبراند', 'بيعي - قسط', 'بيعي - كاش'];
+export function executionCardName(name: string): string {
+  const fullName = String(name || '').trim();
+  const category = strategyCategories.find(value => fullName === value || fullName.startsWith(`${value} `));
+  return category || fullName;
+}
+
+
 function scheduleRange(group: WorkPlanLine[]) {
   const dates = group.map(line => String(line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort();
   if (!dates.length) return '—';
@@ -143,7 +152,7 @@ export function MarketingDashboardPage() {
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
         <div className="mkw-column-body">{!tasks.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
           {tasks.map(task => <article className="mkw-dashboard-task" key={task.id}>
-            <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3>{task.name}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20}/></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()}/></div></div>
+            <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3 title={task.name}>{executionCardName(task.name)}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20}/></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()}/></div></div>
             <div className="mkw-dashboard-stats"><div><small>{W.createdAt}</small><strong>{showDate(task.created_at)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
             <Readiness value={task.readiness}/>
             {((task.submitted_on_time_count ?? 0) > 0 || (task.submitted_late_count ?? 0) > 0) && <div className="mkw-delivery-summary" aria-label="مواعيد تسليم المطلوبات">

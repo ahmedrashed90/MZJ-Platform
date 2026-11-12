@@ -1311,3 +1311,18 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-creative-treatment small { width: 100%; color: #8d6959; }
 .mkw-idea-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .mkw-photography-delivery { padding-top: 0; }
+
+
+/* The photographer and other executors use one presentation grid while keeping different delivery methods. */
+.mkw-detail-view .mkw-capture-editor .mkw-item-detail-grid {grid-template-columns:minmax(0,1fr)}
+.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:minmax(135px,1fr) minmax(155px,1fr) minmax(230px,2fr) minmax(140px,1fr)}
+.mkw .mkw-execution-quick-row>.mkw-creative-treatment {grid-column:1/-1}
+.mkw .mkw-execution-quick-row>.mkw-prominent-due {grid-column:1/-1;min-width:0;display:grid;gap:5px;padding:12px 16px;background:var(--surface);border:1.5px solid var(--line-strong);border-radius:11px}
+.mkw .mkw-prominent-due .mkw-field {display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
+.mkw .mkw-prominent-due .mkw-field>span {font-size:14px;font-weight:850;color:var(--brand)}
+.mkw .mkw-prominent-due :is(strong,input) {font-size:15px;font-weight:800;color:var(--brand)}
+.mkw .mkw-prominent-due input[type=date] {max-width:220px;background:var(--surface-soft);border:1px solid var(--line-strong);border-radius:9px;padding:10px}
+.mkw .mkw-capture-editor .mkw-item-idea {min-width:0}
+.mkw .mkw-capture-editor .mkw-capture-link-section {margin-top:14px}
+@media(max-width:950px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:1fr}}
