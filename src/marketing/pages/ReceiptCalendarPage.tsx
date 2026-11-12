@@ -3,6 +3,7 @@ import { ArrowSquareOut, CaretDown, CaretLeft, CaretRight } from '@phosphor-icon
 import { W, Empty, MediaLabel, Readiness, Status, WorkAlert, WorkHeader } from '../workflow/components';
 import { localDay, showDate, useWorkQuery } from '../workflow/api';
 import { TaskDetail, RatingStars } from '../workflow/TaskDetail';
+import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { PlanDetail } from '../workflow/PlanDetail';
 import type { CalendarPlanEvent } from '../../../shared/marketing-plan-calendar';
 
@@ -110,7 +111,7 @@ export function ReceiptCalendarPage() {
           return <section className="mkw-calendar-task-group" key={group.taskId}>
             {group.items.map(item => <article className="mkw-task-card" key={item.id}>
               <div className="mkw-section-title"><span className="mkw-code">{item.task_no}</span><Status value={item.status} /></div>
-              <h3>{item.task_name}</h3><strong>{item.idea_name}</strong>
+              <h3>{taskCategoryLabel(item.task_name)}</h3><strong>{item.idea_name}</strong>
               {item.assignee_name && <small className="mkw-muted">المنفذ: {item.assignee_name}</small>}
               {rating && <span className={`mkw-calendar-item-rated ${rating.items.find(entry => entry.id === item.id)?.rated ? 'is-rated' : ''}`}>
                 {(() => { const evaluation = rating.items.find(entry => entry.id === item.id); return evaluation?.rated && evaluation.percentage != null

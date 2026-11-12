@@ -462,6 +462,13 @@
 .mkw-inline-file { display:grid; gap:5px; font-size:12px; font-weight:700; color:var(--muted); }
 .mkw-inline-file input[type=file] { max-width:100%; }
 .mkw-requirement-file { display:flex; gap:6px; align-items:center; overflow-wrap:anywhere; font-size:11px; color:var(--muted); }
+/* Task detail: one stored task category, distinct approved ideas in groups of 3 per column. */
+.mkw-detail-title>div:first-child{flex:1 1 auto;min-width:0}
+.mkw-detail-title .mkw-task-idea-groups{display:grid;gap:10px;margin-top:13px;max-width:100%;min-width:0}
+.mkw-detail-title .mkw-task-idea-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mkw-detail-title .mkw-task-idea-column{display:grid;align-content:start;gap:7px;min-width:0}
+.mkw-detail-title .mkw-task-idea-column p{margin:0;padding:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--brand);font-size:14px;font-weight:750;line-height:1.6;overflow-wrap:anywhere}
+@media(max-width:640px){.mkw-detail-title .mkw-task-idea-grid{grid-template-columns:1fr}}
 .mkw-requirement-file .icon-button { padding:3px; }
 .mkw-remove-requirement { min-width:38px; min-height:38px; color:var(--red)!important; }
 .mkw-requirement-footer { display:flex; justify-content:flex-start; padding-top:4px; }
@@ -1316,7 +1323,13 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 /* The photographer and other executors use one presentation grid while keeping different delivery methods. */
 .mkw-detail-view .mkw-capture-editor .mkw-item-detail-grid {grid-template-columns:minmax(0,1fr)}
 .mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:minmax(135px,1fr) minmax(155px,1fr) minmax(230px,2fr) minmax(140px,1fr)}
-.mkw .mkw-execution-quick-row>.mkw-creative-treatment {grid-column:1/-1}
+/* Strategy: the audience/message explanation and downloadable brief share a row. */
+.mkw .mkw-strategy-quick-row>.mkw-idea-brief-field {grid-column:span 2}
+.mkw .mkw-execution-quick-row>.mkw-explanation-brief-row {grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;min-width:0;align-items:stretch}
+.mkw .mkw-explanation-brief-row>.mkw-field {min-width:0;padding:14px;border:1px solid var(--line-strong);border-radius:11px;background:var(--surface);white-space:pre-wrap;overflow-wrap:anywhere}
+.mkw .mkw-explanation-brief-row>.mkw-creative-treatment {display:flex;align-content:start;align-items:center;min-width:0;overflow-wrap:anywhere}
+@media(max-width:950px){.mkw .mkw-strategy-quick-row>.mkw-idea-brief-field {grid-column:auto}}
+@media(max-width:650px){.mkw .mkw-execution-quick-row>.mkw-explanation-brief-row {grid-template-columns:minmax(0,1fr)}}
 .mkw .mkw-execution-quick-row>.mkw-prominent-due {grid-column:1/-1;min-width:0;display:grid;gap:5px;padding:12px 16px;background:var(--surface);border:1.5px solid var(--line-strong);border-radius:11px}
 .mkw .mkw-prominent-due .mkw-field {display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
 .mkw .mkw-prominent-due .mkw-field>span {font-size:14px;font-weight:850;color:var(--brand)}

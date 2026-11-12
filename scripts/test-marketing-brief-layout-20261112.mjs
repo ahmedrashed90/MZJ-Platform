@@ -7,7 +7,7 @@ const css=source('src/marketing/workflow/workflow.css');
 const docx=source('src/marketing/workflow/creativeDocx.ts');
 assert(dashboard.includes('executionCardName(task.name)'));
 assert(dashboard.includes('<h3 title={task.name}>'));
-assert(detail.includes('<h2>{task.name}</h2>')); // Full name remains in task details.
+assert(detail.includes('<h2>{taskCategory}</h2>')); // Full stored title is preserved; category and ideas display separately.
 assert(detail.includes('function CreativeBriefDownload'));
 assert(detail.includes('تحميل البريف DOCX'));
 assert(!detail.includes('تحميل المعالجة الإبداعية DOCX'));
@@ -24,6 +24,17 @@ const editor=detail.split('function ItemEditor(')[1];
 assert(editor?.includes('<CreativeBriefDownload item={item}/>'));
 assert(editor?.includes('mkw-prominent-due'));
 assert(editor.indexOf('الشرح — الجمهور والهدف والرسالة')<editor.indexOf('<CreativeBriefDownload item={item}/>'));
-assert(css.includes('.mkw .mkw-execution-quick-row>.mkw-creative-treatment {grid-column:1/-1}'));
+assert(css.includes('.mkw .mkw-execution-quick-row>.mkw-explanation-brief-row {grid-column:1/-1'));
+assert(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
+assert(capture.includes('mkw-explanation-brief-row'));
+assert(editor.includes('mkw-explanation-brief-row'));
 assert(css.includes('.mkw .mkw-prominent-due'));
-console.log('PASS: short execution card name only, full detail name, shared photographer/editor layout, brief naming and prominent due dates.');
+assert(detail.includes('taskIdeaGroups(taskIdeas)'), 'All distinct ideas must be displayed with the category');
+assert(detail.includes('group.slice(0, 3)') && detail.includes('group.slice(3, 6)'), 'Three ideas on the right, then up to three on the left');
+const calendar=source('src/marketing/pages/ReceiptCalendarPage.tsx');
+assert(calendar.includes('<h3>{taskCategoryLabel(item.task_name)}</h3><strong>{item.idea_name}</strong>'), 'Delivery calendar must show a short task category and the current requirement idea only');
+const helper=source('src/marketing/workflow/taskPresentation.ts');
+assert(helper.includes('export function taskCategoryLabel'));
+assert(helper.includes('export function taskIdeaTitles'));
+assert(helper.includes('for (let i = 0; i < titles.length; i += 6)'));
+console.log('PASS: task category/idea title groups, calendar card label, shared photographer/editor brief beside explanation and prominent due dates.');

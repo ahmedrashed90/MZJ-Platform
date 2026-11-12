@@ -9,6 +9,7 @@ import { showDate, showRange, uploadWorkFile, useWorkQuery, workPost } from './a
 import { filterDashboardExecutorItems } from './dashboardSearch';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { downloadCreativeTreatmentDocx } from './creativeDocx';
+import { STRATEGY_TASK_CATEGORIES, taskCategoryLabel, taskIdeaGroups, taskIdeaTitles } from './taskPresentation';
 
 function submittedDayInRiyadh(value: string | null | undefined) {
   if (!value) return '—';
@@ -87,6 +88,8 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
   const focusedRatingRef = useRef('');
   const openedSearchRequirementRef = useRef('');
   const task = query.data?.task;
+  const taskCategory = task ? taskCategoryLabel(task.name) : '';
+  const taskIdeas = taskIdeaTitles(task?.items || []);
   const executorScoped = Boolean(searchAssigneeNames?.length);
   const visibleItems = filterDashboardExecutorItems(task?.items || [], searchAssigneeNames);
   const items = visibleItems.filter(item => (!onlyItems || onlyItems.includes(item.id)) && (captureOnly ? item.delivery_mode === 'drive_link' : (!deliveryFilter || item.delivery_mode !== 'drive_link')) &&
@@ -152,12 +155,19 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
     } catch (e) { setRatingError(e instanceof Error ? e.message : W.invalid); }
     finally { setRatingBusy(false); }
   }
-  return <Modal open title={task ? `${task.task_no} - ${task.name}` : W.task} onClose={onClose} className="mkw-fullscreen">
+  return <Modal open title={task ? `${task.task_no} - ${taskCategory}` : W.task} onClose={onClose} className="mkw-fullscreen">
     <div className="mkw mkw-detail-view">
       <WorkAlert>{query.error}</WorkAlert>
       {!task ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
         <section className="mkw-detail-overview">
-          <div className="mkw-detail-title"><div><span className="mkw-code">{task.task_no}</span><h2>{task.name}</h2></div><Status value={task.status} /></div>
+          <div className="mkw-detail-title"><div><span className="mkw-code">{task.task_no}</span><h2>{taskCategory}</h2>
+            {STRATEGY_TASK_CATEGORIES.some(category => category === taskCategory) && taskIdeas.length > 0 && <div className="mkw-task-idea-groups" aria-label="الأفكار المرتبطة بالتاسك" dir="rtl">
+              {taskIdeaGroups(taskIdeas).map((group, groupIndex) => <div className="mkw-task-idea-grid" key={groupIndex}>
+                <div className="mkw-task-idea-column">{group.slice(0, 3).map((name, index) => <p key={`${groupIndex}-right-${index}`}>{name}</p>)}</div>
+                {group.length > 3 && <div className="mkw-task-idea-column">{group.slice(3, 6).map((name, index) => <p key={`${groupIndex}-left-${index}`}>{name}</p>)}</div>}
+              </div>)}
+            </div>}
+          </div><Status value={task.status} /></div>
           <div className="mkw-summary"><div><small>{W.taskNo}</small><strong dir="ltr">{task.task_no}</strong></div><div><small>{W.taskType}</small><strong>{task.type_name}</strong></div><div><small>{W.createdAt}</small><strong>{showDate(task.created_at, true)}</strong></div><div><small>{W.dueOn}</small><strong>{executorScoped ? showRange(dueDates[0] || null, dueDates[dueDates.length - 1] || null) : showRange(task.due_from, task.due_to)}</strong></div><div><small>{executorScoped ? 'عدد مطلوبات المنفذ' : W.productCount}</small><strong>{executorScoped ? items.length : task.product_count}</strong></div></div>
           {executorScoped && <div className="mkw-task-search-executor-scope" role="status"><UserCircle size={18}/>
             عرض المطلوبات الخاصة بالمنفذ: <strong>{searchAssigneeNames!.join('، ')}</strong>
@@ -326,12 +336,14 @@ function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => P
     <div className="mkw-item-detail-grid">
       <section className="mkw-item-idea">
         <div className="mkw-section-title"><h4>{W.idea}</h4></div>
-        <div className="mkw-execution-quick-row">
+        <div className="mkw-execution-quick-row mkw-strategy-quick-row">
           <Field label={W.required}><p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p></Field>
           <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
           <div className="mkw-idea-brief-field"><Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة"><StrategyIdeaBrief value={item.idea}/></Field></div>
-          <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
-          <CreativeBriefDownload item={item}/>
+          <div className="mkw-explanation-brief-row">
+            <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
+            <CreativeBriefDownload item={item}/>
+          </div>
           <div className="mkw-prominent-due"><Field label="تاريخ تسليم التصوير"><strong>{showDate(item.due_on)}</strong></Field></div>
         </div>
       </section>
@@ -574,7 +586,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
       {rating && <div className="mkw-rating-reviewer">{rating.reviewer_name} · {showDate(rating.updated_at,true)}</div>}
       <div className="mkw-item-detail-grid">
         <section className="mkw-item-idea"><div className="mkw-section-title"><h4>{W.idea}</h4></div>
-          <div className="mkw-execution-quick-row">
+          <div className={`mkw-execution-quick-row ${fromStrategy ? 'mkw-strategy-quick-row' : ''}`}>
             <Field label={W.required}>{fromStrategy ? <p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p> : <input value={ideaName} readOnly={!editable} disabled={busy} maxLength={250} onChange={event => { setIdeaName(event.target.value); onBriefChanged(); }} />}</Field>
             <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
             <div className="mkw-idea-brief-field">
@@ -586,8 +598,10 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
                 {editingIdea ? 'إلغاء تعديل الفكرة' : 'تعديل الفكرة'}
               </button>}
             </div>
-            <Field label={fromStrategy ? 'الشرح — الجمهور والهدف والرسالة' : 'الشرح — شرح الفكرة أو المطلوب'}>{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
-            {fromStrategy && <CreativeBriefDownload item={item}/>}
+            {fromStrategy ? <div className="mkw-explanation-brief-row">
+              <Field label="الشرح — الجمهور والهدف والرسالة">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>
+              <CreativeBriefDownload item={item}/>
+            </div> : <Field label="الشرح — شرح الفكرة أو المطلوب">{canEditBrief ? <textarea aria-label="الشرح" value={explanation} disabled={busy} maxLength={20000} onChange={event => { setExplanation(event.target.value); onBriefChanged(); }}/> : <p className="mkw-idea-text">{explanation || '—'}</p>}</Field>}
             <div className="mkw-prominent-due"><Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field></div>
           </div>
           {canEditBrief && <div className="mkw-idea-save-actions">

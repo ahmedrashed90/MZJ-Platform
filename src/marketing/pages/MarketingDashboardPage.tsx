@@ -14,18 +14,16 @@ import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOv
 import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
+import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
 type ReviewState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
 
-/** Execution cards show the strategy category; the full task name remains in the task detail and database. */
-const strategyCategories = ['تعريفي - مواصفات السيارات', 'تعريفي - بالويب سايت', 'تعريفي - بالبراند', 'بيعي - قسط', 'بيعي - كاش'];
+/** Preserve the dashboard's public card-name contract with the shared task-title presenter. */
 export function executionCardName(name: string): string {
-  const fullName = String(name || '').trim();
-  const category = strategyCategories.find(value => fullName === value || fullName.startsWith(`${value} `));
-  return category || fullName;
+  return taskCategoryLabel(name);
 }
 
 
