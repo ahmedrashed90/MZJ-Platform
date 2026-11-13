@@ -1268,12 +1268,23 @@ export async function assertWorkflowFileAccess(sql: Sql, file: any, user: Sessio
       where up.file_id=${file.id}::uuid and up.created_by=${user.id}::uuid and up.cancelled_at is null and r.used_at is null)`;
   if (!allowed) throw new Error(W.denied);
 }
+/** PostgreSQL queries return RowList<T>, which includes query metadata.
+ * Rows grouped in memory are ordinary arrays of the selected records. */
+type StrategyProductLinkRow = StrategyAssignedItem & {
+  task_id: string;
+  source: StrategyMarker;
+};
+type StrategyTrackingLinkRow = StrategyProductLinkRow & {
+  task_no: string;
+  created_at: Date;
+};
+
 /** Read the canonical strategy audit links for products, without copying their
  * identity to a second table or altering existing Marketing workflow records. */
 async function strategyProductIdentities(sql:Sql, taskIds:string[]) {
   const result=new Map<string,{ideaCode:string;sourcePlanId:string}>();
   if(!taskIds.length)return result;
-  const linked=await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,
+  const linked=await sql<StrategyProductLinkRow[]>`select i.id::text as id,i.task_id::text as task_id,
     i.client_key::text as client_key,i.idea_name,i.sort_order,h.data as source
     from marketing.work_items i
     join lateral (select data from marketing.work_history h
@@ -1282,7 +1293,7 @@ async function strategyProductIdentities(sql:Sql, taskIds:string[]) {
       order by h.created_at desc,h.id desc limit 1) h on true
     where i.task_id=any(${taskIds}::uuid[])
     order by i.task_id,i.sort_order,i.created_at,i.id`;
-  const tasks=new Map<string,typeof linked>();
+  const tasks=new Map<string,StrategyProductLinkRow[]>();
   for(const row of linked)tasks.set(String(row.task_id),[...(tasks.get(String(row.task_id))||[]),row]);
   for(const rows of tasks.values()){
     const marker=rows[0].source as StrategyMarker;
@@ -1299,7 +1310,7 @@ async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
   if(!hasPermission(user,'marketing.dashboard.view')&&!hasPermission(user,'marketing.database.view'))throw Error(W.denied);
   const from=text(filters.from,10),to=text(filters.to,10);
   if((from&&!isWorkDate(from))||(to&&!isWorkDate(to))||(from&&to&&from>to))throw Error(W.invalid);
-  const rows=await sql<any[]>`select t.id::text as task_id,t.task_no,t.created_at,
+  const rows=await sql<StrategyTrackingLinkRow[]>`select t.id::text as task_id,t.task_no,t.created_at,
     i.id::text as id,i.client_key::text,i.idea_name,i.sort_order,i.status,i.delivery_mode,
     h.data as source,
     exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
@@ -1316,7 +1327,7 @@ async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
       and (${!from} or t.created_at::date>=${from||'1970-01-01'}::date)
       and (${!to} or t.created_at::date<=${to||'9999-12-31'}::date)
     order by t.created_at desc,t.task_no desc,i.sort_order,i.id`;
-  const grouped=new Map<string,typeof rows>();
+  const grouped=new Map<string,StrategyTrackingLinkRow[]>();
   for(const row of rows)grouped.set(String(row.task_id),[...(grouped.get(String(row.task_id))||[]),row]);
   const tracking=[...grouped.values()].map(items=>calculateIdeaTracking(
     String(items[0].task_id),String(items[0].task_no),String(items[0].created_at),
