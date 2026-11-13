@@ -9,6 +9,7 @@ const { createLoader } = require('./marketing-workflow-test-support.cjs');
 const root = process.cwd();
 const shared = createLoader(root)('shared/marketing-workflow.ts');
 const plan = createLoader(root)('src/marketing/workflow/planComposer.ts');
+const productChoice = createLoader(root)('src/marketing/workflow/productChoice.ts');
 const uid = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const ig = uid(10), fb = uid(11);
 const campaignGoalOne = uid(61), campaignGoalTwo = uid(62);
@@ -49,6 +50,7 @@ vm.runInNewContext(transpiled.outputText, { exports: frontExports, crypto,
     if (name === '../../../shared/marketing-workflow') return shared;
     if (name === './requiredMedia') return { splitRequiredMediaSelection: () => [] };
     if (name === './planComposer') return plan;
+    if (name === './productChoice') return productChoice;
     throw new Error('Unexpected frontend module ' + name);
   },
 }, { timeout: 3000 });
