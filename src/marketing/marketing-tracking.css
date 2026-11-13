@@ -1,0 +1,27 @@
+.mkt-track-page{max-width:100%}
+.mkt-track-toolbar{border:1px solid #e4cab9;border-radius:12px;background:#fffaf6;padding:14px;margin:14px 0 20px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+.mkt-track-search{display:flex;align-items:center;gap:8px;min-width:200px;flex:1;border:1px solid #dfc3b1;border-radius:9px;background:#fff;padding:0 12px}
+.mkt-track-search input{border:0;outline:0;padding:12px 0;min-width:0;width:100%;background:transparent}
+.mkt-track-date-range{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.mkt-track-date-range label{font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px}
+.mkt-track-date-range input{border-radius:8px;border:1px solid #e3cbbb;padding:8px;max-width:165px;background:#fff}
+.mkt-track-refresh{display:flex;align-items:center;justify-content:center;min-height:40px}
+.mkt-track-table-wrap{overflow:auto;border:1px solid #e4cab9;border-radius:15px;background:#fffaf6}
+.mkt-track-table{width:100%;border-collapse:collapse;min-width:790px;font-size:13px;text-align:center;direction:rtl}
+.mkt-track-table th{background:#4a211c;color:#f3e8dc;font-size:13px;font-weight:850;padding:17px 11px;white-space:nowrap}
+.mkt-track-table td{border-bottom:1px solid #ecdcd0;padding:13px 10px;vertical-align:middle}
+.mkt-track-table tbody tr:last-child td{border-bottom:0}
+.mkt-track-table tbody tr:hover{background:#fbefe8}
+.mkt-track-task{font-weight:850;color:#4a211c;text-decoration:none;white-space:nowrap}
+.mkt-track-task:hover{text-decoration:underline}
+.mkt-track-assignment{display:inline-block;white-space:nowrap;border-radius:9px;background:#f4e9dd;padding:9px 14px;color:#4a211c}
+.mkt-track-progress{max-width:205px;min-width:135px;margin:auto;padding:10px 12px;border-radius:10px;text-align:right}
+.mkt-track-progress strong{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;white-space:nowrap}
+.mkt-track-progress b{font-size:12px}
+.mkt-track-bar{height:7px;border-radius:999px;background:#e9e6e0;overflow:hidden;margin-top:8px}
+.mkt-track-bar span{display:block;height:100%;border-radius:inherit;transition:width .2s ease}
+.mkt-track-execution{background:#edf6e9;color:#2a6529}.mkt-track-execution .mkt-track-bar span{background:#479943}
+.mkt-track-publishing{background:#fff5e5;color:#8c5b00}.mkt-track-publishing .mkt-track-bar span{background:#d49a2a}
+.mkt-track-funding{background:#fcecea;color:#943e40}.mkt-track-funding .mkt-track-bar span{background:#c46e70}
+.mkt-track-empty{text-align:center;padding:34px;color:#876c60}
+@media(max-width:700px){.mkt-track-toolbar{align-items:stretch}.mkt-track-search{min-width:100%}.mkt-track-date-range{gap:8px}.mkt-track-date-range label{flex:1;min-width:140px}}

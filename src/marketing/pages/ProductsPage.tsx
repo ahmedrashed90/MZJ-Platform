@@ -18,7 +18,7 @@ export function ProductsPage() {
   const query = useWorkQuery<{ rows: WorkProduct[] }>('products');
   const term = search.trim().toLocaleLowerCase();
   const rows = (query.data?.rows || []).filter(product =>
-    `${product.statement} ${product.idea_name} ${product.task_no}`.toLocaleLowerCase().includes(term));
+    `${product.statement} ${product.idea_name} ${product.task_no} ${product.idea_code||''}`.toLocaleLowerCase().includes(term));
 
   return <div className="mkw">
     <WorkHeader title={W.products} onRefresh={() => void query.reload()} loading={query.loading} />
@@ -40,7 +40,7 @@ export function ProductsPage() {
             <td><span className="mkw-code">{index + 1}</span></td>
             <td><time dateTime={approvedAt || undefined} dir="ltr" style={{ display: 'inline-block', direction: 'ltr', unicodeBidi: 'isolate', whiteSpace: 'nowrap' }}>{approvalDate(approvedAt)}</time></td>
             <td className="mkw-table-title"><ProductReference title={product.task_name} details={product}/><MediaLabel kind={product.media_kind} /></td>
-            <td>{product.idea_name}</td>
+            <td>{product.idea_name}{product.idea_code && <small className="mkw-muted" style={{display:'block'}}>كود الفكرة: <span dir="ltr">{product.idea_code}</span></small>}</td>
             <td>{product.assignee_name || '—'}</td>
             <td><ProductViewButton id={product.id} /></td>
           </tr>;

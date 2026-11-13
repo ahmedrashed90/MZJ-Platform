@@ -50,7 +50,7 @@ export type WorkTask = {
   /** Permission-scoped executor names, ideas and requirement dates for dashboard keyword search. */
   assignee_names?: string[]; search_ideas?: string[]; search_briefs?: string[]; due_dates?: string[];
 };
-export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string };
+export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string; idea_code?: string };
 export type WorkPlanLine = {
   id: string; plan_id: string; plan_no: string; kind: WorkPlanKind; name: string; scheduled_on: string;
   review_status?: 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published'; review_note?: string; review_revision?: number;

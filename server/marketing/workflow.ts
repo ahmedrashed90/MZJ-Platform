@@ -16,6 +16,7 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
+import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
 
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
@@ -407,7 +408,7 @@ async function validateFormats(db: any, kind: 'image' | 'video', ids: string[]):
   if (rows.length !== uniqueIds.length || rows.some((r: WorkFormat) => !supportsWorkMedia(kind, r.name))) throw new Error(W.selectFormats);
   return rows as WorkFormat[];
 }
-async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker?: { planId: string; ideaCodes: string[]; requestKey: string; clientKeys: string[] }) {
+async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker?: { planId: string; ideaCodes: string[]; requestKey: string; clientKeys: string[]; itemIdeaCodes: string[] }) {
   requirePermission(user, 'marketing.task.create');
   const reservationId = id(body.reservationId), typeId = id(body.typeId), name = text(body.name, 250);
   const incoming = list(body.items);
@@ -487,7 +488,8 @@ export type StrategyWorkflowTaskInput = {
 export async function createStrategyWorkflowTask(sql: Sql, input: StrategyWorkflowTaskInput, user: SessionUser) {
   const reservation = await reserveTask(sql, { requestKey: input.requestKey }, user);
   const marker = { planId: input.source.planId, ideaCodes: input.source.ideaCodes,
-    requestKey: input.requestKey, clientKeys: input.items.map(item => item.clientKey) };
+    requestKey: input.requestKey, clientKeys: input.items.map(item => item.clientKey),
+    itemIdeaCodes: input.items.map(item => String(item.ideaCode || '')) };
   const result = await createTask(sql, {
     reservationId: reservation.reservation.id, typeId: input.typeId, name: input.name, items: input.items,
   }, user, marker);
@@ -498,7 +500,8 @@ export async function createStrategyWorkflowTask(sql: Sql, input: StrategyWorkfl
   const audited = record?.data || {};
   if (audited.source !== 'mzj-content-strategy' || audited.requestKey !== marker.requestKey ||
       audited.planId !== marker.planId || JSON.stringify(audited.ideaCodes) !== JSON.stringify(marker.ideaCodes) ||
-      JSON.stringify(audited.clientKeys) !== JSON.stringify(marker.clientKeys)) {
+      JSON.stringify(audited.clientKeys) !== JSON.stringify(marker.clientKeys) ||
+      (Array.isArray(audited.itemIdeaCodes) && JSON.stringify(audited.itemIdeaCodes) !== JSON.stringify(marker.itemIdeaCodes))) {
     throw new Error('Assignment idempotency conflict');
   }
   const items = await sql<any[]>`select id::text,client_key::text,assigned_to::text,media_kind,delivery_mode,idea_name,
@@ -1265,6 +1268,62 @@ export async function assertWorkflowFileAccess(sql: Sql, file: any, user: Sessio
       where up.file_id=${file.id}::uuid and up.created_by=${user.id}::uuid and up.cancelled_at is null and r.used_at is null)`;
   if (!allowed) throw new Error(W.denied);
 }
+/** Read the canonical strategy audit links for products, without copying their
+ * identity to a second table or altering existing Marketing workflow records. */
+async function strategyProductIdentities(sql:Sql, taskIds:string[]) {
+  const result=new Map<string,{ideaCode:string;sourcePlanId:string}>();
+  if(!taskIds.length)return result;
+  const linked=await sql<any[]>`select i.id::text as id,i.task_id::text as task_id,
+    i.client_key::text as client_key,i.idea_name,i.sort_order,h.data as source
+    from marketing.work_items i
+    join lateral (select data from marketing.work_history h
+      where h.task_id=i.task_id and h.action='strategy_assigned'
+        and h.data->>'source'='mzj-content-strategy'
+      order by h.created_at desc,h.id desc limit 1) h on true
+    where i.task_id=any(${taskIds}::uuid[])
+    order by i.task_id,i.sort_order,i.created_at,i.id`;
+  const tasks=new Map<string,typeof linked>();
+  for(const row of linked)tasks.set(String(row.task_id),[...(tasks.get(String(row.task_id))||[]),row]);
+  for(const rows of tasks.values()){
+    const marker=rows[0].source as StrategyMarker;
+    const mappings=strategyCodeMap(marker,rows as StrategyAssignedItem[]);
+    for(const row of rows){const ideaCode=mappings.get(String(row.id));
+      if(ideaCode && marker.planId)result.set(String(row.id),{ideaCode,sourcePlanId:marker.planId});}
+  }
+  return result;
+}
+
+/** This is a read-only projection of task creation, approval, agenda and
+ * campaign records. No manual tracking mutation or new tracking table. */
+async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
+  if(!hasPermission(user,'marketing.dashboard.view')&&!hasPermission(user,'marketing.database.view'))throw Error(W.denied);
+  const from=text(filters.from,10),to=text(filters.to,10);
+  if((from&&!isWorkDate(from))||(to&&!isWorkDate(to))||(from&&to&&from>to))throw Error(W.invalid);
+  const rows=await sql<any[]>`select t.id::text as task_id,t.task_no,t.created_at,
+    i.id::text as id,i.client_key::text,i.idea_name,i.sort_order,i.status,i.delivery_mode,
+    h.data as source,
+    exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.product_id=i.id and l.is_deleted=false and p.is_deleted=false and p.kind='agenda') as in_agenda,
+    exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.product_id=i.id and l.is_deleted=false and p.is_deleted=false and p.kind='campaign') as in_campaign
+    from marketing.work_tasks t
+    join lateral (select data from marketing.work_history h
+      where h.task_id=t.id and h.action='strategy_assigned' and h.data->>'source'='mzj-content-strategy'
+      order by h.created_at desc,h.id desc limit 1) h on true
+    join marketing.work_items i on i.task_id=t.id
+    where t.is_deleted=false
+      and (${isManager(user)} or t.created_by=${user.id}::uuid)
+      and (${!from} or t.created_at::date>=${from||'1970-01-01'}::date)
+      and (${!to} or t.created_at::date<=${to||'9999-12-31'}::date)
+    order by t.created_at desc,t.task_no desc,i.sort_order,i.id`;
+  const grouped=new Map<string,typeof rows>();
+  for(const row of rows)grouped.set(String(row.task_id),[...(grouped.get(String(row.task_id))||[]),row]);
+  const tracking=[...grouped.values()].map(items=>calculateIdeaTracking(
+    String(items[0].task_id),String(items[0].task_no),String(items[0].created_at),
+    items[0].source as StrategyMarker,items as StrategyAssignedItem[]));
+  return {ok:true,rows:tracking};
+}
+
 async function products(sql: Sql, user: SessionUser) {
   if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
   const scopes = departmentScope(user);
@@ -1287,8 +1346,10 @@ async function products(sql: Sql, user: SessionUser) {
     where t.is_deleted=false and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
       i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))
     order by i.approved_at desc,i.created_at desc,i.id desc`;
-  return rows.filter(row => finalCoverage(row as WorkItem)).map(row => ({ ...row,
-    statement: `${row.task_name} - ${row.media_kind === 'video' ? W.video : W.image}` }));
+  const identities=await strategyProductIdentities(sql,[...new Set(rows.map(row=>String(row.task_id)))]);
+  return rows.filter(row=>finalCoverage(row as WorkItem)).map(row=>({...row,
+    idea_code:identities.get(String(row.id))?.ideaCode||'',
+    statement:`${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`}));
 }
 async function productVisible(db: any, user: SessionUser, itemId: string, allowPlanReviewer = false) {
   const scopes = departmentScope(user);
@@ -1841,28 +1902,17 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
  */
 export async function listStrategyApprovedProducts(sql: Sql, user: SessionUser) {
   requirePermission(user, 'marketing.products.view');
-  const links = await sql<any[]>`
-    select i.id::text as product_id,i.client_key::text,
-      h.data as strategy_source
-    from marketing.work_items i
-    join marketing.work_tasks task on task.id=i.task_id
-    join marketing.work_history h on h.task_id=task.id and h.action='strategy_assigned'
-    where task.is_deleted=false and task.created_by=${user.id}::uuid
-      and i.status='approved' and h.data->>'source'='mzj-content-strategy'
-    order by i.created_at desc`;
-  const sourceByProduct = new Map<string,{ideaCode:string;sourcePlanId:string}>();
-  for (const link of links) {
-    const codes=Array.isArray(link.strategy_source?.ideaCodes)?link.strategy_source.ideaCodes:[];
-    const keys=Array.isArray(link.strategy_source?.clientKeys)?link.strategy_source.clientKeys:[];
-    const index=keys.indexOf(String(link.client_key));
-    const ideaCode=codes[index], sourcePlanId=link.strategy_source?.planId;
-    if (index < 0 || typeof ideaCode !== 'string' || typeof sourcePlanId !== 'string') continue;
-    sourceByProduct.set(String(link.product_id),{ideaCode,sourcePlanId});
-  }
+  const approved=await products(sql,user);
+  const ownIds=[...new Set(approved.map(product=>String(product.task_id)))];
+  const owned=ownIds.length?await sql<any[]>`select id::text from marketing.work_tasks where id=any(${ownIds}::uuid[]) and created_by=${user.id}::uuid`:[];
+  const ownedTasks=new Set(owned.map(row=>String(row.id)));
+  const identities=await strategyProductIdentities(sql,ownIds);
+  const sourceByProduct=new Map(approved.filter(product=>ownedTasks.has(String(product.task_id))&&identities.has(String(product.id)))
+    .map(product=>[String(product.id),identities.get(String(product.id))!]));
   if (!sourceByProduct.size) return {ok:true,products:[] as any[]};
   // Native products() enforces approval status, final format coverage and scope.
-  const approved=(await products(sql,user)).filter(product=>sourceByProduct.has(String(product.id)));
-  const ids=approved.map(product=>String(product.id));
+  const sourceProducts=approved.filter(product=>sourceByProduct.has(String(product.id)));
+  const ids=sourceProducts.map(product=>String(product.id));
   const planned=ids.length ? await sql<any[]>`
     select line.product_id::text as product_id,line.scheduled_on::text as scheduled_on,
       line.post_type_id::text as post_type_id,post_type.platform_id::text as platform_id,
@@ -1880,7 +1930,7 @@ export async function listStrategyApprovedProducts(sql: Sql, user: SessionUser) 
       agendaId:row.agenda_id,agendaNo:row.plan_no,kind:row.kind
     }]);
   }
-  return {ok:true,products:approved.map(product=>{
+  return {ok:true,products:sourceProducts.map(product=>{
     const source=sourceByProduct.get(String(product.id))!;
     const formats=Array.isArray(product.formats)?product.formats:[];
     return {
@@ -2820,6 +2870,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_dashboard') {
       if (!hasPermission(user,'marketing.dashboard.view') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
       result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user), canReviewPlans:await canReviewPlan(sql,user), userId:user.id };
+    } else if (resource === 'work_marketing_tracking') {
+      result = await marketingIdeaTracking(sql,user,request.query);
     } else if (resource === 'work_task') {
       if (!hasPermission(user, 'marketing.task.view_assigned') && !hasPermission(user, 'marketing.task.view_all') && !hasPermission(user, 'marketing.database.view') && !hasPermission(user, 'marketing.task.review') && !(await canGradeWorkItem(sql,user))) throw new Error(W.denied);
       result = await taskSummary(sql, user, id(request.query.id));

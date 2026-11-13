@@ -595,7 +595,10 @@ test('Approved products are released independently of parent task and newest app
 test('Product details depend on item approval rather than task completion',async()=>{const db=scriptedSql([step("i.status='approved' and t.is_deleted=false",[],(_,q)=>{assert(!q.includes("t.status='completed'"));})]);await assert.rejects(()=>api.productVisible(db,admin,item.id));db.assertDone();});
 test('Fully approved deliverable appears in Products while its parent task is still active',async()=>{
   const released={...item,status:'approved',formats:[format],files:[file],task_status:'active',task_no:'TSK-0001',task_name:'Tucson',approved_at:'2026-10-25T12:00:00Z'};
-  const db=scriptedSql([step("where t.is_deleted=false and i.status='approved'",[released])]);
+  const db=scriptedSql([step("where t.is_deleted=false and i.status='approved'",[released]),
+    // Product identity is read from the same immutable strategy audit history;
+    // a manually created task has no strategy mapping.
+    step("from marketing.work_items i",[])]);
   const visible=await api.products(db,admin);
   assert.equal(visible.length,1);assert.equal(visible[0].id,item.id);
   assert.equal(visible[0].statement,'Tucson - صورة');db.assertDone();

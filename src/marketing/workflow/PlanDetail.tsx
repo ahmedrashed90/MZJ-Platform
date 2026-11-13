@@ -9,6 +9,7 @@ import { CampaignOverview } from './campaignOverview';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
+import { productChoiceGroups, productChoiceLabel } from './productChoice';
 import { CampaignGoalPicker } from './CampaignGoals';
 import type { CampaignGoalOption, CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 import { campaignPlatformGoalRows } from '../../../shared/marketing-campaign-goals';
@@ -113,6 +114,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     if (ok) { setNote(''); setNoteType(''); }
   }
   const products = productsQuery.data?.rows || [], meta = metaQuery.data;
+  const productGroups = productChoiceGroups(products);
   function changeRow(index: number, patch: Partial<EditableLine>) { setRows(old => old.map((row, i) => i === index ? { ...row, ...patch } : row)); }
   function addRow() { setRows(old => [...old, { id: '', date: '', productId: '', postTypeId: '', budget: '0' }]); }
 
@@ -173,7 +175,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
       {editing && plan!.canEdit ? <section className="mkw-plan-edit-lines"><div className="mkw-table-wrap"><table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الفكرة (فكرة المطلوب)</th><th>المنصة ونوع النشر</th>{plan!.kind === 'campaign' && <th>الميزانية</th>}<th>حذف</th></tr></thead><tbody>
         {rows.map((row, index) => { const product = products.find(item => item.id === row.productId); const types = meta?.postTypes.filter(type => product && availablePlanPostTypes(meta.postTypes, product.media_kind, type.platform_id).some(format => format.id === type.id)) || [];
           return <tr key={row.id || `new-${index}`}><td><input type="date" value={row.date} onChange={e => changeRow(index, { date: e.target.value })} /></td>
-          <td><select value={row.productId} onChange={e => changeRow(index, { productId: e.target.value, postTypeId: '' })}><option value="">اختر المنتج</option>{products.map(item => <option key={item.id} value={item.id}>{item.task_no} — {item.idea_name}</option>)}</select></td>
+          <td><select value={row.productId} onChange={e => changeRow(index, { productId: e.target.value, postTypeId: '' })}><option value="">اختر المنتج</option>{productGroups.map(group => <optgroup key={group.title} label={group.title}>{group.rows.map(item => <option key={item.id} value={item.id}>{productChoiceLabel(item)}</option>)}</optgroup>)}</select></td>
           <td className="mkw-plan-idea-cell">{product?.idea || '—'}</td>
           <td><select value={row.postTypeId} onChange={e => changeRow(index, { postTypeId: e.target.value })}><option value="">اختر نوع النشر</option>{types.map(type => <option key={type.id} value={type.id}>{meta?.platforms.find(p => p.id === type.platform_id)?.name} — {type.name}</option>)}</select></td>
           {plan!.kind === 'campaign' && <td><input type="number" min="0" step="0.01" value={row.budget} onChange={e => changeRow(index, { budget: e.target.value })} /></td>}

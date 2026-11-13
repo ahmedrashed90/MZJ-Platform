@@ -26,7 +26,8 @@ async function scenario(kind,role){
     '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
     './api':{showDate:String,useWorkQuery:resource=>resource==='plan'?query:{data:resource==='campaign_goal_settings'?{goals:[{id:'goal-one',name:'زيادة المبيعات'},{id:'goal-two',name:'طلبات التمويل'}],migrationRequired:false}:{categories:[],rows:[],postTypes:[],platforms:[]},reload:async()=>{}},workPost:async(action,payload)=>{calls.push({action,payload});return{ok:true};}},
     './planComposer':{availablePlanPostTypes:()=>[]},'./PlanStatus':{PlanStatusBadges:()=>{},planStateLabels:{in_progress:'Draft'}},'./campaignOverview':{CampaignOverview:()=>{}},
-    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./ProductReference':{ProductReference:()=>null},'../../../shared/marketing-campaign-goals':{campaignPlatformGoalRows:lines=>[...new Map(lines.map(row=>[row.platform_id,{platformId:row.platform_id,platformName:row.platform_name,goals:[]}])).values()]},
+    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./ProductReference':{ProductReference:()=>null},
+    './productChoice':{productChoiceGroups:()=>[],productChoiceLabel:()=>''},'../../../shared/marketing-campaign-goals':{campaignPlatformGoalRows:lines=>[...new Map(lines.map(row=>[row.platform_id,{platformId:row.platform_id,platformName:row.platform_name,goals:[]}])).values()]},
     '../../../shared/marketing-workflow':{isWorkDate:date=>/^\d{4}-\d{2}-\d{2}$/.test(date)}};
   const out={exports:{}};new Function('require','module','exports',compiled.outputText)(n=>{if(n in mods)return mods[n];throw Error('Missing mock '+n);},out,out.exports);
   function render(){state.render();const v=out.exports.PlanDetail({id:'id',onClose:()=>{},onChanged:()=>{}});state.commit();return v;}

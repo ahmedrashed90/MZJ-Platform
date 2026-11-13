@@ -5,6 +5,7 @@ import { W, Empty, Field, FormatSelector, ProductViewButton, WorkAlert, WorkHead
 import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
 import { splitRequiredMediaSelection } from './requiredMedia';
+import { productChoiceGroups, productChoiceLabel } from './productChoice';
 import { CampaignGoalPicker } from './CampaignGoals';
 import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
 import { addPlanPlatform, availablePlanPostTypes, availablePlanProducts, planEntriesPayload, planEntryValid, planPostTypeBudget, selectedPlanPostTypeIds, validatePlanComposer, type PlanEntryDraft, type PlanPlatformDraft } from './planComposer';
@@ -188,15 +189,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   // product's approved image/video type determines which choices are valid.
   const activePlatforms = useMemo(() => meta.platforms.filter(platform =>
     meta.postTypes.some(type => type.platform_id === platform.id)), [meta.platforms, meta.postTypes]);
-  const productGroups = useMemo(() => {
-    const groups = new Map<string, { title: string; rows: WorkProduct[] }>();
-    for (const product of products) {
-      const key = product.task_id || product.task_no;
-      if (!groups.has(key)) groups.set(key, { title: `${product.task_no} — ${product.task_name}`, rows: [] });
-      groups.get(key)!.rows.push(product);
-    }
-    return Array.from(groups.values());
-  }, [products]);
+  const productGroups = useMemo(() => productChoiceGroups(products), [products]);
   const selectedProductIds = useMemo(() => new Set(entries.map(entry => entry.productId).filter(Boolean)), [entries]);
   const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.reduce((count, platform) => count + (platform.postTypeIds?.length || (platform.postTypeId ? 1 : 0)), 0), 0);
   const noMoreProducts = Boolean(productsQuery.data?.rows?.length) && products.every(product => selectedProductIds.has(product.id));
@@ -300,12 +293,13 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
               <div className="mkw-plan-product-picker">
                 <select aria-label={W.selectProduct} required value={entry.productId} disabled={busy} onChange={event => updateEntry(entry.key, { productId: event.target.value, platforms: [] })}>
                   <option value="">اختر المطلوب / المنتج من التاسك</option>
-                  {selectableGroups.map(group => <optgroup key={group.title} label={group.title}>{group.rows.map(candidate => <option key={candidate.id} value={candidate.id}>المطلوب {candidate.sort_order} — {candidate.idea_name} — {candidate.media_kind === 'video' ? 'فيديو' : 'صورة'} — {candidate.assignee_name || '—'} — {candidate.idea.slice(0, 65)}</option>)}</optgroup>)}
+                  {selectableGroups.map(group => <optgroup key={group.title} label={group.title}>{group.rows.map(candidate => <option key={candidate.id} value={candidate.id}>{productChoiceLabel(candidate)}</option>)}</optgroup>)}
                 </select>
                 {!entry.productId && !selectableGroups.length && <small className="mkw-muted">كل المنتجات المتاحة مختارة بالفعل في أيام أخرى.</small>}
                 {product && <div className="mkw-plan-product-preview" role="status">
                   <strong>{product.idea_name}</strong>
                   <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
+                  {!!product.idea_code && <span><b>كود الفكرة:</b> {product.idea_code}</span>}
                   <span><b>الفكرة:</b> {product.idea || '—'}</span>
                   <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
                   <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
