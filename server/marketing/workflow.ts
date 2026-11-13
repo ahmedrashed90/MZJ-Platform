@@ -1307,7 +1307,7 @@ async function strategyProductIdentities(sql:Sql, taskIds:string[]) {
 /** This is a read-only projection of task creation, approval, agenda and
  * campaign records. No manual tracking mutation or new tracking table. */
 async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
-  if(!hasPermission(user,'marketing.dashboard.view')&&!hasPermission(user,'marketing.database.view'))throw Error(W.denied);
+  requirePermission(user,'marketing.idea_tracking.view');
   const from=text(filters.from,10),to=text(filters.to,10);
   if((from&&!isWorkDate(from))||(to&&!isWorkDate(to))||(from&&to&&from>to))throw Error(W.invalid);
   const rows=await sql<StrategyTrackingLinkRow[]>`select t.id::text as task_id,t.task_no,t.created_at,

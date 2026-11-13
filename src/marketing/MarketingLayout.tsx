@@ -26,7 +26,7 @@ const links = [
   { to: "/marketing", label: W.dashboard, icon: CirclesFour, end: true, permission: "marketing.dashboard.view" },
   { to: "/marketing/database", label: W.database, icon: Database, permission: "marketing.database.view" },
   { to: "/marketing/create", label: W.create, icon: PlusCircle, permission: "marketing.create.view" },
-  { to: "/marketing/marketing-tracking", label: "تراكينج التسويق", icon: Target, permission: "marketing.dashboard.view" },
+  { to: "/marketing/marketing-tracking", label: "التراكينج", icon: Target, permission: "marketing.idea_tracking.view" },
   { to: "/marketing/products", label: W.products, icon: Package, permission: "marketing.products.view" },
   { to: "/marketing/packages", label: "الباقات", icon: CreditCard, permission: "marketing.packages.view" },
   { to: "/marketing/receipt-calendar", label: W.calendar, icon: CalendarCheck, permission: "marketing.receipt_calendar.view" },

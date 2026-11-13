@@ -28,7 +28,7 @@ export function MarketingIdeaTrackingPage() {
     return (query.data?.rows||[]).filter(row=>!term||`${row.taskNo} ${row.createdAt}`.toLocaleLowerCase().includes(term));
   },[query.data?.rows,search]);
   return <div className="mkw mkt-track-page">
-    <WorkHeader title="تراكينج التسويق" onRefresh={()=>void query.reload()} loading={query.loading}/>
+    <WorkHeader title="التراكينج" onRefresh={()=>void query.reload()} loading={query.loading}/>
     <WorkAlert>{query.error}</WorkAlert>
     <section className="mkt-track-toolbar">
       <label className="mkt-track-search"><MagnifyingGlass size={19}/><input aria-label="بحث برقم التاسك" type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="بحث برقم التاسك..."/></label>

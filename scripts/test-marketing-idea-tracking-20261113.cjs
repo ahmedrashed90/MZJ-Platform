@@ -35,7 +35,11 @@ assert(api.includes('strategyProductIdentities(sql'));
 assert(api.includes("p.kind='agenda'")&&api.includes("p.kind='campaign'"));
 assert(page.includes('التنفيذ')&&page.includes('النشر')&&page.includes('التمويل'));
 assert(!page.includes('إضافة تراكينج'));
-assert(nav.includes('تراكينج التسويق'));
+assert(nav.includes('التراكينج') && nav.includes('marketing.idea_tracking.view'));
+assert(page.includes('title="التراكينج"'));
+assert(fs.readFileSync('src/marketing/marketing-tracking.css','utf8').includes('color:#fff'));
+assert(fs.readFileSync('src/App.tsx','utf8').includes('permission="marketing.idea_tracking.view"'));
+assert(fs.readFileSync('server/_api-permissions.ts','utf8').includes('work_marketing_tracking: "marketing.idea_tracking.view"')); 
 assert(plan.includes('productChoiceLabel(item)'));
 assert(fs.readFileSync('src/marketing/workflow/CreatePage.tsx','utf8').includes('productChoiceLabel(candidate)'));
 // Execute the production read-only projection with mocked PostgreSQL rows,
@@ -44,7 +48,7 @@ const begin=api.indexOf('async function marketingIdeaTracking('),end=api.indexOf
 assert(begin>=0&&end>begin);
 const fnSource=api.slice(begin,end)+'\nglobalThis.__trackingTest=marketingIdeaTracking;';
 const compiledTracking=ts.transpileModule(fnSource,{fileName:'tracking-sql.ts',compilerOptions:{module:ts.ModuleKind.None,target:ts.ScriptTarget.ES2022}}).outputText;
-const ctx={console,calculateIdeaTracking,hasPermission:(_,p)=>p==='marketing.dashboard.view',isManager:()=>true,
+const ctx={console,calculateIdeaTracking,requirePermission:(_,p)=>{if(p!=='marketing.idea_tracking.view')throw Error('Denied');},isManager:()=>true,
   isWorkDate:value=>/^\d{4}-\d{2}-\d{2}$/.test(value),
   text:(value,max)=>String(value??'').slice(0,max).trim(),W:{denied:'Denied',invalid:'Invalid'}};
 vm.createContext(ctx);vm.runInContext(compiledTracking,ctx);
@@ -63,6 +67,8 @@ vm.createContext(ctx);vm.runInContext(compiledTracking,ctx);
   assert.equal(result.rows.length,1);assert.equal(result.rows[0].assignment,2);
   assert.equal(result.rows[0].fundingPercent,50);
   await assert.rejects(()=>ctx.__trackingTest(sql,{id:'user-1'},{from:'2026-12-31',to:'2026-11-01'}),/Invalid/);
+  ctx.requirePermission=()=>{throw Error('Denied');};
+  await assert.rejects(()=>ctx.__trackingTest(sql,{id:'user-1'},{}),/Denied/,'Permission must be checked on the server');
   console.log('PASS: task/idea code tracking SQL projection, permission/date checks, counts and plans are read-only.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 console.log('PASS: stable strategy idea codes, historical linkage, unique per-stage counts, product details and automatic read-only tracking.');

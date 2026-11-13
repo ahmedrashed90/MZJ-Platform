@@ -78,6 +78,7 @@ const mobileSystems = [
       ["/marketing", "الداش بورد", "marketing.dashboard.view"],
       ["/marketing/database", "قاعدة البيانات", "marketing.database.view"],
       ["/marketing/create", "إنشاء", "marketing.create.view"],
+      ["/marketing/marketing-tracking", "التراكينج", "marketing.idea_tracking.view"],
       ["/marketing/products", "المنتجات", "marketing.products.view"],
       ["/marketing/packages", "الباقات", "marketing.packages.view"],
       ["/marketing/receipt-calendar", "تقويم الاستلام", "marketing.receipt_calendar.view"],

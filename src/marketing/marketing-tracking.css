@@ -8,7 +8,7 @@
 .mkt-track-refresh{display:flex;align-items:center;justify-content:center;min-height:40px}
 .mkt-track-table-wrap{overflow:auto;border:1px solid #e4cab9;border-radius:15px;background:#fffaf6}
 .mkt-track-table{width:100%;border-collapse:collapse;min-width:790px;font-size:13px;text-align:center;direction:rtl}
-.mkt-track-table th{background:#4a211c;color:#f3e8dc;font-size:13px;font-weight:850;padding:17px 11px;white-space:nowrap}
+.mkw.mkt-track-page .mkt-track-table thead th{background:#704039;color:#fff;font-size:13px;font-weight:850;padding:17px 11px;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.12)}
 .mkt-track-table td{border-bottom:1px solid #ecdcd0;padding:13px 10px;vertical-align:middle}
 .mkt-track-table tbody tr:last-child td{border-bottom:0}
 .mkt-track-table tbody tr:hover{background:#fbefe8}

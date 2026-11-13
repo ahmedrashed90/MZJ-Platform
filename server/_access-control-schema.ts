@@ -199,6 +199,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('marketing','platforms','ربط المنصات','/marketing/platforms',60,true),
 ('marketing','publish_prep','تجهيز النشر','/marketing/publish-prep',70,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
+('marketing','idea_tracking','التراكينج','/marketing/marketing-tracking',35,true),
 ('marketing','monitoring','المتابعة','/marketing/monitoring',80,true),
 ('marketing','calendar','التقويم','/marketing/calendar',90,true),
 ('marketing','receipt_calendar','تقويم الاستلام','/marketing/receipt-calendar',100,true),
@@ -385,6 +386,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('marketing.receipt_calendar.view','مشاهدة تقويم الاستلام','marketing','receipt_calendar','view','مشاهدة تقويم الاستلام','مشاهدة تقويم الاستلام','page',false,1530,true),
 ('marketing.stock.view','مشاهدة استوك التسويق','marketing','stock','view','مشاهدة استوك التسويق','مشاهدة استوك التسويق','page',false,1540,true),
 ('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
+('marketing.idea_tracking.view','مشاهدة التراكينج','marketing','idea_tracking','view','مشاهدة التراكينج','تحديد من يمكنه فتح تبويب التراكينج والاطلاع على بياناته','page',true,1535,true),
 ('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
 ('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
 ('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
@@ -615,6 +617,7 @@ on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sor
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
+('marketing','idea_tracking','التراكينج','/marketing/marketing-tracking',35,true),
 ('marketing','subscriptions','الاشتراكات','/marketing/subscriptions',120,true),
 ('marketing','lead_forms','فورم المنصات','/marketing/lead-forms',125,true),
 ('core','owners_community','MZJ Club Community','/owners-community',60,true),
@@ -630,6 +633,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','التحكم في فتح صفحة متابعة طلبات البيع داخل سيستم العمليات','page',false,865,true),
 ('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true),
 ('marketing.subscriptions.view','مشاهدة الاشتراكات','marketing','subscriptions','view','مشاهدة الاشتراكات','فتح صفحة الاشتراكات والخدمات داخل سيستم التسويق','page',true,1541,true),
+('marketing.idea_tracking.view','مشاهدة التراكينج','marketing','idea_tracking','view','مشاهدة التراكينج','تحديد من يمكنه فتح تبويب التراكينج والاطلاع على بياناته','page',true,1535,true),
 ('marketing.subscriptions.renew','تجديد الاشتراكات','marketing','subscriptions','renew','تجديد الاشتراكات','تسجيل تجديد اشتراك وتحديث تاريخ التجديد والقيمة والاستخدام','action',true,1542,true),
 ('marketing.subscriptions.manage','إدارة الاشتراكات','marketing','subscriptions','manage','إدارة الاشتراكات','إضافة وتعديل وإيقاف الاشتراكات من إعدادات سيستم التسويق','settings',true,1543,true),
 ('marketing.lead_forms.view','مشاهدة فورم المنصات','marketing','lead_forms','view','مشاهدة فورم المنصات','فتح تبويب فورم المنصات','page',false,1570,true),
@@ -688,6 +692,11 @@ on conflict do nothing;
 insert into core.role_permissions(role_id,permission_id)
 select r.id,p.id from core.roles r join core.permissions p on p.code like 'marketing.lead_forms.%'
 where r.code in ('admin','system_admin','marketing_admin')
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r join core.permissions p on p.code='marketing.idea_tracking.view'
+where r.code in ('admin','system_admin')
 on conflict do nothing;
 
 insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
@@ -794,6 +803,19 @@ async function requiredPagePermissionCatalogReady() {
           and system_code='operations'
           and page_code='sales_orders_followup'
           and is_active=true
+      )
+      and exists(
+        select 1 from core.system_pages
+        where system_code='marketing' and code='idea_tracking' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='marketing.idea_tracking.view' and system_code='marketing' and page_code='idea_tracking' and is_active=true
+      )
+      and not exists(
+        select 1 from core.roles r where r.code in ('admin','system_admin')
+          and not exists(select 1 from core.role_permissions rp join core.permissions p on p.id=rp.permission_id
+            where rp.role_id=r.id and p.code='marketing.idea_tracking.view')
       )
       and exists(
         select 1 from core.system_pages

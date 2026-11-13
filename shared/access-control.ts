@@ -98,6 +98,7 @@ export const PAGE_CATALOG: CatalogPage[] = [
 
   { system: "marketing", code: "dashboard", name: "الداش بورد", route: "/marketing", sortOrder: 10 },
   { system: "marketing", code: "create", name: W.create, route: "/marketing/create", sortOrder: 30 },
+  { system: "marketing", code: "idea_tracking", name: "التراكينج", route: "/marketing/marketing-tracking", sortOrder: 35 },
   { system: "marketing", code: "products", name: W.products, route: "/marketing/products", sortOrder: 40 },
   { system: "marketing", code: "database", name: "قاعدة البيانات", route: "/marketing/database", sortOrder: 20 },
   { system: "marketing", code: "packages", name: "إدارة الباقات", route: "/marketing/packages", sortOrder: 50 },
@@ -309,6 +310,7 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.task.review", W.approve, "marketing", "dashboard", "task_review", "workflow", W.approve, true),
   p("marketing.products.view", W.products, "marketing", "products", "view", "page"),
   p("marketing.dashboard.view", "مشاهدة داش بورد التسويق", "marketing", "dashboard", "view", "page"),
+  p("marketing.idea_tracking.view", "مشاهدة التراكينج", "marketing", "idea_tracking", "view", "page", "فتح تبويب التراكينج في التسويق", true),
   p("marketing.create_campaign.view", "فتح إنشاء حملة", "marketing", "create", "view_campaign", "page"),
   p("marketing.create_agenda.view", "فتح إنشاء أجندة", "marketing", "create", "view_agenda", "page"),
   p("marketing.database.view", "مشاهدة قاعدة بيانات التسويق", "marketing", "database", "view", "page"),

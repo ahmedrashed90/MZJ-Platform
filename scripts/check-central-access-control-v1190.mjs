@@ -45,7 +45,7 @@ expect("Original permissions remain in historical migrations and newer feature p
   if (historical.includes(`'${code}'`)) return true;
   // Historical migrations are immutable. New permissions live in the idempotent
   // runtime access-control migration, so they must not be required in July's SQL.
-  const isRuntimeAddition = code === "operations.inventory.tajyeer.update" || code === "attendance.records.correct" || code.startsWith("marketing.lead_forms.");
+  const isRuntimeAddition = code === "operations.inventory.tajyeer.update" || code === "marketing.idea_tracking.view" || code === "attendance.records.correct" || code.startsWith("marketing.lead_forms.");
   return isRuntimeAddition && read("server/_access-control-schema.ts").includes(`'${code}'`);
 }));
 

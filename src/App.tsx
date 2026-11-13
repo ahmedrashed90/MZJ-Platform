@@ -132,7 +132,7 @@ function PlatformRoutes() {
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
             <Route path="engagement" element={<PermissionGuard permission="marketing.engagement.view"><EngagementPage /></PermissionGuard>} />
             <Route path="ratings" element={<PermissionGuard permission="marketing.dashboard.view"><MarketingRatingsPage /></PermissionGuard>} />
-            <Route path="marketing-tracking" element={<PermissionGuard permission="marketing.dashboard.view"><MarketingIdeaTrackingPage /></PermissionGuard>} />
+            <Route path="marketing-tracking" element={<PermissionGuard permission="marketing.idea_tracking.view"><MarketingIdeaTrackingPage /></PermissionGuard>} />
             <Route path="monitoring" element={<Navigate to="/marketing" replace />} />
             <Route path="calendar" element={<Navigate to="/marketing/receipt-calendar" replace />} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
