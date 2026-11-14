@@ -46,6 +46,6 @@ export function FilesPreview({ files }: { files: WorkFile[] }) {
 }
 export function ProductPreview({ id, onClose }: { id: string; onClose: () => void }) {
   const { data, error, loading } = useWorkQuery<{ product: WorkProduct }>('product', { id });
-  return <Modal open title={W.viewProduct} onClose={onClose} level={2} className="mkw-modal"><div className="mkw"><WorkAlert>{error}</WorkAlert>{loading && !data ? <Empty>{W.loading}</Empty> : data ? <><h3>{data.product.idea_name}</h3><div className="mkw-muted">{data.product.task_no} — {data.product.task_name}</div><Formats formats={data.product.formats} /><FilesPreview files={data.product.files.filter(file => file.category === 'final')} /></> : null}</div></Modal>;
+  return <Modal open title={W.viewProduct} onClose={onClose} level={2} className="mkw-modal"><div className="mkw"><WorkAlert>{error}</WorkAlert>{loading && !data ? <Empty>{W.loading}</Empty> : data ? <><h3>{data.product.idea_name}</h3><div className="mkw-muted">{data.product.manual_product ? 'منتج يدوي' : `${data.product.task_no} — ${data.product.task_name}`}</div><Formats formats={data.product.formats} />{!data.product.manual_product && <FilesPreview files={data.product.files.filter(file => file.category === 'final')} />}</> : null}</div></Modal>;
 }
 export function ProductViewButton({ id }: { id: string }) { const [open, setOpen] = useState(false); return <><button type="button" className="secondary" onClick={() => setOpen(true)}><Eye size={17} />{W.viewProduct}</button>{open && <ProductPreview id={id} onClose={() => setOpen(false)} />}</>; }

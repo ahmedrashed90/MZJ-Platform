@@ -298,10 +298,12 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
                 {!entry.productId && !selectableGroups.length && <small className="mkw-muted">كل المنتجات المتاحة مختارة بالفعل في أيام أخرى.</small>}
                 {product && <div className="mkw-plan-product-preview" role="status">
                   <strong>{product.idea_name}</strong>
-                  <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
-                  {!!product.idea_code && <span><b>كود الفكرة:</b> {product.idea_code}</span>}
-                  <span><b>الفكرة:</b> {product.idea || '—'}</span>
-                  <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
+                  {product.manual_product ? <span><b>المصدر:</b> منتج يدوي · <b>أنواع النشر المتاحة:</b> {product.formats.length}</span> : <>
+                    <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
+                    {!!product.idea_code && <span><b>كود الفكرة:</b> {product.idea_code}</span>}
+                    <span><b>الفكرة:</b> {product.idea || '—'}</span>
+                    <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
+                  </>}
                   <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
                 </div>}
               </div>

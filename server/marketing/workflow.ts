@@ -155,6 +155,15 @@ async function saveCampaignGoals(sql: Sql, user: SessionUser, body: Row) {
     return { ok:true,id:planId,platformGoals,message:'تم حفظ أهداف المنصات للحملة دون تعديل النشر أو الاعتماد أو الميزانيات.' };
   });
 }
+/** A Marketing-owned, reusable product: never a strategy task or a final-file approval. */
+const MANUAL_KEYWORDS_TASK_NO = 'MANUAL-KEYWORDS';
+const MANUAL_KEYWORDS_NAME = 'كلمات بحث';
+function isManualKeywordsProduct(taskNo: unknown): boolean {
+  return String(taskNo || '') === MANUAL_KEYWORDS_TASK_NO;
+}
+function canAddManualKeywordsProduct(user: SessionUser): boolean {
+  return hasPermission(user, 'marketing.products.view') && hasPermission(user, 'marketing.campaign.create');
+}
 function productManager(user: SessionUser) {
   return getSystemAccess(user, 'marketing').dataScope === 'all' &&
     (hasPermission(user, 'marketing.products.view') || hasPermission(user, 'marketing.publish_prep.view'));
@@ -187,7 +196,7 @@ async function notify(user: SessionUser, action: string, taskId: string, title: 
 async function taskVisible(db: any, user: SessionUser, taskId: string) {
   const scopes = departmentScope(user);
   const gradeAccess = await canGradeWorkItem(db, user);
-  const [row] = await db`select t.* from marketing.work_tasks t where t.id=${taskId}::uuid and t.is_deleted=false and (
+  const [row] = await db`select t.* from marketing.work_tasks t where t.id=${taskId}::uuid and t.is_deleted=false and t.task_no<>'MANUAL-KEYWORDS' and (
     ${(isManager(user) || gradeAccess)} or t.created_by=${user.id}::uuid or exists(
       select 1 from marketing.work_items i left join core.departments d on d.id=i.department_id
       where i.task_id=t.id and (i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
@@ -351,7 +360,7 @@ async function taskList(sql: Sql, user: SessionUser, activeOnly = false) {
         select 1 from core.departments visible_department where visible_department.id=i.department_id
         and visible_department.code=any(${scopes}::text[])))
     left join core.users assignee on assignee.id=i.assigned_to
-    where t.is_deleted=false and (${!activeOnly} or t.status='active') and (
+    where t.is_deleted=false and t.task_no<>'MANUAL-KEYWORDS' and (${!activeOnly} or t.status='active') and (
       ${isManager(user)} or (t.created_by=${user.id}::uuid and ${(hasPermission(user, 'marketing.task.edit') || hasPermission(user, 'marketing.task.review'))})
       or exists(select 1 from marketing.work_items own
         left join core.departments d on d.id=own.department_id where own.task_id=t.id and
@@ -1335,6 +1344,52 @@ async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
   return {ok:true,rows:tracking};
 }
 
+/** Add one Keywords product through the existing approved-product contract.
+ * The internal task satisfies historical plan-item foreign keys but is hidden
+ * from task execution, receipt calendar and strategy idea tracking. */
+async function createManualKeywordsProduct(sql: Sql, user: SessionUser) {
+  if (!canAddManualKeywordsProduct(user)) throw new Error(W.denied);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    await tx`set local statement_timeout = '15s'`;
+    await tx`select pg_advisory_xact_lock(hashtext('mzj:manual_keywords_product')::bigint)`;
+    const [existing] = await tx<any[]>`select i.id::text as id from marketing.work_items i
+      join marketing.work_tasks t on t.id=i.task_id
+      where t.task_no=${MANUAL_KEYWORDS_TASK_NO} and t.is_deleted=false limit 1`;
+    if (existing) return { ok:true, id:existing.id, existed:true, message:W.saved };
+    const [kind] = await tx<any[]>`select id::text as id from marketing.campaign_types
+      where is_active=true order by name,id limit 1`;
+    const [department] = await tx<any[]>`select id::text as id from marketing.departments
+      where is_active=true order by name,id limit 1`;
+    if (!kind || !department) throw new Error('يجب تفعيل تصنيف تكليف وقسم في إعدادات التسويق أولًا');
+    const available = await tx<WorkFormat[]>`select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,
+      p.name as platform_name,p.code as platform_code
+      from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
+      where pt.is_active=true order by p.name,pt.name,pt.id`;
+    // Keywords have no file payload; keep the legacy format/media contract
+    // intact so campaign budgets, platform types and preparation all validate.
+    const formats = available.filter(format => supportsWorkMedia('image',format.name));
+    if (!formats.length || formats.length > 150) throw new Error(W.selectFormats);
+    const [reservation] = await tx<any[]>`insert into marketing.work_reservations(request_key,created_by)
+      values(${randomUUID()}::uuid,${user.id}::uuid) returning id::text,task_number`;
+    await tx`insert into marketing.work_tasks(id,task_number,task_no,name,type_id,created_by,status,completed_at)
+      values(${reservation.id}::uuid,${reservation.task_number},${MANUAL_KEYWORDS_TASK_NO},
+        ${MANUAL_KEYWORDS_NAME},${kind.id}::uuid,${user.id}::uuid,'completed',now())`;
+    const [product] = await tx<any[]>`insert into marketing.work_items
+      (task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,status,
+       submitted_at,approved_at,approved_by,sort_order)
+      values(${reservation.id}::uuid,${randomUUID()}::uuid,${department.id}::uuid,${user.id}::uuid,
+        'image',${MANUAL_KEYWORDS_NAME},${MANUAL_KEYWORDS_NAME},${tx.json(formats)},
+        (now() at time zone 'Asia/Riyadh')::date,'approved',now(),now(),${user.id}::uuid,0)
+      returning id::text`;
+    await history(tx,user,reservation.id,product.id,'manual_product_created','',{
+      source:'marketing',manualKind:'keywords',name:MANUAL_KEYWORDS_NAME
+    });
+    await tx`update marketing.work_reservations set used_at=now() where id=${reservation.id}::uuid`;
+    return {ok:true,id:product.id,existed:false,message:W.saved};
+  });
+}
+
 async function products(sql: Sql, user: SessionUser) {
   if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
   const scopes = departmentScope(user);
@@ -1355,12 +1410,14 @@ async function products(sql: Sql, user: SessionUser) {
       from marketing.work_items candidate where candidate.task_id=i.task_id
     ) numbered where numbered.id=i.id) requirement on true
     where t.is_deleted=false and i.status='approved' and (${productManager(user)} or ${isManager(user)} or
-      i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]))
+      i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]) or
+      t.task_no='MANUAL-KEYWORDS')
     order by i.approved_at desc,i.created_at desc,i.id desc`;
   const identities=await strategyProductIdentities(sql,[...new Set(rows.map(row=>String(row.task_id)))]);
-  return rows.filter(row=>finalCoverage(row as WorkItem)).map(row=>({...row,
+  return rows.filter(row=>isManualKeywordsProduct(row.task_no) || finalCoverage(row as WorkItem)).map(row=>({...row,
+    manual_product:isManualKeywordsProduct(row.task_no),
     idea_code:identities.get(String(row.id))?.ideaCode||'',
-    statement:`${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`}));
+    statement:isManualKeywordsProduct(row.task_no) ? MANUAL_KEYWORDS_NAME : `${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`}));
 }
 async function productVisible(db: any, user: SessionUser, itemId: string, allowPlanReviewer = false) {
   const scopes = departmentScope(user);
@@ -1371,14 +1428,15 @@ async function productVisible(db: any, user: SessionUser, itemId: string, allowP
     left join marketing.departments d on d.id=i.department_id left join core.departments cd on cd.id=d.id
     where i.id=${itemId}::uuid and i.status='approved' and t.is_deleted=false and (
       ${productManager(user)} or ${isManager(user)} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scopes}::text[]) or
+      (t.task_no='MANUAL-KEYWORDS' and ${hasPermission(user, 'marketing.products.view') || hasPermission(user, 'marketing.publish_prep.view')}) or
       (${selectedPlanReviewer} and exists(select 1 from marketing.work_plan_items pl join marketing.work_plans wp on wp.id=pl.plan_id
         where pl.product_id=i.id and pl.is_deleted=false and wp.is_deleted=false and wp.review_status in ('publishing','published'))))`;
   if (!row) throw new Error(W.productUnavailable);
   const orderedItems = await loadItems(db, row.task_id);
   const itemIndex = orderedItems.findIndex(entry => entry.id === itemId);
   const item = orderedItems[itemIndex];
-  if (!item || !finalCoverage(item)) throw new Error(W.productUnavailable);
-  return { ...row, ...item, requirement_number:itemIndex + 1, files: item.files.filter(file => file.category === 'final'), actions: undefined, pending_uploads: undefined };
+  if (!item || (!isManualKeywordsProduct(row.task_no) && !finalCoverage(item))) throw new Error(W.productUnavailable);
+  return { ...row, ...item, manual_product:isManualKeywordsProduct(row.task_no), requirement_number:itemIndex + 1, files: item.files.filter(file => file.category === 'final'), actions: undefined, pending_uploads: undefined };
 }
 /** Product-level publishing preparation is independent of agenda/financing dates.
  * The draft does not create schedules, publish content or change approved files.
@@ -2193,7 +2251,7 @@ async function deleteWorkflowTask(sql: Sql, user: SessionUser, taskId: string) {
     await tx`set local lock_timeout = '3s'`;
     await tx`set local statement_timeout = '15s'`;
     const [task] = await tx<any[]>`select id,name,task_no,is_deleted,created_by from marketing.work_tasks
-      where id=${taskId}::uuid for update`;
+      where id=${taskId}::uuid and task_no<>'MANUAL-KEYWORDS' for update`;
     if (!task || task.is_deleted) throw new Error(W.notFound);
     if (!isManager(user) && task.created_by !== user.id) throw new Error(W.denied);
     const referencedPlans = await tx<any[]>`select distinct l.plan_id::text from marketing.work_plan_items l
@@ -2309,7 +2367,7 @@ async function calendar(sql: Sql, user: SessionUser, request: VercelRequest) {
     coalesce(u.full_name,'') as assignee_name
     from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
     left join core.users u on u.id=i.assigned_to
-    where t.is_deleted=false and (${seeAll} or i.assigned_to=${user.id}::uuid)
+    where t.is_deleted=false and t.task_no<>'MANUAL-KEYWORDS' and (${seeAll} or i.assigned_to=${user.id}::uuid)
       and i.due_on between ${from}::date and ${to}::date
     order by i.due_on,t.created_at desc,i.sort_order`;
   // Every calendar card represents a requirement due on the chosen date.
@@ -2891,7 +2949,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_ratings') {
       result = await ratingsReport(sql, user, request.query);
     } else if (resource === 'work_products') {
-      requirePermission(user, 'marketing.products.view'); result = { ok: true, rows: await products(sql, user) };
+      requirePermission(user, 'marketing.products.view'); result = { ok: true, rows: await products(sql, user), canCreateManual: canAddManualKeywordsProduct(user) };
     } else if (resource === 'work_product') {
       if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
       result = { ok: true, product: await productVisible(sql, user, id(request.query.id)) };
@@ -2949,6 +3007,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_prepare_upload') result = await prepareUpload(sql, body, user);
     else if (action === 'work_commit_upload') result = await commitUpload(sql, body, user);
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
+    else if (action === 'work_create_manual_keywords_product') result = await createManualKeywordsProduct(sql, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);

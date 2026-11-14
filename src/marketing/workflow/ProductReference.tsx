@@ -4,12 +4,13 @@ type ProductDetails = Pick<WorkPlanLine,'task_no'|'requirement_number'|'assignee
 
 /** Requirement position is assigned by the server over the task's original item order. */
 export function ProductReference({title,details}:{title:string;details:ProductDetails}) {
-  const number = Number(details.requirement_number || 0);
+  const manual = details.task_no === 'MANUAL-KEYWORDS';
+  const number = manual ? 0 : Number(details.requirement_number || 0);
   return <span className="mkw-product-reference">
     <strong>{title || '—'}</strong>
-    <small><span dir="ltr">{details.task_no || '—'}</span>
+    <small>{manual ? 'منتج يدوي' : <span dir="ltr">{details.task_no || '—'}</span>}
       {number > 0 && <> - المطلوب {number}</>}
-      {' - '}{details.assignee_name?.trim() || 'منفذ غير محدد'}
+      {!manual && <> {' - '}{details.assignee_name?.trim() || 'منفذ غير محدد'}</>}
     </small>
   </span>;
 }
