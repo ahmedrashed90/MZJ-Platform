@@ -9711,15 +9711,6 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-correction-change-state { margin:0; color:#6D3427; font-size:12px; font-weight:800; line-height:1.75; }
 @media(max-width:560px){.attendance-correction-original,.attendance-correction-times{grid-template-columns:1fr}}
 
-.crm-keepalive-settings { display:grid; gap:14px; }
-.crm-keepalive-toggle { display:flex; align-items:center; gap:8px; margin:10px 0; font-size:13px; }
-.crm-keepalive-channels { display:flex; flex-wrap:wrap; gap:14px; margin:8px 0 14px; font-size:13px; }
-.crm-keepalive-log { display:grid; gap:6px; }
-.crm-keepalive-log > div { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:8px 10px; border:1px solid #efe1da; border-radius:10px; font-size:12px; }
-.crm-keepalive-status { padding:2px 8px; border-radius:999px; font-weight:800; background:#eceff3; }
-.crm-keepalive-status.sent { background:#e6f7ef; color:#0b7650; }
-.crm-keepalive-status.failed { background:#fde4e4; color:#b42318; }
-.crm-keepalive-log .err { color:#b42318; flex-basis:100%; }
 .crm-manychat-reply { display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px; background:#0b7650; color:#fff; font-size:12px; font-weight:800; text-decoration:none; white-space:nowrap; }
 .crm-manychat-reply:hover { background:#095f40; }
 .crm-expiring-list { display:grid; gap:10px; }
@@ -9731,3 +9722,4 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .crm-expiring-phone-form input { min-width:160px; padding:8px 10px; border:1px solid #e4d3cb; border-radius:10px; }
 .crm-expiring-phone { display:inline-flex; gap:6px; align-items:center; font-weight:700; direction:ltr; }
 .crm-expiring-hours { display:inline-flex; gap:8px; align-items:center; font-size:13px; }
+.crm-template-preview { white-space:pre-wrap; background:#faf5f2; border:1px solid #efe1da; border-radius:10px; padding:10px 12px; font-size:12px; margin:8px 0; }

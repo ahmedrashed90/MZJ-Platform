@@ -21,7 +21,6 @@ import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
 import { CrmKpiAccessSettings } from "../components/CrmKpiAccessSettings";
 import { CrmCashQrSettings } from "../components/CrmCashQrSettings";
-import { CrmWindowKeepaliveSettings } from "../components/CrmWindowKeepaliveSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 import { useAuth } from "../../auth/AuthContext";
@@ -37,7 +36,6 @@ const tabs = [
   { key: "sources", label: "المصادر", description: "مصادر العملاء وتصنيفها داخل التقارير", group: "customer" },
   { key: "templates", label: "القوالب والرسائل", description: "الرسائل السريعة وقوالب التواصل المعتمدة", group: "communication" },
   { key: "mappings", label: "ربط الحالات بالقوالب", description: "القالب المرسل عند انتقال العميل بين الحالات", group: "communication" },
-  { key: "window_keepalive", label: "إبقاء المحادثات مفتوحة", description: "رسالة تلقائية قبل انتهاء نافذة الرد لتشجيع العميل على الرد", group: "communication" },
   { key: "automatic_templates", label: "الإرسال التلقائي", description: "تشغيل وإيقاف الرسائل التلقائية", group: "communication" },
   { key: "endpoints", label: "ربط المنصات والـ Workers", description: "مسارات الإرسال والاستقبال والتكاملات", group: "communication" },
   { key: "quality", label: "مؤشرات التقارير", description: "معادلات جودة التسويق والمبيعات وكروت الملخص", group: "control" },
@@ -546,7 +544,6 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       {tab === "automation" ? <fieldset className="settings-readonly-fieldset" disabled={!canManageAutomation}><CrmAutomationSettings /></fieldset> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
       {tab === "cash_qr" ? <CrmCashQrSettings /> : null}
-      {tab === "window_keepalive" ? <CrmWindowKeepaliveSettings /> : null}
       {tab === "kpi_access" ? <CrmKpiAccessSettings users={data.assignmentUsers || []} value={data.kpiSectionPermissions} onSaved={load} /> : null}
 
       {tab === "statuses" ? (

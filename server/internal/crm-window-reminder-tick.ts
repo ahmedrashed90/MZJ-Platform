@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
 import { runCrmWindowReminders } from "../_crm-window-reminders.js";
-import { runWindowKeepalive } from "../_crm-window-keepalive.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
@@ -13,8 +12,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!token || !safeSecretEquals(token, secret)) return response.status(401).json({ ok: false, error: "Unauthorized" });
   try {
     const reminders = await runCrmWindowReminders();
-    const keepalive = await runWindowKeepalive().catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-    const result = { ok: true, reminders, keepalive };
+    const result = { ok: true, reminders };
     console.info("CRM window reminder tick", JSON.stringify(result));
     return response.status(200).json(result);
   } catch (error) {

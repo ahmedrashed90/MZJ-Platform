@@ -143,6 +143,8 @@ async function scheduleInboxAgent(event: any, context: any) {
   const conversationId = clean(event.conversation_id);
   const messageId = clean(event.payload?.messageId || event.payload?.message_id);
   if (!conversationId || !messageId) return { skipped: true, reason: "missing_conversation_or_message" };
+  // Replaced by the time-based escalation engine (server/_crm-inbox-agent-engine.ts, run every minute).
+  if (conversationId) return { skipped: true, reason: "replaced_by_escalation_engine" };
   const [settings] = await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`;
   if (!settings?.enabled) return { skipped: true, reason: "agent_disabled" };
   const channel = clean(context.conversation?.channel_code || event.source);
@@ -260,6 +262,7 @@ async function rescheduleJob(job:any,dueSeconds:number,payload:any={}) {
 async function finishJob(job:any,status:string,error?:string) { const sql=getSql(); await sql`update crm.background_jobs set status=${status},scheduler_status=${status},error_message=${error||null},processed_at=now(),updated_at=now() where id=${job.id}::uuid`; }
 
 async function processInboxAgentJob(job:any) {
+  return finishJob(job,"skipped","replaced_by_escalation_engine");
   const sql=getSql(); const [settings]=await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`; const conversation=await conversationForJob(job);
   if(!settings?.enabled||!conversation) return finishJob(job,"skipped","agent_disabled_or_conversation_missing");
   if(conversation.status==="closed"||conversation.request_state!=="open") return finishJob(job,"skipped","conversation_or_request_closed");
@@ -304,6 +307,7 @@ async function processInboxAgentJob(job:any) {
 }
 
 async function processSalesEscalation(job:any) {
+  return finishJob(job,"skipped","replaced_by_escalation_engine");
   const sql=getSql(); const [settings]=await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`; const conversation=await conversationForJob(job);
   if(!settings?.enabled||!conversation) return finishJob(job,"skipped","agent_disabled_or_conversation_missing");
   if(!withinBusinessHours(settings)) return rescheduleJob(job,secondsUntilStart(settings),{rescheduledReason:"outside_business_hours"});

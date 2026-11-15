@@ -32,7 +32,6 @@ import crmUnreadHandler from "../server/crm/unread.js";
 import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
 import crmMersalUsersHandler from "../server/crm/mersal-users.js";
 import crmEntryRoutingHandler from "../server/crm/entry-routing.js";
-import crmWindowKeepaliveHandler from "../server/crm/window-keepalive.js";
 import crmExpiringWindowsHandler from "../server/crm/expiring-windows.js";
 import crmAutomationSettingsHandler from "../server/crm/automation-settings.js";
 import crmCashQrHandler from "../server/crm/cash-qr.js";
@@ -44,6 +43,7 @@ import internalAutomationJobHandler from "../server/internal/automation-job.js";
 import internalAttendanceTickHandler from "../server/internal/attendance-tick.js";
 import internalMetaEngagementSyncHandler from "../server/internal/meta-engagement-sync.js";
 import internalMarketingPublishTickHandler from "../server/internal/marketing-publish-tick.js";
+import internalInboxAgentTickHandler from "../server/internal/inbox-agent-tick.js";
 import internalCrmWindowReminderTickHandler from "../server/internal/crm-window-reminder-tick.js";
 import attendanceHandler from "../server/attendance.js";
 import deviceAgentHandler from "../server/device-agent.js";
@@ -120,7 +120,6 @@ const routes = new Map<string, ApiHandler>([
   ["crm/mersal-templates", crmMersalTemplatesHandler],
   ["crm/mersal-users", crmMersalUsersHandler],
   ["crm/entry-routing", crmEntryRoutingHandler],
-  ["crm/window-keepalive", crmWindowKeepaliveHandler],
   ["crm/expiring-windows", crmExpiringWindowsHandler],
   ["crm/automation-settings", crmAutomationSettingsHandler],
   ["crm/cash-qr", crmCashQrHandler],
@@ -135,6 +134,7 @@ const routes = new Map<string, ApiHandler>([
   ["internal/meta-engagement-sync", internalMetaEngagementSyncHandler],
   ["internal/marketing-publish-tick", internalMarketingPublishTickHandler],
   ["internal/crm-window-reminder-tick", internalCrmWindowReminderTickHandler],
+  ["internal/inbox-agent-tick", internalInboxAgentTickHandler],
   ["attendance", attendanceHandler],
   ["device-agent", deviceAgentHandler],
   ["tracking/orders", trackingOrdersHandler],

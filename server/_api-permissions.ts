@@ -60,7 +60,7 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     return req(method === "POST" ? "crm.kpi.rating.create" : "crm.kpi.rating.update", "crm", "kpi", "rating");
   }
   if (route === "crm/transfer") return req("crm.customer.bulk_transfer", "crm", "database", "bulk_transfer");
-  if (route === "crm/settings" || route === "crm/entry-routing" || route === "crm/automation-settings" || route === "crm/window-keepalive") {
+  if (route === "crm/settings" || route === "crm/entry-routing" || route === "crm/automation-settings") {
     if (method === "GET") return req("settings.crm.view", "core", "settings", "crm_settings_view");
     return req("settings.crm.manage", "core", "settings", "crm_settings_manage");
   }

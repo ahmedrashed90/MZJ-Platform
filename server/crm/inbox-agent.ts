@@ -1,16 +1,18 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { clean, isCrmManager, parseBody, positiveInt, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { ensureInboxAgentEngineSchema, DEFAULT_CUSTOMER_MESSAGE } from "../_crm-inbox-agent-engine.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
   const sql = getSql();
+  await ensureInboxAgentEngineSchema();
 
   if (request.method === "GET") {
     const limit = positiveInt(request.query.limit, 100, 200);
     const offset = Math.max(0, Number(request.query.offset || 0) || 0);
-    const [settings, managers, logs, logCounts] = await Promise.all([
+    const [settings, managers, logs, logCounts, statuses, templates] = await Promise.all([
       sql`select * from crm.inbox_agent_settings where id='default'`,
       sql`select *,id::text,updated_by::text from crm.inbox_agent_managers order by scope_code`,
       sql`select *,id::text,conversation_id::text,lead_id::text from crm.inbox_agent_logs order by created_at desc limit ${limit} offset ${offset}`,
@@ -19,8 +21,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
           count(*) filter (where (created_at at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as today
         from crm.inbox_agent_logs
       `,
+      sql<{ label: string }[]>`select distinct label from crm.dashboard_statuses where is_active=true order by label`,
+      sql<any[]>`select id::text,name,display_name,content,language_code,status from crm.message_templates where provider='mersal' and is_active=true order by display_name`,
     ]);
-    return response.status(200).json({ ok: true, settings: settings[0], managers, logs, logsTotal: Number(logCounts[0]?.total || 0), logsToday: Number(logCounts[0]?.today || 0), limit, offset });
+    return response.status(200).json({ ok: true, defaultCustomerMessage: DEFAULT_CUSTOMER_MESSAGE, statuses: statuses.map((row) => row.label), templates, settings: settings[0], managers, logs, logsTotal: Number(logCounts[0]?.total || 0), logsToday: Number(logCounts[0]?.today || 0), limit, offset });
   }
 
   if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لحفظ إعدادات الوكيل" });
@@ -42,18 +46,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, row });
     }
 
-    const replies = Array.isArray(body.replies) ? body.replies.map(clean).filter(Boolean) : [];
     const stopKeywords = Array.isArray(body.stopKeywords) ? body.stopKeywords.map(clean).filter(Boolean) : [];
-    const socialPlatforms = Array.isArray(body.socialPlatforms) ? body.socialPlatforms.map(clean).filter(Boolean) : [];
+    const socialPlatforms = (Array.isArray(body.socialPlatforms) ? body.socialPlatforms.map(clean) : []).filter((item: string) => ["instagram", "facebook", "tiktok", "whatsapp"].includes(item));
+    const excludedStatuses = Array.isArray(body.excludedStatuses) ? body.excludedStatuses.map(clean).filter(Boolean) : [];
+    const minutes = (value: unknown, fallback: number, min: number, max: number) => { const n = Math.floor(Number(value)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
+    const templateId = clean(body.escalationTemplateId);
     const [row] = await sql<any[]>`
       update crm.inbox_agent_settings set
-        enabled=${Boolean(body.enabled)},first_delay_seconds=${Number(body.firstDelaySeconds||240)},between_replies_seconds=${Number(body.betweenRepliesSeconds||120)},max_bot_messages=${Number(body.maxBotMessages||2)},
-        escalate_to_branch_manager=${body.escalateToBranchManager!==false},escalate_to_sales_manager=${body.escalateToSalesManager!==false},sales_manager_delay_seconds=${Number(body.salesManagerDelaySeconds||300)},
-        sales_manager_name=${clean(body.salesManagerName)||null},sales_manager_phone=${clean(body.salesManagerPhone)||null},fallback_phone=${clean(body.fallbackPhone)||null},
+        escalation_started_at=case when ${Boolean(body.enabled)} and (enabled=false or escalation_started_at is null) then now() else escalation_started_at end,
+        enabled=${Boolean(body.enabled)},
+        idle_minutes=${minutes(body.idleMinutes, 60, 1, 1380)},window_hours=${minutes(body.windowHours, 23, 2, 23)},step_minutes=${minutes(body.stepMinutes, 10, 1, 120)},
+        customer_message=${clean(body.customerMessage) || null},excluded_statuses=${excludedStatuses}::text[],
+        escalate_to_branch_manager=${body.escalateToBranchManager!==false},escalate_to_sales_manager=${body.escalateToSalesManager!==false},escalate_to_system_manager=${body.escalateToSystemManager!==false},
+        sales_manager_name=${clean(body.salesManagerName)||null},sales_manager_phone=${clean(body.salesManagerPhone)||null},
+        system_manager_name=${clean(body.systemManagerName)||null},system_manager_phone=${clean(body.systemManagerPhone)||null},fallback_phone=${clean(body.fallbackPhone)||null},
+        escalation_template_id=${templateId || null}::uuid,
         business_hours_only=${Boolean(body.businessHoursOnly)},business_start=${clean(body.businessStart)||"09:00"}::time,business_end=${clean(body.businessEnd)||"22:00"}::time,
-        stop_keywords=${stopKeywords.length?stopKeywords:["إلغاء","خلاص","لا تتواصلون"]},replies=${replies.length?replies:["أهلًا بك، تم استلام رسالتك وجاري تحويل طلبك للمختص. يسعدنا خدمتك."]},
-        branch_escalation_template=${clean(body.branchEscalationTemplate)||null},social_enabled=${Boolean(body.socialEnabled)},
-        social_platforms=${socialPlatforms.length?socialPlatforms:["instagram","facebook","tiktok"]},
+        stop_keywords=${stopKeywords.length?stopKeywords:["إلغاء","خلاص","لا تتواصلون"]},
+        social_enabled=true,social_platforms=${socialPlatforms.length?socialPlatforms:["instagram","facebook","tiktok","whatsapp"]},
         updated_by=${user.id}::uuid,updated_at=now()
       where id='default' returning *
     `;
