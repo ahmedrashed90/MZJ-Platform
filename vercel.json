@@ -38,6 +38,10 @@
     {
       "path": "/api/internal/marketing-publish-tick",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/crm-window-reminder-tick",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

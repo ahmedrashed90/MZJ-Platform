@@ -154,6 +154,8 @@ export type CrmConversation = {
   preview_text?: string | null;
   unread_count?: number;
   last_message_at?: string | null;
+  last_customer_message_at?: string | null;
+  messaging_window?: import("../../shared/crm-messaging-window").MessagingWindow | null;
 };
 
 export type CrmMessage = {

@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import { MessagingWindowBadge } from "../components/MessagingWindowBadge";
 
 type InboxRow = Record<string, any>;
 
@@ -30,6 +31,7 @@ export function CrmInboxPage() {
   const [loading, setLoading] = useState(false);
   const [classifyingId, setClassifyingId] = useState("");
   const [canClassify, setCanClassify] = useState(false);
+  const [sortMode, setSortMode] = useState<"expiry" | "latest">("expiry");
 
   async function load() {
     setLoading(true);
@@ -67,6 +69,16 @@ export function CrmInboxPage() {
     }
   }
 
+  // Nearest window expiry first (still-open windows), already-closed ones last.
+  const sortedRows = sortMode === "latest" ? rows : [...rows].sort((a, b) => {
+    const rank = (row: InboxRow) => {
+      const expires = row.messaging_window?.expiresAt ? new Date(row.messaging_window.expiresAt).getTime() : NaN;
+      if (!Number.isFinite(expires)) return Number.MAX_SAFE_INTEGER;
+      return expires > Date.now() ? expires : Number.MAX_SAFE_INTEGER - 1;
+    };
+    return rank(a) - rank(b);
+  });
+
   return (
     <div className="crm-page crm-unclassified-page">
       <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث"}</button></div>
@@ -82,13 +94,14 @@ export function CrmInboxPage() {
         <label className="crm-search-box wide"><MagnifyingGlass size={19} /><input placeholder="بحث بالاسم أو الرقم أو محتوى آخر رسالة" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void load(); }} /></label>
         <select value={state} onChange={(event) => setState(event.target.value)}><option value="">كل الحالات</option><option value="new">رسالة جديدة</option><option value="awaiting_service">بانتظار اختيار الخدمة</option></select>
         <select value={channel} onChange={(event) => setChannel(event.target.value)}><option value="">كل القنوات</option><option value="whatsapp">واتساب</option><option value="facebook">فيسبوك</option><option value="instagram">إنستجرام</option><option value="tiktok">تيك توك</option></select>
+        <select value={sortMode} onChange={(event) => setSortMode(event.target.value as "expiry" | "latest")} aria-label="ترتيب القائمة"><option value="expiry">الأقرب انتهاءً للنافذة أولًا</option><option value="latest">الأحدث أولًا</option></select>
         <button className="crm-primary-button" type="button" onClick={() => void load()}>تطبيق</button>
       </section>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
       <div className="crm-unclassified-list">
-        {rows.map((row) => {
+        {sortedRows.map((row) => {
           const name = row.lead_customer_name || row.contact_display_name || row.customer_name || "عميل";
           const phone = row.primary_phone || row.primary_phone_normalized || row.participant_id || "بدون رقم";
           const awaiting = row.classification_state === "awaiting_service";
@@ -101,7 +114,7 @@ export function CrmInboxPage() {
                   <span className={`crm-unclassified-state ${awaiting ? "waiting" : "new"}`}>{awaiting ? "بانتظار اختيار الخدمة" : "رسالة جديدة"}</span>
                 </header>
                 <div className="crm-unclassified-preview"><ChatCircleDots size={18} /><p>{row.preview_text || "وصل مرفق جديد بدون نص"}</p></div>
-                <footer><span>آخر رسالة: {formatDate(row.last_customer_message_at || row.last_message_at)}</span>{Number(row.unread_count || 0) ? <b>{Number(row.unread_count)} غير مقروءة</b> : <span>تمت القراءة</span>}</footer>
+                <footer><span>آخر رسالة: {formatDate(row.last_customer_message_at || row.last_message_at)}</span>{row.messaging_window ? <MessagingWindowBadge compact expiresAt={row.messaging_window.expiresAt} windowHours={row.messaging_window.windowHours} /> : null}{Number(row.unread_count || 0) ? <b>{Number(row.unread_count)} غير مقروءة</b> : <span>تمت القراءة</span>}</footer>
               </div>
               <aside className="crm-unclassified-actions">
                 <div><CheckCircle size={21} weight="duotone" /><strong>تصنيف الرسالة</strong><small>اختر الخدمة الصحيحة ليتم إنشاء العميل والطلب والتوزيع.</small></div>

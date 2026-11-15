@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { clean, isCrmManager, parseBody, requireCrmUser, userScope, crmLeadScopeSql } from "../_crm-utils.js";
 import { classifyConversationService } from "../_crm-lifecycle.js";
 import { getSql } from "../_db.js";
+import { withMessagingWindow } from "../_crm-window.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
@@ -67,7 +68,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         )
     `;
 
-    return response.status(200).json({ ok: true, rows, summary: summary || {}, canClassify: manager });
+    return response.status(200).json({ ok: true, rows: rows.map(withMessagingWindow), summary: summary || {}, canClassify: manager });
   }
 
   if (request.method === "POST") {

@@ -4,6 +4,7 @@ import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishBackgroundEvent } from "../_crm-background-jobs.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
+import { withMessagingWindow } from "../_crm-window.js";
 
 function preferredChannelForLead(lead: any) {
   const value = [lead?.source_code, lead?.source_name, lead?.platform_code].map((item) => clean(item).toLowerCase()).filter(Boolean).join(" ");
@@ -229,7 +230,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
       else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
+      return response.status(200).json({ ok: true, conversation: withMessagingWindow({ ...conversation, unread_count: 0 }), messages });
     }
 
     let lead: any = null;
@@ -256,7 +257,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit ${limit}
     `];
 
-    return response.status(200).json({ ok: true, rows });
+    return response.status(200).json({ ok: true, rows: rows.map(withMessagingWindow) });
   }
 
   if (request.method === "POST") {

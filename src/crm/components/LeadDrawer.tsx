@@ -20,6 +20,8 @@ import {
 } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
+import { MessagingWindowBadge } from "./MessagingWindowBadge";
+import type { MessagingWindow } from "../../../shared/crm-messaging-window";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta, CrmSaleTransaction } from "../types";
 
@@ -223,6 +225,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [messages, setMessages] = useState<CrmMessage[]>(emptyMessages);
   const [conversationId, setConversationId] = useState("");
   const [conversationChannel, setConversationChannel] = useState("");
+  const [messagingWindow, setMessagingWindow] = useState<MessagingWindow | null>(null);
   const [messageText, setMessageText] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
@@ -330,8 +333,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       setConversationId(id);
       setConversationChannel(resolved.rows[0]?.channel_code || "");
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null; messaging_window?: MessagingWindow | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
+        setMessagingWindow(result.conversation?.messaging_window || null);
         setMessages(result.messages || []);
       } else if (!silent) {
         setMessages([]);
@@ -918,6 +922,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
               </div>
               <div className="crm-conversation-header-content">
                 <div className="crm-conversation-route"><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div>
+                {messagingWindow ? <MessagingWindowBadge expiresAt={messagingWindow.expiresAt} windowHours={messagingWindow.windowHours} /> : null}
                 <div className="crm-conversation-header-actions">
                   <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)} aria-label="تحديث المحادثة"><ArrowClockwise size={18} /></button>
                   {statusNotice ? <small className={`crm-conversation-status-notice ${statusNotice.includes("تعذر") || statusNotice.includes("لا توجد صلاحية") ? "error" : ""}`}>{statusNotice}</small> : null}
