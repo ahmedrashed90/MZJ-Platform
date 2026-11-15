@@ -19,7 +19,7 @@ function period(presetValue: unknown, start: unknown, end: unknown) {
 }
 
 async function loadAccountCampaigns(token: string, account: GoogleAdsAccount, clause: string) {
-  const meta = await googleAdsSearch(token, account.id, `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.start_date, campaign.end_date, campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2);
+  const meta = await googleAdsSearch(token, account.id, `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.start_date_time, campaign.end_date_time, campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2);
   const [metricsResult, leadsResult, adsResult] = await Promise.allSettled([
     googleAdsSearch(token, account.id, `SELECT campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.ctr, metrics.engagements, metrics.conversions FROM campaign WHERE segments.date ${clause} AND campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2),
     googleAdsSearch(token, account.id, `SELECT campaign.id, segments.conversion_action_category, metrics.conversions FROM campaign WHERE segments.date ${clause} AND campaign.status != 'REMOVED' LIMIT 2000`, account.loginCustomerId, 3),
@@ -54,7 +54,7 @@ async function loadAccountCampaigns(token: string, account: GoogleAdsAccount, cl
     return {
       id, accountId: account.id, name: clean(campaign.name) || `حملة ${id}`,
       status: clean(campaign.status), channel: clean(campaign.advertisingChannelType),
-      startTime: clean(campaign.startDate), stopTime: clean(campaign.endDate),
+      startTime: clean(campaign.startDateTime), stopTime: clean(campaign.endDateTime),
       dailyBudget: campaign.campaignBudget?.amountMicros === undefined && row.campaignBudget?.amountMicros === undefined ? null : number(row.campaignBudget?.amountMicros) / 1_000_000,
       metrics: {
         spend, impressions: number(metric.impressions), clicks: number(metric.clicks),

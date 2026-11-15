@@ -24,6 +24,7 @@ function loadModule(code, requireModule, fetcher) {
   return exports;
 }
 const customerId = '1234567890'; const campaignId = '9876543210';
+const inactiveId = '9999999999';
 const adAccount = {id:customerId, name:'MZJ Account A',currency:'SAR',timeZone:'Asia/Riyadh',manager:false,loginCustomerId:''};
 const calls=[];
 async function fakeFetch(url,init={}) {
@@ -31,12 +32,17 @@ async function fakeFetch(url,init={}) {
   calls.push({method:init.method,endpoint:u.pathname,body,headers:init.headers});
   assert.equal(init.headers.Authorization,'Bearer fake-local-token');
   assert.ok(!body.pageSize,'No forbidden pageSize in v26');
+  if(u.pathname.includes(`/customers/${inactiveId}/`)) return {ok:false,status:403,json:async()=>({error:{message:'The customer account cannot be accessed because it is not yet enabled or has been deactivated.'}})};
   if(u.pathname.endsWith('customers:listAccessibleCustomers'))return {ok:true,json:async()=>({resourceNames:[`customers/${customerId}`]})};
   if(u.pathname.endsWith('googleAds:search')) {
     const query=String(body.query);
     let results=[];
     if(query.includes('FROM customer '))results=[{customer:{id:customerId,descriptiveName:'MZJ Account A',currencyCode:'SAR',timeZone:'Asia/Riyadh',manager:false}}];
-    else if(query.includes('campaign_budget.amount_micros'))results=[{campaign:{id:campaignId,name:'Sonata Search 2026',status:'PAUSED',advertisingChannelType:'SEARCH',startDate:'2026-10-01'},campaignBudget:{amountMicros:'30000000'}}];
+    else if(query.includes('campaign_budget.amount_micros')) {
+      assert.ok(query.includes('campaign.start_date_time') && query.includes('campaign.end_date_time'), 'v26 query must request supported campaign date-time fields');
+      assert.ok(!/campaign\.(?:start_date|end_date)(?!_time)/.test(query), 'v26 query must not use removed date-only fields');
+      results=[{campaign:{id:campaignId,name:'Sonata Search 2026',status:'PAUSED',advertisingChannelType:'SEARCH',startDateTime:'2026-10-01 00:00:00',endDateTime:'2026-12-31 23:59:59'},campaignBudget:{amountMicros:'30000000'}}];
+    }
     else if(query.includes('metrics.cost_micros'))results=[{campaign:{id:campaignId},metrics:{costMicros:'50000000',impressions:'2000',clicks:'80',ctr:'4',engagements:'30',conversions:'7'}}];
     else if(query.includes('segments.conversion_action_category'))results=[{campaign:{id:campaignId},segments:{conversionActionCategory:'SUBMIT_LEAD_FORM'},metrics:{conversions:'5'}}];
     else if(query.includes('FROM ad_group_ad'))results=[{campaign:{id:campaignId},adGroup:{name:'Sonata'},adGroupAd:{status:'ENABLED',ad:{id:'222333444',type:'RESPONSIVE_SEARCH_AD'}}}];
@@ -48,7 +54,9 @@ async function fakeFetch(url,init={}) {
   throw new Error(`Unexpected remote URL ${u.pathname}`);
 }
 const api = loadModule(compile(googleApi, '_google-ads-api.ts'), () => {throw Error('No dependencies');}, fakeFetch);
-const connectMock = {getGoogleAdsAccessToken:async()=>({accessToken:'fake-local-token',accounts:[adAccount],selectedAccountIds:[customerId]})};
+const disabledAccount = {...adAccount,id:inactiveId,name:'Inactive account'};
+let selectedAccounts = [adAccount];
+const connectMock = {getGoogleAdsAccessToken:async()=>({accessToken:'fake-local-token',accounts:selectedAccounts,selectedAccountIds:selectedAccounts.map(account=>account.id)})};
 const fakePreset = {metaAdsPreset:(v)=>['today','yesterday','last_7d','last_30d','this_month'].includes(v) ? v : 'last_30d', metaAdsTimeRange:(a,b)=>a&&b?{since:a,until:b}:null};
 const report = loadModule(compile(reporting,'_marketing-google-ads.ts'),name=>{
   if(name==='./_db.js')return {getSql:()=>null};
@@ -64,8 +72,13 @@ check(loaded.reports[0].campaigns[0].metrics.spend===50,'Micros converted to acc
 check(loaded.reports[0].campaigns[0].metrics.leads===5,'Lead conversions are distinguished from all conversions');
 check(loaded.reports[0].campaigns[0].metrics.costPerLead===10,'Google cost per lead correctly calculated');
 check(loaded.reports[0].campaigns[0].dailyBudget===30,'Daily budget correctly read from attributed campaign_budget');
+check(loaded.reports[0].campaigns[0].startTime==='2026-10-01 00:00:00' && loaded.reports[0].campaigns[0].stopTime==='2026-12-31 23:59:59', 'Google Ads v26 start/end date-times are mapped to campaign reports');
 check(loaded.reports[0].campaigns[0].ads.length===1,'Google ads and campaign details are connected');
 check(calls.filter(c=>c.endpoint.endsWith('googleAds:search')).every(c=>!c.body.pageSize),'v26 fixed page size is respected');
+selectedAccounts = [adAccount,disabledAccount];
+const partiallyLoaded = await report.googleAdsData(null,'last_30d','','','');
+check(partiallyLoaded.status==='ready' && partiallyLoaded.reports.length===1 && partiallyLoaded.errors.length===1 && partiallyLoaded.errors[0].accountId===inactiveId, 'Disabled customer error is isolated; selected active account campaigns still load');
+selectedAccounts = [adAccount];
 const beforeWrites=calls.filter(c=>c.endpoint.endsWith('campaigns:mutate')).length;
 await assert.rejects(report.changeGoogleAdsCampaignStatus(null,{accountId:customerId,campaignId,status:'ENABLED'}));
 check(beforeWrites===calls.filter(c=>c.endpoint.endsWith('campaigns:mutate')).length,'Enabling spending without explicit confirmation never mutates');
