@@ -17,7 +17,7 @@ const stubs={
   '../_db.js':{getSql:()=>{throw Error('No live database');},withDatabaseAdvisoryLock:async(k,fn)=>fn()},
   '../_auth.js':{loadUserProfile:async()=>null},
   '../_access-control.js':{getSystemAccess:u=>u.systemAccess.marketing},
-  '../_marketing-workflow-schema.js':{ensureMarketingWorkflowSchema:async()=>{}},
+  '../_marketing-workflow-schema.js':{ marketingStrategyDraftsReady:async()=>false,ensureMarketingWorkflowSchema:async()=>{}},
   '../_notifications.js':{createNotification:async e=>notifications.push(e)},
   '../_media-storage.js':{mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>'',headMediaObject:async()=>({exists:true,size:4})},
   '../_google-drive-storage.js':{createGoogleDriveResumableUpload:async()=>({}),verifyGoogleDriveUploadedFile:async()=>({})},

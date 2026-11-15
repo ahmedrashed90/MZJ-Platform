@@ -10,7 +10,7 @@ const stubs={
   '../_db.js':{getSql:()=>{throw Error('No database in test');},withDatabaseAdvisoryLock:async(k,fn)=>fn()},
   '../_auth.js':{loadUserProfile:async()=>null},
   '../_access-control.js':{getSystemAccess:u=>u.systemAccess.marketing},
-  '../_marketing-workflow-schema.js':{ensureMarketingWorkflowSchema:async()=>{}},
+  '../_marketing-workflow-schema.js':{ marketingStrategyDraftsReady:async()=>false,ensureMarketingWorkflowSchema:async()=>{}},
   '../_notifications.js':{createNotification:async()=>{}},
   '../_media-storage.js':{mediaStorageConfigured:()=>false},
   '../_google-drive-storage.js':{},

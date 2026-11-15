@@ -470,6 +470,70 @@ create unique index if not exists work_campaign_goals_active_name_uq
 insert into marketing.workflow_migrations(code) values('schema-16') on conflict do nothing;
 commit;`;
 
+/** Strategy-origin publishing drafts (schema-18). Purely additive: the native
+ * agenda/campaign tables, statuses and review flow are NOT changed. A draft
+ * collects strategy ideas (work items) by name before they are executed; on
+ * «إرسال للمراجعة» it is converted to a normal work_plan through createPlan(). */
+export const MARKETING_WORKFLOW_STRATEGY_DRAFTS_SQL = `begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.strategy_plan_drafts (
+ id uuid primary key default gen_random_uuid(),
+ kind text not null check(kind in ('agenda','campaign')),
+ name text not null check(char_length(btrim(name)) between 1 and 250),
+ name_key text not null,
+ status text not null default 'draft' check(status in ('draft','submitted')),
+ plan_number bigint not null,
+ plan_no text not null unique,
+ work_plan_id uuid references marketing.work_plans(id),
+ platform_goals jsonb not null default '[]'::jsonb,
+ version integer not null default 1,
+ created_by uuid references core.users(id),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ submitted_by uuid references core.users(id),
+ submitted_at timestamptz
+);
+create unique index if not exists strategy_plan_drafts_open_name_uq
+ on marketing.strategy_plan_drafts(kind,name_key) where status='draft';
+create index if not exists strategy_plan_drafts_plan_idx on marketing.strategy_plan_drafts(work_plan_id);
+create table if not exists marketing.strategy_plan_draft_entries (
+ id uuid primary key default gen_random_uuid(),
+ draft_id uuid not null references marketing.strategy_plan_drafts(id) on delete cascade,
+ item_id uuid not null references marketing.work_items(id) on delete cascade,
+ task_id uuid not null references marketing.work_tasks(id) on delete cascade,
+ idea_code text not null default '',
+ marketing_category text not null default '',
+ target_on date not null,
+ scheduled_on date,
+ platforms jsonb not null default '[]'::jsonb,
+ request_key uuid,
+ version integer not null default 1,
+ added_by uuid references core.users(id),
+ added_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ unique(draft_id,item_id)
+);
+create index if not exists strategy_plan_draft_entries_item_idx on marketing.strategy_plan_draft_entries(item_id);
+create table if not exists marketing.strategy_plan_line_meta (
+ line_id uuid primary key references marketing.work_plan_items(id) on delete cascade,
+ draft_id uuid not null references marketing.strategy_plan_drafts(id) on delete cascade,
+ entry_id uuid references marketing.strategy_plan_draft_entries(id) on delete set null,
+ funding_on date,
+ created_at timestamptz not null default now()
+);
+create table if not exists marketing.strategy_campaign_links (
+ line_id uuid primary key references marketing.work_plan_items(id) on delete cascade,
+ platform text not null, account_id text not null, campaign_id text not null,
+ campaign_name text not null default '',
+ linked_on date not null,
+ linked_by uuid references core.users(id),
+ linked_at timestamptz not null default now(),
+ updated_at timestamptz not null default now()
+);
+insert into marketing.workflow_migrations(code) values('schema-18') on conflict do nothing;
+commit;`;
+
 const PLAN_SCHEDULE_COLUMNS = [
   ['work_plans', 'is_deleted'], ['work_plans', 'activated_at'],
   ['work_plans', 'activated_by'], ['work_plans', 'deleted_at'],
@@ -591,12 +655,12 @@ export function ensureMarketingWorkflowSchema() {
     const sql = getSql();
     const flags = async () => {
       const [present] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.workflow_migrations')::text as relation`;
-      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false, hasCampaignGoals: false, hasCapture: false };
-      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17')`;
-      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15'), hasCampaignGoals: rows.some(x => x.code === 'schema-16'), hasCapture: rows.some(x => x.code === 'schema-17') };
+      if (!present?.relation) return { base: false, hasTaskDeletion: false, hasDrafts: false, current: false, hasKpi: false, hasNotes: false, hasRejected: false, hasRevisionPolicy: false, hasTerminalRejection: false, hasDeadlineExceptions: false, hasPerformanceIndexes: false, hasPlanReview: false, hasPublishControl: false, hasPublicationDates: false, hasPlanReviewers: false, hasCampaignGoals: false, hasCapture: false, hasStrategyDrafts: false };
+      const rows = await sql<{ code: string }[]>`select code from marketing.workflow_migrations where code in ('schema-1','schema-2','schema-3','schema-4','schema-5','schema-6','schema-7','schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17','schema-18')`;
+      return { base: rows.some(x => x.code === 'schema-1'), hasTaskDeletion: rows.some(x => x.code === 'schema-2'), hasDrafts: rows.some(x => x.code === 'schema-3'), current: rows.some(x => x.code === 'schema-4'), hasKpi: rows.some(x => x.code === 'schema-5'), hasNotes: rows.some(x => x.code === 'schema-6'), hasRejected: rows.some(x => x.code === 'schema-7'), hasRevisionPolicy: rows.some(x => x.code === 'schema-8'), hasTerminalRejection: rows.some(x => x.code === 'schema-9'), hasDeadlineExceptions: rows.some(x => x.code === 'schema-10'), hasPerformanceIndexes: rows.some(x => x.code === 'schema-11'), hasPlanReview: rows.some(x => x.code === 'schema-12'), hasPublishControl: rows.some(x => x.code === 'schema-13'), hasPublicationDates: rows.some(x => x.code === 'schema-14'), hasPlanReviewers: rows.some(x => x.code === 'schema-15'), hasCampaignGoals: rows.some(x => x.code === 'schema-16'), hasCapture: rows.some(x => x.code === 'schema-17'), hasStrategyDrafts: rows.some(x => x.code === 'schema-18') };
     };
     const existing = await flags();
-    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers && existing.hasCampaignGoals && existing.hasCapture
+    if (existing.current && existing.hasKpi && existing.hasNotes && existing.hasRejected && existing.hasRevisionPolicy && existing.hasTerminalRejection && existing.hasDeadlineExceptions && existing.hasPerformanceIndexes && existing.hasPlanReview && existing.hasPublishControl && existing.hasPublicationDates && existing.hasPlanReviewers && existing.hasCampaignGoals && existing.hasCapture && existing.hasStrategyDrafts
       && (await marketingPlanScheduleSchemaStatus(sql)).ready && (await marketingWorkflowStructureStatus(sql)).ready) return;
     // Avoid waiting behind a second cold-start migration. The first request
     // performs the migration; other requests receive a quick retriable error.
@@ -619,6 +683,7 @@ export function ensureMarketingWorkflowSchema() {
       if (!(await flags()).hasPlanReviewers) await runSqlScript(MARKETING_WORKFLOW_PLAN_REVIEWERS_SQL);
       if (!(await flags()).hasCampaignGoals) await runSqlScript(MARKETING_WORKFLOW_CAMPAIGN_GOALS_SQL);
       if (!(await flags()).hasCapture || !(await marketingWorkflowStructureStatus(sql)).captureReady) await runSqlScript(MARKETING_WORKFLOW_CAPTURE_SQL);
+      if (!(await flags()).hasStrategyDrafts) await runSqlScript(MARKETING_WORKFLOW_STRATEGY_DRAFTS_SQL);
     });
     if (!acquired) {
       const error = new Error('تهيئة قاعدة بيانات التسويق قيد التنفيذ، يرجى إعادة المحاولة بعد قليل');
@@ -661,4 +726,18 @@ export function assertMarketingWorkflowReady(sql = getSql()) {
     })().catch(error => { workflowStructureReady = null; throw error; });
   }
   return workflowStructureReady;
+}
+
+/** Read-only probe for the strategy-draft tables; never runs DDL. Cached once
+ * true so ordinary dashboard loads do not repeat catalog checks. */
+let strategyDraftTablesReady = false;
+export async function marketingStrategyDraftsReady(sql = getSql()) {
+  if (strategyDraftTablesReady) return true;
+  const [row] = await sql<{ ready: boolean }[]>`select
+    to_regclass('marketing.strategy_plan_drafts') is not null
+    and to_regclass('marketing.strategy_plan_draft_entries') is not null
+    and to_regclass('marketing.strategy_plan_line_meta') is not null
+    and to_regclass('marketing.strategy_campaign_links') is not null as ready`;
+  strategyDraftTablesReady = Boolean(row?.ready);
+  return strategyDraftTablesReady;
 }

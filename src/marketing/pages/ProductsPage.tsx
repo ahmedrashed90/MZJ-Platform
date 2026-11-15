@@ -3,6 +3,7 @@ import { W, Empty, MediaLabel, ProductViewButton, Search, WorkAlert, WorkHeader 
 import { useWorkQuery, workPost } from '../workflow/api';
 import type { WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from '../workflow/ProductReference';
+import { StrategyProductsTab } from '../workflow/StrategyDrafts';
 
 /** Display the actual product approval timestamp in MZJ's business timezone. */
 function approvalDate(value: string | null | undefined): string {
@@ -18,6 +19,7 @@ export function ProductsPage() {
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
   const [message,setMessage] = useState('');
+  const [tab,setTab] = useState<'strategy' | 'approved'>('strategy');
   const query = useWorkQuery<{ rows: WorkProduct[]; canCreateManual: boolean }>('products');
   const term = search.trim().toLocaleLowerCase();
   const alreadyAdded = Boolean(query.data?.rows?.some(product=>product.manual_product));
@@ -41,8 +43,12 @@ export function ProductsPage() {
       </button>}
     </WorkHeader>
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
+    <div className="mkw-products-tabs" role="tablist" aria-label="أنواع المنتجات">
+      <button type="button" role="tab" className="secondary" aria-selected={tab === 'strategy'} onClick={() => setTab('strategy')}>منتجات الاستراتيجية (الأفكار والتراكينج)</button>
+      <button type="button" role="tab" className="secondary" aria-selected={tab === 'approved'} onClick={() => setTab('approved')}>المنتجات المعتمدة</button>
+    </div>
     <div className="mkw-toolbar"><Search value={search} onChange={setSearch} /></div>
-    <div className="mkw-table-wrap">
+    {tab === 'strategy' ? <StrategyProductsTab search={search}/> : <div className="mkw-table-wrap">
       <table>
         <thead><tr>
           <th>مسلسل</th>
@@ -65,6 +71,6 @@ export function ProductsPage() {
         })}</tbody>
       </table>
       {!rows.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
-    </div>
+    </div>}
   </div>;
 }

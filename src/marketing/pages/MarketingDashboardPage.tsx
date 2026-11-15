@@ -16,6 +16,7 @@ import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
+import { StrategyCampaignLinkModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -57,8 +58,12 @@ export function MarketingDashboardPage() {
   }
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities; canReviewPlans: boolean; userId: string }>('dashboard');
-  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; campaignGoalsReady?: boolean; canUpgrade: boolean }>('schema_status');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; campaignGoalsReady?: boolean; strategyDraftsReady?: boolean; canUpgrade: boolean }>('schema_status');
   const publishSettings = useWorkQuery<{ enabled: boolean }>('publish_button_settings');
+  // Strategy flow: agenda/campaign drafts filled from «إنشاء التكليفات».
+  const strategyDrafts = useWorkQuery<{ ready: boolean; drafts: StrategyDraft[] }>('strategy_drafts');
+  const [draftOpenId, setDraftOpenId] = useState(''), [draftReportId, setDraftReportId] = useState(''), [linkPlanId, setLinkPlanId] = useState('');
+  const drafts = strategyDrafts.data?.drafts || [];
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
 
   async function upgradeSchema() {
@@ -70,6 +75,7 @@ export function MarketingDashboardPage() {
       await schema.reload();
       await publishSettings.reload();
       await query.reload();
+      await strategyDrafts.reload();
     } catch (error) {
       setSchemaError(error instanceof Error ? error.message : W.invalid);
     } finally {
@@ -125,13 +131,14 @@ export function MarketingDashboardPage() {
   const chooserLines = preparationLinesByDate(chooserSourceLines);
   const chooserIsCampaign = chooserLines[0]?.kind === 'campaign';
 
-  return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => void query.reload()} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
+  return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => { void query.reload(); void strategyDrafts.reload(); }} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
     {schema.data && !schema.data.ready && <div className="mkw-schema-upgrade" role="alert">
       <span>{schema.data.baseReady ? 'تحتاج قاعدة بيانات التسويق إلى تحديث الجداول حتى تظهر بيانات التنفيذ والنشر الحالية.' : 'قاعدة بيانات التسويق تحتاج إلى التهيئة الأساسية.'}</span>
       {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
     </div>}
     {schema.data?.ready && schema.data.campaignGoalsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يوجد تحديث جديد لإعدادات «الهدف من الحملة» دون حذف أي حملة سابقة.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث أهداف الحملات</button></div>}
+    {schema.data?.ready && schema.data.strategyDraftsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يتوفر تحديث لتفعيل مسودات الأجندة والحملة القادمة من استراتيجية المحتوى (بدون تغيير أي أجندة أو حملة حالية).</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تفعيل مسودات الاستراتيجية</button></div>}
     {schema.data?.ready && schema.data.publishSettingsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يتوفر تحديث إعدادات التحكم في زر النشر التلقائي.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث إعدادات النشر</button></div>}
     {schema.data?.ready && !schema.data.performanceReady && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status">
       <span>يتوفر تحسين لفهارس قاعدة بيانات التسويق لتسريع تحميل تفاصيل التاسكات والمراجعات.</span>
@@ -169,9 +176,10 @@ export function MarketingDashboardPage() {
       <section className="mkw-column mkw-publishing-column">
         <header><button type="button" className="mkw-column-toggle" aria-expanded={publishingOpen} aria-controls="mkw-publishing-body" onClick={() => setPublishingOpen(open => !open)}>
           <div className="mkw-column-title"><PaperPlaneTilt size={21}/><h2>{W.publishingSection}</h2><CaretDown className={publishingOpen ? 'mkw-section-open' : ''} size={18}/></div>
-          <span className="mkw-column-count">{groups.size}</span>
+          <span className="mkw-column-count">{groups.size + drafts.length}</span>
         </button></header>
-        {publishingOpen && <div id="mkw-publishing-body" className="mkw-column-body mkw-publish-column-body">{!groups.size && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
+        {publishingOpen && <div id="mkw-publishing-body" className="mkw-column-body mkw-publish-column-body">{!groups.size && !drafts.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
+          {drafts.map(draft => <StrategyDraftCard key={draft.id} draft={draft} onOpen={() => setDraftOpenId(draft.id)} onReport={() => setDraftReportId(draft.id)}/>)}
           {[...groups.entries()].map(([id, group]) => {
             const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
             const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
@@ -289,6 +297,9 @@ export function MarketingDashboardPage() {
             else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: first.agenda_from, agendaTo: first.agenda_to });
           } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
         }}>{chooserIsCampaign ? 'تصدير PDF — ملخص الحملة' : 'تصدير PDF — ملخص الأجندة'}</button>
+        {chooserIsCampaign && chooserSourceLines[0]?.strategy_draft_id && <button type="button" className="primary" disabled={!['publishing','published'].includes(chooserSourceLines[0]?.review_status || '')}
+          title={['publishing','published'].includes(chooserSourceLines[0]?.review_status || '') ? '' : 'متاح بعد اعتماد الحملة'}
+          onClick={() => setLinkPlanId(chooserSourceLines[0].plan_id)}>ربط الحملة بتقارير الحملات (تفاعل النشر)</button>}
       </div>}
       <WorkAlert>{pdfError}</WorkAlert>
       {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to} platformGoals={chooserSourceLines[0]?.campaign_platform_goals}/>}
@@ -297,7 +308,10 @@ export function MarketingDashboardPage() {
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>
       </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
       <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
-      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr></Fragment>)}</tbody></table></div></div></Modal>}
+      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td><button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button></td></tr></Fragment>)}</tbody></table></div></div></Modal>}
+    {draftOpenId && <StrategyDraftEditor id={draftOpenId} onClose={() => setDraftOpenId('')} onChanged={() => { void strategyDrafts.reload(); void query.reload(); }}/>}
+    {draftReportId && <StrategyDraftReport draftId={draftReportId} onClose={() => setDraftReportId('')}/>}
+    {linkPlanId && <StrategyCampaignLinkModal lines={groups.get(linkPlanId) || []} onClose={() => setLinkPlanId('')} onChanged={() => void query.reload()}/>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
   </div>;
 }

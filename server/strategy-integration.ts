@@ -6,6 +6,7 @@ import { hasPermission, canAccessSystem } from '../shared/system-access.js';
 import { supportsWorkMedia } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
 import { createStrategyWorkflowTask, listStrategyApprovedProducts, createStrategyWorkflowAgenda, type StrategyWorkflowTaskInput, type StrategyAgendaInput } from './marketing/workflow.js';
+import { applyStrategyPlacements, listOpenStrategyDrafts, validateStrategyPlacements, type StrategyPlacement } from './marketing/strategy-drafts.js';
 
 // Dedicated, server-to-server API. Never proxy the ordinary Marketing API.
 // READ can only SELECT approved fields. ASSIGN can only create a workflow task.
@@ -42,7 +43,7 @@ function keysOnly(record: Record<string, unknown>, accepted: readonly string[]):
   return Object.keys(record).every(key => accepted.includes(key));
 }
 function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTaskInput {
-  if (!keysOnly(body, ['requestKey', 'typeId', 'name', 'source', 'items'])) throw Error('Unsupported assignment fields');
+  if (!keysOnly(body, ['requestKey', 'typeId', 'name', 'source', 'items', 'placements'])) throw Error('Unsupported assignment fields');
   const requestKey = body.requestKey, typeId = body.typeId, name = stringValue(body.name, 250);
   if (!isUuid(requestKey) || !isUuid(typeId) || !name) throw Error('Invalid assignment identification');
   const source = body.source;
@@ -93,6 +94,28 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
   return { requestKey, typeId, name, source: { planId, ideaCodes }, items: normalizedItems };
 }
 
+/** Optional strategy-flow destination per idea: an agenda draft (publish date)
+ * or a campaign draft (funding date), chosen by draft id or typed as a new name. */
+function normalizePlacements(body: Record<string, unknown>, ideaCodes: string[]): StrategyPlacement[] {
+  if (body.placements === undefined) return [];
+  if (!Array.isArray(body.placements) || body.placements.length > 30) throw Error('Invalid placement list');
+  const allowed = new Set(ideaCodes), seen = new Set<string>();
+  const validDate = (value: string) => /^20\d\d-\d\d-\d\d$/.test(value) && !Number.isNaN(Date.parse(`${value}T12:00:00Z`)) &&
+    new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value;
+  return body.placements.map((value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Invalid placement');
+    const row = value as Record<string, unknown>;
+    if (!keysOnly(row, ['ideaCode', 'kind', 'draftId', 'name', 'date', 'category'])) throw Error('Unsupported placement fields');
+    const ideaCode = stringValue(row.ideaCode, 40), kind = row.kind, date = stringValue(row.date, 10);
+    const name = stringValue(row.name ?? '', 250).replace(/\s+/g, ' '), category = stringValue(row.category ?? '', 120);
+    const draftId = row.draftId === undefined || row.draftId === '' ? '' : row.draftId;
+    if (!allowed.has(ideaCode) || seen.has(ideaCode) || (kind !== 'agenda' && kind !== 'campaign') || !validDate(date) ||
+        (draftId ? !isUuid(draftId) || name : !name)) throw Error('Invalid placement values');
+    seen.add(ideaCode);
+    return { ideaCode, kind, date, category, ...(draftId ? { draftId: draftId as string } : { name }) } as StrategyPlacement;
+  });
+}
+
 function normalizeAgenda(body: Record<string, unknown>): StrategyAgendaInput {
   if(!keysOnly(body,['requestKey','sourcePlanId','name','agendaFrom','agendaTo','entries']))throw Error('Unsupported agenda fields');
   const requestKey=body.requestKey, sourcePlanId=stringValue(body.sourcePlanId,120),name=stringValue(body.name,250);
@@ -132,7 +155,7 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
   response.setHeader('Cache-Control', 'no-store, max-age=0');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   const method = String(request.method || 'GET').toUpperCase();
-  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'agenda-products'].includes(resource);
+  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'agenda-products', 'plan-drafts'].includes(resource);
   const isAssignment = method === 'POST' && resource === 'assignments';
   const isAgenda = method === 'POST' && resource === 'agenda';
   if (!isRead && !isAssignment && !isAgenda) {
@@ -150,6 +173,10 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
         return response.status(403).json({ok:false,error:'Integration user cannot read approved products'});
       const payload=await listStrategyApprovedProducts(sql,user);
       return response.status(200).json(payload);
+    }
+    if (isRead && resource === 'plan-drafts') {
+      // Names of open agenda/campaign drafts only (status «مسودة»), for the dropdown.
+      return response.status(200).json(await listOpenStrategyDrafts(sql));
     }
     if (isRead) {
       const payload = await sql.begin(async tx => {
@@ -215,6 +242,7 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
     if (!body) return response.status(400).json({ ok:false,error:'JSON object is required' });
     if (JSON.stringify(body).length > 100000) return response.status(413).json({ ok:false,error:'Integration payload is too large' });
     const input = isAgenda ? normalizeAgenda(body) : normalizeAssignment(body);
+    const placements = isAgenda ? [] : normalizePlacements(body, (input as StrategyWorkflowTaskInput).source.ideaCodes);
     const actorId = String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID || '').trim();
     if (!isUuid(actorId)) return response.status(503).json({ ok:false,error:'Integration task creator is not configured' });
     const user = await loadUserProfile(actorId);
@@ -224,12 +252,22 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
       return response.status(403).json({ ok:false,error:'Integration user lacks the required Marketing permission' });
     }
     await assertMarketingWorkflowReady(sql);
-    const result = isAgenda ? await createStrategyWorkflowAgenda(sql,input as StrategyAgendaInput,user)
-      : await createStrategyWorkflowTask(sql,input as StrategyWorkflowTaskInput,user);
-    return response.status(result.existed ? 200 : 201).json(result);
+    if (isAgenda) {
+      const result = await createStrategyWorkflowAgenda(sql,input as StrategyAgendaInput,user);
+      return response.status(result.existed ? 200 : 201).json(result);
+    }
+    const assignment = input as StrategyWorkflowTaskInput;
+    // Chosen drafts are checked BEFORE the task exists; the task itself is unchanged.
+    await validateStrategyPlacements(sql, placements);
+    const result = await createStrategyWorkflowTask(sql,assignment,user);
+    const drafts = !placements.length ? [] : await applyStrategyPlacements(sql, user, { taskId: result.id, requestKey: assignment.requestKey, placements,
+      items: result.items, itemIdeaCodes: new Map(assignment.items.map(item => [item.clientKey, String(item.ideaCode || '')])) });
+    return response.status(result.existed ? 200 : 201).json({ ...result, drafts });
   } catch (error: any) {
     const message = String(error?.message || 'Integration failed');
     const invalid = /^Invalid|^Missing|^Unsupported|^Valid taskId|^JSON object/.test(message);
+    // Strategy-draft conflicts carry an Arabic reason the owner must see.
+    if (message.startsWith('Invalid placement: ')) return response.status(409).json({ ok:false,error:message.slice('Invalid placement: '.length) });
     if (!invalid) console.error('Strategy integration request failed', { resource, code: error?.code || null });
     return response.status(invalid ? 400 : 500).json({ ok:false,error: invalid ? message : 'Unable to complete the integration request' });
   }

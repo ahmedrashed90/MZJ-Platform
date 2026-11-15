@@ -11,7 +11,7 @@ const load = createLoader(root, {
  '../_db.js':{getSql:()=>{throw Error('Live DB forbidden')},withDatabaseAdvisoryLock:async (_key,fn)=>fn()},
  '../_auth.js':{loadUserProfile:async()=>null},
  '../_access-control.js':{getSystemAccess:u=>u.systemAccess.marketing},
- '../_marketing-workflow-schema.js':{assertMarketingWorkflowReady:async()=>{},ensureMarketingWorkflowSchema:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({ready:true})},
+ '../_marketing-workflow-schema.js':{ marketingStrategyDraftsReady:async()=>false,assertMarketingWorkflowReady:async()=>{},ensureMarketingWorkflowSchema:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({ready:true})},
  '../_notifications.js':{createNotification:async()=>{}},
  '../_media-storage.js':{mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>'',headMediaObject:async()=>({exists:true,size:12})},
  '../_google-drive-storage.js':{createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://example.invalid'})},

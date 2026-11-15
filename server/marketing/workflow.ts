@@ -16,6 +16,9 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
+import { decorateStrategyPlanLines, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
+  saveStrategyDraftEntry, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
+import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
 
 type Sql = ReturnType<typeof getSql>;
@@ -1843,7 +1846,10 @@ async function updatePlanAgendaWindow(sql: Sql, user: SessionUser, body: Row) {
   return { ok:true, agendaFrom, agendaTo, resubmitted:result.resubmitted, message:W.saved };
 }
 
-async function createPlan(sql: Sql, body: Row, user: SessionUser) {
+/** `reserved` is used only by the strategy draft flow: the draft shows its
+ * AGD-/CMP- code from creation, and the resulting plan keeps the same code.
+ * Native callers omit it and keep the original numbering loop unchanged. */
+async function createPlan(sql: Sql, body: Row, user: SessionUser, reserved?: { planNumber: string; planNo: string }) {
   const kind = body.kind === 'agenda' || body.kind === 'campaign' ? body.kind : null;
   if (!kind) throw new Error(W.invalid);
   requirePermission(user, kind === 'agenda' ? 'marketing.agenda.create' : 'marketing.campaign.create');
@@ -1933,7 +1939,12 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser) {
     const platformGoals = kind==='campaign'
       ? await validateCampaignPlatformGoals(tx,body.platformGoals,[...new Set(normalized.map(entry=>entry.platformId))]) : [];
     let seq: any, planNo = '';
-    do {
+    if (reserved) {
+      if (!reserved.planNo.startsWith(kind === 'agenda' ? 'AGD-' : 'CMP-')) throw new Error(W.invalid);
+      seq = { value: reserved.planNumber }; planNo = reserved.planNo;
+      const [collision] = await tx<any[]>`select 1 from marketing.work_plans where plan_no=${planNo} limit 1`;
+      if (collision) throw new Error(W.conflict);
+    } else do {
       [seq] = await tx<any[]>`select nextval('marketing.work_plan_number_seq')::text as value`;
       planNo = `${kind === 'agenda' ? 'AGD' : 'CMP'}-${String(seq.value).padStart(6, '0')}`;
       const [collision] = await tx<any[]>`select 1 from marketing.campaigns where campaign_code=${planNo} union all select 1 from marketing.work_plans where plan_no=${planNo} limit 1`;
@@ -2141,7 +2152,8 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
       ${productManager(user)} or ${isManager(user)} or ${planReviewer} or p.created_by=${user.id}::uuid or i.assigned_to=${user.id}::uuid or d.code=any(${scopes}::text[]))
     order by l.scheduled_on,p.created_at desc,l.id`;
   const todayInSaudiArabia = saudiCalendarDay();
-  return rows.map(row => {
+  // Strategy-flow campaign lines add funding-date timing; native lines unchanged.
+  return decorateStrategyPlanLines(sql, rows.map(row => {
     const manual_post_url = String(row.manual_post_url || row.audited_manual_post_url || '').trim();
     const effective_post_url = String(manual_post_url || row.provider_post_url || '').trim();
     // Publication requires only a persisted post URL, never caption/hashtags.
@@ -2157,7 +2169,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
       status: row.review_status === 'publishing' && published_ready ? 'published' :
         row.review_status !== 'publishing' ? row.review_status :
         row.failed_count ? 'failed' : row.scheduled_count ? 'scheduled' : 'publishing' };
-  });
+  }));
 }
 
 /** Remove a single agenda/campaign, never its source products or task. When
@@ -2847,6 +2859,9 @@ export async function assertLegacyMarketingTarget(sql: Sql, body: Row) {
   if (owned) throw new Error(W.immutable);
 }
 
+/** Native functions handed to the strategy draft flow (no duplicated rules). */
+const strategyDraftDeps: StrategyDraftDeps = { createPlan, changePlanReview, loadItems, canReviewPlan };
+
 /** Dispatch only the rebuilt marketing workflow; unrelated systems/routes are untouched. */
 export async function handleMarketingWorkflow(request: VercelRequest, response: VercelResponse, sql: Sql, user: SessionUser, services: WorkflowServices): Promise<boolean> {
   const resource = text(request.query.resource), body = request.method === 'POST' ? queryBody(request) : {};
@@ -2894,6 +2909,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
       planReviewersReady: await planReviewerTableReady(sql),
       campaignGoalsReady: Boolean((await sql<{ ready:boolean }[]>`select to_regclass('marketing.work_campaign_goals') is not null as ready`)[0]?.ready),
+      strategyDraftsReady: status.baseReady ? await marketingStrategyDraftsReady(sql) : false,
       ready: Boolean(status.ready && structure.ready && reviewSchemaReady && planReview?.ready && publicationDates?.ready && await planReviewerTableReady(sql)),
       missing: [...status.missing, ...structure.missing],
       canUpgrade: hasPermission(user, 'platform.superadmin') });
@@ -2939,6 +2955,15 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_dashboard') {
       if (!hasPermission(user,'marketing.dashboard.view') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
       result = { ok: true, tasks: await taskList(sql, user), lines: await planLines(sql, user), capabilities: workflowCapabilities(user), canReviewPlans:await canReviewPlan(sql,user), userId:user.id };
+    } else if (resource === 'work_strategy_drafts') {
+      if (!hasPermission(user,'marketing.dashboard.view') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
+      result = await strategyDraftsForDashboard(sql, user);
+    } else if (resource === 'work_strategy_draft') {
+      result = await strategyDraftDetail(sql, user, id(request.query.id));
+    } else if (resource === 'work_strategy_report') {
+      result = await strategyPlanReport(sql, user, request.query as Row);
+    } else if (resource === 'work_strategy_products') {
+      result = await strategyProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
     } else if (resource === 'work_marketing_tracking') {
       result = await marketingIdeaTracking(sql,user,request.query);
     } else if (resource === 'work_task') {
@@ -3009,6 +3034,11 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_remove_upload') result = await removeUpload(sql, body, user);
     else if (action === 'work_create_manual_keywords_product') result = await createManualKeywordsProduct(sql, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
+    else if (action === 'work_strategy_save_entry') result = await saveStrategyDraftEntry(sql, user, body);
+    else if (action === 'work_strategy_save_draft') result = await saveStrategyDraftSettings(sql, user, body);
+    else if (action === 'work_strategy_delete_draft') result = await deleteStrategyDraft(sql, user, body);
+    else if (action === 'work_strategy_submit_draft') result = await submitStrategyDraft(sql, user, body, strategyDraftDeps);
+    else if (action === 'work_strategy_link_campaign') result = await linkStrategyCampaign(sql, user, body, strategyDraftDeps);
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
     else if (action === 'work_save_plan_reviewers') result = await savePlanReviewers(sql, user, body);

@@ -6,7 +6,7 @@ const load=createLoader(process.cwd(),{
   '../_db.js':{getSql:()=>{throw new Error('No production database in test');},withDatabaseAdvisoryLock:async(_key,cb)=>cb()},
   '../_auth.js':{loadUserProfile:async()=>null},
   '../_access-control.js':{getSystemAccess:u=>u.systemAccess?.marketing},
-  '../_marketing-workflow-schema.js':{assertMarketingWorkflowReady:async()=>{},ensureMarketingWorkflowSchema:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({ready:true,baseReady:true,missing:[]}),marketingWorkflowStructureStatus:async()=>({ready:structureReady,missing:structureReady?[]:['reviewers']})},
+  '../_marketing-workflow-schema.js':{ marketingStrategyDraftsReady:async()=>false,assertMarketingWorkflowReady:async()=>{},ensureMarketingWorkflowSchema:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({ready:true,baseReady:true,missing:[]}),marketingWorkflowStructureStatus:async()=>({ready:structureReady,missing:structureReady?[]:['reviewers']})},
   '../_notifications.js':{createNotification:async()=>{}},
   '../_media-storage.js':{mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>'',headMediaObject:async()=>({exists:true,size:0})},
   '../_google-drive-storage.js':{createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://unused.invalid'})},

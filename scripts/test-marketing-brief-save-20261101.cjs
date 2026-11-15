@@ -13,7 +13,7 @@ const stubs = {
   '../_db.js': { getSql:()=>{throw Error('No live database in tests');},withDatabaseAdvisoryLock:async(k,fn)=>fn() },
   '../_auth.js': { loadUserProfile:async()=>null },
   '../_access-control.js': { getSystemAccess:u=>u.systemAccess.marketing },
-  '../_marketing-workflow-schema.js': { ensureMarketingWorkflowSchema:async()=>{} },
+  '../_marketing-workflow-schema.js': { marketingStrategyDraftsReady:async()=>false, ensureMarketingWorkflowSchema:async()=>{} },
   '../_notifications.js': { createNotification:async()=>{} },
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('External media upload is not part of this test');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid'}),verifyGoogleDriveUploadedFile:async()=>({id:'fake',size:4})},

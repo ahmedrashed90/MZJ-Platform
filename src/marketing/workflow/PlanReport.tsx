@@ -9,6 +9,7 @@ import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
+import { StrategyPlanProductsSection } from './StrategyProductsTable';
 import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
@@ -109,6 +110,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
             {entry.note && <div className="mkw-review-document">{parseReviewNote(entry.note).map((block, i) => <p key={i}>{block.text}</p>)}</div>}
           </article>)}
         </details>}
+        <StrategyPlanProductsSection planId={plan.id}/>
         <section className="mkw-plan-report-list" aria-label="تفاصيل المنشورات">
           <h3>تفاصيل النشر حسب المنصة ونوع المنشور ({lines.length})</h3>
           <div className="mkw-table-wrap mkw-plan-report-table"><table>
@@ -128,7 +130,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
             <tbody>{displayLines.map((line, index) => <Fragment key={line.id}>{(index === 0 || displayLines[index - 1]?.platform_name !== line.platform_name) &&
               <tr className="mkw-platform-row-heading" key={`platform-${index}`}><th scope="rowgroup" colSpan={11}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
               <tr key={line.id}>
-              <td>{showDate(line.scheduled_on)}</td>
+              <td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}</small>}</td>
               <td className="mkw-plan-report-product"><ProductReference title={line.idea_name} details={line}/></td>
               <td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td>
               <td>{line.platform_name || '—'}</td>

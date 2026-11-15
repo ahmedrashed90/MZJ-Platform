@@ -64,6 +64,10 @@ export type WorkPlanLine = {
   product_id: string; idea_name: string; product_idea?: string; task_no: string; task_name: string;
   requirement_number?: number; assignee_name?: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
+  /** Strategy flow only: the draft this plan came from, the per-idea funding
+   * date, and the «تقارير الحملات» campaign that marks the line as published. */
+  strategy_draft_id?: string | null; strategy_funding_on?: string | null;
+  strategy_campaign_link?: { platform: string; accountId: string; campaignId: string; campaignName: string; linkedOn: string | null } | null;
 };
 export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; manageFormats: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };
 

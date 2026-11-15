@@ -31,7 +31,7 @@ const apiModule=createLoader(process.cwd(),{
   '../_db.js':{getSql:()=>sql,withDatabaseAdvisoryLock:async(_k,fn)=>fn()},
   '../_auth.js':{loadUserProfile:async()=>null},
   '../_access-control.js':{getSystemAccess:()=>({dataScope:'all',roleCode:'marketing_admin',departmentCodes:[],branchCodes:[]})},
-  '../_marketing-workflow-schema.js':{assertMarketingWorkflowReady:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({}),marketingWorkflowStructureStatus:async()=>({}),ensureMarketingWorkflowSchema:async()=>{}},
+  '../_marketing-workflow-schema.js':{ marketingStrategyDraftsReady:async()=>false,assertMarketingWorkflowReady:async()=>{},marketingPlanScheduleSchemaStatus:async()=>({}),marketingWorkflowStructureStatus:async()=>({}),ensureMarketingWorkflowSchema:async()=>{}},
   '../_notifications.js':{createNotification:async data=>{notices.push(data);}},
   '../_media-storage.js':{createUploadUrl:()=>{},headMediaObject:async()=>({}),mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>''},
   '../_google-drive-storage.js':{createGoogleDriveResumableUpload:async()=>({}),verifyGoogleDriveUploadedFile:async()=>({})},

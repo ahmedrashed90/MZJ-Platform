@@ -11,7 +11,8 @@ const stubs = {
   '../_db.js': { getSql:()=>{throw Error('No live database in tests');},withDatabaseAdvisoryLock:async(k,fn)=>fn() },
   '../_auth.js': { loadUserProfile:async()=>null },
   '../_access-control.js': { getSystemAccess:u=>u.systemAccess.marketing },
-  '../_marketing-workflow-schema.js': { ensureMarketingWorkflowSchema:async()=>{} },
+  // Strategy draft tables absent: native plan lines must stay byte-for-byte unchanged.
+  '../_marketing-workflow-schema.js': { ensureMarketingWorkflowSchema:async()=>{}, marketingStrategyDraftsReady:async()=>false },
   '../_notifications.js': { createNotification:async e=>events.push(e) },
   '../_media-storage.js': {mediaStorageConfigured:()=>false,buildMarketingStorageKey:()=>`work/${uid(80)}`,headMediaObject:async()=>({exists:true,size:4}),createUploadUrl:()=>{throw Error('Unexpected external upload');}},
   '../_google-drive-storage.js': {createGoogleDriveResumableUpload:async()=>({uploadUrl:'https://upload.invalid/test'}),verifyGoogleDriveUploadedFile:async()=>({id:'drive-id',size:4})},
