@@ -124,9 +124,9 @@ export async function applyStrategyPlacements(sql: Sql, user: SessionUser, input
             join marketing.strategy_plan_drafts d on d.id=e.draft_id
             where e.item_id=any(${itemIds}::uuid[]) and d.kind=${placement.kind} and d.name_key=${nameKey} limit 1`;
           if (previous) continue;
-          const code = await reservePlanCode(tx, placement.kind);
-          [draft] = await tx<any[]>`insert into marketing.strategy_plan_drafts(kind,name,name_key,plan_number,plan_no,created_by)
-            values(${placement.kind},${name},${nameKey},${code.planNumber},${code.planNo},${user.id}::uuid)
+          // No AGD/CMP code yet: the code is reserved on «إرسال للمراجعة».
+          [draft] = await tx<any[]>`insert into marketing.strategy_plan_drafts(kind,name,name_key,created_by)
+            values(${placement.kind},${name},${nameKey},${user.id}::uuid)
             returning id::text,kind,name,plan_no,status`;
         }
       }
@@ -136,11 +136,11 @@ export async function applyStrategyPlacements(sql: Sql, user: SessionUser, input
         left join marketing.work_plans p on p.id=d.work_plan_id
         where e.item_id=any(${itemIds}::uuid[]) and e.draft_id<>${draft.id}::uuid
           and (d.status='draft' or coalesce(p.is_deleted,false)=false) limit 1`;
-      if (elsewhere) throw new Error(`Invalid placement: الفكرة ${placement.ideaCode} مرتبطة بالفعل بـ «${elsewhere.name}» (${elsewhere.plan_no}).`);
+      if (elsewhere) throw new Error(`Invalid placement: الفكرة ${placement.ideaCode} مرتبطة بالفعل بـ «${elsewhere.name}»${elsewhere.plan_no ? ` (${elsewhere.plan_no})` : ''}.`);
       for (const itemId of itemIds) {
         await tx`insert into marketing.strategy_plan_draft_entries(draft_id,item_id,task_id,idea_code,marketing_category,target_on,scheduled_on,request_key,added_by)
           values(${draft.id}::uuid,${itemId}::uuid,${input.taskId}::uuid,${placement.ideaCode},${text(placement.category, 120)},
-            ${placement.date}::date,${placement.kind === 'agenda' ? placement.date : null}::date,${input.requestKey}::uuid,${user.id}::uuid)
+            ${placement.date}::date,${placement.date}::date,${input.requestKey}::uuid,${user.id}::uuid)
           on conflict(draft_id,item_id) do nothing`;
       }
       await tx`update marketing.strategy_plan_drafts set updated_at=now() where id=${draft.id}::uuid`;
@@ -213,13 +213,16 @@ function entryState(kind: string, entry: Row, catalog: Map<string, CatalogType>)
       (kind !== 'campaign' || (type.budget !== '' && type.budget != null && Number.isFinite(Number(type.budget)) && Number(type.budget) >= 0))));
   const executed = entry.item_status === 'approved' && !entry.task_deleted &&
     finalCoverage({ formats, files: list(entry.files), media_kind: entry.media_kind } as any);
+  // Execution is NOT required to send for review; publishing preparation is
+  // what waits for approved final files. It stays visible as information.
   const missing: string[] = [];
+  const notes: string[] = [];
   if (entry.task_deleted) missing.push('التاسك محذوف');
-  else if (!executed) missing.push(entry.item_status === 'approved' ? 'المقاسات النهائية غير مكتملة' : 'لم يتم تنفيذ واعتماد الفكرة بعد');
+  else if (!executed) notes.push(entry.item_status === 'approved' ? 'المقاسات النهائية غير مكتملة' : 'لم يتم تنفيذ واعتماد الفكرة بعد');
   if (!entry.scheduled_on) missing.push('حدد تاريخ النشر');
   if (!platforms.length) missing.push('اختر المنصة ونوع النشر');
   else if (!configured) missing.push(kind === 'campaign' ? 'أكمل نوع النشر والميزانية لكل منصة' : 'أكمل نوع النشر لكل منصة');
-  return { configured, executed, ready: configured && executed, missing };
+  return { configured, executed, ready: configured && !entry.task_deleted, missing, notes };
 }
 function presentEntry(kind: string, planNo: string, entry: Row, catalog: Map<string, CatalogType>) {
   const state = entryState(kind, entry, catalog);
@@ -468,8 +471,15 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
     entries: current.ideas.map(idea => ({ productId: idea.itemId, date: idea.scheduledOn, platforms: idea.platforms })) };
   if (current.kind === 'agenda') Object.assign(payload, { agendaFrom: dates[0], agendaTo: dates.at(-1) });
   else Object.assign(payload, { fundingFrom: funding[0], fundingTo: funding.at(-1), platformGoals: goals });
-  const [codeRow] = await sql<any[]>`select plan_number::text from marketing.strategy_plan_drafts where id=${draftId}::uuid`;
-  const created = await deps.createPlan(sql, payload, user, { planNumber: String(codeRow.plan_number), planNo: current.planNo });
+  // The AGD/CMP code is reserved only now (idempotent on retry).
+  const code = await sql.begin(async tx => {
+    const [row] = await tx<any[]>`select plan_number::text,plan_no from marketing.strategy_plan_drafts where id=${draftId}::uuid for update`;
+    if (row?.plan_no) return { planNumber: String(row.plan_number), planNo: String(row.plan_no) };
+    const reserved = await reservePlanCode(tx, current.kind);
+    await tx`update marketing.strategy_plan_drafts set plan_number=${reserved.planNumber},plan_no=${reserved.planNo},updated_at=now() where id=${draftId}::uuid`;
+    return reserved;
+  });
+  const created = await deps.createPlan(sql, payload, user, code);
   const planId = String(created.id);
   await sql.begin(async tx => {
     await tx`select id from marketing.strategy_plan_drafts where id=${draftId}::uuid for update`;
@@ -488,7 +498,7 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
   const [plan] = await sql<any[]>`select review_status from marketing.work_plans where id=${planId}::uuid`;
   if (plan && ['in_progress', 'revision'].includes(plan.review_status))
     await deps.changePlanReview(sql, user, { planId, decision: 'submitted', note: '' });
-  return { ok: true, id: planId, planNo: current.planNo, existed: false, message: 'تم إرسال المسودة للمراجعة' };
+  return { ok: true, id: planId, planNo: code.planNo, existed: false, message: 'تم إرسال المسودة للمراجعة' };
 }
 
 /* ------------------------------------------------------------------ */
@@ -511,6 +521,8 @@ export async function linkStrategyCampaign(sql: Sql, user: SessionUser, body: Ro
     if (!['publishing', 'published'].includes(plan.review_status)) throw new Error('لا يمكن ربط الحملة بتقارير الحملات قبل اعتمادها');
     const valid = await tx<any[]>`select id::text from marketing.work_plan_items where plan_id=${planId}::uuid and is_deleted=false and id=any(${lineIds}::uuid[])`;
     if (valid.length !== lineIds.length) throw new Error(W.invalid);
+    const pendingIds = await strategyItemsPendingFiles(tx as unknown as Sql, (await tx<any[]>`select distinct product_id::text from marketing.work_plan_items where id=any(${lineIds}::uuid[])`).map(row => row.product_id));
+    if (pendingIds.size) throw new Error('بعض المنشورات المختارة لم يُسلَّم منتجها النهائي بعد — لا يمكن ربطها بتقارير الحملات قبل التنفيذ والاعتماد');
     // The FIRST link fixes the publication day; re-linking only corrects the campaign identity.
     for (const lineId of lineIds) await tx`insert into marketing.strategy_campaign_links(line_id,platform,account_id,campaign_id,campaign_name,linked_on,linked_by)
       values(${lineId}::uuid,${platform},${accountId},${campaignId},${campaignName},${today}::date,${user.id}::uuid)
@@ -534,6 +546,8 @@ export async function decorateStrategyPlanLines<T extends Row>(sql: Sql, rows: T
     sql<any[]>`select id::text,work_plan_id::text from marketing.strategy_plan_drafts where work_plan_id=any(${planIds}::uuid[])`,
   ]);
   if (!drafts.length) return rows;
+  const strategyPlanIds = new Set(drafts.map(row => row.work_plan_id));
+  const pendingItems = await strategyItemsPendingFiles(sql, [...new Set(rows.filter(row => strategyPlanIds.has(String(row.plan_id))).map(row => String(row.product_id)))]);
   const fundingByLine = new Map(meta.map(row => [row.line_id, day(row.funding_on)]));
   const linkByLine = new Map(links.map(row => [row.line_id, row]));
   const draftByPlan = new Map(drafts.map(row => [row.work_plan_id, row.id]));
@@ -541,12 +555,13 @@ export async function decorateStrategyPlanLines<T extends Row>(sql: Sql, rows: T
   return rows.map(row => {
     const draftId = draftByPlan.get(String(row.plan_id));
     if (!draftId) return row;
-    if (row.kind !== 'campaign') return { ...row, strategy_draft_id: draftId };
+    const strategy_product_pending = pendingItems.has(String(row.product_id));
+    if (row.kind !== 'campaign') return { ...row, strategy_draft_id: draftId, strategy_product_pending };
     const fundingOn = fundingByLine.get(String(row.id)) || null;
     const link = linkByLine.get(String(row.id)) || null;
     const linkedOn = link ? day(link.linked_on) : null;
     const publishedReady = Boolean(row.published_ready) || Boolean(link);
-    return { ...row, strategy_draft_id: draftId, strategy_funding_on: fundingOn,
+    return { ...row, strategy_draft_id: draftId, strategy_product_pending, strategy_funding_on: fundingOn,
       strategy_campaign_link: link ? { platform: link.platform, accountId: link.account_id, campaignId: link.campaign_id,
         campaignName: link.campaign_name, linkedOn } : null,
       published_ready: publishedReady,
@@ -570,4 +585,67 @@ export async function decorateStrategyProducts<T extends Row>(sql: Sql, rows: T[
     const placement = byItem.get(String(row.id));
     return placement ? { ...row, strategy_category: placement.marketing_category || '', strategy_order_no: placement.plan_no } : row;
   });
+}
+
+/** Items (of strategy plans) whose final files are not yet approved: their
+ * publications cannot be prepared or published until execution completes. */
+async function strategyItemsPendingFiles(sql: Sql, itemIds: string[]) {
+  if (!itemIds.length) return new Set<string>();
+  const rows = await sql<any[]>`select i.id::text,i.status,i.formats,i.media_kind,
+      coalesce((select jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mime_type',f.mime_type,
+        'category',j.category,'format_id',j.format_id,'status',f.status))
+        from marketing.work_item_files j join marketing.files f on f.id=j.file_id
+        where j.item_id=i.id and j.category='final' and f.status='ready'),'[]'::jsonb) as files
+    from marketing.work_items i where i.id=any(${itemIds}::uuid[])`;
+  return new Set(rows.filter(row => row.status !== 'approved' ||
+    !finalCoverage({ formats: list(row.formats), files: list(row.files), media_kind: row.media_kind } as any)).map(row => String(row.id)));
+}
+
+/** Strategy flow: a strategy requirement (files) may be scheduled before it is
+ * executed. Visibility follows the same scope as the products list. */
+export async function strategyPendingProduct(db: any, user: SessionUser, itemId: string,
+  scope: { productManager: boolean; manager: boolean; departments: string[] }) {
+  if (!(await marketingStrategyDraftsReady(db))) return null;
+  const [row] = await db`select i.*,i.id::text,i.task_id::text,i.due_on::text,t.task_no,t.name as task_name
+    from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id left join core.departments cd on cd.id=i.department_id
+    where i.id=${itemId}::uuid and t.is_deleted=false and i.delivery_mode='files' and i.status<>'rejected'
+      and exists(select 1 from marketing.work_history h where h.task_id=t.id and h.action='strategy_assigned')
+      and (${scope.productManager} or ${scope.manager} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scope.departments}::text[]))`;
+  return row ? { ...row, strategy_pending: true } : null;
+}
+
+/** «إنشاء حملة / إنشاء أجندة»: strategy requirements shown before execution,
+ * in the same shape as products() so the native composer can list them. */
+export async function strategyPlanProducts(sql: Sql, user: SessionUser, scope: { productManager: boolean; manager: boolean; departments: string[] }) {
+  if (!hasPermission(user, 'marketing.products.view')) throw new Error(W.denied);
+  if (!(await marketingStrategyDraftsReady(sql))) return { ok: true, rows: [] as any[] };
+  const rows = await sql<any[]>`select i.*,i.id::text,i.task_id::text,i.due_on::text,t.task_no,t.name as task_name,
+      coalesce(u.full_name,'') as assignee_name,requirement.requirement_number,
+      (select h.data from marketing.work_history h where h.task_id=t.id and h.action='strategy_assigned' order by h.id desc limit 1) as marker
+    from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
+    left join core.users u on u.id=i.assigned_to left join core.departments cd on cd.id=i.department_id
+    left join lateral (select numbered.requirement_number from (
+      select candidate.id,row_number() over(order by candidate.sort_order,candidate.created_at,candidate.id)::int as requirement_number
+      from marketing.work_items candidate where candidate.task_id=i.task_id) numbered where numbered.id=i.id) requirement on true
+    where t.is_deleted=false and i.delivery_mode='files' and i.status<>'rejected'
+      and exists(select 1 from marketing.work_history h where h.task_id=t.id and h.action='strategy_assigned')
+      and (${scope.productManager} or ${scope.manager} or i.assigned_to=${user.id}::uuid or t.created_by=${user.id}::uuid or cd.code=any(${scope.departments}::text[]))
+    order by t.created_at desc,requirement.requirement_number`;
+  const decorated = await decorateStrategyProducts(sql, rows.map(row => {
+    const keys = list(row.marker?.clientKeys), codes = list(row.marker?.itemIdeaCodes);
+    const position = keys.indexOf(String(row.client_key));
+    const { marker: _marker, ...rest } = row;
+    return { ...rest, idea_code: position >= 0 ? String(codes[position] || '') : '', files: [], strategy_pending: row.status !== 'approved',
+      statement: `${row.task_name} - ${row.media_kind === 'video' ? W.video : W.image}` };
+  }));
+  return { ok: true, rows: decorated };
+}
+
+/** «حذف الاسم» from the strategy assignment page: open drafts only; tasks and
+ * products are never removed. Called by the integration (owner session). */
+export async function deleteStrategyDraftFromIntegration(sql: Sql, draftId: string) {
+  if (!(await marketingStrategyDraftsReady(sql))) throw new Error(`Invalid placement: ${STRATEGY_DRAFT_MIGRATION_MESSAGE}`);
+  const [removed] = await sql<any[]>`delete from marketing.strategy_plan_drafts where id=${draftId}::uuid and status='draft' returning id::text,name`;
+  if (!removed) throw new Error('Invalid placement: الاسم غير موجود أو تم إرساله للمراجعة بالفعل؛ احذفه من التسويق.');
+  return { ok: true, id: removed.id, name: removed.name };
 }

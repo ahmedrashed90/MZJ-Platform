@@ -52,7 +52,7 @@ export type WorkTask = {
 };
 export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string; idea_code?: string; manual_product?: boolean;
   /** Strategy flow: category and draft/plan code (رقم الطلب) when the product came from a strategy draft. */
-  strategy_category?: string; strategy_order_no?: string };
+  strategy_category?: string; strategy_order_no?: string; strategy_pending?: boolean };
 export type WorkPlanLine = {
   id: string; plan_id: string; plan_no: string; kind: WorkPlanKind; name: string; scheduled_on: string;
   review_status?: 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published'; review_note?: string; review_revision?: number;
@@ -68,7 +68,7 @@ export type WorkPlanLine = {
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
   /** Strategy flow only: the draft this plan came from, the per-idea funding
    * date, and the «تقارير الحملات» campaign that marks the line as published. */
-  strategy_draft_id?: string | null; strategy_funding_on?: string | null;
+  strategy_draft_id?: string | null; strategy_funding_on?: string | null; strategy_product_pending?: boolean;
   strategy_campaign_link?: { platform: string; accountId: string; campaignId: string; campaignName: string; linkedOn: string | null } | null;
 };
 export type WorkCapabilities = { createTask: boolean; editTask: boolean; review: boolean; manageFormats: boolean; createAgenda: boolean; createCampaign: boolean; products: boolean; prepare: boolean; publish: boolean; viewAll: boolean };

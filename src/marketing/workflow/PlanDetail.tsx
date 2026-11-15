@@ -37,6 +37,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
   const plan = query.data?.plan;
   const settings = useWorkQuery<{ categories: Array<{ id: string; name: string; is_active: boolean }> }>('evaluation_settings', {}, !!plan?.canReview);
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products', {}, !!plan?.canEdit);
+  const strategyProductsQuery = useWorkQuery<{ rows: WorkProduct[] }>('strategy_plan_products', {}, !!plan?.canEdit);
   const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings',{},!!plan?.canEditGoals);
   const metaQuery = useWorkQuery<WorkMeta>('meta', {}, !!plan?.canEdit);
   const [editing, setEditing] = useState(false), [rows, setRows] = useState<EditableLine[]>([]);
@@ -113,7 +114,9 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     });
     if (ok) { setNote(''); setNoteType(''); }
   }
-  const products = productsQuery.data?.rows || [], meta = metaQuery.data;
+  const approvedProducts = productsQuery.data?.rows || [], meta = metaQuery.data;
+  const approvedIds = new Set(approvedProducts.map(product => product.id));
+  const products = [...approvedProducts, ...(strategyProductsQuery.data?.rows || []).filter(product => !approvedIds.has(product.id))];
   const productGroups = productChoiceGroups(products);
   function changeRow(index: number, patch: Partial<EditableLine>) { setRows(old => old.map((row, i) => i === index ? { ...row, ...patch } : row)); }
   function addRow() { setRows(old => [...old, { id: '', date: '', productId: '', postTypeId: '', budget: '0' }]); }

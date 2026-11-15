@@ -174,6 +174,8 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
 function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campaign'; initialProduct: string; meta: WorkMeta }) {
   const navigate = useNavigate(), requestKey = useRef(crypto.randomUUID());
   const productsQuery = useWorkQuery<{ rows: WorkProduct[] }>('products');
+  // Strategy flow: strategy requirements are listed before execution as well.
+  const strategyProductsQuery = useWorkQuery<{ rows: WorkProduct[] }>('strategy_plan_products');
   const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings',{},kind==='campaign');
   const [selectedGoals, setSelectedGoals] = useState<Record<string,string[]>>({});
   const [name, setName] = useState('');
@@ -184,7 +186,9 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const dateLabel = kind === 'agenda' ? W.publishDate : 'تاريخ نشر المحتوى';
   const label = kind === 'agenda' ? W.agenda : W.campaign;
-  const products = productsQuery.data?.rows || [];
+  const approvedProducts = productsQuery.data?.rows || [];
+  const approvedIds = new Set(approvedProducts.map(product => product.id));
+  const products = [...approvedProducts, ...(strategyProductsQuery.data?.rows || []).filter(product => !approvedIds.has(product.id))];
   // Publishing formats come from marketing platform settings, and the selected
   // product's approved image/video type determines which choices are valid.
   const activePlatforms = useMemo(() => meta.platforms.filter(platform =>
@@ -192,7 +196,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
   const productGroups = useMemo(() => productChoiceGroups(products), [products]);
   const selectedProductIds = useMemo(() => new Set(entries.map(entry => entry.productId).filter(Boolean)), [entries]);
   const platformLineCount = entries.reduce((total, entry) => total + entry.platforms.reduce((count, platform) => count + (platform.postTypeIds?.length || (platform.postTypeId ? 1 : 0)), 0), 0);
-  const noMoreProducts = Boolean(productsQuery.data?.rows?.length) && products.every(product => selectedProductIds.has(product.id));
+  const noMoreProducts = Boolean(products.length) && products.every(product => selectedProductIds.has(product.id));
   // One objective selection per PLATFORM across all days, even if the platform
   // has many post formats and products. Never replicate goals per publish row.
   const selectedPlatformIds = useMemo(() => [...new Set(entries.flatMap(entry => entry.platforms.map(platform => platform.platformId)))], [entries]);
@@ -376,7 +380,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
     </section>}
     <footer className="mkw-form-footer"><button type="button" className="secondary" disabled={busy} onClick={() => navigate('/marketing')}>{W.cancel}</button>
       <button type="button" className="secondary" disabled={busy} onClick={() => setPreviewOpen(current => !current)}>{previewOpen ? 'إغلاق المعاينة' : 'معاينة'}</button>
-      <button type="submit" className="primary" disabled={busy || !productsQuery.data?.rows.length}>{busy ? W.loading : kind === 'campaign' ? 'حفظ الجدول وإنشاء الحملة' : 'حفظ الجدول وإنشاء الأجندة'}</button>
+      <button type="submit" className="primary" disabled={busy || !products.length}>{busy ? W.loading : kind === 'campaign' ? 'حفظ الجدول وإنشاء الحملة' : 'حفظ الجدول وإنشاء الأجندة'}</button>
     </footer>
   </form>;
 }

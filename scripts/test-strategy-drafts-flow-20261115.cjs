@@ -66,7 +66,7 @@ const ok = (m) => console.log('PASS:', m);
   // 1) 4 ideas → new «أجندة ديسمبر»; 2) 8 more via dropdown (id) and a typed variant of the same name → one draft with 12.
   const first = await assign(4, 'A', () => ({ kind: 'agenda', name: 'أجندة ديسمبر', date: addDays(10) }));
   const agendaDraft = first.touched[0];
-  assert.equal(first.touched.length, 1); assert.match(agendaDraft.planNo, /^AGD-\d{6}$/);
+  assert.equal(first.touched.length, 1); assert.equal(agendaDraft.planNo, null, 'no AGD code while it is a draft');
   const second = await assign(8, 'B', i => i < 6 ? { kind: 'agenda', draftId: agendaDraft.id, date: addDays(11) } : { kind: 'agenda', name: 'اجندة  ديسمبر', date: addDays(12) });
   assert.deepEqual([...new Set(second.touched.map(row => row.id))], [agendaDraft.id]);
   let open = await drafts.listOpenStrategyDrafts(sql);
@@ -81,25 +81,17 @@ const ok = (m) => console.log('PASS:', m);
   ok('an idea cannot sit in two open drafts');
 
   const campaign = await assign(2, 'C', () => ({ kind: 'campaign', name: 'حملة رمضان', date: addDays(20) }));
-  const campaignDraft = campaign.touched[0]; assert.match(campaignDraft.planNo, /^CMP-\d{6}$/);
+  const campaignDraft = campaign.touched[0]; assert.equal(campaignDraft.planNo, null);
   await assert.rejects(() => drafts.validateStrategyPlacements(sql, [{ ideaCode: 'X', kind: 'agenda', draftId: campaignDraft.id, date: addDays(5), category: '' }]), /نوع المسودة/);
-  ok('campaign draft created by name with CMP code; kind mismatch rejected before any task');
+  ok('campaign draft created by name without a code; kind mismatch rejected before any task');
 
   // Dashboard: drafts visible even though nothing is executed.
   let board = await drafts.strategyDraftsForDashboard(sql, AH);
   const agendaCard = board.drafts.find(row => row.id === agendaDraft.id);
   assert.equal(agendaCard.ideaCount, 12); assert.equal(agendaCard.readyCount, 0); assert.equal(agendaCard.status, 'draft');
   await assert.rejects(() => drafts.submitStrategyDraft(sql, AH, { draftId: agendaDraft.id }, deps), /قبل اكتمال/);
-  ok('draft cards exist before execution; «إرسال للمراجعة» refused while ideas are incomplete');
+  ok('draft cards exist before execution; «إرسال للمراجعة» refused while ideas are not configured');
 
-  // Executors deliver and reviewers approve (native rule: approved + final coverage).
-  const allItems = [...first.task.items, ...second.task.items, ...campaign.task.items];
-  for (const item of allItems) {
-    const [file] = await sql`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,status)
-      values(${'k/' + item.id},'final.jpg','image/jpeg',10,'work-final','ready') returning id::text`;
-    await sql`insert into marketing.work_item_files(item_id,file_id,category,format_id) values(${item.id}::uuid,${file.id}::uuid,'final',${post.id})`;
-    await sql`update marketing.work_items set status='approved',approved_at=now() where id=${item.id}::uuid`;
-  }
   const detailResult = await drafts.strategyDraftDetail(sql, AH, agendaDraft.id);
   const detail = detailResult.draft;
   assert(detailResult.platforms.some(row => row.platformId === tt.id && row.postTypes.some(type => type.id === ttVideo.id && type.mediaKinds.join() === 'video')));
@@ -110,7 +102,13 @@ const ok = (m) => console.log('PASS:', m);
     scheduledOn: idea.publishOn, platforms: [{ platformId: igId, postTypes: [{ postTypeId: post.id }] }, { platformId: tt.id, postTypes: [{ postTypeId: ttStory.id }] }] });
   const agendaResult = await drafts.submitStrategyDraft(sql, AH, { draftId: agendaDraft.id }, deps);
   const [agendaPlan] = await sql`select plan_no,review_status,kind from marketing.work_plans where id=${agendaResult.id}::uuid`;
-  assert.equal(agendaPlan.plan_no, agendaDraft.planNo); assert.equal(agendaPlan.review_status, 'submitted'); assert.equal(agendaPlan.kind, 'agenda');
+  assert.match(agendaPlan.plan_no, /^AGD-\d{6}$/); assert.equal(agendaPlan.plan_no, agendaResult.planNo);
+  assert.equal(agendaPlan.review_status, 'submitted'); assert.equal(agendaPlan.kind, 'agenda');
+  const agendaLinesPending = await workflow.planLines(sql, AH, agendaResult.id);
+  assert(agendaLinesPending.every(line => line.strategy_product_pending === true), 'preparation waits for final files');
+  const pickerPending = await drafts.strategyPlanProducts(sql, AH, { productManager: true, manager: true, departments: [] });
+  assert(pickerPending.rows.some(row => row.id === first.task.items[0].id && row.strategy_pending && row.strategy_order_no === agendaResult.planNo));
+  ok('«إرسال للمراجعة» works BEFORE execution; the AGD code is given now; plan lines flagged «بانتظار تسليم الملفات النهائية»; strategy products listed for إنشاء أجندة/حملة');
   assert.equal((await sql`select count(*)::int as n from marketing.work_plan_items where plan_id=${agendaResult.id}::uuid`)[0].n, 24);
   board = await drafts.strategyDraftsForDashboard(sql, AH);
   assert(!board.drafts.some(row => row.id === agendaDraft.id));
@@ -130,13 +128,25 @@ const ok = (m) => console.log('PASS:', m);
   await drafts.saveStrategyDraftSettings(sql, AH, { draftId: campaignDraft.id, platformGoals: [{ platformId: igId, goalIds: [goal.id] }] });
   const campaignResult = await drafts.submitStrategyDraft(sql, AH, { draftId: campaignDraft.id }, deps);
   const [cPlan] = await sql`select p.plan_no,p.review_status,c.payload from marketing.work_plans p join marketing.campaigns c on c.id=p.id where p.id=${campaignResult.id}::uuid`;
-  assert.equal(cPlan.plan_no, campaignDraft.planNo); assert.equal(cPlan.payload.fundingFrom, addDays(20)); assert.equal(cPlan.payload.fundingTo, addDays(20));
+  assert.match(cPlan.plan_no, /^CMP-\d{6}$/); assert.equal(cPlan.payload.fundingFrom, addDays(20)); assert.equal(cPlan.payload.fundingTo, addDays(20));
   ok('campaign draft requires budget per post type and a goal per platform → native campaign CMP, funding period from idea funding dates');
 
   await workflow.changePlanReview(sql, RV, { planId: campaignResult.id, decision: 'approved', note: '' });
   let lines = await workflow.planLines(sql, AH, campaignResult.id);
   assert.equal(lines.length, 2); assert(lines.every(line => line.strategy_funding_on === addDays(20) && line.publication_timing === null && !line.published_ready));
   await assert.rejects(() => drafts.linkStrategyCampaign(sql, AH, { planId: agendaResult.id, lineIds: [lines[0].id], platform: 'meta', accountId: 'a', campaignId: 'c' }, deps));
+  await assert.rejects(() => drafts.linkStrategyCampaign(sql, AH, { planId: campaignResult.id, lineIds: [lines[0].id], platform: 'meta', accountId: 'act_1', campaignId: '99', campaignName: 'Ramadan' }, deps), /لم يُسلَّم/);
+  ok('campaign cannot be linked as published before its products are delivered');
+  // Executors deliver and reviewers approve (native rule: approved + final coverage).
+  const allItems = [...first.task.items, ...second.task.items, ...campaign.task.items];
+  for (const item of allItems) {
+    const [file] = await sql`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,status)
+      values(${'k/' + item.id},'final.jpg','image/jpeg',10,'work-final','ready') returning id::text`;
+    await sql`insert into marketing.work_item_files(item_id,file_id,category,format_id) values(${item.id}::uuid,${file.id}::uuid,'final',${post.id})`;
+    await sql`update marketing.work_items set status='approved',approved_at=now() where id=${item.id}::uuid`;
+  }
+  assert((await workflow.planLines(sql, AH, agendaResult.id)).every(line => !line.strategy_product_pending));
+  ok('after execution + approval the publications become preparable');
   await drafts.linkStrategyCampaign(sql, AH, { planId: campaignResult.id, lineIds: [lines[0].id], platform: 'meta', accountId: 'act_1', campaignId: '99', campaignName: 'Ramadan' }, deps);
   await sql`update marketing.strategy_plan_line_meta set funding_on=${addDays(-1)}::date where line_id=${lines[1].id}::uuid`;
   await drafts.linkStrategyCampaign(sql, AH, { planId: campaignResult.id, lineIds: [lines[1].id], platform: 'meta', accountId: 'act_1', campaignId: '99', campaignName: 'Ramadan' }, deps);
@@ -149,17 +159,28 @@ const ok = (m) => console.log('PASS:', m);
 
   const products = await drafts.strategyProducts(sql, AH, { productManager: true, manager: true, departments: [] });
   const productA01 = products.rows.find(row => row.ideaCode === 'A01');
-  assert.equal(productA01.orderNo, agendaDraft.planNo); assert.equal(productA01.category, 'تعريفي - بالبراند');
+  assert.equal(productA01.orderNo, agendaResult.planNo); assert.equal(productA01.category, 'تعريفي - بالبراند');
   assert.match(productA01.assignmentNo, /^TSK-\d{6}-\d{2}$/); assert.equal(productA01.publishOn, addDays(10));
   const productC = products.rows.find(row => row.ideaCode === 'C01');
   assert.equal(productC.fundingOn, addDays(20)); assert.equal(productC.publishOn, addDays(15));
   const picker = await workflow.products(sql, AH);
   const pickA01 = picker.find(row => row.id === first.task.items[0].id);
-  assert.equal(pickA01.strategy_order_no, agendaDraft.planNo); assert.equal(pickA01.strategy_category, 'تعريفي - بالبراند');
+  assert.equal(pickA01.strategy_order_no, agendaResult.planNo); assert.equal(pickA01.strategy_category, 'تعريفي - بالبراند');
   const report = await drafts.strategyPlanReport(sql, AH, { planId: campaignResult.id });
   assert.equal(report.draft.ideas.length, 2);
   ok('products tab tracking (رقم التكليف/التاسك/الطلب, تاريخ التنفيذ/النشر/التمويل) and plan report data');
 
+  // «حذف الاسم» from the strategy page: only names not sent for review.
+  const trial = await assign(1, 'T', () => ({ kind: 'agenda', name: 'أجندة تجربة', date: addDays(9) }));
+  await drafts.deleteStrategyDraftFromIntegration(sql, trial.touched[0].id);
+  assert(!(await drafts.listOpenStrategyDrafts(sql)).drafts.some(row => row.id === trial.touched[0].id));
+  await assert.rejects(() => drafts.deleteStrategyDraftFromIntegration(sql, agendaDraft.id), /أُرسل|إرساله/);
+  ok('trial names can be deleted from the strategy page; tasks stay; submitted ones are refused');
+  const composed = await workflow.createPlan(sql, { requestKey: randomUUID(), kind: 'campaign', name: 'حملة من إنشاء حملة', fundingFrom: addDays(5), fundingTo: addDays(6),
+    platformGoals: [{ platformId: igId, goalIds: [goal.id] }],
+    entries: [{ productId: trial.task.items[0].id, date: addDays(5), platforms: [{ platformId: igId, postTypes: [{ postTypeId: post.id, budget: 100 }] }] }] }, AH);
+  assert((await workflow.planLines(sql, AH, composed.id))[0].product_id === trial.task.items[0].id);
+  ok('«إنشاء حملة» accepts a strategy product before execution (native products still need approval)');
   // Native plans are untouched by the strategy decoration.
   const nativeItem = second.task.items[0];
   const native = await workflow.createPlan(sql, { requestKey: randomUUID(), kind: 'agenda', name: 'أجندة عادية',

@@ -6,7 +6,7 @@ import { hasPermission, canAccessSystem } from '../shared/system-access.js';
 import { supportsWorkMedia } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
 import { createStrategyWorkflowTask, listStrategyApprovedProducts, createStrategyWorkflowAgenda, type StrategyWorkflowTaskInput, type StrategyAgendaInput } from './marketing/workflow.js';
-import { applyStrategyPlacements, listOpenStrategyDrafts, validateStrategyPlacements, type StrategyPlacement } from './marketing/strategy-drafts.js';
+import { applyStrategyPlacements, deleteStrategyDraftFromIntegration, listOpenStrategyDrafts, validateStrategyPlacements, type StrategyPlacement } from './marketing/strategy-drafts.js';
 
 // Dedicated, server-to-server API. Never proxy the ordinary Marketing API.
 // READ can only SELECT approved fields. ASSIGN can only create a workflow task.
@@ -158,8 +158,9 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
   const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'agenda-products', 'plan-drafts'].includes(resource);
   const isAssignment = method === 'POST' && resource === 'assignments';
   const isAgenda = method === 'POST' && resource === 'agenda';
-  if (!isRead && !isAssignment && !isAgenda) {
-    response.setHeader('Allow', ['assignments','agenda'].includes(resource) ? 'GET, POST' : 'GET');
+  const isDraftDelete = method === 'POST' && resource === 'plan-drafts';
+  if (!isRead && !isAssignment && !isAgenda && !isDraftDelete) {
+    response.setHeader('Allow', ['assignments','agenda','plan-drafts'].includes(resource) ? 'GET, POST' : 'GET');
     return response.status(405).json({ ok: false, error: 'Only designated read endpoints and assignment creation are allowed' });
   }
   if (!verifyScope(request, isRead ? 'read' : 'assign')) return response.status(401).json({ ok: false, error: 'Unauthorized integration request' });
@@ -240,6 +241,11 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
     }
     const body = bodyValue(request);
     if (!body) return response.status(400).json({ ok:false,error:'JSON object is required' });
+    if (isDraftDelete) {
+      // «حذف الاسم» from the strategy assignment page: open drafts only.
+      if (!keysOnly(body, ['draftId']) || !isUuid(body.draftId)) throw Error('Invalid draft identifier');
+      return response.status(200).json(await deleteStrategyDraftFromIntegration(sql, body.draftId as string));
+    }
     if (JSON.stringify(body).length > 100000) return response.status(413).json({ ok:false,error:'Integration payload is too large' });
     const input = isAgenda ? normalizeAgenda(body) : normalizeAssignment(body);
     const placements = isAgenda ? [] : normalizePlacements(body, (input as StrategyWorkflowTaskInput).source.ideaCodes);

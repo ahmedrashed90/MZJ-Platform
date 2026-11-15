@@ -12,10 +12,10 @@ export type StrategyDraftIdea = {
   publishOn: string | null; fundingOn: string | null; targetOn: string | null; scheduledOn: string | null;
   platforms: StrategyDraftPlatform[];
   formats: Array<{ id: string; platformId: string; platformName: string; platformCode: string; name: string }>;
-  configured: boolean; executed: boolean; ready: boolean; missing: string[];
+  configured: boolean; executed: boolean; ready: boolean; missing: string[]; notes?: string[];
 };
 export type StrategyDraft = {
-  id: string; kind: 'agenda' | 'campaign'; name: string; planNo: string; status: 'draft' | 'submitted'; workPlanId: string | null;
+  id: string; kind: 'agenda' | 'campaign'; name: string; planNo: string | null; status: 'draft' | 'submitted'; workPlanId: string | null;
   createdAt: string; creatorName: string; platformGoals: Array<{ platformId: string; goalIds: string[] }>;
   ideas: StrategyDraftIdea[]; ideaCount: number; productCount: number; readyCount: number; executedCount: number; configuredCount: number;
   periodFrom: string | null; periodTo: string | null; platforms: Array<{ platformId: string; name: string }>; canEdit: boolean;

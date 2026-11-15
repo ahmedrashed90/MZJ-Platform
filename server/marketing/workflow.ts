@@ -16,7 +16,7 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
-import { decorateStrategyPlanLines, decorateStrategyProducts, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
+import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingProduct, strategyPlanProducts, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
   saveStrategyDraftEntry, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
@@ -1423,6 +1423,18 @@ async function products(sql: Sql, user: SessionUser) {
     idea_code:identities.get(String(row.id))?.ideaCode||'',
     statement:isManualKeywordsProduct(row.task_no) ? MANUAL_KEYWORDS_NAME : `${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`})));
 }
+/** Product for an agenda/campaign row. Native products must be approved with
+ * final files (unchanged). Strategy requirements may be scheduled before
+ * execution; their preparation/publication still waits for approved files. */
+async function planProduct(db: any, user: SessionUser, itemId: string) {
+  try { return await productVisible(db, user, itemId); }
+  catch (error) {
+    if (!(error instanceof Error) || error.message !== W.productUnavailable) throw error;
+    const pending = await strategyPendingProduct(db, user, itemId, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
+    if (!pending) throw error;
+    return pending;
+  }
+}
 async function productVisible(db: any, user: SessionUser, itemId: string, allowPlanReviewer = false) {
   const scopes = departmentScope(user);
   const selectedPlanReviewer = allowPlanReviewer && await canReviewPlan(db as Sql,user);
@@ -1633,7 +1645,7 @@ async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
       if (lineId) kept.add(lineId);
       const productId = id(entry.productId), postTypeId = id(entry.postTypeId), date = text(entry.date,10);
       if (!isWorkDate(date)) throw new Error(W.dateInvalid);
-      const product = await productVisible(tx, user, productId);
+      const product = await planProduct(tx, user, productId);
       await validateFormats(tx, product.media_kind, [postTypeId]);
       const budget = plan.kind === 'campaign' ? Number(entry.budget) : 0;
       if (!Number.isFinite(budget) || budget < 0 || budget > 100000000 || Math.abs(budget * 100 - Math.round(budget * 100)) > 0.000001) throw new Error(W.invalid);
@@ -1700,7 +1712,9 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
     const [line] = await tx<any[]>`select l.id,l.plan_id,l.manual_post_url,l.manual_published_on,p.review_status,p.created_by,p.activated_at from marketing.work_plan_items l
       join marketing.work_plans p on p.id=l.plan_id where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
     if (!line || !['publishing','published'].includes(line.review_status)) throw new Error('لا يمكن تسجيل رابط النشر قبل اعتماد الحملة أو الأجندة');
-    if (!(await planLines(tx as unknown as Sql,user,String(line.plan_id))).some(visible => visible.id === lineId)) throw new Error(W.denied);
+    const visibleLine = (await planLines(tx as unknown as Sql,user,String(line.plan_id))).find(visible => visible.id === lineId);
+    if (!visibleLine) throw new Error(W.denied);
+    if (visibleLine.strategy_product_pending) throw new Error('بانتظار تسليم الملفات النهائية واعتمادها — لا يمكن تسجيل النشر قبل تنفيذ المنتج');
     if (line.created_by !== user.id && !(await canReviewPlan(tx as unknown as Sql,user)) && !hasPermission(user,'marketing.publish.now')) throw new Error(W.denied);
     // Locking the row above makes the first-save check atomic across devices.
     // A previously deleted legacy link is also locked if it has a first-save date.
@@ -1891,7 +1905,7 @@ async function createPlan(sql: Sql, body: Row, user: SessionUser, reserved?: { p
         throw new Error('المطلوب / المنتج مكرر داخل نفس الحملة أو الأجندة. اختر مطلوبًا مختلفًا لكل يوم.');
       }
       usedProducts.add(productId);
-      const product = await productVisible(tx, user, productId);
+      const product = await planProduct(tx, user, productId);
       if (grouped) {
         const platforms = list(entry.platforms);
         if (!platforms.length || platforms.length > 50) throw new Error(W.requiredFields);
@@ -2442,6 +2456,7 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
   if (!hasPermission(user, 'marketing.publish_prep.view') && !planReviewer) throw new Error(W.denied);
   const [line] = (await planLines(sql, user)).filter(row => row.id === lineId);
   if (!line) throw new Error(W.notFound);
+  if (line.strategy_product_pending) throw new Error('بانتظار تسليم الملفات النهائية واعتمادها — لا يمكن تجهيز النشر قبل تنفيذ المنتج');
   const product = await productVisible(sql, user, line.product_id, planReviewer);
   const targets = await sql<any[]>`select target.id,target.post_type_id,target.schedule_id,s.status,s.publish_result,s.published_at,
     s.caption,s.hashtags,s.publish_options,s.updated_at,p.code as platform_code,p.name as platform_name,pt.name as post_type_name
@@ -2466,6 +2481,7 @@ async function savePreparation(sql: Sql, user: SessionUser, body: Row, services:
   const lineId = id(body.lineId);
   const [visible] = (await planLines(sql, user)).filter(row => row.id === lineId);
   if (!visible) throw new Error(W.notFound);
+  if (visible.strategy_product_pending) throw new Error('بانتظار تسليم الملفات النهائية واعتمادها — لا يمكن تجهيز النشر قبل تنفيذ المنتج');
   const product = await productVisible(sql, user, visible.product_id);
   const selected = [...new Set(list(body.formatIds).map(value => id(value)))];
   const taskFormats = list(product.formats) as WorkFormat[];
@@ -2963,6 +2979,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       result = await strategyDraftDetail(sql, user, id(request.query.id));
     } else if (resource === 'work_strategy_report') {
       result = await strategyPlanReport(sql, user, request.query as Row);
+    } else if (resource === 'work_strategy_plan_products') {
+      result = await strategyPlanProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
     } else if (resource === 'work_strategy_products') {
       result = await strategyProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
     } else if (resource === 'work_marketing_tracking') {

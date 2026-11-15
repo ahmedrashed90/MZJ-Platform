@@ -3,7 +3,6 @@ import { CalendarBlank, CheckCircle, FolderOpen, LinkSimple, PaperPlaneTilt, Tra
 import { Modal } from '../../components/Modal';
 import { Empty, Readiness, W, WorkAlert } from './components';
 import { showDate, useWorkQuery, workPost } from './api';
-import { CampaignGoalPicker } from './CampaignGoals';
 import { marketingFetch, marketingQuery } from '../api';
 import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
 import type { CampaignReportPayload, CampaignReportRow } from '../../../shared/campaign-report';
@@ -26,7 +25,7 @@ export function StrategyDraftCard({ draft, onOpen, onReport }: { draft: Strategy
   return <article className="mkw-dashboard-publish-card mkw-strategy-draft-card" aria-label={`مسودة ${kindName(draft.kind)} ${draft.name}`}>
     <div className="mkw-dashboard-publish-card-head">
       <div className="mkw-dashboard-publish-head-main">
-        <span className="mkw-code">{draft.planNo}</span>
+        <span className="mkw-code">{draft.planNo || 'الكود يُحدد عند الإرسال للمراجعة'}</span>
         <h3>{draft.name}</h3>
         <div className="mkw-dashboard-publish-meta-line">
           <span className="mkw-kind-label">{kindName(draft.kind)}</span>
@@ -62,7 +61,7 @@ export function StrategyDraftReport({ draftId, onClose }: { draftId: string; onC
   return <Modal open title={`التقرير${draft ? ` — ${draft.name}` : ''}`} onClose={onClose} className="mkw-fullscreen mkw-plan-report-modal">
     <div className="mkw mkw-plan-report"><WorkAlert>{query.error}</WorkAlert>
       {!draft ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
-        <div className="mkw-section-title"><div><span className="mkw-code">{draft.planNo}</span><strong>مسودة {kindName(draft.kind)} · {draft.name}</strong></div><span className="mkw-strategy-draft-badge">مسودة</span></div>
+        <div className="mkw-section-title"><div><span className="mkw-code">{draft.planNo || '—'}</span><strong>مسودة {kindName(draft.kind)} · {draft.name}</strong></div><span className="mkw-strategy-draft-badge">مسودة</span></div>
         <StrategyProductsTable draft={draft}/>
       </>}
     </div>
@@ -83,15 +82,16 @@ function formPlatforms(form: EntryForm, campaign: boolean): StrategyDraftPlatfor
     postTypes: Object.entries(types).map(([postTypeId, budget]) => ({ postTypeId, budget: (campaign ? budget : 0) as unknown as number })) }));
 }
 
-/** Inside view: ideas → every active platform and publish type (one or more),
- * date, and for a campaign the budget per publish type and the goal per platform.
- * «إرسال للمراجعة» opens the native review flow (أجندة / حملة معتمدة بعد الاعتماد). */
+/** Inside view: ideas → ONE step: dates on top, then one row per platform with
+ * its publish types (budget per type for a campaign) and the campaign goal.
+ * «إرسال للمراجعة» does not wait for execution; preparation does. */
 export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const query = useWorkQuery<{ draft: StrategyDraft; platforms: CatalogPlatform[] }>('strategy_draft', { id });
   const draft = query.data?.draft;
   const catalog = query.data?.platforms || [];
   const campaign = draft?.kind === 'campaign';
   const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings', {}, campaign);
+  const goalOptions = goalsQuery.data?.goals || [];
   const [selectedId, setSelectedId] = useState(''), [filter, setFilter] = useState<'all' | 'incomplete' | 'ready'>('all');
   const [form, setForm] = useState<EntryForm | null>(null), [dirty, setDirty] = useState(false);
   const [goals, setGoals] = useState<Record<string, string[]>>({});
@@ -102,17 +102,19 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   useEffect(() => { if (selected) { setForm(formFromIdea(selected)); setDirty(false); } }, [selected?.id, selected?.version]);
   useEffect(() => { if (draft) setGoals(Object.fromEntries(draft.platformGoals.map(row => [row.platformId, row.goalIds]))); }, [draft?.id, JSON.stringify(draft?.platformGoals)]);
   const usedPlatforms = draft?.platforms || [];
-  const goalsMissing = campaign && usedPlatforms.some(platform => !(draft!.platformGoals.find(row => row.platformId === platform.platformId)?.goalIds.length));
-  const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !goalsMissing);
+  const platformsWithoutGoal = campaign ? usedPlatforms.filter(platform => !(draft!.platformGoals.find(row => row.platformId === platform.platformId)?.goalIds.length)) : [];
+  const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !platformsWithoutGoal.length);
   const visibleIdeas = ideas.filter(idea => filter === 'all' || (filter === 'ready' ? idea.ready : !idea.ready));
   const producedIds = new Set(selected?.formats.map(format => format.id) || []);
+  const rows = selected ? catalog.map(platform => ({ ...platform, postTypes: platform.postTypes.filter(type => type.mediaKinds.includes(selected.mediaKind)) })) : [];
+  const usable = rows.filter(row => row.postTypes.length), unusable = rows.filter(row => !row.postTypes.length);
   const ideaBudget = form ? Object.values(form.platforms).reduce((sum, types) => sum + Object.values(types).reduce((total, value) => total + (Number(value) || 0), 0), 0) : 0;
   const selectedCount = form ? Object.values(form.platforms).reduce((sum, types) => sum + Object.keys(types).length, 0) : 0;
   const readiness = draft?.productCount ? Math.round(draft.readyCount * 100 / draft.productCount) : 0;
 
-  async function run(action: string, body: Record<string, unknown>, done: string, reload = true) {
+  async function run(action: string, body: Record<string, unknown>, done: string) {
     setBusy(true); setError(''); setMessage('');
-    try { await workPost(action, body); if (reload) { await query.reload(); onChanged(); } setMessage(done); return true; }
+    try { await workPost(action, body); await query.reload(); onChanged(); setMessage(done); return true; }
     catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); return false; }
     finally { setBusy(false); }
   }
@@ -122,10 +124,15 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
       if (checked) platforms[platformId] = platforms[platformId] || {}; else delete platforms[platformId];
       return { ...current, platforms }; });
   }
-  function toggleType(platformId: string, postTypeId: string, checked: boolean) {
+  function toggleType(platformId: string, postTypeId: string) {
     update(current => { const types = { ...(current.platforms[platformId] || {}) };
-      if (checked) types[postTypeId] = types[postTypeId] ?? ''; else delete types[postTypeId];
+      if (types[postTypeId] !== undefined) delete types[postTypeId]; else types[postTypeId] = '';
       return { ...current, platforms: { ...current.platforms, [platformId]: types } }; });
+  }
+  function toggleGoal(platformId: string, goalId: string) {
+    setGoals(current => { const list = current[platformId] || [];
+      return { ...current, [platformId]: list.includes(goalId) ? list.filter(value => value !== goalId) : [...list, goalId] }; });
+    setDirty(true); setMessage('');
   }
   function validate(): string {
     if (!form || !draft) return W.invalid;
@@ -137,20 +144,25 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
     if (campaign && entries.some(([, types]) => Object.values(types).some(value => value === '' || !(Number(value) >= 0)))) return 'أدخل ميزانية لكل نوع نشر';
     return '';
   }
-  async function saveIdea(goNext = false) {
+  function goalsPayload(extraPlatformIds: string[]) {
+    const ids = [...new Set([...usedPlatforms.map(platform => platform.platformId), ...extraPlatformIds])];
+    return ids.map(platformId => ({ platformId, goalIds: goals[platformId] || [] }));
+  }
+  async function saveIdea() {
     if (!selected || !form || !draft) return;
     const problem = validate();
     if (problem) { setError(problem); return; }
-    const ok = await run('strategy_save_entry', { draftId: draft.id, entryId: selected.id, version: selected.version,
-      scheduledOn: form.scheduledOn, ...(campaign ? { fundingOn: form.fundingOn } : {}), platforms: formPlatforms(form, campaign) }, 'تم حفظ إعداد الفكرة');
-    if (ok && goNext) {
-      const index = ideas.findIndex(idea => idea.id === selected.id);
-      const next = [...ideas.slice(index + 1), ...ideas.slice(0, index)].find(idea => !idea.configured);
-      if (next) setSelectedId(next.id);
-    }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await workPost('strategy_save_entry', { draftId: draft.id, entryId: selected.id, version: selected.version,
+        scheduledOn: form.scheduledOn, ...(campaign ? { fundingOn: form.fundingOn } : {}), platforms: formPlatforms(form, campaign) });
+      if (campaign) await workPost('strategy_save_draft', { draftId: draft.id, platformGoals: goalsPayload(Object.keys(form.platforms)) });
+      await query.reload(); onChanged(); setDirty(false); setMessage('تم حفظ إعداد الفكرة');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
   }
-  /** Copy the same platforms/types (and budgets) to ideas not configured yet;
-   * each idea keeps its own dates and only types matching its media are copied. */
+  /** Same platforms/types (and budgets) for ideas not configured yet; each idea
+   * keeps its own dates, and only types matching its media are copied. */
   async function copyToIncomplete() {
     if (!form || !draft || !selected) return;
     const problem = validate();
@@ -171,6 +183,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
           ...(campaign ? { fundingOn: idea.fundingOn || form.fundingOn } : {}), platforms });
         done++;
       }
+      if (campaign) await workPost('strategy_save_draft', { draftId: draft.id, platformGoals: goalsPayload(Object.keys(form.platforms)) });
       setMessage(`تم تطبيق الإعداد على ${done} فكرة${skipped.length ? ` · لم يُطبق على: ${skipped.join('، ')} (نوع الوسائط مختلف)` : ''}`);
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); await query.reload(); onChanged(); }
@@ -181,14 +194,14 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
       {!draft ? <Empty>{query.loading ? W.loading : query.error || W.noData}</Empty> : <>
         <section className="mkw-sd-hero">
           <div className="mkw-sd-hero-title">
-            <span className="mkw-code" dir="ltr">{draft.planNo}</span>
+            <span className="mkw-code">{draft.planNo || 'الكود يُحدد عند الإرسال للمراجعة'}</span>
             <h2>{draft.name}</h2>
-            <div className="mkw-sd-chips"><span className="mkw-strategy-draft-badge">مسودة {kindName(draft.kind)}</span><span>منشئ المسودة: {draft.creatorName || '—'}</span><span>تاريخ الإنشاء: {showDate(draft.createdAt)}</span></div>
+            <div className="mkw-sd-chips"><span className="mkw-strategy-draft-badge">مسودة {kindName(draft.kind)}</span><span>تاريخ الإنشاء: {showDate(draft.createdAt)}</span></div>
           </div>
           <div className="mkw-sd-tiles">
             <div><small>عدد الأفكار</small><strong>{draft.ideaCount}</strong></div>
-            <div><small>تم التنفيذ</small><strong>{draft.executedCount}<em>/ {draft.productCount}</em></strong></div>
             <div><small>مكتمل الإعداد</small><strong>{draft.configuredCount}<em>/ {draft.productCount}</em></strong></div>
+            <div><small>تم التنفيذ</small><strong>{draft.executedCount}<em>/ {draft.productCount}</em></strong></div>
             <div><small>{draft.kind === 'agenda' ? 'فترة نشر الأجندة' : 'فترة التمويل'}</small><strong className="mkw-sd-period">{period(draft.periodFrom, draft.periodTo)}</strong></div>
           </div>
           <Readiness value={readiness} label={`جاهز للإرسال ${draft.readyCount} من ${draft.productCount}`}/>
@@ -197,7 +210,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
         <div className="mkw-strategy-draft-layout">
           <aside className="mkw-strategy-draft-ideas" aria-label="أفكار المسودة">
             <div className="mkw-sd-filter" role="tablist">
-              {([['all', `الكل (${ideas.length})`], ['incomplete', `غير مكتمل (${ideas.filter(idea => !idea.ready).length})`], ['ready', `جاهز (${draft.readyCount})`]] as const).map(([key, label]) =>
+              {([['all', `الكل (${ideas.length})`], ['incomplete', `غير مكتمل (${ideas.filter(idea => !idea.ready).length})`], ['ready', `مكتمل (${draft.readyCount})`]] as const).map(([key, label]) =>
                 <button key={key} type="button" role="tab" aria-selected={filter === key} onClick={() => setFilter(key)}>{label}</button>)}
             </div>
             {visibleIdeas.map(idea => <button type="button" key={idea.id} className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
@@ -207,8 +220,8 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
                 <strong>{idea.ideaName}</strong>
                 <small>{mediaName(idea.mediaKind)} · <span dir="ltr">{idea.assignmentNo}</span></small>
                 <span className="mkw-sd-idea-flags">
-                  <span className={idea.executed ? 'is-ok' : 'is-wait'}>{idea.executed ? 'منفذة' : 'لم تُنفذ'}</span>
                   <span className={idea.configured ? 'is-ok' : 'is-wait'}>{idea.configured ? `${idea.platforms.length} منصة` : 'الإعداد ناقص'}</span>
+                  <span className={idea.executed ? 'is-ok' : 'is-info'}>{idea.executed ? 'منفذة' : 'لم تُنفذ بعد'}</span>
                 </span>
               </span>
               {idea.ready ? <CheckCircle size={18} weight="fill" className="mkw-sd-ok"/> : <WarningCircle size={18} weight="fill" className="mkw-sd-warn"/>}
@@ -220,59 +233,58 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
               <header className="mkw-sd-idea-head">
                 <div><strong>{selected.ideaName}</strong>
                   <div className="mkw-sd-chips"><span>{mediaName(selected.mediaKind)}</span><span>{selected.category || 'بدون تصنيف'}</span><span dir="ltr">{selected.taskNo}</span><span>المنفذ: {selected.assigneeName || '—'}</span><span>موعد التسليم: {showDate(selected.dueOn)}</span></div></div>
-                <span className={`mkw-publish-timing ${selected.executed ? 'is-on-time' : 'is-pending'}`}>{selected.executed ? 'تم التنفيذ والاعتماد' : 'لم يتم التنفيذ بعد'}</span>
+                <span className={`mkw-publish-timing ${selected.executed ? 'is-on-time' : 'is-pending'}`} title={selected.executed ? '' : 'لا يمنع الإرسال للمراجعة؛ تجهيز النشر ينتظر التنفيذ'}>{selected.executed ? 'تم التنفيذ والاعتماد' : 'لم يتم التنفيذ بعد'}</span>
               </header>
               {!!selected.missing.length && <div className="mkw-sd-missing"><WarningCircle size={16} weight="fill"/>{selected.missing.join(' · ')}</div>}
-              <div className="mkw-sd-step"><span>1</span><h4>{campaign ? 'تاريخ النشر وتاريخ التمويل' : 'تاريخ النشر'}</h4></div>
-              <div className="mkw-strategy-draft-dates">
-                <label className="mkw-field"><span>تاريخ النشر</span><input type="date" value={form.scheduledOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, scheduledOn: event.target.value }))}/></label>
-                {campaign && <label className="mkw-field"><span>تاريخ التمويل</span><input type="date" value={form.fundingOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, fundingOn: event.target.value }))}/></label>}
-              </div>
-              <div className="mkw-sd-step"><span>2</span><h4>المنصات وأنواع النشر</h4><small>{Object.keys(form.platforms).length} منصة · {selectedCount} نوع نشر{campaign ? ` · الإجمالي ${money(ideaBudget)} ر.س` : ''}</small></div>
-              <div className="mkw-strategy-draft-platforms">
-                {catalog.map(platform => {
-                  const types = platform.postTypes.filter(type => type.mediaKinds.includes(selected.mediaKind));
-                  const checked = Boolean(form.platforms[platform.platformId]);
-                  const chosen = form.platforms[platform.platformId] || {};
-                  const subtotal = Object.values(chosen).reduce((sum, value) => sum + (Number(value) || 0), 0);
-                  return <fieldset key={platform.platformId} className={`${checked ? 'is-checked' : ''} ${!types.length ? 'is-disabled' : ''}`} disabled={!types.length}>
-                    <legend><label className="mkw-sd-platform-toggle"><input type="checkbox" disabled={!draft.canEdit || busy || !types.length} checked={checked} onChange={event => togglePlatform(platform.platformId, event.target.checked)}/>
-                      <strong>{platform.platformName}</strong>{checked && <small>{Object.keys(chosen).length} نوع{campaign ? ` · ${money(subtotal)} ر.س` : ''}</small>}</label></legend>
-                    {!types.length ? <small className="mkw-muted">لا يوجد نوع نشر مناسب لـ{mediaName(selected.mediaKind)}</small> : checked && <div className="mkw-sd-types">
-                      {types.map(type => {
-                        const typeChecked = chosen[type.id] !== undefined;
-                        return <div key={type.id} className={`mkw-sd-type ${typeChecked ? 'is-checked' : ''}`}>
-                          <label><input type="checkbox" disabled={!draft.canEdit || busy} checked={typeChecked} onChange={event => toggleType(platform.platformId, type.id, event.target.checked)}/>
-                            <span>{type.name}{type.width && type.height ? <b dir="ltr">{type.width}×{type.height}</b> : null}</span>
-                            {producedIds.has(type.id) && <em>مقاس منفذ</em>}</label>
-                          {campaign && typeChecked && <label className="mkw-sd-budget"><span>الميزانية</span><input type="number" min={0} step="0.01" inputMode="decimal" placeholder="0.00" disabled={!draft.canEdit || busy}
-                            value={chosen[type.id]} onChange={event => { const value = event.target.value; update(current => ({ ...current, platforms: { ...current.platforms, [platform.platformId]: { ...current.platforms[platform.platformId], [type.id]: value } } })); }}/><small>ر.س</small></label>}
-                        </div>;
-                      })}
-                    </div>}
-                  </fieldset>;
-                })}
-                {!catalog.length && <Empty>لا توجد منصات فعالة في إعدادات التسويق.</Empty>}
+              <div className="mkw-sd-setup">
+                <div className="mkw-sd-setup-top">
+                  <label className="mkw-field"><span>تاريخ النشر</span><input type="date" value={form.scheduledOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, scheduledOn: event.target.value }))}/></label>
+                  {campaign && <label className="mkw-field"><span>تاريخ التمويل</span><input type="date" value={form.fundingOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, fundingOn: event.target.value }))}/></label>}
+                  <div className="mkw-sd-summary"><strong>{Object.keys(form.platforms).length}</strong> منصة · <strong>{selectedCount}</strong> نوع نشر{campaign && <> · الإجمالي <strong>{money(ideaBudget)}</strong> ر.س</>}</div>
+                </div>
+                <div className={`mkw-sd-rows ${campaign ? 'is-campaign' : ''}`} role="table" aria-label="المنصات وأنواع النشر">
+                  <div className="mkw-sd-row mkw-sd-row-head" role="row"><span role="columnheader">المنصة</span><span role="columnheader">{campaign ? 'أنواع النشر والميزانية (ر.س)' : 'أنواع النشر'}</span>{campaign && <span role="columnheader">الهدف من الحملة</span>}</div>
+                  {usable.map(platform => {
+                    const checked = Boolean(form.platforms[platform.platformId]);
+                    const chosen = form.platforms[platform.platformId] || {};
+                    const platformGoals = goals[platform.platformId] || [];
+                    return <div key={platform.platformId} role="row" className={`mkw-sd-row ${checked ? 'is-checked' : ''}`}>
+                      <label className="mkw-sd-row-platform" role="cell"><input type="checkbox" disabled={!draft.canEdit || busy} checked={checked} onChange={event => togglePlatform(platform.platformId, event.target.checked)}/><strong>{platform.platformName}</strong></label>
+                      <div className="mkw-sd-row-types" role="cell">
+                        {platform.postTypes.map(type => {
+                          const on = chosen[type.id] !== undefined;
+                          return <span key={type.id} className={`mkw-sd-pill ${on ? 'is-on' : ''}`}>
+                            <button type="button" disabled={!draft.canEdit || busy} aria-pressed={on} onClick={() => { if (!checked) togglePlatform(platform.platformId, true); toggleType(platform.platformId, type.id); }}>
+                              {type.name}{producedIds.has(type.id) && <i title="مقاس منفذ في التاسك">●</i>}</button>
+                            {campaign && on && <input type="number" min={0} step="0.01" inputMode="decimal" placeholder="الميزانية" aria-label={`ميزانية ${platform.platformName} ${type.name}`} disabled={!draft.canEdit || busy}
+                              value={chosen[type.id]} onChange={event => { const value = event.target.value; update(current => ({ ...current, platforms: { ...current.platforms, [platform.platformId]: { ...current.platforms[platform.platformId], [type.id]: value } } })); }}/>}
+                          </span>;
+                        })}
+                      </div>
+                      {campaign && <div className="mkw-sd-row-goals" role="cell">
+                        {checked ? goalOptions.map(goal => <button type="button" key={goal.id} disabled={!draft.canEdit || busy} aria-pressed={platformGoals.includes(goal.id)}
+                          className={`mkw-sd-goal ${platformGoals.includes(goal.id) ? 'is-on' : ''}`} onClick={() => toggleGoal(platform.platformId, goal.id)}>{goal.name}</button>)
+                          : <small className="mkw-muted">اختر المنصة أولًا</small>}
+                        {checked && !goalOptions.length && <small className="mkw-muted">{goalsQuery.data?.migrationRequired ? 'حدّث أهداف الحملات من الإعدادات' : 'لا توجد أهداف في الإعدادات'}</small>}
+                      </div>}
+                    </div>;
+                  })}
+                  {!usable.length && <Empty>لا توجد منصات فعالة مناسبة.</Empty>}
+                </div>
+                {!!unusable.length && <small className="mkw-muted">غير متاحة لـ{mediaName(selected.mediaKind)}: {unusable.map(row => row.platformName).join('، ')}</small>}
+                <small className="mkw-muted mkw-sd-legend"><i>●</i> مقاس منفذ في التاسك</small>
               </div>
               {draft.canEdit && <div className="mkw-sd-panel-actions">
-                <button type="button" className="secondary" disabled={busy} onClick={() => void copyToIncomplete()}>تطبيق نفس المنصات على الأفكار غير المكتملة</button>
-                <button type="button" className="secondary" disabled={busy} onClick={() => void saveIdea(true)}>حفظ والانتقال للتالي</button>
+                <button type="button" className="secondary" disabled={busy} onClick={() => void copyToIncomplete()}>تطبيق نفس الإعداد على الأفكار غير المكتملة</button>
                 <button type="button" className="primary" disabled={busy} onClick={() => void saveIdea()}>{dirty ? 'حفظ إعداد الفكرة *' : 'حفظ إعداد الفكرة'}</button>
               </div>}
             </>}
           </section>
         </div>
-        {campaign && <section className="mkw-panel mkw-strategy-draft-goals">
-          <div className="mkw-sd-step"><span>3</span><h4>الهدف من الحملة — لكل منصة</h4><small>تظهر المنصات المستخدمة بعد حفظ إعداد الأفكار.</small></div>
-          <WorkAlert>{goalsQuery.data?.migrationRequired ? 'حدّث أهداف الحملات من إعدادات التسويق أولًا.' : goalsQuery.error}</WorkAlert>
-          <div className="mkw-sd-goals-grid">{usedPlatforms.map(platform => <CampaignGoalPicker key={platform.platformId} platformName={platform.name || 'منصة'} goals={goalsQuery.data?.goals || []}
-            selectedIds={goals[platform.platformId] || []} disabled={!draft.canEdit || busy} onChange={next => setGoals(current => ({ ...current, [platform.platformId]: next }))}/>)}</div>
-          {!usedPlatforms.length && <Empty>لم تُحدد منصات بعد.</Empty>}
-          {draft.canEdit && !!usedPlatforms.length && <div className="mkw-actions"><button type="button" className="secondary" disabled={busy}
-            onClick={() => void run('strategy_save_draft', { draftId: draft.id, platformGoals: usedPlatforms.map(platform => ({ platformId: platform.platformId, goalIds: goals[platform.platformId] || [] })) }, 'تم حفظ أهداف الحملة')}>حفظ أهداف الحملة</button></div>}
-        </section>}
         {draft.canEdit && <div className="mkw-strategy-draft-footer">
-          <span className={allReady ? 'mkw-sd-ready-note' : 'mkw-muted'}>{allReady ? 'كل الأفكار مكتملة — جاهزة للإرسال للمراجعة. بعد الاعتماد تظهر كـ ' + (campaign ? '«حملة معتمدة».' : '«أجندة معتمدة».') : `أكمل كل الأفكار${campaign ? ' وأهداف الحملة' : ''} أولًا — جاهز ${draft.readyCount} من ${draft.productCount}.`}</span>
+          <span className={allReady ? 'mkw-sd-ready-note' : 'mkw-muted'}>{allReady ? 'كل الأفكار مكتملة الإعداد — جاهزة للإرسال للمراجعة. التنفيذ غير مطلوب للإرسال، وتجهيز النشر ينتظر الملفات النهائية.'
+            : platformsWithoutGoal.length && ideas.every(idea => idea.ready) ? `اختر الهدف من الحملة لمنصة: ${platformsWithoutGoal.map(platform => platform.name).join('، ')}`
+            : `أكمل إعداد كل الأفكار أولًا — مكتمل ${draft.readyCount} من ${draft.productCount}.`}</span>
           <button type="button" className="danger secondary" disabled={busy} onClick={() => { if (window.confirm('حذف المسودة؟ لن يتم حذف التاسكات أو المنتجات.')) void run('strategy_delete_draft', { draftId: draft.id }, 'تم حذف المسودة').then(ok => { if (ok) onClose(); }); }}><Trash size={17}/>حذف المسودة</button>
           <button type="button" className="primary" disabled={busy || !allReady} onClick={() => void run('strategy_submit_draft', { draftId: draft.id }, 'تم الإرسال للمراجعة').then(ok => { if (ok) onClose(); })}><PaperPlaneTilt size={17}/>إرسال للمراجعة</button>
         </div>}
