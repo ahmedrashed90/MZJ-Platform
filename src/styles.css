@@ -9710,3 +9710,13 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .attendance-correction-guidance { color:#766059; font-size:12px; line-height:1.7; font-weight:600; }
 .attendance-correction-change-state { margin:0; color:#6D3427; font-size:12px; font-weight:800; line-height:1.75; }
 @media(max-width:560px){.attendance-correction-original,.attendance-correction-times{grid-template-columns:1fr}}
+
+.crm-keepalive-settings { display:grid; gap:14px; }
+.crm-keepalive-toggle { display:flex; align-items:center; gap:8px; margin:10px 0; font-size:13px; }
+.crm-keepalive-channels { display:flex; flex-wrap:wrap; gap:14px; margin:8px 0 14px; font-size:13px; }
+.crm-keepalive-log { display:grid; gap:6px; }
+.crm-keepalive-log > div { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:8px 10px; border:1px solid #efe1da; border-radius:10px; font-size:12px; }
+.crm-keepalive-status { padding:2px 8px; border-radius:999px; font-weight:800; background:#eceff3; }
+.crm-keepalive-status.sent { background:#e6f7ef; color:#0b7650; }
+.crm-keepalive-status.failed { background:#fde4e4; color:#b42318; }
+.crm-keepalive-log .err { color:#b42318; flex-basis:100%; }
