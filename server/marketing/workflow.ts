@@ -16,7 +16,7 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
-import { decorateStrategyPlanLines, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
+import { decorateStrategyPlanLines, decorateStrategyProducts, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
   saveStrategyDraftEntry, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
@@ -1417,10 +1417,11 @@ async function products(sql: Sql, user: SessionUser) {
       t.task_no='MANUAL-KEYWORDS')
     order by i.approved_at desc,i.created_at desc,i.id desc`;
   const identities=await strategyProductIdentities(sql,[...new Set(rows.map(row=>String(row.task_id)))]);
-  return rows.filter(row=>isManualKeywordsProduct(row.task_no) || finalCoverage(row as WorkItem)).map(row=>({...row,
+  // Strategy flow adds category + order code (رقم الطلب) for the product pickers only.
+  return decorateStrategyProducts(sql, rows.filter(row=>isManualKeywordsProduct(row.task_no) || finalCoverage(row as WorkItem)).map(row=>({...row,
     manual_product:isManualKeywordsProduct(row.task_no),
     idea_code:identities.get(String(row.id))?.ideaCode||'',
-    statement:isManualKeywordsProduct(row.task_no) ? MANUAL_KEYWORDS_NAME : `${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`}));
+    statement:isManualKeywordsProduct(row.task_no) ? MANUAL_KEYWORDS_NAME : `${row.task_name} - ${row.media_kind==='video'?W.video:W.image}`})));
 }
 async function productVisible(db: any, user: SessionUser, itemId: string, allowPlanReviewer = false) {
   const scopes = departmentScope(user);

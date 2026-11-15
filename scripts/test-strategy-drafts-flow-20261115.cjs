@@ -13,7 +13,7 @@ if (!url) { console.log('SKIP: set MZJ_TEST_DATABASE_URL to a disposable databas
 process.env.DATABASE_URL = url;
 const pg = createRequire(path.join(root, 'package.json'))('postgres');
 const load = createLoader(root, { postgres: { default: pg, __esModule: true }, '../_notifications.js': { createNotification: async () => {} } },
-  { 'server/marketing/workflow.ts': '\nexport { createPlan, changePlanReview, loadItems, canReviewPlan, planLines };' });
+  { 'server/marketing/workflow.ts': '\nexport { createPlan, changePlanReview, loadItems, canReviewPlan, planLines, products };' });
 const workflow = load('server/marketing/workflow.ts');
 const drafts = load('server/marketing/strategy-drafts.ts');
 const { saudiCalendarDay } = load('shared/marketing-publication-timing.ts');
@@ -32,12 +32,17 @@ const ok = (m) => console.log('PASS:', m);
   for (const userId of [integration, ahmed, reviewer, executor]) await sql`insert into core.user_systems(user_id,system_code,is_enabled,data_scope) values(${userId}::uuid,'marketing',true,'all') on conflict do nothing`;
   const deptId = randomUUID();
   await sql`insert into core.departments(id,code,name,system_code,is_active) values(${deptId}::uuid,${'design-' + deptId.slice(0,6)},'تصميم','marketing',true)`;
-  const [dept] = await sql`insert into marketing.departments(id,name,is_active) values(${deptId}::uuid,'تصميم',true) returning id::text`;
+  const [dept] = await sql`insert into marketing.departments(id,name,is_active) values(${deptId}::uuid,${'تصميم ' + deptId.slice(0,6)},true) returning id::text`;
   await sql`insert into core.user_system_departments(user_id,system_code,department_id,is_primary) values(${executor}::uuid,'marketing',${dept.id}::uuid,true)`;
-  const [type] = await sql`insert into marketing.campaign_types(name,short_code,code_prefix,is_active) values('تعريف',${'T' + randomUUID().slice(0,4)},'TS',true) returning id::text`;
+  const [type] = await sql`insert into marketing.campaign_types(name,short_code,code_prefix,is_active) values(${'تعريف ' + randomUUID().slice(0,6)},${'T' + randomUUID().slice(0,4)},'TS',true) returning id::text`;
   const [ig] = await sql`insert into marketing.platforms(code,name,is_active) values(${'instagram'},'Instagram',true) on conflict do nothing returning id::text`;
   const igId = ig?.id || (await sql`select id::text from marketing.platforms where code='instagram'`)[0].id;
   const [post] = await sql`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${igId}::uuid,'Image Post',1080,1080,true) returning id::text`;
+  // A second platform NOT among the idea's produced sizes, plus a video-only type.
+  const ttCode = 'tiktok-' + randomUUID().slice(0, 6);
+  const [tt] = await sql`insert into marketing.platforms(code,name,is_active) values(${ttCode},'TikTok',true) returning id::text`;
+  const [ttStory] = await sql`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${tt.id}::uuid,'Image Story',1080,1920,true) returning id::text`;
+  const [ttVideo] = await sql`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${tt.id}::uuid,'Video Reel',1080,1920,true) returning id::text`;
   await sql`insert into marketing.work_plan_reviewers(slot,user_id) values(1,${reviewer}::uuid) on conflict(slot) do update set user_id=excluded.user_id`;
   const [goal] = await sql`insert into marketing.work_campaign_goals(name) values(${'زيادة الليدات ' + randomUUID().slice(0,4)}) returning id::text`;
   const user = (id, scope) => ({ id, fullName: 'Tester', permissions: perms, deniedPermissions: [], roleCodes: ['marketing_admin'], systemAccess: access(scope) });
@@ -95,16 +100,21 @@ const ok = (m) => console.log('PASS:', m);
     await sql`insert into marketing.work_item_files(item_id,file_id,category,format_id) values(${item.id}::uuid,${file.id}::uuid,'final',${post.id})`;
     await sql`update marketing.work_items set status='approved',approved_at=now() where id=${item.id}::uuid`;
   }
-  const detail = (await drafts.strategyDraftDetail(sql, AH, agendaDraft.id)).draft;
+  const detailResult = await drafts.strategyDraftDetail(sql, AH, agendaDraft.id);
+  const detail = detailResult.draft;
+  assert(detailResult.platforms.some(row => row.platformId === tt.id && row.postTypes.some(type => type.id === ttVideo.id && type.mediaKinds.join() === 'video')));
+  await assert.rejects(() => drafts.saveStrategyDraftEntry(sql, AH, { draftId: agendaDraft.id, entryId: detail.ideas[0].id,
+    scheduledOn: detail.ideas[0].publishOn, platforms: [{ platformId: tt.id, postTypes: [{ postTypeId: ttVideo.id }] }] }), /لا يناسب/);
+  ok('editor offers ALL active platforms/publish types; a video-only type is refused for an image idea');
   for (const idea of detail.ideas) await drafts.saveStrategyDraftEntry(sql, AH, { draftId: agendaDraft.id, entryId: idea.id, version: idea.version,
-    scheduledOn: idea.publishOn, platforms: [{ platformId: igId, postTypes: [{ postTypeId: post.id }] }] });
+    scheduledOn: idea.publishOn, platforms: [{ platformId: igId, postTypes: [{ postTypeId: post.id }] }, { platformId: tt.id, postTypes: [{ postTypeId: ttStory.id }] }] });
   const agendaResult = await drafts.submitStrategyDraft(sql, AH, { draftId: agendaDraft.id }, deps);
   const [agendaPlan] = await sql`select plan_no,review_status,kind from marketing.work_plans where id=${agendaResult.id}::uuid`;
   assert.equal(agendaPlan.plan_no, agendaDraft.planNo); assert.equal(agendaPlan.review_status, 'submitted'); assert.equal(agendaPlan.kind, 'agenda');
-  assert.equal((await sql`select count(*)::int as n from marketing.work_plan_items where plan_id=${agendaResult.id}::uuid`)[0].n, 12);
+  assert.equal((await sql`select count(*)::int as n from marketing.work_plan_items where plan_id=${agendaResult.id}::uuid`)[0].n, 24);
   board = await drafts.strategyDraftsForDashboard(sql, AH);
   assert(!board.drafts.some(row => row.id === agendaDraft.id));
-  ok('complete agenda draft → native agenda with the SAME code AGD, status «submitted» (same review flow), 12 posts');
+  ok('complete agenda draft → native agenda with the SAME code AGD, status «submitted» (same review flow), 12 ideas × 2 platforms = 24 posts');
   const repeat = await drafts.submitStrategyDraft(sql, AH, { draftId: agendaDraft.id }, deps);
   assert.equal(repeat.id, agendaResult.id); ok('re-submit returns the same agenda (idempotent)');
 
@@ -143,6 +153,9 @@ const ok = (m) => console.log('PASS:', m);
   assert.match(productA01.assignmentNo, /^TSK-\d{6}-\d{2}$/); assert.equal(productA01.publishOn, addDays(10));
   const productC = products.rows.find(row => row.ideaCode === 'C01');
   assert.equal(productC.fundingOn, addDays(20)); assert.equal(productC.publishOn, addDays(15));
+  const picker = await workflow.products(sql, AH);
+  const pickA01 = picker.find(row => row.id === first.task.items[0].id);
+  assert.equal(pickA01.strategy_order_no, agendaDraft.planNo); assert.equal(pickA01.strategy_category, 'تعريفي - بالبراند');
   const report = await drafts.strategyPlanReport(sql, AH, { planId: campaignResult.id });
   assert.equal(report.draft.ideas.length, 2);
   ok('products tab tracking (رقم التكليف/التاسك/الطلب, تاريخ التنفيذ/النشر/التمويل) and plan report data');

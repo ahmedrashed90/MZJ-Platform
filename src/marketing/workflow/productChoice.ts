@@ -1,18 +1,18 @@
 import type { WorkProduct } from '../../../shared/marketing-workflow';
+import { taskCategoryLabel } from './taskPresentation';
 
 /** One canonical human-readable product label for new and revised campaigns
  * and agendas. The product UUID remains unchanged. */
 export function productChoiceLabel(product:WorkProduct):string {
   if (product.manual_product) return `كلمات بحث`;
-  const number=Number(product.requirement_number || product.sort_order+1);
+  // Same order as the products table: التصنيف — المطلوب — رقم التاسك — رقم الطلب — اسم الفكرة.
   return [
-    `المطلوب ${number}`,
-    product.idea_code ? `كود الفكرة ${product.idea_code}` : '',
-    product.idea_name,
+    product.strategy_category || taskCategoryLabel(product.task_name),
     product.media_kind==='video'?'فيديو':'صورة',
-    product.assignee_name||'—',
-    String(product.idea||'').replace(/\s+/g,' ').slice(0,100),
-  ].filter(Boolean).join(' — ');
+    product.task_no || '—',
+    product.strategy_order_no || '—',
+    product.idea_name,
+  ].map(value=>String(value||'').trim()||'—').join(' — ');
 }
 export function productChoiceGroups(products:WorkProduct[]) {
   const groups=new Map<string,{title:string;rows:WorkProduct[]}>();

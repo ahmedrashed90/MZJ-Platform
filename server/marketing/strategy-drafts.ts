@@ -11,7 +11,7 @@
 import type { SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { finalCoverage, isWorkDate, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
+import { finalCoverage, isWorkDate, supportsWorkMedia, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
@@ -162,6 +162,25 @@ export async function listOpenStrategyDrafts(sql: Sql) {
 /* ------------------------------------------------------------------ */
 /* Reads for Marketing UI                                              */
 /* ------------------------------------------------------------------ */
+/** All active platforms and publish types (same source as the native composer). */
+type CatalogType = { id: string; name: string; width: number | null; height: number | null; platformId: string; platformName: string; platformCode: string };
+async function postTypeCatalog(sql: Sql): Promise<CatalogType[]> {
+  const rows = await sql<any[]>`select pt.id::text,pt.name,pt.width,pt.height,p.id::text as platform_id,p.name as platform_name,p.code as platform_code
+    from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id
+    where pt.is_active=true and p.is_active=true order by p.name,pt.name,pt.id`;
+  return rows.map(row => ({ id: row.id, name: row.name, width: row.width ?? null, height: row.height ?? null,
+    platformId: row.platform_id, platformName: row.platform_name, platformCode: row.platform_code || '' }));
+}
+function catalogPlatforms(catalog: CatalogType[]) {
+  const map = new Map<string, { platformId: string; platformName: string; platformCode: string; postTypes: any[] }>();
+  for (const type of catalog) {
+    const row = map.get(type.platformId) || { platformId: type.platformId, platformName: type.platformName, platformCode: type.platformCode, postTypes: [] };
+    row.postTypes.push({ id: type.id, name: type.name, width: type.width, height: type.height,
+      mediaKinds: (['image', 'video'] as const).filter(kind => supportsWorkMedia(kind, type.name)) });
+    map.set(type.platformId, row);
+  }
+  return [...map.values()];
+}
 async function draftEntries(sql: Sql, draftIds: string[]) {
   if (!draftIds.length) return [] as Row[];
   return sql<any[]>`select e.id::text,e.draft_id::text,e.item_id::text,e.task_id::text,e.idea_code,e.marketing_category,
@@ -182,12 +201,15 @@ async function draftEntries(sql: Sql, draftIds: string[]) {
     where e.draft_id=any(${draftIds}::uuid[])
     order by e.target_on,e.added_at,requirement.requirement_number`;
 }
-function entryState(kind: string, entry: Row) {
+function entryState(kind: string, entry: Row, catalog: Map<string, CatalogType>) {
   const platforms = list(entry.platforms);
   const formats = list(entry.formats) as WorkFormat[];
-  const allowed = new Set(formats.map(format => String(format.id)));
+  const allowed = (platformId: string, postTypeId: string) => {
+    const type = catalog.get(postTypeId);
+    return Boolean(type && type.platformId === platformId && supportsWorkMedia(entry.media_kind, type.name));
+  };
   const configured = Boolean(entry.scheduled_on) && platforms.length > 0 && platforms.every(platform =>
-    list(platform.postTypes).length > 0 && list(platform.postTypes).every((type: any) => allowed.has(String(type.postTypeId)) &&
+    list(platform.postTypes).length > 0 && list(platform.postTypes).every((type: any) => allowed(String(platform.platformId), String(type.postTypeId)) &&
       (kind !== 'campaign' || (type.budget !== '' && type.budget != null && Number.isFinite(Number(type.budget)) && Number(type.budget) >= 0))));
   const executed = entry.item_status === 'approved' && !entry.task_deleted &&
     finalCoverage({ formats, files: list(entry.files), media_kind: entry.media_kind } as any);
@@ -199,8 +221,8 @@ function entryState(kind: string, entry: Row) {
   else if (!configured) missing.push(kind === 'campaign' ? 'أكمل نوع النشر والميزانية لكل منصة' : 'أكمل نوع النشر لكل منصة');
   return { configured, executed, ready: configured && executed, missing };
 }
-function presentEntry(kind: string, planNo: string, entry: Row) {
-  const state = entryState(kind, entry);
+function presentEntry(kind: string, planNo: string, entry: Row, catalog: Map<string, CatalogType>) {
+  const state = entryState(kind, entry, catalog);
   const reqNo = Number(entry.requirement_number || 0);
   return {
     id: entry.id, draftId: entry.draft_id, itemId: entry.item_id, taskId: entry.task_id, version: entry.version,
@@ -228,13 +250,14 @@ async function draftRows(sql: Sql, user: SessionUser, where: 'open' | { id: stri
           left join core.users u on u.id=d.created_by where d.id=${where.id}::uuid`
       : await sql<any[]>`select d.*,d.id::text,d.work_plan_id::text,coalesce(u.full_name,'') as creator_name from marketing.strategy_plan_drafts d
           left join core.users u on u.id=d.created_by where d.work_plan_id=${where.planId}::uuid`;
-  const entries = await draftEntries(sql, rows.map(row => String(row.id)));
+  const [entries, catalog] = await Promise.all([draftEntries(sql, rows.map(row => String(row.id))), postTypeCatalog(sql)]);
+  const catalogById = new Map(catalog.map(type => [type.id, type]));
+  const platformNames = new Map(catalog.map(type => [type.platformId, type.platformName]));
   return rows.map(row => {
-    const ideas = entries.filter(entry => entry.draft_id === row.id).map(entry => presentEntry(row.kind, row.plan_no, entry));
+    const ideas = entries.filter(entry => entry.draft_id === row.id).map(entry => presentEntry(row.kind, row.plan_no, entry, catalogById));
     const platformIds = new Map<string, string>();
     for (const idea of ideas) for (const platform of idea.platforms) {
-      const name = idea.formats.find(format => format.platformId === String(platform.platformId))?.platformName || '';
-      platformIds.set(String(platform.platformId), name);
+      platformIds.set(String(platform.platformId), platformNames.get(String(platform.platformId)) || '');
     }
     const dates = ideas.map(idea => row.kind === 'campaign' ? idea.fundingOn : idea.publishOn).filter(Boolean).sort() as string[];
     return {
@@ -259,9 +282,9 @@ export async function strategyDraftsForDashboard(sql: Sql, user: SessionUser) {
 export async function strategyDraftDetail(sql: Sql, user: SessionUser, draftId: string) {
   await requireReady(sql);
   if (!canSeeDrafts(user)) throw new Error(W.denied);
-  const [draft] = await draftRows(sql, user, { id: draftId });
+  const [[draft], catalog] = await Promise.all([draftRows(sql, user, { id: draftId }), postTypeCatalog(sql)]);
   if (!draft || (!isManager(user) && !canUseKind(user, draft.kind))) throw new Error(W.notFound);
-  return { ok: true, draft };
+  return { ok: true, draft, platforms: catalogPlatforms(catalog) };
 }
 /** Report rows for the «التقرير» button: draft card or a plan made from a draft. */
 export async function strategyPlanReport(sql: Sql, user: SessionUser, query: Row) {
@@ -351,8 +374,9 @@ export async function saveStrategyDraftEntry(sql: Sql, user: SessionUser, body: 
       if (!isWorkDate(fundingOn)) throw new Error('حدد تاريخ التمويل');
       targetOn = fundingOn;
     } else targetOn = scheduledOn;
-    const formats = list(entry.formats) as WorkFormat[];
-    const byId = new Map(formats.map(format => [String(format.id), format]));
+    // Any active platform / publish type that supports the idea's media, exactly
+    // like the native agenda/campaign composer (not limited to produced sizes).
+    const byId = new Map((await postTypeCatalog(tx as unknown as Sql)).map(type => [type.id, type]));
     const requested = list(body.platforms);
     if (requested.length > 15) throw new Error(W.invalid);
     const seenPlatforms = new Set<string>();
@@ -367,7 +391,9 @@ export async function saveStrategyDraftEntry(sql: Sql, user: SessionUser, body: 
         const postTypeId = id(type.postTypeId);
         if (seenTypes.has(postTypeId)) throw new Error('نوع النشر مكرر');
         seenTypes.add(postTypeId);
-        if (String(byId.get(postTypeId)?.platform_id || '') !== platformId) throw new Error('نوع النشر غير مطابق لمقاسات الفكرة المعتمدة في التاسك');
+        const known = byId.get(postTypeId);
+        if (!known || known.platformId !== platformId) throw new Error('نوع النشر غير متاح لهذه المنصة. حدّث الصفحة.');
+        if (!supportsWorkMedia(entry.media_kind, known.name)) throw new Error(`نوع النشر «${known.name}» لا يناسب ${entry.media_kind === 'video' ? 'الفيديو' : 'الصورة'}`);
         if (draft.kind !== 'campaign') return { postTypeId, budget: 0 };
         if (type.budget === '' || type.budget == null) throw new Error('أدخل ميزانية مستقلة لكل نوع نشر داخل المنصة.');
         const budget = Number(type.budget);
@@ -527,5 +553,21 @@ export async function decorateStrategyPlanLines<T extends Row>(sql: Sql, rows: T
       published_on: link ? linkedOn : row.published_on,
       publication_timing: classifyWorkPublicationTiming(fundingOn || row.scheduled_on, Boolean(link), linkedOn, today),
       status: row.review_status === 'publishing' && publishedReady ? 'published' : row.status };
+  });
+}
+
+/** Product rows for pickers: the strategy category and the draft/plan code
+ * (رقم الطلب). Native fields are untouched; rows without a draft get nothing. */
+export async function decorateStrategyProducts<T extends Row>(sql: Sql, rows: T[]): Promise<T[]> {
+  if (!rows.length || !(await marketingStrategyDraftsReady(sql))) return rows;
+  const ids = rows.map(row => String(row.id));
+  const placements = await sql<any[]>`select e.item_id::text,e.marketing_category,d.plan_no,coalesce(p.is_deleted,false) as plan_deleted
+    from marketing.strategy_plan_draft_entries e join marketing.strategy_plan_drafts d on d.id=e.draft_id
+    left join marketing.work_plans p on p.id=d.work_plan_id where e.item_id=any(${ids}::uuid[]) order by e.added_at`;
+  const byItem = new Map<string, any>();
+  for (const row of placements) if (!row.plan_deleted || !byItem.has(row.item_id)) byItem.set(row.item_id, row);
+  return rows.map(row => {
+    const placement = byItem.get(String(row.id));
+    return placement ? { ...row, strategy_category: placement.marketing_category || '', strategy_order_no: placement.plan_no } : row;
   });
 }
