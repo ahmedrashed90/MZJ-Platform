@@ -702,7 +702,44 @@ async function acceptChoice(context: FlowContext, choice: any) {
   context.session.selected_choice_id = choice.id;
   context.session.current_step_id = null;
   context.session.status = "sending";
+  await classifyOnChoiceSelection(context, choice);
   return advanceChoiceFlow(context, choice);
+}
+
+// Classify + distribute the moment the customer picks a service, instead of
+// waiting for every follow-up question to be answered. Customers who pick a
+// service and then go quiet used to stay in "unclassified" forever, so no rep
+// could reach them inside the messaging window. completeFinalAction() later
+// classifies again with the same service; classifyConversationService reuses
+// the open request, so this never creates duplicates.
+async function classifyOnChoiceSelection(context: FlowContext, choice: any) {
+  const { session, input } = context;
+  const serviceKey = clean(choice?.service_key);
+  if (!serviceKey) return;
+  const finalAction = choice.final_action && typeof choice.final_action === "object" ? choice.final_action : {};
+  if (finalAction.createOrUpdateCustomer === false || finalAction.classifyService === false) return;
+  const distributionEnabled = finalAction.requestDistribution !== false;
+  const assignPrimary = distributionEnabled && (serviceKey === "service"
+    ? finalAction.assignCustomerService !== false
+    : finalAction.assignSales !== false);
+  const assignCallCenter = distributionEnabled && serviceKey === "finance" && finalAction.assignCallCenter !== false;
+  try {
+    await classifyConversationService({
+      conversationId: session.conversation_id,
+      serviceKey,
+      sourceCode: input.platformCode,
+      classificationMethod: "automation_flow",
+      eventKey: `automation:${session.id}:choice-selected`,
+      actor: null,
+      skipAutomaticTemplate: true,
+      assignPrimary,
+      assignCallCenter,
+      requestedBranchCode: choice.branch_policy === "fixed" ? clean(choice.branch_code) : undefined,
+    });
+  } catch (error: any) {
+    // Never block the automation flow; completeFinalAction() retries classification.
+    console.error("early service classification failed", clean(error?.message || error));
+  }
 }
 
 async function handleAnswer(context: FlowContext) {
