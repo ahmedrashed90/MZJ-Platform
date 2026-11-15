@@ -470,6 +470,15 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
         conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "",
       };
     }
+    // No ManyChat Contact ID yet: send straight to the customer's IGSID. The
+    // Instagram worker delivers through the Graph API for this case (inside the
+    // 24h window). Set CRM_INSTAGRAM_DIRECT_SEND=false to require ManyChat again.
+    if (participantId && process.env.CRM_INSTAGRAM_DIRECT_SEND?.trim().toLowerCase() !== "false") {
+      return {
+        participantId, instagramScopedId: participantId, igId: participantId, instagramAccountId: conversation.page_id || "", pageId: conversation.page_id || "",
+        conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "",
+      };
+    }
     throw new Error("حساب Instagram غير جاهز للمراسلة: ManyChat Contact ID غير مربوط بالمحادثة بعد");
   }
 
