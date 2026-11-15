@@ -16,7 +16,7 @@ import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
-import { StrategyCampaignLinkModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
+import { StrategyCampaignLinkModal, StrategyLineCopyModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -62,6 +62,7 @@ export function MarketingDashboardPage() {
   const publishSettings = useWorkQuery<{ enabled: boolean }>('publish_button_settings');
   // Strategy flow: agenda/campaign drafts filled from «إنشاء التكليفات».
   const strategyDrafts = useWorkQuery<{ ready: boolean; drafts: StrategyDraft[] }>('strategy_drafts');
+  const [copyLine, setCopyLine] = useState<WorkPlanLine | null>(null);
   const [draftOpenId, setDraftOpenId] = useState(''), [draftReportId, setDraftReportId] = useState(''), [linkPlanId, setLinkPlanId] = useState('');
   const drafts = strategyDrafts.data?.drafts || [];
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
@@ -110,7 +111,7 @@ export function MarketingDashboardPage() {
     setPdfError('');
     // Campaigns always show the complete funding/creative budget overview,
     // even if the campaign currently contains only one publish line.
-    if (group[0]?.kind === 'campaign' || group.length > 1) setSelectPlan(group[0].plan_id);
+    if (group[0]?.kind === 'campaign' || group.length > 1 || group[0]?.strategy_draft_id) setSelectPlan(group[0].plan_id);
     else if (group.length) setPrepareId(group[0].id);
   }
   async function activatePlan(group: WorkPlanLine[]) {
@@ -308,9 +309,15 @@ export function MarketingDashboardPage() {
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>
       </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
       <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
-      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td><span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span></td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
+      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td>{line.strategy_draft_id
+        ? <button type="button" className={`mkw-publish-draft-state mkw-copy-state-button ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}
+            title="كتابة الكابشن والهاشتاج ورابط المنشور"
+            onClick={() => { setSelectPlan(''); if (line.strategy_product_pending) setCopyLine(line); else setPrepareId(line.id); }}>
+            {line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : String(line.caption || '').trim() ? 'تم حفظ الكابشن — تعديل' : 'كتابة الكابشن والهاشتاج'}</button>
+        : <span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span>}</td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
     {draftOpenId && <StrategyDraftEditor id={draftOpenId} onClose={() => setDraftOpenId('')} onChanged={() => { void strategyDrafts.reload(); void query.reload(); }}/>}
     {draftReportId && <StrategyDraftReport draftId={draftReportId} onClose={() => setDraftReportId('')}/>}
+    {copyLine && <StrategyLineCopyModal line={copyLine} onClose={() => setCopyLine(null)} onChanged={() => void query.reload()}/>}
     {linkPlanId && <StrategyCampaignLinkModal lines={groups.get(linkPlanId) || []} onClose={() => setLinkPlanId('')} onChanged={() => void query.reload()}/>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
   </div>;

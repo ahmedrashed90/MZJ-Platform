@@ -293,6 +293,29 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   </Modal>;
 }
 
+/** Strategy plans: caption + hashtags before the product is delivered. The
+ * post link (نشر في الموعد / تأخر) is entered from «فتح» after delivery. */
+export function StrategyLineCopyModal({ line, onClose, onChanged }: { line: WorkPlanLine; onClose: () => void; onChanged: () => void }) {
+  const [caption, setCaption] = useState(String(line.caption || '')), [hashtags, setHashtags] = useState(String(line.hashtags || ''));
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
+  async function save() {
+    setBusy(true); setError(''); setMessage('');
+    try { await workPost('strategy_save_line_copy', { lineId: line.id, caption, hashtags }); setMessage('تم حفظ الكابشن والهاشتاج'); onChanged(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
+    finally { setBusy(false); }
+  }
+  return <Modal open level={1} title={`الكابشن والهاشتاج — ${line.idea_name}`} onClose={onClose} className="mkw-modal">
+    <div className="mkw mkw-strategy-copy">
+      <div className="mkw-sd-chips"><span>{line.platform_name || '—'} · {line.post_type_name || '—'}</span><span>تاريخ النشر: {showDate(line.scheduled_on)}</span>{line.strategy_funding_on && <span>تاريخ التمويل: {showDate(line.strategy_funding_on)}</span>}</div>
+      <WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
+      <label className="mkw-field"><span>الكابشن</span><textarea rows={6} value={caption} disabled={busy} onChange={event => setCaption(event.target.value)}/></label>
+      <label className="mkw-field"><span>الهاشتاج</span><textarea rows={3} value={hashtags} disabled={busy} onChange={event => setHashtags(event.target.value)}/></label>
+      <div className="mkw-sd-missing"><WarningCircle size={16} weight="fill"/>رابط المنشور (نشر في الموعد / تأخر في النشر) يُضاف من زر «فتح» في تجهيز النشر بعد تسليم الملفات النهائية واعتمادها.</div>
+      <div className="mkw-actions"><button type="button" className="secondary" onClick={onClose}>إغلاق</button><button type="button" className="primary" disabled={busy} onClick={() => void save()}>حفظ الكابشن والهاشتاج</button></div>
+    </div>
+  </Modal>;
+}
+
 /** «تجهيز النشر» for strategy campaigns: choose the published campaign from
  * «تفاعل النشر — تقارير الحملات». The link day vs funding day decides
  * «نشر في الموعد» / «تأخر في النشر». */
@@ -355,7 +378,7 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
 type StrategyProductRow = {
   serial: number; itemId: string; ideaCode: string; createdAt: string; category: string; taskName: string; mediaKind: 'image' | 'video';
   itemStatus: string; assignmentNo: string; taskNo: string; orderNo: string; orderName: string; orderKind: string; orderStatus: string;
-  assigneeName: string; ideaName: string; dueOn: string | null; approvedOn: string | null; publishOn: string | null; fundingOn: string | null;
+  assigneeName: string; ideaName: string; readiness: number; dueOn: string | null; approvedOn: string | null; publishOn: string | null; fundingOn: string | null;
 };
 /** Products tab «منتجات الاستراتيجية» with the requested tracking columns. */
 export function StrategyProductsTab({ search }: { search: string }) {
@@ -366,8 +389,8 @@ export function StrategyProductsTab({ search }: { search: string }) {
     <WorkAlert>{query.error}</WorkAlert>
     <div className="mkw-table-wrap mkw-strategy-products-table"><table>
       <thead>
-        <tr><th rowSpan={2}>م</th><th rowSpan={2}>تاريخ الإنشاء</th><th colSpan={7}>البيان</th><th colSpan={3}>التراكينج</th></tr>
-        <tr><th>التصنيف</th><th>المطلوب</th><th>رقم التكليف</th><th>رقم التاسك</th><th>رقم الطلب</th><th>اسم المنفذ</th><th>اسم الفكرة</th><th>تاريخ التنفيذ</th><th>تاريخ النشر</th><th>تاريخ التمويل</th></tr>
+        <tr><th rowSpan={2}>م</th><th rowSpan={2}>تاريخ الإنشاء</th><th colSpan={7}>البيان</th><th colSpan={4}>التراكينج</th></tr>
+        <tr><th>التصنيف</th><th>المطلوب</th><th>رقم التكليف</th><th>رقم التاسك</th><th>رقم الطلب</th><th>اسم المنفذ</th><th>اسم الفكرة</th><th>الجاهزية</th><th>تاريخ التنفيذ</th><th>تاريخ النشر</th><th>تاريخ التمويل</th></tr>
       </thead>
       <tbody>{rows.map((row, index) => <tr key={row.itemId}>
         <td><span className="mkw-code">{index + 1}</span></td>
@@ -379,6 +402,7 @@ export function StrategyProductsTab({ search }: { search: string }) {
         <td>{row.orderNo ? <><span dir="ltr">{row.orderNo}</span><small className="mkw-muted" style={{ display: 'block' }}>{row.orderKind === 'campaign' ? W.campaign : W.agenda}: {row.orderName}{row.orderStatus === 'draft' ? ' (مسودة)' : ''}</small></> : '—'}</td>
         <td>{row.assigneeName || '—'}</td>
         <td>{row.ideaName}{row.ideaCode && <small className="mkw-muted" style={{ display: 'block' }}>كود الفكرة: <span dir="ltr">{row.ideaCode}</span></small>}</td>
+        <td className="mkw-sp-readiness"><span><b style={{ width: `${Math.max(0, Math.min(100, row.readiness || 0))}%` }}/></span><small>{Math.round(row.readiness || 0)}%</small></td>
         <td>{row.approvedOn ? showDate(row.approvedOn) : <span className="mkw-muted">لم يُنفذ (التسليم {showDate(row.dueOn)})</span>}</td>
         <td>{showDate(row.publishOn)}</td>
         <td>{showDate(row.fundingOn)}</td>

@@ -11,7 +11,7 @@
 import type { SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { finalCoverage, isWorkDate, supportsWorkMedia, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
+import { finalCoverage, isWorkDate, supportsWorkMedia, workItemReadiness, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
@@ -299,7 +299,8 @@ export async function strategyPlanReport(sql: Sql, user: SessionUser, query: Row
 
 /** Products tab «منتجات الاستراتيجية»: every strategy file requirement,
  * executed or not, with its agenda/campaign draft tracking. */
-export async function strategyProducts(sql: Sql, user: SessionUser, scope: { productManager: boolean; manager: boolean; departments: string[] }) {
+export async function strategyProducts(sql: Sql, user: SessionUser, scope: { productManager: boolean; manager: boolean; departments: string[] },
+  loadItems?: (db: any, taskId: string) => Promise<WorkItem[]>) {
   if (!hasPermission(user, 'marketing.products.view')) throw new Error(W.denied);
   const ready = await marketingStrategyDraftsReady(sql);
   const rows = await sql<any[]>`select i.id::text as item_id,i.task_id::text,i.idea_name,i.media_kind,i.status as item_status,
@@ -325,6 +326,11 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
     where e.item_id=any(${itemIds}::uuid[]) order by e.added_at` : [];
   const byItem = new Map<string, any>();
   for (const row of placements) if (!row.plan_deleted || !byItem.has(row.item_id)) byItem.set(row.item_id, row);
+  // «الجاهزية» per idea of the assignment, same formula as the task readiness.
+  const readiness = new Map<string, number>();
+  if (loadItems) for (const taskId of [...new Set(rows.map(row => String(row.task_id)))]) {
+    for (const item of await loadItems(sql, taskId)) readiness.set(String(item.id), workItemReadiness(item));
+  }
   return { ok: true, ready, rows: rows.map((row, index) => {
     const placement = byItem.get(row.item_id);
     const marker = row.marker || {};
@@ -340,7 +346,7 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
       assignmentNo: row.task_no && reqNo ? `${row.task_no}-${String(reqNo).padStart(2, '0')}` : row.task_no,
       taskNo: row.task_no, orderNo: placement?.plan_no || '', orderName: placement?.draft_name || '', orderKind: kind,
       orderStatus: placement ? (placement.draft_status === 'draft' ? 'draft' : placement.plan_status || 'submitted') : '',
-      assigneeName: row.assignee_name, ideaName: row.idea_name,
+      assigneeName: row.assignee_name, ideaName: row.idea_name, readiness: readiness.get(String(row.item_id)) ?? (row.item_status === 'approved' ? 100 : 0),
       dueOn: day(row.due_on), approvedOn: row.approved_at ? saudiCalendarDay(new Date(row.approved_at)) : null,
       publishOn: placement ? (day(placement.scheduled_on) || (kind === 'agenda' ? day(placement.target_on) : null)) : null,
       fundingOn: kind === 'campaign' ? day(placement?.target_on) : null,
@@ -648,4 +654,24 @@ export async function deleteStrategyDraftFromIntegration(sql: Sql, draftId: stri
   const [removed] = await sql<any[]>`delete from marketing.strategy_plan_drafts where id=${draftId}::uuid and status='draft' returning id::text,name`;
   if (!removed) throw new Error('Invalid placement: الاسم غير موجود أو تم إرساله للمراجعة بالفعل؛ احذفه من التسويق.');
   return { ok: true, id: removed.id, name: removed.name };
+}
+
+/** Strategy plans: caption + hashtags of a publication can be written before
+ * the product is delivered. Publishing/link still waits for final files. */
+export async function saveStrategyLineCopy(sql: Sql, user: SessionUser, body: Row, planLines: (db: Sql, user: SessionUser, planId?: string) => Promise<any[]>) {
+  if (!hasPermission(user, 'marketing.publish_prep.manage')) throw new Error(W.denied);
+  const lineId = id(body.lineId);
+  const caption = text(body.caption, 10000), hashtags = text(body.hashtags, 3000);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    const [line] = await tx<any[]>`select l.id::text,l.plan_id::text,l.version from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
+    if (!line) throw new Error(W.notFound);
+    if (body.version !== undefined && Number(body.version) !== Number(line.version)) throw new Error(W.conflict);
+    const visible = (await planLines(tx as unknown as Sql, user, line.plan_id)).find(row => row.id === lineId);
+    if (!visible || !visible.strategy_draft_id) throw new Error(W.denied);
+    if (Number(visible.prepared_count || 0) > 0) throw new Error('المنشور مُجهز بالفعل؛ عدّل الكابشن من زر «فتح» في تجهيز النشر.');
+    await tx`update marketing.work_plan_items set caption=${caption},hashtags=${hashtags},version=version+1,updated_at=now() where id=${lineId}::uuid`;
+    return { ok: true, id: lineId, message: W.saved };
+  });
 }

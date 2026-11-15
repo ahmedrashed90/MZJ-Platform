@@ -13,14 +13,14 @@ if (!url) { console.log('SKIP: set MZJ_TEST_DATABASE_URL to a disposable databas
 process.env.DATABASE_URL = url;
 const pg = createRequire(path.join(root, 'package.json'))('postgres');
 const load = createLoader(root, { postgres: { default: pg, __esModule: true }, '../_notifications.js': { createNotification: async () => {} } },
-  { 'server/marketing/workflow.ts': '\nexport { createPlan, changePlanReview, loadItems, canReviewPlan, planLines, products };' });
+  { 'server/marketing/workflow.ts': '\nexport { createPlan, changePlanReview, loadItems, canReviewPlan, planLines, products, marketingIdeaTracking };' });
 const workflow = load('server/marketing/workflow.ts');
 const drafts = load('server/marketing/strategy-drafts.ts');
 const { saudiCalendarDay } = load('shared/marketing-publication-timing.ts');
 const sql = load('server/_db.ts').getSql();
 const deps = { createPlan: workflow.createPlan, changePlanReview: workflow.changePlanReview, loadItems: workflow.loadItems, canReviewPlan: workflow.canReviewPlan };
 const access = (scope = 'all') => ({ marketing: { enabled: true, dataScope: scope, roleId: null, roleCode: 'marketing_admin', branchCodes: [], departmentCodes: [], vehicleStatusCodes: [] } });
-const perms = ['system.marketing.access','marketing.task.create','marketing.task.view_all','marketing.task.review','marketing.products.view','marketing.agenda.create',
+const perms = ['system.marketing.access','marketing.task.create','marketing.idea_tracking.view','marketing.task.view_all','marketing.task.review','marketing.products.view','marketing.agenda.create',
   'marketing.campaign.create','marketing.dashboard.view','marketing.publish_prep.view','marketing.publish_prep.manage','marketing.database.view'];
 const addDays = (n) => { const d = new Date(`${saudiCalendarDay()}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const ok = (m) => console.log('PASS:', m);
@@ -108,6 +108,10 @@ const ok = (m) => console.log('PASS:', m);
   assert(agendaLinesPending.every(line => line.strategy_product_pending === true), 'preparation waits for final files');
   const pickerPending = await drafts.strategyPlanProducts(sql, AH, { productManager: true, manager: true, departments: [] });
   assert(pickerPending.rows.some(row => row.id === first.task.items[0].id && row.strategy_pending && row.strategy_order_no === agendaResult.planNo));
+  const copyLine = agendaLinesPending[0];
+  await drafts.saveStrategyLineCopy(sql, AH, { lineId: copyLine.id, caption: 'كابشن تجريبي', hashtags: '#MZJ' }, workflow.planLines);
+  assert.equal((await workflow.planLines(sql, AH, agendaResult.id)).find(line => line.id === copyLine.id).caption, 'كابشن تجريبي');
+  ok("caption + hashtags can be written before the product is delivered");
   ok('«إرسال للمراجعة» works BEFORE execution; the AGD code is given now; plan lines flagged «بانتظار تسليم الملفات النهائية»; strategy products listed for إنشاء أجندة/حملة');
   assert.equal((await sql`select count(*)::int as n from marketing.work_plan_items where plan_id=${agendaResult.id}::uuid`)[0].n, 24);
   board = await drafts.strategyDraftsForDashboard(sql, AH);
@@ -156,8 +160,15 @@ const ok = (m) => console.log('PASS:', m);
   assert.deepEqual(lines.map(line => line.publication_timing).sort(), ['late', 'on_time']);
   assert(lines.every(line => line.published_ready && line.status === 'published'));
   ok('«تقارير الحملات» link on/before funding date = نشر في الموعد; after it = تأخر في النشر');
+  const tracking = (await workflow.marketingIdeaTracking(sql, AH, {})).rows;
+  const cTrack = tracking.find(row => row.taskId === campaign.task.id), aTrack = tracking.find(row => row.taskId === first.task.id);
+  assert.equal(cTrack.fundingPercent, 100, 'in campaign 50% + linked to campaign reports 50%');
+  assert.equal(cTrack.executionPercent, 100);
+  assert.equal(aTrack.publishingPercent, 50, 'in agenda 50%, no post link yet');
+  ok('التراكينج: execution 50/50 (submit/approve), publishing 50/50 (agenda/link), funding 50/50 (campaign/report link)');
 
-  const products = await drafts.strategyProducts(sql, AH, { productManager: true, manager: true, departments: [] });
+  const products = await drafts.strategyProducts(sql, AH, { productManager: true, manager: true, departments: [] }, workflow.loadItems);
+  assert(products.rows.every(row => row.readiness >= 50 || row.ideaCode.startsWith('T')), 'readiness per idea (files delivered; seeded without per-format review)');
   const productA01 = products.rows.find(row => row.ideaCode === 'A01');
   assert.equal(productA01.orderNo, agendaResult.planNo); assert.equal(productA01.category, 'تعريفي - بالبراند');
   assert.match(productA01.assignmentNo, /^TSK-\d{6}-\d{2}$/); assert.equal(productA01.publishOn, addDays(10));

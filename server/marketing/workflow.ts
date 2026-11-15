@@ -16,7 +16,7 @@ import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
-import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingProduct, strategyPlanProducts, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
+import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingProduct, strategyPlanProducts, saveStrategyLineCopy, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
   saveStrategyDraftEntry, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
@@ -1323,8 +1323,13 @@ async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
   const from=text(filters.from,10),to=text(filters.to,10);
   if((from&&!isWorkDate(from))||(to&&!isWorkDate(to))||(from&&to&&from>to))throw Error(W.invalid);
   const rows=await sql<StrategyTrackingLinkRow[]>`select t.id::text as task_id,t.task_no,t.created_at,
-    i.id::text as id,i.client_key::text,i.idea_name,i.sort_order,i.status,i.delivery_mode,
+    i.id::text as id,i.client_key::text,i.idea_name,i.sort_order,i.status,i.delivery_mode,i.submitted_at,
     h.data as source,
+    exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.product_id=i.id and l.is_deleted=false and p.is_deleted=false and p.kind='agenda'
+        and (coalesce(l.manual_post_url,'')<>'' or exists(select 1 from marketing.work_publish_targets target
+          join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published'
+            and nullif(s.publish_result->>'url','') is not null))) as agenda_published,
     exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
       where l.product_id=i.id and l.is_deleted=false and p.is_deleted=false and p.kind='agenda') as in_agenda,
     exists(select 1 from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
@@ -1339,6 +1344,12 @@ async function marketingIdeaTracking(sql:Sql,user:SessionUser,filters:Row) {
       and (${!from} or t.created_at::date>=${from||'1970-01-01'}::date)
       and (${!to} or t.created_at::date<=${to||'9999-12-31'}::date)
     order by t.created_at desc,t.task_no desc,i.sort_order,i.id`;
+  // Funding 2nd half: the strategy campaign was linked to «تقارير الحملات».
+  const linked=await marketingStrategyDraftsReady(sql) && rows.length ? new Set((await sql<any[]>`select distinct l.product_id::text as id
+    from marketing.strategy_campaign_links link join marketing.work_plan_items l on l.id=link.line_id
+    join marketing.work_plans p on p.id=l.plan_id where l.is_deleted=false and p.is_deleted=false
+      and l.product_id=any(${rows.map(row=>String(row.id))}::uuid[])`).map(row=>row.id)) : new Set<string>();
+  for(const row of rows as any[])row.campaign_linked=linked.has(String(row.id));
   const grouped=new Map<string,StrategyTrackingLinkRow[]>();
   for(const row of rows)grouped.set(String(row.task_id),[...(grouped.get(String(row.task_id))||[]),row]);
   const tracking=[...grouped.values()].map(items=>calculateIdeaTracking(
@@ -2982,7 +2993,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     } else if (resource === 'work_strategy_plan_products') {
       result = await strategyPlanProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
     } else if (resource === 'work_strategy_products') {
-      result = await strategyProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
+      result = await strategyProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) }, loadItems);
     } else if (resource === 'work_marketing_tracking') {
       result = await marketingIdeaTracking(sql,user,request.query);
     } else if (resource === 'work_task') {
@@ -3054,6 +3065,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_create_manual_keywords_product') result = await createManualKeywordsProduct(sql, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_strategy_save_entry') result = await saveStrategyDraftEntry(sql, user, body);
+    else if (action === 'work_strategy_save_line_copy') result = await saveStrategyLineCopy(sql, user, body, planLines);
     else if (action === 'work_strategy_save_draft') result = await saveStrategyDraftSettings(sql, user, body);
     else if (action === 'work_strategy_delete_draft') result = await deleteStrategyDraft(sql, user, body);
     else if (action === 'work_strategy_submit_draft') result = await submitStrategyDraft(sql, user, body, strategyDraftDeps);

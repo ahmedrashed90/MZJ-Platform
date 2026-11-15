@@ -9,6 +9,7 @@ export type StrategyMarker = {
 export type StrategyAssignedItem = {
   id: string; client_key: string; idea_name: string; sort_order: number;
   status?: string; delivery_mode?: string; in_agenda?: boolean; in_campaign?: boolean;
+  submitted_at?: string | Date | null; agenda_published?: boolean; campaign_linked?: boolean;
 };
 
 export function strategyCodeMap(marker: StrategyMarker | null | undefined, items: StrategyAssignedItem[]): Map<string, string> {
@@ -52,7 +53,17 @@ export type MarketingIdeaTrackingRow = {
   publishing: number; publishingPercent: number;
   funding: number; fundingPercent: number;
 };
-const percentage = (count:number,total:number) => total ? Math.round(count*100/total) : 0;
+/** MZJ tracking rule (per idea, then averaged over the assignment's ideas):
+ * التنفيذ  50% عند الإرسال + 50% عند الاعتماد
+ * النشر    50% عند وضع الطلب في أجندة + 50% عند إضافة رابط النشر
+ * التمويل  50% عند وضع الطلب في حملة + 50% عند ربط الحملة بتقارير الحملات
+ * The count is the number of ideas that started the stage. */
+const average = (scores:number[]) => scores.length ? Math.round(scores.reduce((sum,value)=>sum+value,0)/scores.length) : 0;
+function executionScore(item:StrategyAssignedItem) {
+  if (item.status==='approved') return 100;
+  if (item.submitted_at || ['submitted','revision','editing'].includes(String(item.status||''))) return 50;
+  return 0;
+}
 export function calculateIdeaTracking(taskId:string,taskNo:string,createdAt:string,marker:StrategyMarker,items:StrategyAssignedItem[]):MarketingIdeaTrackingRow {
   const codes = [...new Set((marker.ideaCodes || []).filter(code=>typeof code==='string' && !!code))];
   const mapped=strategyCodeMap(marker,items);
@@ -61,14 +72,19 @@ export function calculateIdeaTracking(taskId:string,taskNo:string,createdAt:stri
     const code=mapped.get(item.id);
     if (code && ideaItems.has(code)) ideaItems.get(code)!.push(item);
   }
-  let execution=0,publishing=0,funding=0;
+  const executionScores:number[]=[],publishingScores:number[]=[],fundingScores:number[]=[];
   for(const list of ideaItems.values()){
     const finalItems=list.filter(item=>item.delivery_mode!=='drive_link');
-    if ((finalItems.length ? finalItems : list).length && (finalItems.length ? finalItems : list).every(item=>item.status==='approved')) execution++;
-    if(list.some(item=>Boolean(item.in_agenda))) publishing++;
-    if(list.some(item=>Boolean(item.in_campaign))) funding++;
+    const production=finalItems.length ? finalItems : list;
+    executionScores.push(production.length ? average(production.map(executionScore)) : 0);
+    publishingScores.push(list.some(item=>Boolean(item.in_agenda)) ? (list.some(item=>Boolean(item.agenda_published)) ? 100 : 50) : 0);
+    fundingScores.push(list.some(item=>Boolean(item.in_campaign)) ? (list.some(item=>Boolean(item.campaign_linked)) ? 100 : 50) : 0);
   }
   const assignment=codes.length;
-  return {taskId,taskNo,createdAt,assignment,execution,executionPercent:percentage(execution,assignment),
-    publishing,publishingPercent:percentage(publishing,assignment),funding,fundingPercent:percentage(funding,assignment)};
+  const started=(scores:number[])=>scores.filter(score=>score>0).length;
+  const percent=(scores:number[])=>assignment ? Math.round(scores.reduce((sum,value)=>sum+value,0)/assignment) : 0;
+  return {taskId,taskNo,createdAt,assignment,
+    execution:started(executionScores),executionPercent:percent(executionScores),
+    publishing:started(publishingScores),publishingPercent:percent(publishingScores),
+    funding:started(fundingScores),fundingPercent:percent(fundingScores)};
 }
