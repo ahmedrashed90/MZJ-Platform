@@ -27,6 +27,7 @@ const CrmFinanceHistoryPage = lazy(() => import("./crm/pages/CrmFinanceHistoryPa
 const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").then((module) => ({ default: module.CrmInboxAgentPage })));
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
+const CrmExpiringPage = lazy(() => import("./crm/pages/CrmExpiringPage").then((module) => ({ default: module.CrmExpiringPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmContactsPage = lazy(() => import("./crm/pages/CrmContactsPage").then((module) => ({ default: module.CrmContactsPage })));
 const CashQrRegistrationPage = lazy(() => import("./crm/pages/CashQrRegistrationPage").then((module) => ({ default: module.CashQrRegistrationPage })));
@@ -113,6 +114,7 @@ function PlatformRoutes() {
             <Route path="database" element={<PermissionGuard permission="crm.database.view"><CrmDatabasePage /></PermissionGuard>} />
             <Route path="manual-leads" element={<PermissionGuard permission="crm.manual_leads.view"><CrmManualLeadsPage /></PermissionGuard>} />
             <Route path="finance-history" element={<PermissionGuard permission="crm.finance_history.view"><CrmFinanceHistoryPage /></PermissionGuard>} />
+            <Route path="expiring" element={<PermissionGuard permission="crm.conversation.view"><CrmExpiringPage /></PermissionGuard>} />
             <Route path="inbox" element={<PermissionGuard permission="crm.inbox.view"><CrmInboxPage /></PermissionGuard>} />
             <Route path="contacts" element={<PermissionGuard permission="crm.contacts.view"><CrmContactsPage /></PermissionGuard>} />
             <Route path="inbox-agent" element={<PermissionGuard permission="crm.inbox_agent.view"><CrmInboxAgentPage /></PermissionGuard>} />

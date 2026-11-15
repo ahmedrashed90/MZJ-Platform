@@ -14,3 +14,17 @@ export function withMessagingWindow<T extends Record<string, any>>(row: T): T & 
   });
   return { ...row, messaging_window };
 }
+
+/**
+ * Link to the contact's ManyChat Live Chat. Replies typed there get Meta's HUMAN_AGENT tag from ManyChat
+ * itself (up to 7 days), which the platform cannot apply on its own.
+ * MANYCHAT_LIVE_CHAT_BASE overrides the account base URL (default: the MZJ ManyChat account).
+ */
+export function manychatLiveChatUrl(channelCode: unknown, manychatContactId: unknown, participantId?: unknown): string | null {
+  const channel = String(channelCode ?? "").trim().toLowerCase();
+  if (channel !== "facebook" && channel !== "instagram") return null;
+  const contact = String(manychatContactId || (channel === "facebook" ? participantId : "") || "").trim();
+  if (!/^\d{5,}$/.test(contact)) return null;
+  const base = (process.env.MANYCHAT_LIVE_CHAT_BASE || "https://app.manychat.com/fb4223690").trim().replace(/\/+$/, "");
+  return `${base}/chat/${contact}`;
+}

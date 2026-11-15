@@ -45,6 +45,7 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     if (payload.templateName || payload.templateCode || payload.template) return req("crm.conversation.send_template", "crm", "inbox_agent", "send_template");
     return req("crm.conversation.send_text", "crm", "inbox_agent", "send_text");
   }
+  if (route === "crm/expiring-windows") return method === "GET" ? req("crm.conversation.view", "crm", "inbox_agent", "view") : req("crm.conversation.send_text", "crm", "inbox_agent", "send_text");
   if (route === "crm/inbox") return method === "GET" ? req("crm.inbox.view", "crm", "inbox", "view") : req("crm.conversation.classify", "crm", "inbox", "classify");
   if (route === "crm/inbox-agent") {
     if (method === "GET") return req("crm.inbox_agent.view", "crm", "inbox_agent", "view");
@@ -59,7 +60,7 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     return req(method === "POST" ? "crm.kpi.rating.create" : "crm.kpi.rating.update", "crm", "kpi", "rating");
   }
   if (route === "crm/transfer") return req("crm.customer.bulk_transfer", "crm", "database", "bulk_transfer");
-  if (route === "crm/settings" || route === "crm/entry-routing" || route === "crm/automation-settings") {
+  if (route === "crm/settings" || route === "crm/entry-routing" || route === "crm/automation-settings" || route === "crm/window-keepalive") {
     if (method === "GET") return req("settings.crm.view", "core", "settings", "crm_settings_view");
     return req("settings.crm.manage", "core", "settings", "crm_settings_manage");
   }

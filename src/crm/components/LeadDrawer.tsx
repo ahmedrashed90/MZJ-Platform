@@ -226,6 +226,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [conversationId, setConversationId] = useState("");
   const [conversationChannel, setConversationChannel] = useState("");
   const [messagingWindow, setMessagingWindow] = useState<MessagingWindow | null>(null);
+  const [manychatUrl, setManychatUrl] = useState("");
   const [messageText, setMessageText] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
@@ -333,9 +334,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       setConversationId(id);
       setConversationChannel(resolved.rows[0]?.channel_code || "");
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null; messaging_window?: MessagingWindow | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null; messaging_window?: MessagingWindow | null; manychat_live_chat_url?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
         setMessagingWindow(result.conversation?.messaging_window || null);
+        setManychatUrl(result.conversation?.manychat_live_chat_url || "");
         setMessages(result.messages || []);
       } else if (!silent) {
         setMessages([]);
@@ -923,6 +925,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
               <div className="crm-conversation-header-content">
                 <div className="crm-conversation-route"><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div>
                 {messagingWindow ? <MessagingWindowBadge expiresAt={messagingWindow.expiresAt} windowHours={messagingWindow.windowHours} /> : null}
+                {messagingWindow?.state === "closed" && manychatUrl ? <a className="crm-manychat-reply" href={manychatUrl} target="_blank" rel="noopener noreferrer" title="الرد من ManyChat يستخدم وسم Human Agent لحد 7 أيام">الرد عبر ManyChat</a> : null}
                 <div className="crm-conversation-header-actions">
                   <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)} aria-label="تحديث المحادثة"><ArrowClockwise size={18} /></button>
                   {statusNotice ? <small className={`crm-conversation-status-notice ${statusNotice.includes("تعذر") || statusNotice.includes("لا توجد صلاحية") ? "error" : ""}`}>{statusNotice}</small> : null}

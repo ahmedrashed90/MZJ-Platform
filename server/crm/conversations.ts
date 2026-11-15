@@ -4,7 +4,7 @@ import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishBackgroundEvent } from "../_crm-background-jobs.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
-import { withMessagingWindow } from "../_crm-window.js";
+import { withMessagingWindow, manychatLiveChatUrl } from "../_crm-window.js";
 
 function preferredChannelForLead(lead: any) {
   const value = [lead?.source_code, lead?.source_name, lead?.platform_code].map((item) => clean(item).toLowerCase()).filter(Boolean).join(" ");
@@ -230,7 +230,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
       else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: withMessagingWindow({ ...conversation, unread_count: 0 }), messages });
+      let liveChatUrl: string | null = null;
+      if (conversation.contact_id && (conversation.channel_code === "facebook" || conversation.channel_code === "instagram")) {
+        const [identity] = await sql<any[]>`
+          select nullif(ci.metadata->>'manychatContactId','') as manychat_contact_id, ci.participant_id
+          from crm.contact_identities ci
+          where ci.contact_id=${conversation.contact_id}::uuid and ci.channel_code=${conversation.channel_code}
+          order by (coalesce(ci.metadata->>'manychatContactId','')<>'') desc, ci.updated_at desc limit 1
+        `;
+        liveChatUrl = manychatLiveChatUrl(conversation.channel_code, identity?.manychat_contact_id, identity?.participant_id);
+      }
+      return response.status(200).json({ ok: true, conversation: { ...withMessagingWindow({ ...conversation, unread_count: 0 }), manychat_live_chat_url: liveChatUrl }, messages });
     }
 
     let lead: any = null;

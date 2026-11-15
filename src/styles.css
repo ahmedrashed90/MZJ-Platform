@@ -9720,3 +9720,14 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 .crm-keepalive-status.sent { background:#e6f7ef; color:#0b7650; }
 .crm-keepalive-status.failed { background:#fde4e4; color:#b42318; }
 .crm-keepalive-log .err { color:#b42318; flex-basis:100%; }
+.crm-manychat-reply { display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px; background:#0b7650; color:#fff; font-size:12px; font-weight:800; text-decoration:none; white-space:nowrap; }
+.crm-manychat-reply:hover { background:#095f40; }
+.crm-expiring-list { display:grid; gap:10px; }
+.crm-expiring-card { border:1px solid #efe1da; border-radius:14px; padding:12px 14px; background:#fff; display:grid; gap:10px; }
+.crm-expiring-card header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.crm-expiring-card header small { display:block; color:#6f5148; font-size:11px; margin-top:3px; }
+.crm-expiring-card footer { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+.crm-expiring-phone-form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.crm-expiring-phone-form input { min-width:160px; padding:8px 10px; border:1px solid #e4d3cb; border-radius:10px; }
+.crm-expiring-phone { display:inline-flex; gap:6px; align-items:center; font-weight:700; direction:ltr; }
+.crm-expiring-hours { display:inline-flex; gap:8px; align-items:center; font-size:13px; }

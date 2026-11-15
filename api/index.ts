@@ -33,6 +33,7 @@ import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
 import crmMersalUsersHandler from "../server/crm/mersal-users.js";
 import crmEntryRoutingHandler from "../server/crm/entry-routing.js";
 import crmWindowKeepaliveHandler from "../server/crm/window-keepalive.js";
+import crmExpiringWindowsHandler from "../server/crm/expiring-windows.js";
 import crmAutomationSettingsHandler from "../server/crm/automation-settings.js";
 import crmCashQrHandler from "../server/crm/cash-qr.js";
 import crmInboxHandler from "../server/crm/inbox.js";
@@ -120,6 +121,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/mersal-users", crmMersalUsersHandler],
   ["crm/entry-routing", crmEntryRoutingHandler],
   ["crm/window-keepalive", crmWindowKeepaliveHandler],
+  ["crm/expiring-windows", crmExpiringWindowsHandler],
   ["crm/automation-settings", crmAutomationSettingsHandler],
   ["crm/cash-qr", crmCashQrHandler],
   ["crm/inbox", crmInboxHandler],

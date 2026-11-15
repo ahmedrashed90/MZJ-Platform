@@ -8,6 +8,7 @@ import {
   PlusCircle,
   Robot,
   ChatsCircle,
+  Timer,
   AddressBook,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
@@ -18,6 +19,7 @@ const items = [
   { href: "/crm/database", label: "قاعدة البيانات", icon: Database, permission: "crm.database.view" },
   { href: "/crm/manual-leads", label: "إضافة العملاء", icon: PlusCircle, permission: "crm.manual_leads.view" },
   { href: "/crm/finance-history", label: "سجل العملاء", icon: ClipboardText, permission: "crm.finance_history.view" },
+  { href: "/crm/expiring", label: "تنتهي قريباً", icon: Timer, permission: "crm.conversation.view" },
   { href: "/crm/inbox", label: "رسائل غير مصنفة", icon: ChatsCircle, permission: "crm.inbox.view" },
   { href: "/crm/contacts", label: "جهات الاتصال", icon: AddressBook, permission: "crm.contacts.view" },
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot, permission: "crm.inbox_agent.view" },
