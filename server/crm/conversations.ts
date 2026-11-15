@@ -335,6 +335,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         workerAttempts: delivery.workerAttempts || undefined,
         providerResponse: delivery.providerStatus === "failed" ? delivery.providerResponse : undefined,
         error: delivery.errorMessage || undefined,
+        errorCode: (delivery as any).errorCode || undefined,
+        retryable: (delivery as any).retryable === true ? true : undefined,
       });
     } catch (error: any) {
       return response.status(400).json({ ok: false, error: error?.message || "فشل إرسال الرسالة" });

@@ -27,6 +27,7 @@ export type ConversationContext = {
   metadata?: Record<string, unknown> | null;
   lead_extra_data?: Record<string, unknown> | null;
   manychat_contact_id?: string | null;
+  last_customer_message_at?: string | Date | null;
 };
 
 export type TemplateRow = {
@@ -224,9 +225,13 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
       status: attempt.status,
       error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null,
     }));
-    const errorMessage = providerStatus === "failed"
+    const rawProviderError = providerStatus === "failed"
       ? clean(data?.error || data?.message || data?.raw?.message || data?.raw?.error || data?.raw) || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى Worker الإرسال")
       : "";
+    const errorCode = providerStatus === "failed" ? clean(data?.error_code || data?.errorCode) : "";
+    const retryable = providerStatus === "failed" && data?.retryable === true;
+    // Prefer the worker's classified Arabic message so the agent sees WHY it failed.
+    const errorMessage = providerStatus === "failed" ? (clean(data?.error_ar) || rawProviderError) : "";
 
     if (input.messageId) {
       await sql`
@@ -234,7 +239,7 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
           provider_status=${providerStatus},
           provider_message_id=coalesce(nullif(${providerMessageId},''),provider_message_id),
           media_status=case when storage_key is not null then ${providerStatus} else media_status end,
-          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ workerRoute: delivery.usedUrl, workerAttempts: attempts, providerResult: data, providerConfirmedAt: new Date().toISOString(), providerError: errorMessage || null })}::jsonb
+          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ workerRoute: delivery.usedUrl, workerAttempts: attempts, providerResult: data, providerConfirmedAt: new Date().toISOString(), providerError: errorMessage || null, providerRawError: rawProviderError || null, providerErrorCode: errorCode || null, providerRetryable: retryable, deliveryConfirmed: data?.delivery_confirmed === false ? false : undefined, usedMessageTag: clean(data?.used_message_tag) || undefined })}::jsonb
         where id=${input.messageId}::uuid
       `;
     }
@@ -352,7 +357,7 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
         await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
       }
     }
-    return { providerStatus, providerMessageId, providerResponse: data, errorMessage, httpStatus: delivery.provider?.status || 0, workerRoute: delivery.usedUrl, attempts };
+    return { providerStatus, providerMessageId, providerResponse: data, errorMessage, errorCode, retryable, httpStatus: delivery.provider?.status || 0, workerRoute: delivery.usedUrl, attempts };
   } catch (error: any) {
     const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
     if (input.messageId) {
@@ -374,7 +379,7 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
         where id=${input.automaticDispatchId}::uuid
       `.catch(()=>undefined);
     }
-    return { providerStatus: 'failed', providerMessageId: '', providerResponse: null, errorMessage, httpStatus: 0, workerRoute: input.urls[0] || '', attempts: [] };
+    return { providerStatus: 'failed', providerMessageId: '', providerResponse: null, errorMessage, errorCode: 'PROVIDER_UNAVAILABLE', retryable: true, httpStatus: 0, workerRoute: input.urls[0] || '', attempts: [] };
   }
 }
 
@@ -561,6 +566,52 @@ async function loadConversation(conversationId: string): Promise<ConversationCon
   return row || null;
 }
 
+type MessagingWindowState = "skipped" | "unknown" | "open" | "human_agent" | "closed";
+type MessagingWindowCheck = { blocked: boolean; message: string; tag?: "HUMAN_AGENT"; state: MessagingWindowState; ageHours: number | null };
+
+function envFlag(value: unknown) { return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase()); }
+
+/**
+ * Meta (Messenger / Instagram) only allows a reply within 24 hours of the customer's last message.
+ * A human agent may reply up to 7 days later with the HUMAN_AGENT tag (needs the permission on the Meta app).
+ * Env:
+ *  CRM_MESSAGING_WINDOW_MODE   enforce (default) | warn | off
+ *  META_HUMAN_AGENT_ENABLED    true to let human replies use the HUMAN_AGENT tag between 24h and 7 days
+ *  TIKTOK_WINDOW_HOURS         optional; TikTok is not checked unless this is set
+ */
+function evaluateMessagingWindow(conversation: ConversationContext, route: DeliveryRoute, senderType: "human" | "bot" | "system"): MessagingWindowCheck {
+  const mode = clean(process.env.CRM_MESSAGING_WINDOW_MODE).toLowerCase() || "enforce";
+  if (mode === "off" || route === "whatsapp") return { blocked: false, message: "", state: "skipped", ageHours: null };
+
+  const windowHours = route === "tiktok" ? Number(process.env.TIKTOK_WINDOW_HOURS || 0) : 24;
+  if (!windowHours || !Number.isFinite(windowHours)) return { blocked: false, message: "", state: "skipped", ageHours: null };
+
+  const last = conversation.last_customer_message_at ? new Date(conversation.last_customer_message_at as any).getTime() : NaN;
+  if (!Number.isFinite(last)) return { blocked: false, message: "", state: "unknown", ageHours: null };
+
+  const ageHours = Math.max(0, (Date.now() - last) / 3_600_000);
+  if (ageHours <= windowHours) return { blocked: false, message: "", state: "open", ageHours };
+
+  const metaRoute = route === "facebook" || route === "instagram";
+  const humanAgentFlag = envFlag(process.env.META_HUMAN_AGENT_ENABLED);
+  if (metaRoute && senderType === "human" && humanAgentFlag && ageHours <= 24 * 7) {
+    return { blocked: false, message: "", tag: "HUMAN_AGENT", state: "human_agent", ageHours };
+  }
+
+  const hours = Math.floor(ageHours);
+  const label = sourceLabel(route);
+  let message = `انتهت نافذة الرد على عميل ${label}: آخر رسالة من العميل كانت قبل ${hours} ساعة. لا يمكن إرسال رسالة قبل أن يراسلنا العميل من جديد.`;
+  if (metaRoute && senderType !== "human") message += " الرسائل الآلية لا تستخدم الاستثناء الخاص بالموظف البشري.";
+  else if (metaRoute && !humanAgentFlag) message += " (تفعيل HUMAN_AGENT على تطبيق ميتا ثم META_HUMAN_AGENT_ENABLED يسمح بالرد البشري حتى 7 أيام.)";
+  else if (metaRoute && ageHours > 24 * 7) message += " مرّ أكثر من 7 أيام فلا يوجد استثناء للرد.";
+
+  if (mode === "warn") {
+    console.warn("CRM messaging window closed (warn mode)", { route, hours, conversationId: conversation.id });
+    return { blocked: false, message, state: "closed", ageHours };
+  }
+  return { blocked: true, message, state: "closed", ageHours };
+}
+
 export async function deliverCrmMessage(input: {
   conversation: ConversationContext;
   text?: string;
@@ -603,10 +654,20 @@ export async function deliverCrmMessage(input: {
   if (needsFacebookPrivateReply && (kind !== "text" || (Array.isArray(input.buttons) && input.buttons.length))) {
     throw new Error("أول رسالة خاصة لعميل Facebook القادم من تعليق يجب أن تكون رسالة نصية فقط");
   }
+  // Comment private replies have their own (7 day) rule; do not apply the 24h DM window to them.
+  const windowCheck: MessagingWindowCheck = (needsInstagramPrivateReply || needsFacebookPrivateReply)
+    ? { blocked: false, message: "", state: "skipped", ageHours: null }
+    : evaluateMessagingWindow(conversation, policy.route, senderType);
+  if (windowCheck.blocked) throw new Error(windowCheck.message);
+
   const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
   const proposedJobId = crypto.randomUUID();
-  const baseWorkerPayload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
+  const baseWorkerPayload: Record<string, unknown> = {
+    ...deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer }),
+    windowState: windowCheck.state,
+    ...(windowCheck.tag ? { messageTag: windowCheck.tag, tag: windowCheck.tag, messaging_type: "MESSAGE_TAG" } : {}),
+  };
 
   const [job] = await sql<any[]>`
     insert into integrations.outbound_jobs(id,source,idempotency_key,conversation_id,lead_id,payload,status,created_by)
@@ -670,6 +731,9 @@ export async function deliverCrmMessage(input: {
       providerStatus: providerResult.providerStatus,
       providerResponse: providerResult.providerResponse,
       errorMessage: providerResult.errorMessage,
+      errorCode: providerResult.errorCode,
+      retryable: providerResult.retryable,
+      windowState: windowCheck.state,
       jobId: job.id,
       routing: policy,
       workerRoute: providerResult.workerRoute,
