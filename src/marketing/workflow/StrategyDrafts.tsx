@@ -326,7 +326,12 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
   // لو كل السطور على منصة واحدة، نفلتر قائمة الحملات على محوّل التقرير المقابل.
   // يوتيوب وجوجل يُنشران إعلانات عبر حساب Google Ads، وفيسبوك وانستجرام عبر Meta،
   // فتُطابَق منصة النشر مع كود المحوّل الموحّد (google / meta / tiktok / snapchat).
-  const platformCodes = Array.from(new Set(lines.map(line => campaignReportPlatformCode(line.platform_code)).filter(Boolean)));
+  // نحاول بالكود أولًا، ثم باسم المنصة لو الكود غير معروف (مثل كود مخصص لـ Google).
+  const adapterFor = (line: WorkPlanLine) => {
+    const byCode = campaignReportPlatformCode(line.platform_code);
+    return ['meta', 'google', 'tiktok', 'snapchat'].includes(byCode) ? byCode : campaignReportPlatformCode(line.platform_name);
+  };
+  const platformCodes = Array.from(new Set(lines.map(adapterFor).filter(Boolean)));
   const singlePlatform = platformCodes.length === 1 ? platformCodes[0] : '';
   const platformLabel = singlePlatform ? (lines[0]?.platform_name || '') : '';
   const [report, setReport] = useState<CampaignReportPayload | null>(null);

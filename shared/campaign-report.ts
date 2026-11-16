@@ -28,10 +28,12 @@ export type CampaignReportPayload = {
  * adapter code. Unknown codes pass through unchanged. */
 export function campaignReportPlatformCode(marketingPlatformCode: unknown): string {
   const code = String(marketingPlatformCode ?? '').trim().toLowerCase();
-  if (['meta', 'facebook', 'fb', 'instagram', 'ig', 'facebook_ads', 'instagram_ads'].includes(code)) return 'meta';
-  if (['google', 'youtube', 'yt', 'google_ads', 'youtube_ads', 'gads'].includes(code)) return 'google';
-  if (['tiktok', 'tiktok_ads'].includes(code)) return 'tiktok';
-  if (['snapchat', 'snap', 'snapchat_ads'].includes(code)) return 'snapchat';
+  // Substring matching so variant codes map correctly, e.g. google_search,
+  // googleads, youtube_ads → google; facebook_ads, ig → meta.
+  if (code.includes('meta') || code.includes('facebook') || code === 'fb' || code.includes('instagram') || code === 'ig') return 'meta';
+  if (code.includes('google') || code.includes('youtube') || code === 'yt' || code.includes('gads')) return 'google';
+  if (code.includes('tiktok')) return 'tiktok';
+  if (code.includes('snap')) return 'snapchat';
   return code;
 }
 
