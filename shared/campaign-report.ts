@@ -20,6 +20,21 @@ export type CampaignReportPayload = {
   rows: CampaignReportRow[]; providers: CampaignReportProvider[]; canEditManager?: boolean; canRefreshReport?: boolean;
 };
 
+/** Map a marketing publishing-platform code (the code stored on a work plan
+ * line, e.g. facebook/instagram/youtube) to the paid-ad report adapter code
+ * (meta/google/tiktok/snapchat). Both YouTube and Google publishing run their
+ * paid ads through the single Google Ads account, and Facebook/Instagram
+ * through the single Meta Ads account, so their report rows live under one
+ * adapter code. Unknown codes pass through unchanged. */
+export function campaignReportPlatformCode(marketingPlatformCode: unknown): string {
+  const code = String(marketingPlatformCode ?? '').trim().toLowerCase();
+  if (['meta', 'facebook', 'fb', 'instagram', 'ig', 'facebook_ads', 'instagram_ads'].includes(code)) return 'meta';
+  if (['google', 'youtube', 'yt', 'google_ads', 'youtube_ads', 'gads'].includes(code)) return 'google';
+  if (['tiktok', 'tiktok_ads'].includes(code)) return 'tiktok';
+  if (['snapchat', 'snap', 'snapchat_ads'].includes(code)) return 'snapchat';
+  return code;
+}
+
 /** Accounting conversion requested by MZJ: fixed USD/SAR peg for reports. */
 export const REPORT_CURRENCY = 'SAR' as const;
 export const USD_TO_SAR = 3.75;

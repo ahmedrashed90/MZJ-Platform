@@ -5,7 +5,7 @@ import { Empty, Readiness, W, WorkAlert } from './components';
 import { showDate, useWorkQuery, workPost } from './api';
 import { marketingFetch, marketingQuery } from '../api';
 import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
-import type { CampaignReportPayload, CampaignReportRow } from '../../../shared/campaign-report';
+import { campaignReportPlatformCode, type CampaignReportPayload, type CampaignReportRow } from '../../../shared/campaign-report';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import './strategyDrafts.css';
 
@@ -323,10 +323,12 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
   const today = new Date().toISOString().slice(0, 10);
   // أوسع فترة يسمح بها تقرير الحملات (365 يومًا؛ الحد الأقصى 366) حتى تظهر كل الحملات الحديثة
   const from = new Date(Date.parse(`${today}T12:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10);
-  // لو كل السطور على منصة واحدة، نفلتر قائمة الحملات على هذه المنصة فقط
-  const platformCodes = Array.from(new Set(lines.map(line => String(line.platform_code || '').toLowerCase()).filter(Boolean)));
+  // لو كل السطور على منصة واحدة، نفلتر قائمة الحملات على محوّل التقرير المقابل.
+  // يوتيوب وجوجل يُنشران إعلانات عبر حساب Google Ads، وفيسبوك وانستجرام عبر Meta،
+  // فتُطابَق منصة النشر مع كود المحوّل الموحّد (google / meta / tiktok / snapchat).
+  const platformCodes = Array.from(new Set(lines.map(line => campaignReportPlatformCode(line.platform_code)).filter(Boolean)));
   const singlePlatform = platformCodes.length === 1 ? platformCodes[0] : '';
-  const platformLabel = singlePlatform ? (lines.find(line => String(line.platform_code || '').toLowerCase() === singlePlatform)?.platform_name || '') : '';
+  const platformLabel = singlePlatform ? (lines[0]?.platform_name || '') : '';
   const [report, setReport] = useState<CampaignReportPayload | null>(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const [search, setSearch] = useState(''), [selectedKey, setSelectedKey] = useState('');
