@@ -321,8 +321,12 @@ export function StrategyLineCopyModal({ line, onClose, onChanged }: { line: Work
  * «نشر في الموعد» / «تأخر في النشر». */
 export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines: WorkPlanLine[]; onClose: () => void; onChanged: () => void }) {
   const today = new Date().toISOString().slice(0, 10);
-  const earliest = lines.map(line => String(line.strategy_funding_on || line.scheduled_on || '').slice(0, 10)).filter(Boolean).sort()[0] || today;
-  const from = new Date(Date.parse(`${earliest}T12:00:00Z`) - 7 * 86400000).toISOString().slice(0, 10);
+  // نجلب كل الحملات بدون قيد تاريخ (3 سنوات للخلف) حتى لا تختفي أي حملة بسبب التاريخ
+  const from = new Date(Date.parse(`${today}T12:00:00Z`) - 3 * 365 * 86400000).toISOString().slice(0, 10);
+  // لو كل السطور على منصة واحدة، نفلتر قائمة الحملات على هذه المنصة فقط
+  const platformCodes = Array.from(new Set(lines.map(line => String(line.platform_code || '').toLowerCase()).filter(Boolean)));
+  const singlePlatform = platformCodes.length === 1 ? platformCodes[0] : '';
+  const platformLabel = singlePlatform ? (lines.find(line => String(line.platform_code || '').toLowerCase() === singlePlatform)?.platform_name || '') : '';
   const [report, setReport] = useState<CampaignReportPayload | null>(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const [search, setSearch] = useState(''), [selectedKey, setSelectedKey] = useState('');
@@ -330,14 +334,16 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
   useEffect(() => {
     let active = true;
     setLoading(true);
-    marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom: from < today ? from : today, dateTo: today })}`)
+    marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom: from, dateTo: today })}`)
       .then(result => { if (active) setReport(result); })
       .catch(failure => { if (active) setError(failure instanceof Error ? failure.message : 'تعذر قراءة تقارير الحملات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [from, today]);
   const term = search.trim().toLocaleLowerCase();
-  const rows: CampaignReportRow[] = (report?.rows || []).filter(row => !term || `${row.campaignName} ${row.accountName} ${row.platformName}`.toLocaleLowerCase().includes(term));
+  const rows: CampaignReportRow[] = (report?.rows || []).filter(row =>
+    (!singlePlatform || String(row.platform || '').toLowerCase() === singlePlatform) &&
+    (!term || `${row.campaignName} ${row.accountName} ${row.platformName}`.toLocaleLowerCase().includes(term)));
   const selected = (report?.rows || []).find(row => row.key === selectedKey) || null;
   async function save() {
     if (!selected || !lineIds.length || busy) return;
@@ -349,10 +355,10 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
-  return <Modal open level={1} title="ربط الحملة بتقارير الحملات" onClose={onClose} className="mkw-fullscreen mkw-strategy-link-modal">
+  return <Modal open level={1} title={singlePlatform ? `ربط الحملة بتقارير الحملات — ${platformLabel}` : 'ربط الحملة بتقارير الحملات'} onClose={onClose} className="mkw-fullscreen mkw-strategy-link-modal">
     <div className="mkw mkw-strategy-link">
       <WorkAlert>{error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
-      <p className="mkw-muted">اختر الحملة المنشورة من «تفاعل النشر — تقارير الحملات». يوم الربط يُقارن بتاريخ التمويل: في نفس اليوم أو قبله = نشر في الموعد، بعده = تأخر في النشر.</p>
+      <p className="mkw-muted">اختر الحملة المنشورة من «تفاعل النشر — تقارير الحملات»{singlePlatform ? ` الخاصة بمنصة ${platformLabel}` : ''}. يوم الربط يُقارن بتاريخ النشر المخطط: في نفس اليوم أو قبله = نشر في الموعد، بعده = تأخر في النشر.</p>
       <div className="mkw-table-wrap"><table>
         <thead><tr><th>اختيار</th><th>الفكرة</th><th>المنصة · نوع النشر</th><th>تاريخ التمويل</th><th>الحالة</th></tr></thead>
         <tbody>{lines.map(line => <tr key={line.id}>
@@ -368,7 +374,7 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
           <input type="radio" name="strategy-campaign" checked={row.key === selectedKey} onChange={() => setSelectedKey(row.key)}/>
           <span><strong>{row.campaignName}</strong><small>{row.platformName} · {row.accountName}</small></span>
         </label>)}
-        {!rows.length && <Empty>لا توجد حملات في تقارير الحملات للفترة {showDate(from)} — {showDate(today)}.</Empty>}
+        {!rows.length && <Empty>{singlePlatform ? `لا توجد حملات لمنصة ${platformLabel} في تقارير الحملات.` : 'لا توجد حملات في تقارير الحملات.'}</Empty>}
       </div>}
       <div className="mkw-actions"><button type="button" className="primary" disabled={busy || !selected || !lineIds.length} onClick={() => void save()}><LinkSimple size={17}/>ربط {lineIds.length} منشور بالحملة المختارة</button></div>
     </div>

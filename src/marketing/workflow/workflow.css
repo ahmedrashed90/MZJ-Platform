@@ -1100,6 +1100,9 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-campaign-funding-fields label{display:grid;gap:6px;min-width:180px;flex:1;font-weight:700;font-size:12px}
 .mkw-campaign-funding-fields input{width:100%}
 .mkw-platform-row-heading th{font-size:13px;text-align:right!important;color:#4a211c!important;background:#f3e8dc!important;border-bottom:1px solid #d5bbaa!important;padding:11px 14px!important}
+.mkw-platform-head-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.mkw-platform-head-row>span{font-weight:750}
+.mkw-platform-link-btn{min-height:32px!important;padding:5px 12px!important;font-size:12.5px!important;gap:6px!important}
 .mkw-calendar-rating-inline{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;direction:rtl}
 .mkw-calendar-rating-inline strong,.mkw-calendar-rating-inline b{color:#4a211c}
 .mkw-calendar-rating-inline .mkw-rating-stars{display:inline-flex;gap:1px;white-space:nowrap}
@@ -1340,15 +1343,3 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 @media(max-width:950px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:1fr}}
 
-/* PrepCampaignLinkSection — اختيار الحملة الإعلانية في تجهيز النشر */
-/* Inline per-platform campaign link (inside each article in PreparationEditor) */
-.mkw-prep-campaign-inline {margin-block:6px 2px;padding:8px 12px;background:var(--bg);border:1px solid var(--line);border-radius:9px}
-.mkw-prep-campaign-inline-row {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.mkw-prep-campaign-linked {display:flex;align-items:center;gap:8px;color:var(--success)}
-.mkw-prep-campaign-linked svg {flex-shrink:0}
-.mkw-prep-campaign-linked span {display:grid;gap:2px}
-.mkw-prep-campaign-linked strong {font-size:13px}
-.mkw-prep-campaign-linked small {color:var(--muted);font-size:11px}
-.mkw-prep-campaign-unlinked-inline {font-size:13px;color:var(--muted)}
-.mkw-prep-campaign-pick-btn {min-height:34px !important;padding:5px 11px !important;font-size:13px !important}
-.mkw-prep-campaign-chooser-content {display:grid;gap:14px;padding:4px 2px}

@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle, MagnifyingGlass, X } from '@phosphor-icons/react';
+import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle, MagnifyingGlass, X, LinkSimple } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { W, Empty, Readiness, WorkAlert, WorkHeader } from '../workflow/components';
 import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
@@ -64,6 +64,7 @@ export function MarketingDashboardPage() {
   const strategyDrafts = useWorkQuery<{ ready: boolean; drafts: StrategyDraft[] }>('strategy_drafts');
   const [copyLine, setCopyLine] = useState<WorkPlanLine | null>(null);
   const [draftOpenId, setDraftOpenId] = useState(''), [draftReportId, setDraftReportId] = useState(''), [linkPlanId, setLinkPlanId] = useState('');
+  const [linkPlatformLines, setLinkPlatformLines] = useState<WorkPlanLine[] | null>(null);
   const drafts = strategyDrafts.data?.drafts || [];
   const [schemaUpgrading, setSchemaUpgrading] = useState(false), [schemaError, setSchemaError] = useState('');
 
@@ -308,7 +309,14 @@ export function MarketingDashboardPage() {
         <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(chooserSourceLines[0]?.agenda_from)}</strong></div>
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>
       </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
-      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}>{line.platform_name || 'منصة غير محددة'}</th></tr>}
+      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}><div className="mkw-platform-head-row"><span>{line.platform_name || 'منصة غير محددة'}</span>{chooserIsCampaign && chooserSourceLines[0]?.strategy_draft_id && (() => {
+        const platformLines = chooserLines.filter(row => (row.platform_code || row.platform_name) === (line.platform_code || line.platform_name));
+        const approved = ['publishing','published'].includes(chooserSourceLines[0]?.review_status || '');
+        const linkedCount = platformLines.filter(row => row.strategy_campaign_link).length;
+        return <button type="button" className="secondary mkw-platform-link-btn" disabled={!approved}
+          title={approved ? 'اختر الحملة الإعلانية من تقارير الحملات لهذه المنصة' : 'متاح بعد اعتماد الحملة'}
+          onClick={() => setLinkPlatformLines(platformLines)}><LinkSimple size={15}/>{linkedCount === platformLines.length && platformLines.length ? 'تغيير الحملة المرتبطة' : linkedCount ? `اختيار الحملة (${linkedCount}/${platformLines.length} مرتبط)` : 'اختيار الحملة'}</button>;
+      })()}</div></th></tr>}
       <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td>{line.strategy_draft_id
         ? <button type="button" className={`mkw-publish-draft-state mkw-copy-state-button ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}
             title="كتابة الكابشن والهاشتاج ورابط المنشور"
@@ -319,6 +327,7 @@ export function MarketingDashboardPage() {
     {draftReportId && <StrategyDraftReport draftId={draftReportId} onClose={() => setDraftReportId('')}/>}
     {copyLine && <StrategyLineCopyModal line={copyLine} onClose={() => setCopyLine(null)} onChanged={() => void query.reload()}/>}
     {linkPlanId && <StrategyCampaignLinkModal lines={groups.get(linkPlanId) || []} onClose={() => setLinkPlanId('')} onChanged={() => void query.reload()}/>}
+    {linkPlatformLines && <StrategyCampaignLinkModal lines={linkPlatformLines} onClose={() => setLinkPlatformLines(null)} onChanged={() => { void query.reload(); }}/>}
     {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
   </div>;
 }
