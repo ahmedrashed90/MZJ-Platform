@@ -790,6 +790,13 @@ async function handleAnswer(context: FlowContext) {
   await context.tx`update crm.automation_sessions set last_activity_at=now() where id=${context.session.id}::uuid`;
 
   if (!validation.valid) {
+    // If max_attempts is set and we have reached it, skip this step and continue the flow.
+    const maxAttempts = Number(step.max_attempts || 0);
+    if (maxAttempts > 0 && attempt >= maxAttempts) {
+      // Skip: advance without a value (phone stays empty, inbox-agent will request it later).
+      const flowResult = await advanceChoiceFlow(context, choice, Number(step.sort_order));
+      return flowResult;
+    }
     try {
       await sendFlowMessage(context, {
         kind: "validation_error",
