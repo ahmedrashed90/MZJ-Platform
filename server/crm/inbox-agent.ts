@@ -12,7 +12,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method === "GET") {
     const limit = positiveInt(request.query.limit, 100, 200);
     const offset = Math.max(0, Number(request.query.offset || 0) || 0);
-    const [settings, managers, logs, logCounts, statuses, templates, statusRules] = await Promise.all([
+    const [settings, managers, logs, logCounts, statuses, templates, statusRulesRaw] = await Promise.all([
       sql`select * from crm.inbox_agent_settings where id='default'`,
       sql`select *,id::text,updated_by::text from crm.inbox_agent_managers order by scope_code`,
       sql`select *,id::text,conversation_id::text,lead_id::text from crm.inbox_agent_logs order by created_at desc limit ${limit} offset ${offset}`,
@@ -23,9 +23,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql<{ label: string }[]>`select distinct label from crm.dashboard_statuses where is_active=true order by label`,
       sql<any[]>`select id::text,name,display_name,content,language_code,status from crm.message_templates where provider='mersal' and is_active=true order by display_name`,
-      sql<any[]>`select *,id::text,updated_by::text from crm.inbox_agent_status_rules order by sort_order,id`.catch(() => [] as any[]),
+      sql<any[]>`
+        select r.id::text as id, r.status_label, r.is_active,
+          coalesce(json_agg(s order by s.stage) filter (where s.id is not null), '[]') as stages
+        from crm.inbox_agent_status_rules r
+        left join crm.inbox_agent_status_rule_stages s on s.rule_id=r.id
+        group by r.id, r.status_label, r.is_active
+        order by r.status_label
+      `.catch(() => [] as any[]),
     ]);
-    return response.status(200).json({ ok: true, defaultCustomerMessage: DEFAULT_CUSTOMER_MESSAGE, statuses: statuses.map((row) => row.label), templates, settings: settings[0], managers, statusRules, logs, logsTotal: Number(logCounts[0]?.total || 0), logsToday: Number(logCounts[0]?.today || 0), limit, offset });
+    return response.status(200).json({ ok: true, defaultCustomerMessage: DEFAULT_CUSTOMER_MESSAGE, statuses: statuses.map((row) => row.label), templates, settings: settings[0], managers, statusRules: statusRulesRaw, logs, logsTotal: Number(logCounts[0]?.total || 0), logsToday: Number(logCounts[0]?.today || 0), limit, offset });
   }
 
   if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لحفظ إعدادات الوكيل" });
@@ -34,28 +41,44 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "POST" || request.method === "PUT" || request.method === "PATCH") {
     if (section === "status_rule") {
-      // Upsert a per-status escalation rule.
-      // body: { statusLabel, delayMinutes, target, sortOrder, isActive }
-      // DELETE: body: { section: "status_rule", delete: true, statusLabel, target }
+      // r11: multi-stage status escalation rules
+      // body: { statusLabel, isActive, stages: [{stage,delayMinutes,target},...] }
+      // DELETE: body: { section:"status_rule", delete:true, statusLabel }
       const statusLabel = clean(body.statusLabel);
-      const target = clean(body.target);
-      if (!statusLabel || !target) return response.status(400).json({ ok: false, error: "statusLabel و target مطلوبان" });
-      if (!["branch_manager", "sales_manager", "system_manager"].includes(target)) return response.status(400).json({ ok: false, error: "target غير صحيح" });
+      if (!statusLabel) return response.status(400).json({ ok: false, error: "statusLabel مطلوب" });
       if (body.delete) {
-        await sql`delete from crm.inbox_agent_status_rules where status_label=${statusLabel} and target=${target}`;
+        await sql`delete from crm.inbox_agent_status_rules where status_label=${statusLabel}`;
         return response.status(200).json({ ok: true });
       }
-      const delayMinutes = Math.min(10080, Math.max(1, Number(body.delayMinutes) || 60));
-      const sortOrder = Number(body.sortOrder) || 0;
       const isActive = body.isActive !== false;
-      const [row] = await sql<any[]>`
-        insert into crm.inbox_agent_status_rules(status_label,delay_minutes,target,sort_order,is_active,updated_by,updated_at)
-        values (${statusLabel},${delayMinutes},${target},${sortOrder},${isActive},${user.id}::uuid,now())
-        on conflict (status_label,target) do update
-          set delay_minutes=excluded.delay_minutes,sort_order=excluded.sort_order,is_active=excluded.is_active,updated_by=excluded.updated_by,updated_at=now()
+      // Validate stages
+      const rawStages: any[] = Array.isArray(body.stages) ? body.stages : [];
+      const validTargets = ["branch_manager", "sales_manager", "system_manager"];
+      const stages = rawStages
+        .filter((s) => [1, 2, 3].includes(Number(s.stage)) && validTargets.includes(clean(s.target)))
+        .map((s) => ({
+          stage: Number(s.stage),
+          delayMinutes: Math.min(10080, Math.max(1, Number(s.delayMinutes) || 60)),
+          target: clean(s.target) as string,
+        }));
+      if (stages.length === 0) return response.status(400).json({ ok: false, error: "لازم تضيف مرحلة واحدة على الأقل" });
+      // Upsert rule (status_label is unique)
+      const [rule] = await sql<any[]>`
+        insert into crm.inbox_agent_status_rules(status_label,is_active,updated_by,updated_at)
+        values (${statusLabel},${isActive},${user.id}::uuid,now())
+        on conflict (status_label) do update
+          set is_active=excluded.is_active,updated_by=excluded.updated_by,updated_at=now()
         returning *,id::text
       `;
-      return response.status(200).json({ ok: true, row });
+      // Replace stages (delete old, insert new)
+      await sql`delete from crm.inbox_agent_status_rule_stages where rule_id=${rule.id}::uuid`;
+      for (const s of stages) {
+        await sql`
+          insert into crm.inbox_agent_status_rule_stages(rule_id,stage,delay_minutes,target)
+          values (${rule.id}::uuid,${s.stage},${s.delayMinutes},${s.target})
+        `;
+      }
+      return response.status(200).json({ ok: true, rule, stages });
     }
 
     if (section === "manager") {

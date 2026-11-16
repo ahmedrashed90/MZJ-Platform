@@ -39,19 +39,27 @@ export async function ensureInboxAgentEngineSchema() {
       // Status-change escalation: track when the rep last changed the lead status on this conversation's lead.
       await sql`alter table crm.conversations add column if not exists status_changed_at timestamptz`;
       await sql`alter table crm.conversations add column if not exists status_changed_label text`;
-      // Per-status escalation rules configured by the manager.
+      // Per-status escalation rules: one rule per status_label, with up to 3 stages each having its own delay + target.
       await sql`
         create table if not exists crm.inbox_agent_status_rules (
           id uuid primary key default gen_random_uuid(),
-          status_label text not null,
-          delay_minutes integer not null default 60,
-          target text not null default 'branch_manager',
-          sort_order integer not null default 0,
+          status_label text not null unique,
           is_active boolean not null default true,
           created_at timestamptz not null default now(),
           updated_at timestamptz not null default now(),
-          updated_by uuid,
-          unique (status_label, target)
+          updated_by uuid
+        )
+      `;
+      await sql`
+        create table if not exists crm.inbox_agent_status_rule_stages (
+          id uuid primary key default gen_random_uuid(),
+          rule_id uuid not null references crm.inbox_agent_status_rules(id) on delete cascade,
+          stage integer not null,
+          delay_minutes integer not null default 60,
+          target text not null default 'branch_manager',
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now(),
+          unique (rule_id, stage)
         )
       `;
       await sql`
@@ -280,98 +288,117 @@ export async function runInboxAgentTick() {
       }
     }
   }
-  // ── Status-change escalation ─────────────────────────────────────────────
-  // For each active status rule, find conversations where:
-  //   - the lead's status matches the rule
-  //   - status_changed_at is set and delay_minutes have elapsed
-  //   - no employee reply came after the status change
-  //   - not in excluded statuses
-  //   - escalation not already sent for this (conversation, status_changed_at, target)
-  const statusRules = await sql<any[]>`
-    select * from crm.inbox_agent_status_rules where is_active=true order by sort_order,id
-  `;
+  // ── Status-change escalation (multi-stage) ───────────────────────────────
+  // Each rule (one per status_label) can have up to 3 stages, each with its own delay_minutes + target.
+  // The agent runs every minute; for each conversation whose status changed, it checks which stage is due next.
+  const statusRulesWithStages = await sql<any[]>`
+    select r.id::text as rule_id, r.status_label, r.is_active,
+      json_agg(s order by s.stage) as stages
+    from crm.inbox_agent_status_rules r
+    left join crm.inbox_agent_status_rule_stages s on s.rule_id=r.id
+    where r.is_active=true
+    group by r.id, r.status_label, r.is_active
+  `.catch(() => [] as any[]);
 
-  if (statusRules.length > 0) {
+  if (statusRulesWithStages.length > 0) {
     const statusCounters = { scanned: 0, escalations: 0, failures: 0 };
+    const cyclePfx = "status_rule";
 
-    for (const rule of statusRules) {
-      const delayMs = Math.max(1, Number(rule.delay_minutes)) * 60_000;
-      const cutoff = new Date(now - delayMs).toISOString();
+    // Gather all status labels covered by active rules
+    const activeLabels = statusRulesWithStages.map((r: any) => r.status_label);
 
-      const statusCandidates = await sql<any[]>`
-        select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.branch_code,c.department_code,c.service_key,
-          c.status_changed_at,c.status_changed_label,
-          l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
-          u.full_name as assigned_name,r.branch_code as request_branch_code,r.department_code as request_department_code
-        from crm.conversations c
-        left join crm.leads l on l.id=c.lead_id
-        left join core.users u on u.id=c.assigned_to
-        left join crm.service_requests r on r.id=c.service_request_id
-        where c.status_changed_at is not null
-          and c.status_changed_at <= ${cutoff}::timestamptz
-          and c.status_changed_label = ${rule.status_label}
-          and coalesce(c.status,'open')<>'closed'
-          and c.classification_state<>'closed'
-          and (c.agent_muted_at is null or c.agent_muted_at < c.status_changed_at)
-          and (c.last_human_reply_at is null or c.last_human_reply_at < c.status_changed_at)
-          and (l.id is null or l.is_deleted=false)
-          and (cardinality(${excluded}::text[])=0 or coalesce(l.status_label,'')<>all(${excluded}::text[]))
-          and not exists (
-            select 1 from crm.inbox_agent_escalations e
-            where e.conversation_id=c.id
-              and e.cycle=${`status:${rule.status_label}:${rule.target}`}
-              and e.anchor_at=c.status_changed_at
-              and e.status<>'cancelled'
-          )
-        limit 200
+    // Find all open conversations whose status_changed_at is set and status matches a rule
+    const statusCandidates = await sql<any[]>`
+      select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.branch_code,c.department_code,c.service_key,
+        c.status_changed_at,c.status_changed_label,
+        l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
+        u.full_name as assigned_name,r2.branch_code as request_branch_code,r2.department_code as request_department_code
+      from crm.conversations c
+      left join crm.leads l on l.id=c.lead_id
+      left join core.users u on u.id=c.assigned_to
+      left join crm.service_requests r2 on r2.id=c.service_request_id
+      where c.status_changed_at is not null
+        and c.status_changed_label = any(${activeLabels}::text[])
+        and coalesce(c.status,'open')<>'closed'
+        and c.classification_state<>'closed'
+        and (c.agent_muted_at is null or c.agent_muted_at < c.status_changed_at)
+        and (c.last_human_reply_at is null or c.last_human_reply_at < c.status_changed_at)
+        and (l.id is null or l.is_deleted=false)
+        and (cardinality(${excluded}::text[])=0 or coalesce(l.status_label,'')<>all(${excluded}::text[]))
+      limit 500
+    `;
+
+    statusCounters.scanned = statusCandidates.length;
+
+    for (const conv of statusCandidates) {
+      const rule = statusRulesWithStages.find((r: any) => r.status_label === conv.status_changed_label);
+      if (!rule) continue;
+      const stages: any[] = Array.isArray(rule.stages) ? rule.stages.filter(Boolean) : [];
+      if (!stages.length) continue;
+
+      const anchor = new Date(conv.status_changed_at);
+      const cycleName = `${cyclePfx}:${rule.status_label}`;
+
+      // Upsert escalation tracker for this conversation+cycle+anchor
+      await sql`
+        insert into crm.inbox_agent_escalations(conversation_id,cycle,anchor_at,stage,status)
+        values (${conv.id}::uuid,${cycleName},${anchor.toISOString()}::timestamptz,0,'active')
+        on conflict (conversation_id,cycle,anchor_at) do nothing
       `;
+      const [state] = await sql<any[]>`
+        select * from crm.inbox_agent_escalations
+        where conversation_id=${conv.id}::uuid and cycle=${cycleName} and anchor_at=${anchor.toISOString()}::timestamptz
+      `;
+      if (!state || state.status === "done") continue;
 
-      statusCounters.scanned += statusCandidates.length;
+      // Find which stage is next
+      const currentStage = Number(state.stage || 0);
+      const nextStageData = stages.find((s: any) => Number(s.stage) > currentStage);
+      if (!nextStageData) {
+        // All stages done — mark done
+        await sql`update crm.inbox_agent_escalations set status='done',updated_at=now() where id=${state.id}::uuid and status='active'`;
+        continue;
+      }
 
-      for (const row of statusCandidates) {
-        // Determine recipient based on target
-        let recipient: { name: string; phone: string } | null = null;
-        if (rule.target === "branch_manager") recipient = await branchManagerFor(row, settings);
-        else if (rule.target === "sales_manager") recipient = { name: clean(settings.sales_manager_name) || "مدير المبيعات", phone: normalizePhone(settings.sales_manager_phone) };
-        else recipient = { name: clean(settings.system_manager_name) || "مدير النظام", phone: normalizePhone(settings.system_manager_phone) };
+      const delayMs = Math.max(1, Number(nextStageData.delay_minutes)) * 60_000;
+      if (now - anchor.getTime() < delayMs) continue; // not yet time
 
-        const cycleName = `status:${rule.status_label}:${rule.target}`;
-        const anchor = new Date(row.status_changed_at);
+      // Optimistic claim
+      const [claimed] = await sql<any[]>`
+        update crm.inbox_agent_escalations
+        set stage=${nextStageData.stage},stage_at=now(),updated_at=now(),
+            status=${nextStageData.stage >= stages.length ? "done" : "active"}
+        where id=${state.id}::uuid and stage=${currentStage} and status='active'
+        returning id::text
+      `;
+      if (!claimed) continue;
 
-        // Insert escalation record (idempotent)
-        await sql`
-          insert into crm.inbox_agent_escalations(conversation_id,cycle,anchor_at,stage,stage_at,status)
-          values (${row.id}::uuid,${cycleName},${anchor.toISOString()}::timestamptz,1,now(),'done')
-          on conflict (conversation_id,cycle,anchor_at) do nothing
-        `;
-        const [inserted] = await sql<any[]>`
-          select id::text from crm.inbox_agent_escalations
-          where conversation_id=${row.id}::uuid and cycle=${cycleName} and anchor_at=${anchor.toISOString()}::timestamptz and stage=1 and status='done'
-          limit 1
-        `;
-        if (!inserted) continue; // already processed by another worker
+      const targetKey = clean(nextStageData.target);
+      const targetLabel = targetKey === "branch_manager" ? "مدير الفرع" : targetKey === "sales_manager" ? "مدير المبيعات" : "مدير النظام";
 
-        const targetLabel = rule.target === "branch_manager" ? "مدير الفرع" : rule.target === "sales_manager" ? "مدير المبيعات" : "مدير النظام";
-        const common = { conversationId: row.id, leadId: row.lead_id, customerName: row_name(row), customerPhone: row.phone || row.phone_normalized || "", branchCode: row.request_branch_code || row.branch_code || "", assignedName: row.assigned_name || "", metadata: { cycle: cycleName, statusLabel: rule.status_label, target: rule.target, anchor: anchor.toISOString() } };
+      let recipient: { name: string; phone: string } | null = null;
+      if (targetKey === "branch_manager") recipient = await branchManagerFor(conv, settings);
+      else if (targetKey === "sales_manager") recipient = { name: clean(settings.sales_manager_name) || "مدير المبيعات", phone: normalizePhone(settings.sales_manager_phone) };
+      else recipient = { name: clean(settings.system_manager_name) || "مدير النظام", phone: normalizePhone(settings.system_manager_phone) };
 
-        if (!recipient?.phone) {
-          await addLog({ ...common, action: "escalation_skipped", reason: `status_rule_${rule.target}_phone_missing` });
-          continue;
-        }
-        try {
-          const customerName = row_name(row);
-          const platform = sourceLabel(row.channel_code) || clean(row.channel_code);
-          const assigned = clean(row.assigned_name) || "غير موزع";
-          const elapsed = Math.round((now - anchor.getTime()) / 60_000);
-          const elapsedLabel = elapsed >= 60 ? `${Math.round(elapsed / 60)} ساعة` : `${elapsed} دقيقة`;
-          const alertText = `تنبيه: تغيير حالة العميل (${targetLabel})\nالعميل: ${customerName}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nتم تغيير الحالة إلى "${rule.status_label}" منذ ${elapsedLabel} دون تواصل مع العميل.`;
-          await deliverDirectWhatsapp({ phone: recipient.phone, text: alertText, idempotencyKey: `inbox-agent-status:${inserted.id}`, reason: `status_change_escalation_${rule.target}` });
-          statusCounters.escalations += 1;
-          await addLog({ ...common, action: `status_${rule.target}_escalation`, reason: `status_changed_to_${rule.status_label}_no_reply_after_${rule.delay_minutes}m`, messageText: alertText, managerName: recipient.name });
-        } catch (error) {
-          statusCounters.failures += 1;
-          await addLog({ ...common, action: "escalation_failed", reason: error instanceof Error ? error.message.slice(0, 300) : "send_failed", managerName: recipient.name });
-        }
+      const common = { conversationId: conv.id, leadId: conv.lead_id, customerName: row_name(conv), customerPhone: conv.phone || conv.phone_normalized || "", branchCode: conv.request_branch_code || conv.branch_code || "", assignedName: conv.assigned_name || "", metadata: { cycle: cycleName, statusLabel: rule.status_label, stage: nextStageData.stage, target: targetKey, anchor: anchor.toISOString() } };
+
+      if (!recipient?.phone) {
+        await addLog({ ...common, action: "escalation_skipped", reason: `status_rule_stage${nextStageData.stage}_${targetKey}_phone_missing` });
+        continue;
+      }
+      try {
+        const platform = sourceLabel(conv.channel_code) || clean(conv.channel_code);
+        const assigned = clean(conv.assigned_name) || "غير موزع";
+        const elapsed = Math.round((now - anchor.getTime()) / 60_000);
+        const elapsedLabel = elapsed >= 1440 ? `${Math.round(elapsed / 1440)} يوم` : elapsed >= 60 ? `${Math.round(elapsed / 60)} ساعة` : `${elapsed} دقيقة`;
+        const alertText = `تنبيه: تغيير حالة العميل (${targetLabel})\nالعميل: ${row_name(conv)}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nتم تغيير الحالة إلى "${rule.status_label}" منذ ${elapsedLabel} دون تواصل مع العميل.`;
+        await deliverDirectWhatsapp({ phone: recipient.phone, text: alertText, idempotencyKey: `inbox-agent-status:${state.id}:${nextStageData.stage}`, reason: `status_change_escalation_stage${nextStageData.stage}` });
+        statusCounters.escalations += 1;
+        await addLog({ ...common, action: `status_stage${nextStageData.stage}_${targetKey}_escalation`, reason: `status_changed_to_${rule.status_label}_stage${nextStageData.stage}_after_${nextStageData.delay_minutes}m`, messageText: alertText, managerName: recipient.name });
+      } catch (error) {
+        statusCounters.failures += 1;
+        await addLog({ ...common, action: "escalation_failed", reason: error instanceof Error ? error.message.slice(0, 300) : "send_failed", managerName: recipient.name });
       }
     }
 
