@@ -1747,6 +1747,42 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   });
 }
 
+/** Link one or more campaign plan lines to a campaign-report entry.
+ * Works for EVERY campaign — both native (created in marketing) and
+ * strategy-flow — using the same strategy_campaign_links table (line_id PK).
+ * linked_on is fixed to today (Saudi) so «نشر في الموعد» is decided by
+ * comparing the actual link day with the planned publish date (scheduled_on):
+ * same day or earlier = on time, later = late. Re-linking keeps that day and
+ * only corrects the campaign identity. Requires the plan to be approved. */
+async function savePrepCampaignLink(sql: Sql, user: SessionUser, body: Row) {
+  const planId = id(body.planId);
+  const lineIds = [...new Set(list(body.lineIds).map(id))];
+  const platform = text(body.platform, 40).toLowerCase();
+  const accountId = text(body.accountId, 180);
+  const campaignId = text(body.campaignId, 180);
+  const campaignName = text(body.campaignName, 300);
+  if (!lineIds.length || lineIds.length > 500 || !platform || !accountId || !campaignId ||
+      /[\u0000-\u001f]/.test(accountId + campaignId)) throw new Error(W.invalid);
+  if (!hasPermission(user, 'marketing.publish_prep.manage') && !(await canReviewPlan(sql, user))) throw new Error(W.denied);
+  const today = saudiCalendarDay();
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    const [plan] = await tx<any[]>`select p.id,p.kind,p.review_status,p.is_deleted
+      from marketing.work_plans p where p.id=${planId}::uuid for update of p`;
+    if (!plan || plan.is_deleted || plan.kind !== 'campaign') throw new Error(W.notFound);
+    if (!['publishing', 'published'].includes(plan.review_status)) throw new Error('لا يمكن ربط الحملة بتقارير الحملات قبل اعتمادها');
+    const valid = await tx<any[]>`select id::text from marketing.work_plan_items
+      where plan_id=${planId}::uuid and is_deleted=false and id=any(${lineIds}::uuid[])`;
+    if (valid.length !== lineIds.length) throw new Error(W.invalid);
+    for (const lineId of lineIds) await tx`insert into marketing.strategy_campaign_links(line_id,platform,account_id,campaign_id,campaign_name,linked_on,linked_by)
+      values(${lineId}::uuid,${platform},${accountId},${campaignId},${campaignName},${today}::date,${user.id}::uuid)
+      on conflict(line_id) do update set platform=excluded.platform,account_id=excluded.account_id,
+        campaign_id=excluded.campaign_id,campaign_name=excluded.campaign_name,updated_at=now()`;
+    await tx`update marketing.work_plan_items set updated_at=now() where id=any(${lineIds}::uuid[])`;
+    return { ok: true, message: 'تم ربط الحملة بتقارير الحملات' };
+  });
+}
+
 /** Repair a legacy record where a past revision cleared the URL but retained
  * the original first-published date. Do not fabricate a new date or overwrite
  * a live manual/provider URL. Restricted to configured reviewers/admins. */
@@ -2179,7 +2215,7 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     order by l.scheduled_on,p.created_at desc,l.id`;
   const todayInSaudiArabia = saudiCalendarDay();
   // Strategy-flow campaign lines add funding-date timing; native lines unchanged.
-  return decorateStrategyPlanLines(sql, rows.map(row => {
+  const decorated = await decorateStrategyPlanLines(sql, rows.map(row => {
     const manual_post_url = String(row.manual_post_url || row.audited_manual_post_url || '').trim();
     const effective_post_url = String(manual_post_url || row.provider_post_url || '').trim();
     // Publication requires only a persisted post URL, never caption/hashtags.
@@ -2196,6 +2232,33 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
         row.review_status !== 'publishing' ? row.review_status :
         row.failed_count ? 'failed' : row.scheduled_count ? 'scheduled' : 'publishing' };
   }));
+  return decorateNativeCampaignLinks(sql, decorated, todayInSaudiArabia);
+}
+
+/** Attach the campaign-report link + on-time timing to NATIVE campaign lines
+ * (those not produced by the strategy flow, which decorateStrategyPlanLines
+ * leaves untouched). The link lives in the shared strategy_campaign_links
+ * table keyed by line_id, so it applies to every campaign. On-time is decided
+ * by comparing the link day with the planned publish date (scheduled_on). */
+async function decorateNativeCampaignLinks(sql: Sql, rows: any[], today: string) {
+  const nativeIds = rows.filter(row => row.kind === 'campaign' && !row.strategy_draft_id).map(row => String(row.id));
+  if (!nativeIds.length) return rows;
+  const links = await sql<any[]>`select line_id::text,platform,account_id,campaign_id,campaign_name,linked_on::text
+    from marketing.strategy_campaign_links where line_id=any(${nativeIds}::uuid[])`;
+  if (!links.length) return rows;
+  const byLine = new Map(links.map(row => [row.line_id, row]));
+  return rows.map(row => {
+    const link = byLine.get(String(row.id));
+    if (!link) return row;
+    const linkedOn = String(link.linked_on || '').slice(0, 10) || null;
+    return { ...row,
+      strategy_campaign_link: { platform: link.platform, accountId: link.account_id,
+        campaignId: link.campaign_id, campaignName: link.campaign_name, linkedOn },
+      published_ready: true,
+      published_on: linkedOn,
+      publication_timing: classifyWorkPublicationTiming(workDate(row.scheduled_on), true, linkedOn, today),
+      status: row.review_status === 'publishing' ? 'published' : row.status };
+  });
 }
 
 /** Remove a single agenda/campaign, never its source products or task. When
@@ -3080,6 +3143,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_update_plan_agenda_window') result = await updatePlanAgendaWindow(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
+    else if (action === 'work_save_prep_campaign_link') result = await savePrepCampaignLink(sql, user, body);
     else if (action === 'work_restore_plan_post_url') result = await restorePlanPostUrl(sql, user, body);
     else if (action === 'work_correct_plan_published_on') result = await correctPlanPublicationDate(sql, user, body);
     else if (action === 'work_activate_plan') {

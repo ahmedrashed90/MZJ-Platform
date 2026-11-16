@@ -349,7 +349,9 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
     if (!selected || !lineIds.length || busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
-      await workPost('strategy_link_campaign', { planId: lines[0].plan_id, lineIds, platform: selected.platform, accountId: selected.accountId,
+      // حملات الاستراتيجية تمر بتحقق ملفات الاستراتيجية؛ الحملات المستقلة تُربط مباشرة
+      const action = lines[0]?.strategy_draft_id ? 'strategy_link_campaign' : 'save_prep_campaign_link';
+      await workPost(action, { planId: lines[0].plan_id, lineIds, platform: selected.platform, accountId: selected.accountId,
         campaignId: selected.campaignId, campaignName: selected.campaignName });
       setMessage('تم ربط الحملة بتقارير الحملات'); onChanged();
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }

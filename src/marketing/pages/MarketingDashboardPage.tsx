@@ -309,7 +309,7 @@ export function MarketingDashboardPage() {
         <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(chooserSourceLines[0]?.agenda_from)}</strong></div>
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>
       </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
-      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}><div className="mkw-platform-head-row"><span>{line.platform_name || 'منصة غير محددة'}</span>{chooserIsCampaign && chooserSourceLines[0]?.strategy_draft_id && (() => {
+      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}><div className="mkw-platform-head-row"><span>{line.platform_name || 'منصة غير محددة'}</span>{chooserIsCampaign && (() => {
         const platformLines = chooserLines.filter(row => (row.platform_code || row.platform_name) === (line.platform_code || line.platform_name));
         const approved = ['publishing','published'].includes(chooserSourceLines[0]?.review_status || '');
         const linkedCount = platformLines.filter(row => row.strategy_campaign_link).length;
