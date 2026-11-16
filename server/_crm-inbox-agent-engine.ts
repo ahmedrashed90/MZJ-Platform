@@ -401,12 +401,12 @@ export async function runInboxAgentTick() {
   // Each rule (one per status_label) can have up to 3 stages, each with its own delay_minutes + target.
   // The agent runs every minute; for each conversation whose status changed, it checks which stage is due next.
   const statusRulesWithStages = await sql<any[]>`
-    select r.id::text as rule_id, r.status_label, r.is_active,
+    select r.id::text as rule_id, r.status_label, r.is_active, r.created_at,
       json_agg(s order by s.stage) as stages
     from crm.inbox_agent_status_rules r
     left join crm.inbox_agent_status_rule_stages s on s.rule_id=r.id
     where r.is_active=true
-    group by r.id, r.status_label, r.is_active
+    group by r.id, r.status_label, r.is_active, r.created_at
   `.catch(() => [] as any[]);
 
   if (statusRulesWithStages.length > 0) {
@@ -444,6 +444,11 @@ export async function runInboxAgentTick() {
       if (!rule) continue;
       const stages: any[] = Array.isArray(rule.stages) ? rule.stages.filter(Boolean) : [];
       if (!stages.length) continue;
+
+      // Only escalate status changes that happened AFTER the rule was created. This stops a
+      // newly-created (or re-saved) rule from dumping a backlog of older status changes all at
+      // once with huge elapsed times; every escalation then fires at its configured delay.
+      if (rule.created_at && new Date(conv.status_changed_at).getTime() < new Date(rule.created_at).getTime()) continue;
 
       const anchor = new Date(conv.status_changed_at);
       const cycleName = `${cyclePfx}:${rule.status_label}`;
