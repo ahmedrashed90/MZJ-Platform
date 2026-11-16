@@ -321,8 +321,8 @@ export function StrategyLineCopyModal({ line, onClose, onChanged }: { line: Work
  * «نشر في الموعد» / «تأخر في النشر». */
 export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines: WorkPlanLine[]; onClose: () => void; onChanged: () => void }) {
   const today = new Date().toISOString().slice(0, 10);
-  // نجلب كل الحملات بدون قيد تاريخ (3 سنوات للخلف) حتى لا تختفي أي حملة بسبب التاريخ
-  const from = new Date(Date.parse(`${today}T12:00:00Z`) - 3 * 365 * 86400000).toISOString().slice(0, 10);
+  // أوسع فترة يسمح بها تقرير الحملات (365 يومًا؛ الحد الأقصى 366) حتى تظهر كل الحملات الحديثة
+  const from = new Date(Date.parse(`${today}T12:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10);
   // لو كل السطور على منصة واحدة، نفلتر قائمة الحملات على هذه المنصة فقط
   const platformCodes = Array.from(new Set(lines.map(line => String(line.platform_code || '').toLowerCase()).filter(Boolean)));
   const singlePlatform = platformCodes.length === 1 ? platformCodes[0] : '';
