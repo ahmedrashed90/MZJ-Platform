@@ -62,8 +62,14 @@ function fromApi(raw: any) {
   };
 }
 
+const targetOptions = [
+  { key: "branch_manager", label: "مدير الفرع" },
+  { key: "sales_manager", label: "مدير المبيعات" },
+  { key: "system_manager", label: "مدير النظام" },
+];
+
 export function CrmInboxAgentPage() {
-  const [tab, setTab] = useState<"general" | "logs">("general");
+  const [tab, setTab] = useState<"general" | "status_rules" | "logs">("general");
   const [settings, setSettings] = useState(defaults);
   const [managers, setManagers] = useState<any[]>([]);
   const [statuses, setStatuses] = useState<string[]>([]);
@@ -77,14 +83,18 @@ export function CrmInboxAgentPage() {
   const [manager, setManager] = useState({ scopeCode: "", managerName: "", whatsappPhone: "", isActive: true });
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
+  // Status rules state
+  const [statusRules, setStatusRules] = useState<any[]>([]);
+  const [ruleForm, setRuleForm] = useState({ statusLabel: "", delayMinutes: 60, target: "branch_manager" });
 
   useEffect(() => { void load(); }, [logsPage]);
 
   async function load() {
     try {
-      const result = await crmFetch<{ ok: boolean; settings: any; managers: any[]; logs: any[]; logsTotal: number; logsToday: number; statuses: string[]; templates: any[]; defaultCustomerMessage: string }>(`/api/crm/inbox-agent${queryString({ limit: logsPageSize, offset: logsPage * logsPageSize })}`);
+      const result = await crmFetch<{ ok: boolean; settings: any; managers: any[]; logs: any[]; logsTotal: number; logsToday: number; statuses: string[]; templates: any[]; defaultCustomerMessage: string; statusRules: any[] }>(`/api/crm/inbox-agent${queryString({ limit: logsPageSize, offset: logsPage * logsPageSize })}`);
       setSettings(fromApi(result.settings)); setManagers(result.managers || []); setLogs(result.logs || []); setLogsTotal(result.logsTotal || 0); setLogsToday(result.logsToday || 0);
       setStatuses(result.statuses || []); setTemplates(result.templates || []); setDefaultCustomerMessage(result.defaultCustomerMessage || "");
+      setStatusRules(result.statusRules || []);
     } catch (error) { setNotice(error instanceof Error ? error.message : "فشل تحميل البيانات"); }
   }
 
@@ -111,6 +121,22 @@ export function CrmInboxAgentPage() {
     catch (error) { setNotice(error instanceof Error ? error.message : "تعذر مسح إعداد المدير"); }
   }
 
+  async function saveStatusRule() {
+    if (!ruleForm.statusLabel) { setNotice("اختر الحالة أولاً"); return; }
+    try {
+      await crmFetch("/api/crm/inbox-agent", { method: "POST", body: JSON.stringify({ section: "status_rule", ...ruleForm }) });
+      setNotice("تم حفظ قاعدة التصعيد."); setRuleForm({ statusLabel: "", delayMinutes: 60, target: "branch_manager" }); await load();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر حفظ القاعدة"); }
+  }
+
+  async function deleteStatusRule(statusLabel: string, target: string) {
+    if (!confirm("مسح قاعدة التصعيد؟")) return;
+    try {
+      await crmFetch("/api/crm/inbox-agent", { method: "POST", body: JSON.stringify({ section: "status_rule", delete: true, statusLabel, target }) });
+      setNotice("تم مسح القاعدة."); await load();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر مسح القاعدة"); }
+  }
+
   const selectedTemplate = templates.find((template) => template.id === settings.escalationTemplateId);
 
   return (
@@ -124,7 +150,7 @@ export function CrmInboxAgentPage() {
         <div><span>المنصات</span><strong>{settings.socialPlatforms.length}</strong><small>{platformOptions.filter((p) => settings.socialPlatforms.includes(p.key)).map((p) => p.label).join("، ") || "لا توجد منصات"}</small></div>
       </div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
-      <div className="crm-department-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>الإعدادات العامة</button><button className={tab === "logs" ? "active" : ""} onClick={() => setTab("logs")}>السجل</button></div>
+      <div className="crm-department-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>الإعدادات العامة</button><button className={tab === "status_rules" ? "active" : ""} onClick={() => setTab("status_rules")}>تصعيد تغيير الحالة</button><button className={tab === "logs" ? "active" : ""} onClick={() => setTab("logs")}>السجل</button></div>
 
       {tab === "general" ? <div className="crm-settings-grid">
         <section className="crm-panel settings-card"><h2>تشغيل / إيقاف</h2>
@@ -176,6 +202,45 @@ export function CrmInboxAgentPage() {
         </section>
         <section className="crm-panel settings-card full"><h2>مديرو الفروع (التصعيد الأول)</h2><div className="crm-manager-form"><select value={manager.scopeCode} onChange={(e) => setManager((current) => ({ ...current, scopeCode: e.target.value }))}><option value="">القسم / الفرع</option><option value="cash_sales">مبيعات الكاش - عام</option><option value="hall">فرع الصالة</option><option value="qadisiyah">فرع القادسية</option><option value="multaqa">فرع الملتقى</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">الكول سنتر</option><option value="__unassigned__">قبل اختيار الخدمة</option></select><input placeholder="اسم المدير" value={manager.managerName} onChange={(e) => setManager((current) => ({ ...current, managerName: e.target.value }))} /><input placeholder="رقم واتساب المدير" value={manager.whatsappPhone} onChange={(e) => setManager((current) => ({ ...current, whatsappPhone: e.target.value }))} /><button className="crm-primary-button" onClick={() => void saveManager()}>إضافة / تحديث</button></div><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>الفرع / القسم</th><th>اسم المدير</th><th>رقم الواتساب</th><th>الحالة</th><th>الإجراءات</th></tr></thead><tbody>{managers.map((row) => <tr key={row.id}><td>{row.scope_code}</td><td>{row.manager_name}</td><td>{row.whatsapp_phone}</td><td>{row.is_active ? "مفعل" : "متوقف"}</td><td><button className="crm-row-delete" onClick={() => void deleteManager(row.scope_code)}><Trash size={16} />مسح</button></td></tr>)}{!managers.length ? <tr><td colSpan={5}><div className="crm-empty-state">لا توجد إعدادات مديرين بعد.</div></td></tr> : null}</tbody></table></div></section>
         <div className="crm-settings-save"><button className="crm-primary-button" disabled={saving} onClick={() => void saveSettings()}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ الإعدادات"}</button></div>
+      </div> : null}
+
+      {tab === "status_rules" ? <div className="crm-settings-grid">
+        <section className="crm-panel settings-card full">
+          <h2>قواعد التصعيد عند تغيير الحالة</h2>
+          <p className="crm-help-text">عندما يغير المندوب حالة العميل، يبدأ الوكيل عداداً. إذا لم يتم التواصل مع العميل خلال الوقت المحدد، يرسل الوكيل تنبيهاً للمستلم المختار. يتوقف التصعيد إذا رد موظف على المحادثة أو تغيرت الحالة مرة أخرى.</p>
+          <div className="crm-manager-form">
+            <select value={ruleForm.statusLabel} onChange={(e) => setRuleForm((f) => ({ ...f, statusLabel: e.target.value }))}>
+              <option value="">اختر الحالة</option>
+              {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--crm-text-muted)" }}>التأخير (دقيقة)</span>
+              <input type="number" min={1} max={10080} value={ruleForm.delayMinutes} onChange={(e) => setRuleForm((f) => ({ ...f, delayMinutes: Number(e.target.value) }))} style={{ width: 100 }} />
+            </label>
+            <select value={ruleForm.target} onChange={(e) => setRuleForm((f) => ({ ...f, target: e.target.value }))}>
+              {targetOptions.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+            <button className="crm-primary-button" onClick={() => void saveStatusRule()}>إضافة / تحديث</button>
+          </div>
+          <p className="crm-help-text">يمكنك إضافة أكثر من قاعدة لنفس الحالة بمستلمين مختلفين. مثال: بعد ساعة → مدير الفرع، بعد 4 ساعات → مدير المبيعات.</p>
+          <div className="crm-table-shell compact">
+            <table className="crm-table">
+              <thead><tr><th>الحالة</th><th>التأخير</th><th>المستلم</th><th>الحالة</th><th></th></tr></thead>
+              <tbody>
+                {statusRules.map((rule) => (
+                  <tr key={rule.id}>
+                    <td>{rule.status_label}</td>
+                    <td>{rule.delay_minutes >= 60 ? `${Math.round(rule.delay_minutes / 60)} ساعة` : `${rule.delay_minutes} دقيقة`}</td>
+                    <td>{targetOptions.find((t) => t.key === rule.target)?.label || rule.target}</td>
+                    <td>{rule.is_active ? <span className="crm-log-action good" style={{ display: "inline-flex", gap: 4 }}><CheckCircle size={14} />مفعل</span> : <span className="crm-log-action" style={{ display: "inline-flex", gap: 4 }}><XCircle size={14} />متوقف</span>}</td>
+                    <td><button className="crm-row-delete" onClick={() => void deleteStatusRule(rule.status_label, rule.target)}><Trash size={16} />مسح</button></td>
+                  </tr>
+                ))}
+                {!statusRules.length ? <tr><td colSpan={5}><div className="crm-empty-state">لا توجد قواعد بعد. أضف قاعدة أعلاه.</div></td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div> : null}
 
       {tab === "logs" ? <><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الوقت</th><th>الإجراء</th><th>العميل</th><th>الفرع</th><th>السبب</th><th>الرسالة</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id}><td>{formatDate(log.created_at)}</td><td>{log.action === "customer_notice" ? <span className="crm-log-action good"><CheckCircle size={16} />{actionLabels.customer_notice}</span> : log.action?.endsWith("_escalation") ? <span className="crm-log-action warn"><Robot size={16} />{actionLabels[log.action] || "تصعيد"}</span> : <span className="crm-log-action"><XCircle size={16} />{actionLabels[log.action] || log.action}</span>}</td><td>{log.customer_name || "عميل"}<small>{log.customer_phone || ""}</small></td><td>{log.branch_code || "—"}</td><td>{log.reason || "—"}</td><td>{log.message_text || "—"}</td></tr>)}{!logs.length ? <tr><td colSpan={6}><div className="crm-empty-state">لا توجد سجلات بعد.</div></td></tr> : null}</tbody></table></div>{logsTotal > logsPageSize ? <div className="crm-pagination"><button className="crm-secondary-button" disabled={logsPage === 0} onClick={() => setLogsPage((current) => Math.max(0, current - 1))}>السابق</button><span>صفحة {logsPage + 1} من {Math.max(1, Math.ceil(logsTotal / logsPageSize))}</span><button className="crm-secondary-button" disabled={(logsPage + 1) * logsPageSize >= logsTotal} onClick={() => setLogsPage((current) => current + 1)}>التالي</button></div> : null}</> : null}

@@ -30,6 +30,30 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists escalate_to_system_manager boolean not null default true`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalation_started_at timestamptz`;
       await sql`alter table crm.inbox_agent_settings add column if not exists engine_v2 boolean not null default false`;
+      // Per-conversation mute: an employee can stop the agent for one conversation. A newer customer message re-arms it.
+      await sql`alter table crm.conversations add column if not exists agent_muted_at timestamptz`;
+      await sql`alter table crm.conversations add column if not exists agent_muted_by uuid`;
+      // Phone-capture flag: set by the automation when it asks the customer for their number.
+      // Cleared once a valid number is saved to the lead. While set (and lead has no phone), agent skips escalation.
+      await sql`alter table crm.conversations add column if not exists phone_requested_at timestamptz`;
+      // Status-change escalation: track when the rep last changed the lead status on this conversation's lead.
+      await sql`alter table crm.conversations add column if not exists status_changed_at timestamptz`;
+      await sql`alter table crm.conversations add column if not exists status_changed_label text`;
+      // Per-status escalation rules configured by the manager.
+      await sql`
+        create table if not exists crm.inbox_agent_status_rules (
+          id uuid primary key default gen_random_uuid(),
+          status_label text not null,
+          delay_minutes integer not null default 60,
+          target text not null default 'branch_manager',
+          sort_order integer not null default 0,
+          is_active boolean not null default true,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now(),
+          updated_by uuid,
+          unique (status_label, target)
+        )
+      `;
       await sql`
         create table if not exists crm.inbox_agent_escalations (
           id uuid primary key default gen_random_uuid(),
@@ -136,22 +160,27 @@ export async function runInboxAgentTick() {
 
   const idleMinutes = Math.max(1, Number(settings.idle_minutes || 60));
   const windowMinutes = Math.max(idleMinutes + 1, Number(settings.window_hours || 23) * 60);
+  // TikTok has a 48-hour messaging window; trigger the "window" cycle at 47h so the alert goes out before the window closes.
+  const tiktokWindowMinutes = Math.max(idleMinutes + 1, 47 * 60);
   const stepMs = Math.max(1, Number(settings.step_minutes || 10)) * 60_000;
   const platforms: string[] = (Array.isArray(settings.social_platforms) ? settings.social_platforms : []).map(clean).filter(Boolean);
   const channels = Array.from(new Set(platforms.flatMap((p) => p === "whatsapp" ? ["whatsapp", "mersal"] : [p])));
   if (!channels.length) return { ok: true, enabled: true, skipped: "no_platforms" };
   const excluded: string[] = (Array.isArray(settings.excluded_statuses) ? settings.excluded_statuses : []).map(clean).filter(Boolean);
 
-  // Housekeeping: an employee replied, or the customer wrote again => the open escalations are no longer needed.
+  // Housekeeping: an employee replied, customer wrote again, or agent was muted => cancel open escalations.
   await sql`
     update crm.inbox_agent_escalations e set status='cancelled',updated_at=now()
     from crm.conversations c
     where e.status='active' and c.id=e.conversation_id
-      and (c.last_customer_message_at>e.anchor_at or (c.last_human_reply_at is not null and c.last_human_reply_at>=e.anchor_at))
+      and (c.last_customer_message_at>e.anchor_at
+        or (c.last_human_reply_at is not null and c.last_human_reply_at>=e.anchor_at)
+        or (c.agent_muted_at is not null and c.agent_muted_at>=c.last_customer_message_at))
   `;
 
   const candidates = await sql<any[]>`
     select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.preview_text,c.last_customer_message_at,c.branch_code,c.department_code,c.service_key,
+      c.phone_requested_at,
       l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
       u.full_name as assigned_name,r.branch_code as request_branch_code,r.department_code as request_department_code
     from crm.conversations c
@@ -159,11 +188,12 @@ export async function runInboxAgentTick() {
     left join core.users u on u.id=c.assigned_to
     left join crm.service_requests r on r.id=c.service_request_id
     where c.last_customer_message_at is not null
-      and c.last_customer_message_at >= greatest(now()-interval '26 hours', ${settings.escalation_started_at}::timestamptz)
+      and c.last_customer_message_at >= greatest(now()-interval '50 hours', ${settings.escalation_started_at}::timestamptz)
       and c.last_customer_message_at <= now()-(${idleMinutes}||' minutes')::interval
       and c.channel_code = any(${channels}::text[])
       and coalesce(c.status,'open')<>'closed'
       and c.classification_state<>'closed'
+      and (c.agent_muted_at is null or c.agent_muted_at < c.last_customer_message_at)
       and (c.last_human_reply_at is null or c.last_human_reply_at < c.last_customer_message_at)
       and (l.id is null or l.is_deleted=false)
       and (cardinality(${excluded}::text[])=0 or coalesce(l.status_label,'')<>all(${excluded}::text[]))
@@ -181,10 +211,17 @@ export async function runInboxAgentTick() {
     const lastText = normalizedText(row.preview_text);
     if (stopWords.some((word) => lastText.includes(word))) continue;
 
+    // Skip entirely if the phone automation is waiting for the customer to provide their number.
+    // Once a valid number is saved, phone_requested_at is cleared and escalation resumes normally.
+    if (row.phone_requested_at && !row.phone_normalized) continue;
+
+    // TikTok has a 48h window, so the "window" cycle starts at 47h instead of the standard window_hours.
+    const effectiveWindowMinutes = clean(row.channel_code) === "tiktok" ? tiktokWindowMinutes : windowMinutes;
+
     const cycles: string[] = [];
-    if (ageMinutes >= idleMinutes && ageMinutes < windowMinutes) cycles.push("idle");
-    if (ageMinutes >= windowMinutes) cycles.push("window");
-    // An "idle" cycle that already started keeps going even after the 23h mark.
+    if (ageMinutes >= idleMinutes && ageMinutes < effectiveWindowMinutes) cycles.push("idle");
+    if (ageMinutes >= effectiveWindowMinutes) cycles.push("window");
+    // An "idle" cycle that already started keeps going even after the window mark.
     const [activeIdle] = await sql<any[]>`select id from crm.inbox_agent_escalations where conversation_id=${row.id}::uuid and cycle='idle' and anchor_at=${anchor.toISOString()}::timestamptz and status='active'`;
     if (activeIdle && !cycles.includes("idle")) cycles.push("idle");
 
@@ -243,5 +280,105 @@ export async function runInboxAgentTick() {
       }
     }
   }
+  // ── Status-change escalation ─────────────────────────────────────────────
+  // For each active status rule, find conversations where:
+  //   - the lead's status matches the rule
+  //   - status_changed_at is set and delay_minutes have elapsed
+  //   - no employee reply came after the status change
+  //   - not in excluded statuses
+  //   - escalation not already sent for this (conversation, status_changed_at, target)
+  const statusRules = await sql<any[]>`
+    select * from crm.inbox_agent_status_rules where is_active=true order by sort_order,id
+  `;
+
+  if (statusRules.length > 0) {
+    const statusCounters = { scanned: 0, escalations: 0, failures: 0 };
+
+    for (const rule of statusRules) {
+      const delayMs = Math.max(1, Number(rule.delay_minutes)) * 60_000;
+      const cutoff = new Date(now - delayMs).toISOString();
+
+      const statusCandidates = await sql<any[]>`
+        select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.branch_code,c.department_code,c.service_key,
+          c.status_changed_at,c.status_changed_label,
+          l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
+          u.full_name as assigned_name,r.branch_code as request_branch_code,r.department_code as request_department_code
+        from crm.conversations c
+        left join crm.leads l on l.id=c.lead_id
+        left join core.users u on u.id=c.assigned_to
+        left join crm.service_requests r on r.id=c.service_request_id
+        where c.status_changed_at is not null
+          and c.status_changed_at <= ${cutoff}::timestamptz
+          and c.status_changed_label = ${rule.status_label}
+          and coalesce(c.status,'open')<>'closed'
+          and c.classification_state<>'closed'
+          and (c.agent_muted_at is null or c.agent_muted_at < c.status_changed_at)
+          and (c.last_human_reply_at is null or c.last_human_reply_at < c.status_changed_at)
+          and (l.id is null or l.is_deleted=false)
+          and (cardinality(${excluded}::text[])=0 or coalesce(l.status_label,'')<>all(${excluded}::text[]))
+          and not exists (
+            select 1 from crm.inbox_agent_escalations e
+            where e.conversation_id=c.id
+              and e.cycle=${`status:${rule.status_label}:${rule.target}`}
+              and e.anchor_at=c.status_changed_at
+              and e.status<>'cancelled'
+          )
+        limit 200
+      `;
+
+      statusCounters.scanned += statusCandidates.length;
+
+      for (const row of statusCandidates) {
+        // Determine recipient based on target
+        let recipient: { name: string; phone: string } | null = null;
+        if (rule.target === "branch_manager") recipient = await branchManagerFor(row, settings);
+        else if (rule.target === "sales_manager") recipient = { name: clean(settings.sales_manager_name) || "مدير المبيعات", phone: normalizePhone(settings.sales_manager_phone) };
+        else recipient = { name: clean(settings.system_manager_name) || "مدير النظام", phone: normalizePhone(settings.system_manager_phone) };
+
+        const cycleName = `status:${rule.status_label}:${rule.target}`;
+        const anchor = new Date(row.status_changed_at);
+
+        // Insert escalation record (idempotent)
+        await sql`
+          insert into crm.inbox_agent_escalations(conversation_id,cycle,anchor_at,stage,stage_at,status)
+          values (${row.id}::uuid,${cycleName},${anchor.toISOString()}::timestamptz,1,now(),'done')
+          on conflict (conversation_id,cycle,anchor_at) do nothing
+        `;
+        const [inserted] = await sql<any[]>`
+          select id::text from crm.inbox_agent_escalations
+          where conversation_id=${row.id}::uuid and cycle=${cycleName} and anchor_at=${anchor.toISOString()}::timestamptz and stage=1 and status='done'
+          limit 1
+        `;
+        if (!inserted) continue; // already processed by another worker
+
+        const targetLabel = rule.target === "branch_manager" ? "مدير الفرع" : rule.target === "sales_manager" ? "مدير المبيعات" : "مدير النظام";
+        const common = { conversationId: row.id, leadId: row.lead_id, customerName: row_name(row), customerPhone: row.phone || row.phone_normalized || "", branchCode: row.request_branch_code || row.branch_code || "", assignedName: row.assigned_name || "", metadata: { cycle: cycleName, statusLabel: rule.status_label, target: rule.target, anchor: anchor.toISOString() } };
+
+        if (!recipient?.phone) {
+          await addLog({ ...common, action: "escalation_skipped", reason: `status_rule_${rule.target}_phone_missing` });
+          continue;
+        }
+        try {
+          const customerName = row_name(row);
+          const platform = sourceLabel(row.channel_code) || clean(row.channel_code);
+          const assigned = clean(row.assigned_name) || "غير موزع";
+          const elapsed = Math.round((now - anchor.getTime()) / 60_000);
+          const elapsedLabel = elapsed >= 60 ? `${Math.round(elapsed / 60)} ساعة` : `${elapsed} دقيقة`;
+          const alertText = `تنبيه: تغيير حالة العميل (${targetLabel})\nالعميل: ${customerName}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nتم تغيير الحالة إلى "${rule.status_label}" منذ ${elapsedLabel} دون تواصل مع العميل.`;
+          await deliverDirectWhatsapp({ phone: recipient.phone, text: alertText, idempotencyKey: `inbox-agent-status:${inserted.id}`, reason: `status_change_escalation_${rule.target}` });
+          statusCounters.escalations += 1;
+          await addLog({ ...common, action: `status_${rule.target}_escalation`, reason: `status_changed_to_${rule.status_label}_no_reply_after_${rule.delay_minutes}m`, messageText: alertText, managerName: recipient.name });
+        } catch (error) {
+          statusCounters.failures += 1;
+          await addLog({ ...common, action: "escalation_failed", reason: error instanceof Error ? error.message.slice(0, 300) : "send_failed", managerName: recipient.name });
+        }
+      }
+    }
+
+    counters.scanned += statusCounters.scanned;
+    counters.escalations += statusCounters.escalations;
+    counters.failures += statusCounters.failures;
+  }
+
   return { ok: true, enabled: true, ...counters };
 }

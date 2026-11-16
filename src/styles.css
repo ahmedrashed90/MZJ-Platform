@@ -9713,6 +9713,10 @@ button.operations-tajyeer-badge.editable:focus-visible { outline: 2px solid #7a3
 
 .crm-manychat-reply { display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px; background:#0b7650; color:#fff; font-size:12px; font-weight:800; text-decoration:none; white-space:nowrap; }
 .crm-manychat-reply:hover { background:#095f40; }
+.crm-agent-mute-button { display:inline-flex; align-items:center; gap:4px; padding:5px 11px; border-radius:999px; border:1.5px solid #d1d5db; background:#fff; color:#374151; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; transition:background .15s,color .15s,border-color .15s; }
+.crm-agent-mute-button:hover { background:#f3f4f6; border-color:#9ca3af; }
+.crm-agent-mute-button.is-muted { background:#fef3c7; border-color:#f59e0b; color:#92400e; }
+.crm-agent-mute-button.is-muted:hover { background:#fde68a; }
 .crm-expiring-list { display:grid; gap:10px; }
 .crm-expiring-card { border:1px solid #efe1da; border-radius:14px; padding:12px 14px; background:#fff; display:grid; gap:10px; }
 .crm-expiring-card header { display:flex; align-items:center; justify-content:space-between; gap:10px; }

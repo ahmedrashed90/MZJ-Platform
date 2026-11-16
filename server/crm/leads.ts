@@ -664,6 +664,16 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
         actor: user,
         reason: input.statusLabel,
       }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+
+      // Record the status-change timestamp on all open conversations for this lead so the
+      // inbox agent can fire status-rule escalations if the rep doesn't follow up.
+      await sql`
+        update crm.conversations
+        set status_changed_at=now(), status_changed_label=${input.statusLabel}, updated_at=now()
+        where lead_id=${id}::uuid
+          and coalesce(status,'open')<>'closed'
+          and classification_state<>'closed'
+      `.catch((error: any) => console.error("status_changed_at update failed", error));
     }
   }
 

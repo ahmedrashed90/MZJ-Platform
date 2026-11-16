@@ -270,7 +270,10 @@ function validateStep(step: any, rawValue: string, options: any[] = []) {
   }
   if (step.step_type === "phone") {
     const normalized = normalizePhone(rawValue);
-    if (!/^9665\d{8}$/.test(normalized)) return { valid: false, normalized: "", error: clean(step.validation_error_message) || "رقم الجوال غير صحيح." };
+    // Accept Saudi (9665XXXXXXXX) and international E.164 numbers (8–15 digits after normalisation).
+    // normalizePhone strips non-digits, converts Arabic numerals, handles 05/5/00 prefixes for Saudi,
+    // and returns "" when the result is outside the 8–15 digit range.
+    if (!normalized) return { valid: false, normalized: "", error: clean(step.validation_error_message) || "رقم الجوال غير صحيح. برجاء إدخال رقم سعودي (مثل 0508821819) أو دولي مع رمز الدولة (مثل +201012345678)." };
     return { valid: true, normalized, error: "" };
   }
   const normalized = clean(rawValue);
@@ -319,6 +322,11 @@ async function applyCustomerField(context: FlowContext, step: any, value: string
     const metadata = { ...(session.metadata || {}), capturedPhone: value, pendingTargetContactId: pendingTargetContactId || null };
     await tx`update crm.automation_sessions set metadata=${tx.json(metadata)},last_activity_at=now() where id=${session.id}::uuid`;
     session.metadata = metadata;
+    // A valid phone has been captured: clear the inbox-agent skip flag on this conversation.
+    await tx`
+      update crm.conversations set phone_requested_at=null,updated_at=now()
+      where id=${session.conversation_id}::uuid and phone_requested_at is not null
+    `.catch(() => undefined);
     return;
   }
 
@@ -683,6 +691,13 @@ async function advanceChoiceFlow(context: FlowContext, choice: any, afterSortOrd
       where id=${context.session.id}::uuid
     `;
     context.session.status = "awaiting_answer";
+    // If we are waiting for the customer's phone number, mark the conversation so the inbox agent skips it.
+    if (step.step_type === "phone" || step.customer_field_key === "phone") {
+      await context.tx`
+        update crm.conversations set phone_requested_at=now(),updated_at=now()
+        where id=${context.session.conversation_id}::uuid and phone_requested_at is null
+      `.catch(() => undefined);
+    }
     return { action: "awaiting_answer", choice: choice.choice_code, currentStep: step.step_code, sessionId: context.session.id };
   }
   context.session.current_step_id = null;
