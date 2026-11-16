@@ -27,6 +27,7 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists system_manager_name text`;
       await sql`alter table crm.inbox_agent_settings add column if not exists system_manager_phone text`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalation_template_id uuid`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists status_escalation_template_id uuid`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalate_to_system_manager boolean not null default true`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalation_started_at timestamptz`;
       await sql`alter table crm.inbox_agent_settings add column if not exists engine_v2 boolean not null default false`;
@@ -124,15 +125,28 @@ function renderTemplateText(content: string, values: string[]) {
   return content.replace(/{{\s*(\d+)\s*}}/g, (match, index) => values[Number(index) - 1] ?? "-");
 }
 
-async function sendAlert(input: { settings: any; row: any; phone: string; stageLabel: string; idempotencyKey: string; reason: string }) {
+async function sendAlert(input: {
+  settings: any; row: any; phone: string; stageLabel: string;
+  idempotencyKey: string; reason: string;
+  // Optional extra params for status-change escalation template (5-variable)
+  statusLabel?: string; elapsedLabel?: string;
+}) {
   const sql = getSql();
   const customerName = clean(row_name(input.row));
   const platform = sourceLabel(input.row.channel_code) || clean(input.row.channel_code);
   const assigned = clean(input.row.assigned_name) || "غير موزع";
-  const values = [customerName, platform, assigned, input.stageLabel];
+  // If statusLabel + elapsedLabel provided → 5-variable template (inbox_agent_status_escalation)
+  // Otherwise → 4-variable template (inbox_agent_escalation)
+  const values = input.statusLabel
+    ? [customerName, platform, assigned, input.statusLabel, input.elapsedLabel || "—"]
+    : [customerName, platform, assigned, input.stageLabel];
   let template: any = null;
-  if (input.settings.escalation_template_id) {
-    [template] = await sql<any[]>`select *,id::text from crm.message_templates where id=${input.settings.escalation_template_id}::uuid and is_active=true`;
+  // Status-change escalation uses its own template; idle escalation uses the general one.
+  const templateId = input.statusLabel
+    ? (input.settings.status_escalation_template_id || null)
+    : (input.settings.escalation_template_id || null);
+  if (templateId) {
+    [template] = await sql<any[]>`select *,id::text from crm.message_templates where id=${templateId}::uuid and is_active=true`;
   }
   if (template) {
     const text = renderTemplateText(clean(template.content), values);
@@ -140,7 +154,9 @@ async function sendAlert(input: { settings: any; row: any; phone: string; stageL
     return text;
   }
   // No template selected: plain text (only deliverable inside the manager's 24h WhatsApp window).
-  const text = `تنبيه من وكيل صندوق الوارد (${input.stageLabel})\nالعميل: ${customerName}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nلم يتم التواصل مع العميل حتى الآن.`;
+  const text = input.statusLabel
+    ? `تنبيه من وكيل صندوق الوارد — تغيير حالة\nالعميل: ${customerName}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nالحالة المغيّرة إلى: ${input.statusLabel}\nالوقت منذ التغيير: ${input.elapsedLabel || "—"}\nلم يتم التواصل مع العميل حتى الآن.`
+    : `تنبيه من وكيل صندوق الوارد (${input.stageLabel})\nالعميل: ${customerName}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nلم يتم التواصل مع العميل حتى الآن.`;
   await deliverDirectWhatsapp({ phone: input.phone, text, idempotencyKey: input.idempotencyKey, reason: input.reason });
   return text;
 }
@@ -388,12 +404,18 @@ export async function runInboxAgentTick() {
         continue;
       }
       try {
-        const platform = sourceLabel(conv.channel_code) || clean(conv.channel_code);
-        const assigned = clean(conv.assigned_name) || "غير موزع";
         const elapsed = Math.round((now - anchor.getTime()) / 60_000);
         const elapsedLabel = elapsed >= 1440 ? `${Math.round(elapsed / 1440)} يوم` : elapsed >= 60 ? `${Math.round(elapsed / 60)} ساعة` : `${elapsed} دقيقة`;
-        const alertText = `تنبيه: تغيير حالة العميل (${targetLabel})\nالعميل: ${row_name(conv)}\nالمنصة: ${platform}\nالمندوب المسؤول: ${assigned}\nتم تغيير الحالة إلى "${rule.status_label}" منذ ${elapsedLabel} دون تواصل مع العميل.`;
-        await deliverDirectWhatsapp({ phone: recipient.phone, text: alertText, idempotencyKey: `inbox-agent-status:${state.id}:${nextStageData.stage}`, reason: `status_change_escalation_stage${nextStageData.stage}` });
+        const alertText = await sendAlert({
+          settings,
+          row: conv,
+          phone: recipient.phone,
+          stageLabel: targetLabel,
+          statusLabel: rule.status_label,
+          elapsedLabel,
+          idempotencyKey: `inbox-agent-status:${state.id}:${nextStageData.stage}`,
+          reason: `status_change_escalation_stage${nextStageData.stage}`,
+        });
         statusCounters.escalations += 1;
         await addLog({ ...common, action: `status_stage${nextStageData.stage}_${targetKey}_escalation`, reason: `status_changed_to_${rule.status_label}_stage${nextStageData.stage}_after_${nextStageData.delay_minutes}m`, messageText: alertText, managerName: recipient.name });
       } catch (error) {

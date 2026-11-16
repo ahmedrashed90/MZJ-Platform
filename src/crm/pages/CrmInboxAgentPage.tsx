@@ -21,6 +21,7 @@ const defaults = {
   stopKeywords: ["إلغاء", "خلاص", "لا تتواصلون"],
   customerMessage: "",
   escalationTemplateId: "",
+  statusEscalationTemplateId: "",
   excludedStatuses: [] as string[],
   socialPlatforms: ["instagram", "facebook", "tiktok", "whatsapp"],
 };
@@ -69,6 +70,7 @@ function fromApi(raw: any) {
     stopKeywords: raw.stop_keywords || defaults.stopKeywords,
     customerMessage: raw.customer_message || "",
     escalationTemplateId: raw.escalation_template_id || "",
+    statusEscalationTemplateId: raw.status_escalation_template_id || "",
     excludedStatuses: raw.excluded_statuses || [],
     socialPlatforms: raw.social_platforms || defaults.socialPlatforms,
   };
@@ -336,16 +338,32 @@ export function CrmInboxAgentPage() {
             <p className="ia-hint">إذا تركتها فارغة تُستخدم الرسالة الافتراضية.</p>
           </div>
 
-          {/* قالب مرسال */}
+          {/* قالب مرسال — النظام الأول (idle) */}
           <div className="ia-card ia-card-wide">
-            <div className="ia-card-title">قالب رسالة التصعيد (مرسال)</div>
+            <div className="ia-card-title">قالب التصعيد — عدم الرد على العميل (مرسال)</div>
             <select className="ia-select" value={settings.escalationTemplateId} onChange={(e) => set("escalationTemplateId", e.target.value)}>
-              <option value="">اختر القالب المعتمد من مرسال</option>
+              <option value="">اختر القالب</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.display_name || t.name}</option>)}
             </select>
             {selectedTemplate ? <pre className="ia-template-preview">{selectedTemplate.content}</pre> : null}
             <p className="ia-hint">متغيرات القالب: {"{{1}}"} اسم العميل، {"{{2}}"} المنصة، {"{{3}}"} المندوب، {"{{4}}"} مرحلة التصعيد.</p>
           </div>
+
+          {/* قالب مرسال — النظام الثاني (status change) */}
+          {(() => {
+            const selectedStatusTemplate = templates.find((t) => t.id === settings.statusEscalationTemplateId);
+            return (
+              <div className="ia-card ia-card-wide">
+                <div className="ia-card-title">قالب التصعيد — تغيير الحالة (مرسال)</div>
+                <select className="ia-select" value={settings.statusEscalationTemplateId} onChange={(e) => set("statusEscalationTemplateId", e.target.value)}>
+                  <option value="">اختر القالب</option>
+                  {templates.map((t) => <option key={t.id} value={t.id}>{t.display_name || t.name}</option>)}
+                </select>
+                {selectedStatusTemplate ? <pre className="ia-template-preview">{selectedStatusTemplate.content}</pre> : null}
+                <p className="ia-hint">متغيرات القالب: {"{{1}}"} اسم العميل، {"{{2}}"} المنصة، {"{{3}}"} المندوب، {"{{4}}"} الحالة المغيّرة، {"{{5}}"} الوقت منذ التغيير.</p>
+              </div>
+            );
+          })()}
 
           {/* مديرو المبيعات والنظام */}
           <div className="ia-card">

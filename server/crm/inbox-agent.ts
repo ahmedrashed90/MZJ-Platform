@@ -100,6 +100,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const excludedStatuses = Array.isArray(body.excludedStatuses) ? body.excludedStatuses.map(clean).filter(Boolean) : [];
     const minutes = (value: unknown, fallback: number, min: number, max: number) => { const n = Math.floor(Number(value)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
     const templateId = clean(body.escalationTemplateId);
+    const statusTemplateId = clean(body.statusEscalationTemplateId);
     const [row] = await sql<any[]>`
       update crm.inbox_agent_settings set
         escalation_started_at=case when ${Boolean(body.enabled)} and (enabled=false or escalation_started_at is null) then now() else escalation_started_at end,
@@ -110,6 +111,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         sales_manager_name=${clean(body.salesManagerName)||null},sales_manager_phone=${clean(body.salesManagerPhone)||null},
         system_manager_name=${clean(body.systemManagerName)||null},system_manager_phone=${clean(body.systemManagerPhone)||null},fallback_phone=${clean(body.fallbackPhone)||null},
         escalation_template_id=${templateId || null}::uuid,
+        status_escalation_template_id=${statusTemplateId || null}::uuid,
         business_hours_only=${Boolean(body.businessHoursOnly)},business_start=${clean(body.businessStart)||"09:00"}::time,business_end=${clean(body.businessEnd)||"22:00"}::time,
         stop_keywords=${stopKeywords.length?stopKeywords:["إلغاء","خلاص","لا تتواصلون"]},
         social_enabled=true,social_platforms=${socialPlatforms.length?socialPlatforms:["instagram","facebook","tiktok","whatsapp"]},
