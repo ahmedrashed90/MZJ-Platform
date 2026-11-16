@@ -1764,6 +1764,7 @@ async function savePrepCampaignLink(sql: Sql, user: SessionUser, body: Row) {
   if (!lineIds.length || lineIds.length > 500 || !platform || !accountId || !campaignId ||
       /[\u0000-\u001f]/.test(accountId + campaignId)) throw new Error(W.invalid);
   if (!hasPermission(user, 'marketing.publish_prep.manage') && !(await canReviewPlan(sql, user))) throw new Error(W.denied);
+  if (!(await marketingStrategyDraftsReady(sql))) throw new Error('حدّث قاعدة بيانات التسويق لتفعيل ربط تقارير الحملات.');
   const today = saudiCalendarDay();
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
@@ -2242,7 +2243,9 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
  * by comparing the link day with the planned publish date (scheduled_on). */
 async function decorateNativeCampaignLinks(sql: Sql, rows: any[], today: string) {
   const nativeIds = rows.filter(row => row.kind === 'campaign' && !row.strategy_draft_id).map(row => String(row.id));
-  if (!nativeIds.length) return rows;
+  // The strategy_campaign_links table ships with the strategy schema, so probe
+  // readiness before querying it — on an un-migrated install it does not exist.
+  if (!nativeIds.length || !(await marketingStrategyDraftsReady(sql))) return rows;
   const links = await sql<any[]>`select line_id::text,platform,account_id,campaign_id,campaign_name,linked_on::text
     from marketing.strategy_campaign_links where line_id=any(${nativeIds}::uuid[])`;
   if (!links.length) return rows;
