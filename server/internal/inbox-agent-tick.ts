@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
-import { runInboxAgentTick } from "../_crm-inbox-agent-engine.js";
+import { runInboxAgentTick, runAutoAssign } from "../_crm-inbox-agent-engine.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
@@ -11,7 +11,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!secret) return response.status(503).json({ ok: false, error: "CRON_SECRET is required" });
   if (!token || !safeSecretEquals(token, secret)) return response.status(401).json({ ok: false, error: "Unauthorized" });
   try {
-    const result = await runInboxAgentTick();
+    const [tickResult, assignResult] = await Promise.all([
+      runInboxAgentTick(),
+      runAutoAssign(),
+    ]);
+    const result = { ...tickResult, autoAssign: assignResult };
     console.info("Inbox agent tick", JSON.stringify(result));
     return response.status(200).json(result);
   } catch (error) {

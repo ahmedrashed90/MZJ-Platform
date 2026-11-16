@@ -2,6 +2,94 @@ import { getSql } from "./_db.js";
 import { clean, normalizePhone, sourceLabel } from "./_crm-utils.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 
+// ---------------------------------------------------------------------------
+// Auto-assign: round-robin across ALL active assignment-rule members (all
+// branches), applied to unassigned conversations after `auto_assign_minutes`.
+// ---------------------------------------------------------------------------
+export async function runAutoAssign(): Promise<{ assigned: number; skipped: number }> {
+  const sql = getSql();
+
+  // Load settings
+  const [settings] = await sql<any[]>`select auto_assign_minutes,is_active,social_platforms from crm.inbox_agent_settings where id='default'`;
+  if (!settings?.is_active) return { assigned: 0, skipped: 0 };
+  const delayMinutes = Math.max(1, Number(settings.auto_assign_minutes || 1));
+
+  const platforms: string[] = (Array.isArray(settings.social_platforms) ? settings.social_platforms : []).map(clean).filter(Boolean);
+  const channels = Array.from(new Set(platforms.flatMap((p) => p === "whatsapp" ? ["whatsapp", "mersal"] : [p])));
+  if (!channels.length) return { assigned: 0, skipped: 0 };
+
+  // Find unassigned conversations that have been waiting >= delay_minutes
+  const conversations = await sql<any[]>`
+    select c.id::text, c.lead_id::text, c.channel_code, c.service_key, c.branch_code, c.department_code,
+           c.last_customer_message_at
+    from crm.conversations c
+    where c.assigned_to is null
+      and c.last_customer_message_at is not null
+      and c.last_customer_message_at <= now() - (${delayMinutes}||' minutes')::interval
+      and c.last_customer_message_at >= now() - interval '50 hours'
+      and c.channel_code = any(${channels}::text[])
+      and coalesce(c.status,'open') <> 'closed'
+      and c.classification_state <> 'closed'
+    order by c.last_customer_message_at asc
+    limit 100
+  `;
+
+  if (!conversations.length) return { assigned: 0, skipped: 0 };
+
+  // Load all active members across all assignment rules, ordered by branch then
+  // last_assigned_at asc (least-recently assigned first) for round-robin.
+  const members = await sql<any[]>`
+    select m.rule_id::text, m.user_id::text, u.full_name, ar.branch_code, ar.department_code,
+           m.assignment_count, m.last_assigned_at
+    from crm.assignment_rule_members m
+    join crm.assignment_rules ar on ar.id = m.rule_id and ar.is_active = true
+    join core.users u on u.id = m.user_id and u.is_active = true
+    where m.is_active = true
+    order by ar.branch_code nulls last, m.last_assigned_at asc nulls first, m.assignment_count asc
+  `;
+
+  if (!members.length) return { assigned: 0, skipped: conversations.length };
+
+  let memberIdx = 0;
+  let assigned = 0;
+  let skipped = 0;
+
+  for (const conv of conversations) {
+    // Check if already assigned (race guard)
+    const [check] = await sql<any[]>`select assigned_to from crm.conversations where id=${conv.id}::uuid`;
+    if (check?.assigned_to) { skipped++; continue; }
+
+    const member = members[memberIdx % members.length];
+    memberIdx++;
+
+    await sql`
+      update crm.conversations
+      set assigned_to = ${member.user_id}::uuid, updated_at = now()
+      where id = ${conv.id}::uuid and assigned_to is null
+    `;
+
+    // Update assignment count on the rule member for round-robin tracking
+    await sql`
+      update crm.assignment_rule_members
+      set assignment_count = assignment_count + 1, last_assigned_at = now(), updated_at = now()
+      where rule_id = ${member.rule_id}::uuid and user_id = ${member.user_id}::uuid
+    `;
+
+    // Log the assignment
+    await sql`
+      insert into crm.assignment_logs(rule_id, lead_id, department_code, branch_code, source_code,
+        assigned_to, assigned_name, assignment_mode, action)
+      values (${member.rule_id}::uuid, ${conv.lead_id || null}::uuid,
+        ${member.department_code}, ${member.branch_code || null}, 'inbox_agent_auto_assign',
+        ${member.user_id}::uuid, ${member.full_name}, 'round_robin', 'inbox_agent_auto_assign')
+    `.catch(() => undefined);
+
+    assigned++;
+  }
+
+  return { assigned, skipped };
+}
+
 /**
  * Inbox agent v2 — time based escalation.
  *
@@ -23,6 +111,7 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists window_hours integer not null default 23`;
       await sql`alter table crm.inbox_agent_settings add column if not exists step_minutes integer not null default 10`;
       await sql`alter table crm.inbox_agent_settings add column if not exists customer_message text`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists disable_customer_message boolean not null default false`;
       await sql`alter table crm.inbox_agent_settings add column if not exists excluded_statuses text[] not null default '{}'`;
       await sql`alter table crm.inbox_agent_settings add column if not exists system_manager_name text`;
       await sql`alter table crm.inbox_agent_settings add column if not exists system_manager_phone text`;
@@ -30,6 +119,7 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists status_escalation_template_id uuid`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalate_to_system_manager boolean not null default true`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalation_started_at timestamptz`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_minutes integer not null default 1`;
       await sql`alter table crm.inbox_agent_settings add column if not exists engine_v2 boolean not null default false`;
       // Per-conversation mute: an employee can stop the agent for one conversation. A newer customer message re-arms it.
       await sql`alter table crm.conversations add column if not exists agent_muted_at timestamptz`;
@@ -51,6 +141,8 @@ export async function ensureInboxAgentEngineSchema() {
           updated_by uuid
         )
       `;
+      // Ensure the unique constraint exists even on tables created before it was added.
+      await sql`create unique index if not exists crm_inbox_agent_status_rules_status_label_uq on crm.inbox_agent_status_rules(status_label)`;
       await sql`
         create table if not exists crm.inbox_agent_status_rule_stages (
           id uuid primary key default gen_random_uuid(),
@@ -63,6 +155,7 @@ export async function ensureInboxAgentEngineSchema() {
           unique (rule_id, stage)
         )
       `;
+      await sql`create unique index if not exists crm_inbox_agent_status_rule_stages_rule_stage_uq on crm.inbox_agent_status_rule_stages(rule_id, stage)`;
       await sql`
         create table if not exists crm.inbox_agent_escalations (
           id uuid primary key default gen_random_uuid(),
@@ -269,7 +362,7 @@ export async function runInboxAgentTick() {
       const customerName = row_name(row);
       const common = { conversationId: row.id, leadId: row.lead_id, customerName, customerPhone: row.phone || row.phone_normalized || "", branchCode: row.request_branch_code || row.branch_code || "", assignedName: row.assigned_name || "", metadata: { cycle, stage: nextStage.stage, anchor: anchor.toISOString() } };
 
-      if (nextStage.stage === 1) {
+      if (nextStage.stage === 1 && !settings.disable_customer_message) {
         const text = clean(settings.customer_message) || DEFAULT_CUSTOMER_MESSAGE;
         try {
           await deliverConversationMessage({ conversationId: row.id, text, senderType: "bot", reason: "inbox_agent_customer_notice", idempotencyKey: `inbox-agent-notice:${state.id}` });

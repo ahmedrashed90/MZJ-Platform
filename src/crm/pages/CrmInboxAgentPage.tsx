@@ -7,6 +7,7 @@ const defaults = {
   idleMinutes: 60,
   windowHours: 23,
   stepMinutes: 10,
+  autoAssignMinutes: 1,
   escalateToBranchManager: true,
   escalateToSalesManager: true,
   escalateToSystemManager: true,
@@ -20,6 +21,7 @@ const defaults = {
   businessEnd: "22:00",
   stopKeywords: ["إلغاء", "خلاص", "لا تتواصلون"],
   customerMessage: "",
+  disableCustomerMessage: false,
   escalationTemplateId: "",
   statusEscalationTemplateId: "",
   excludedStatuses: [] as string[],
@@ -56,6 +58,7 @@ function fromApi(raw: any) {
     idleMinutes: raw.idle_minutes ?? 60,
     windowHours: raw.window_hours ?? 23,
     stepMinutes: raw.step_minutes ?? 10,
+    autoAssignMinutes: raw.auto_assign_minutes ?? 1,
     escalateToBranchManager: raw.escalate_to_branch_manager !== false,
     escalateToSalesManager: raw.escalate_to_sales_manager !== false,
     escalateToSystemManager: raw.escalate_to_system_manager !== false,
@@ -69,6 +72,7 @@ function fromApi(raw: any) {
     businessEnd: String(raw.business_end || "22:00").slice(0, 5),
     stopKeywords: raw.stop_keywords || defaults.stopKeywords,
     customerMessage: raw.customer_message || "",
+    disableCustomerMessage: Boolean(raw.disable_customer_message),
     escalationTemplateId: raw.escalation_template_id || "",
     statusEscalationTemplateId: raw.status_escalation_template_id || "",
     excludedStatuses: raw.excluded_statuses || [],
@@ -323,6 +327,7 @@ export function CrmInboxAgentPage() {
           <div className="ia-card">
             <div className="ia-card-title">التوقيت</div>
             <div className="ia-fields">
+              <label className="ia-field"><span>تعيين تلقائي للمحادثات الجديدة بعد (دقيقة)</span><input type="number" min={1} max={60} value={settings.autoAssignMinutes} onChange={(e) => set("autoAssignMinutes", Number(e.target.value))} /></label>
               <label className="ia-field"><span>بدون تواصل (دقيقة)</span><input type="number" min={1} value={settings.idleMinutes} onChange={(e) => set("idleMinutes", Number(e.target.value))} /></label>
               <label className="ia-field"><span>نافذة العميل (ساعة)</span><input type="number" min={2} max={23} value={settings.windowHours} onChange={(e) => set("windowHours", Number(e.target.value))} /></label>
               <label className="ia-field"><span>الفاصل بين التصعيدات (دقيقة)</span><input type="number" min={1} value={settings.stepMinutes} onChange={(e) => set("stepMinutes", Number(e.target.value))} /></label>
@@ -334,8 +339,14 @@ export function CrmInboxAgentPage() {
           {/* رسالة العميل */}
           <div className="ia-card ia-card-wide">
             <div className="ia-card-title">الرسالة التي تصل للعميل</div>
-            <textarea rows={3} className="ia-textarea" placeholder={defaultCustomerMessage} value={settings.customerMessage} onChange={(e) => set("customerMessage", e.target.value)} />
-            <p className="ia-hint">إذا تركتها فارغة تُستخدم الرسالة الافتراضية.</p>
+            <label className="ia-toggle-row" style={{marginBottom:"8px"}}>
+              <input type="checkbox" checked={settings.disableCustomerMessage} onChange={(e) => set("disableCustomerMessage", e.target.checked)} />
+              <span>لا ترسل رسالة للعميل</span>
+            </label>
+            {!settings.disableCustomerMessage && <>
+              <textarea rows={3} className="ia-textarea" placeholder={defaultCustomerMessage} value={settings.customerMessage} onChange={(e) => set("customerMessage", e.target.value)} />
+              <p className="ia-hint">إذا تركتها فارغة تُستخدم الرسالة الافتراضية.</p>
+            </>}
           </div>
 
           {/* قالب مرسال — النظام الأول (idle) */}
