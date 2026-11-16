@@ -300,64 +300,65 @@ function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData;
     {data.capabilities.prepare && !locked && <footer className="mkw-form-footer"><button type="submit" className="primary" disabled={busy}>{busy ? W.loading : W.save}</button></footer>}
     {isTikTok && data.capabilities.publish && hasTikTokWaiting && <div className="mkw-tiktok-publish-actions"><button type="button" className="primary" disabled={busy || !data.capabilities.prepare} onClick={() => void activateTikTok()}><PaperPlaneTilt size={17}/> نشر في التاريخ والوقت المحددين</button><small>يلزم تجهيز جميع بنود جدول النشر قبل التفعيل.</small></div>}
     {data.line.kind === 'campaign' && <div className="mkw-muted">{W.fundingPlan}</div>}
-    {data.line.kind === 'campaign' && <PrepCampaignLinkSection line={data.line} onChanged={refresh} capabilities={data.capabilities} />}
     {data.line.platform_code && !['facebook', 'instagram', 'youtube', 'tiktok'].includes(data.line.platform_code) && <WorkAlert>يمكن حفظ التجهيز لهذه المنصة، لكن النشر التلقائي غير متاح لها عبر الربط الحالي. لا يُعتبر تجهيز المحتوى نشرًا فعليًا.</WorkAlert>}
-    <div className="mkw-upload-section">{data.targets.filter(target => target.status !== 'cancelled').map(target => <article className="mkw-upload-format" key={target.id}><div className="mkw-section-title"><strong>{target.platform_name} - {target.post_type_name}</strong><Status value={target.status} /></div>{target.publish_result?.error && <WorkAlert>{target.publish_result.error}</WorkAlert>}{target.platform_code === 'tiktok' && target.status === 'scheduled' && <div className="mkw-tiktok-scheduled-state"><p>المنشور مجدول عبر BulkPublish{target.publish_result.scheduledAt ? ` · ${new Date(target.publish_result.scheduledAt).toLocaleString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh', hour12: true })}` : ''}. لم يتم تأكيد نشره بعد.</p><button type="button" className="secondary" disabled={busy} onClick={() => void checkTikTok(target)}>التحقق من حالة النشر</button>{data.capabilities.publish && data.capabilities.prepare && <div className="mkw-tiktok-reschedule"><Field label="تاريخ النشر الجديد"><input type="date" value={rescheduleDate} disabled={busy || data.targets.filter(item => item.status !== 'cancelled').length > 1} onChange={event => setRescheduleDate(event.target.value)} /></Field><Field label="وقت النشر الجديد (السعودية)"><input type="time" value={rescheduleTime} disabled={busy} onChange={event => setRescheduleTime(event.target.value)} /></Field><button type="button" className="secondary" disabled={busy || (rescheduleDate === String(data.line.scheduled_on).slice(0,10) && rescheduleTime === (target.publish_options?.publishTime || '20:00'))} onClick={() => void updateTikTokSchedule(target)}>تحديث الموعد دون تكرار</button></div>}</div>}{target.platform_code === 'tiktok' && target.status === 'published' && !!target.publish_result?.url && <a href={target.publish_result.url} target="_blank" rel="noreferrer">فتح فيديو TikTok المنشور</a>}{data.capabilities.publish && data.capabilities.prepare && (target.status === 'verification_required' || (target.status === 'processing' && !!target.updated_at && Date.now() - new Date(target.updated_at).getTime() > 900000)) && <button type="button" className="secondary" disabled={busy} onClick={() => void resetAfterCheck(target)}>{W.resetAfterCheck}</button>}</article>)}</div>
+    <div className="mkw-upload-section">{data.targets.filter(target => target.status !== 'cancelled').map(target => <article className="mkw-upload-format" key={target.id}><div className="mkw-section-title"><strong>{target.platform_name} - {target.post_type_name}</strong><Status value={target.status} /></div>{data.line.kind === 'campaign' && <PrepCampaignInlineLink line={data.line} target={target} onChanged={refresh} capabilities={data.capabilities} />}{target.publish_result?.error && <WorkAlert>{target.publish_result.error}</WorkAlert>}{target.platform_code === 'tiktok' && target.status === 'scheduled' && <div className="mkw-tiktok-scheduled-state"><p>المنشور مجدول عبر BulkPublish{target.publish_result.scheduledAt ? ` · ${new Date(target.publish_result.scheduledAt).toLocaleString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh', hour12: true })}` : ''}. لم يتم تأكيد نشره بعد.</p><button type="button" className="secondary" disabled={busy} onClick={() => void checkTikTok(target)}>التحقق من حالة النشر</button>{data.capabilities.publish && data.capabilities.prepare && <div className="mkw-tiktok-reschedule"><Field label="تاريخ النشر الجديد"><input type="date" value={rescheduleDate} disabled={busy || data.targets.filter(item => item.status !== 'cancelled').length > 1} onChange={event => setRescheduleDate(event.target.value)} /></Field><Field label="وقت النشر الجديد (السعودية)"><input type="time" value={rescheduleTime} disabled={busy} onChange={event => setRescheduleTime(event.target.value)} /></Field><button type="button" className="secondary" disabled={busy || (rescheduleDate === String(data.line.scheduled_on).slice(0,10) && rescheduleTime === (target.publish_options?.publishTime || '20:00'))} onClick={() => void updateTikTokSchedule(target)}>تحديث الموعد دون تكرار</button></div>}</div>}{target.platform_code === 'tiktok' && target.status === 'published' && !!target.publish_result?.url && <a href={target.publish_result.url} target="_blank" rel="noreferrer">فتح فيديو TikTok المنشور</a>}{data.capabilities.publish && data.capabilities.prepare && (target.status === 'verification_required' || (target.status === 'processing' && !!target.updated_at && Date.now() - new Date(target.updated_at).getTime() > 900000)) && <button type="button" className="secondary" disabled={busy} onClick={() => void resetAfterCheck(target)}>{W.resetAfterCheck}</button>}</article>)}</div>
   </form>;
 }
 
-// ── Prep: campaign-report link section (shown for campaign lines only) ─────────
+// ── Prep: inline campaign-report link per platform (shown inside each article for campaign lines) ─────────
 type PrepLinkedCampaign = { platform: string; accountId: string; campaignId: string; campaignName: string; linkedOn: string } | null;
 
-function PrepCampaignLinkSection({ line, onChanged, capabilities }: {
+/** Shown directly inside each upload-format article when line.kind === 'campaign'. */
+function PrepCampaignInlineLink({ line, target, onChanged, capabilities }: {
   line: WorkPlanLine & { prep_campaign_link?: PrepLinkedCampaign };
+  target: PublishTarget;
   onChanged: () => Promise<void>;
   capabilities: WorkCapabilities;
 }) {
   const [open, setOpen] = useState(false);
   const linked: PrepLinkedCampaign = (line as any).prep_campaign_link || null;
+  // Show linked info only when it matches this target's platform
+  const linkedForThisPlatform = linked && linked.platform.toLowerCase() === target.platform_code.toLowerCase();
   return (
-    <section className="mkw-prep-campaign-link-section" aria-label="الحملة الإعلانية">
-      <div className="mkw-prep-campaign-link-header">
-        <strong>الحملة الإعلانية</strong>
+    <div className="mkw-prep-campaign-inline" aria-label="الحملة الإعلانية">
+      <div className="mkw-prep-campaign-inline-row">
+        {linkedForThisPlatform ? (
+          <div className="mkw-prep-campaign-linked">
+            <CheckCircle size={15} weight="fill" />
+            <span><strong>{linked!.campaignName}</strong><small>{showDate(linked!.linkedOn)}</small></span>
+          </div>
+        ) : (
+          <span className="mkw-muted mkw-prep-campaign-unlinked-inline">لم تُحدد الحملة الإعلانية</span>
+        )}
         {capabilities.prepare && (
-          <button type="button" className="secondary" onClick={() => setOpen(true)}>
-            <LinkSimple size={15} />
-            {linked ? 'تغيير الحملة المرتبطة' : 'اختيار الحملة من تقارير الحملات'}
+          <button type="button" className="secondary mkw-prep-campaign-pick-btn" onClick={() => setOpen(true)}>
+            <LinkSimple size={14} />
+            {linkedForThisPlatform ? 'تغيير' : 'اختيار الحملة'}
           </button>
         )}
       </div>
-      {linked ? (
-        <div className="mkw-prep-campaign-linked">
-          <CheckCircle size={16} weight="fill" />
-          <span>
-            <strong>{linked.campaignName}</strong>
-            <small>{linked.platform} · {showDate(linked.linkedOn)}</small>
-          </span>
-        </div>
-      ) : (
-        <p className="mkw-muted mkw-prep-campaign-unlinked">لم يتم ربط حملة إعلانية بعد. اختر الحملة المنشورة من تقارير الحملات لتتبع الأداء وتحديد «نشر في الموعد».</p>
-      )}
       {open && (
         <PrepCampaignLinkModal
           line={line}
+          platformCode={target.platform_code}
+          platformName={target.platform_name}
           onClose={() => setOpen(false)}
           onChanged={async () => { setOpen(false); await onChanged(); }}
         />
       )}
-    </section>
+    </div>
   );
 }
 
-function PrepCampaignLinkModal({ line, onClose, onChanged }: {
+function PrepCampaignLinkModal({ line, platformCode, platformName, onClose, onChanged }: {
   line: WorkPlanLine;
+  platformCode: string;
+  platformName: string;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
   const today = new Date().toISOString().slice(0, 10);
-  const scheduledOn = String((line as any).strategy_funding_on || line.scheduled_on || today).slice(0, 10);
-  const from = new Date(Date.parse(`${scheduledOn}T12:00:00Z`) - 14 * 86400000).toISOString().slice(0, 10);
-
+  // Load all available campaigns — no date restriction so nothing is missed
   const [report, setReport] = useState<CampaignReportPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -369,19 +370,21 @@ function PrepCampaignLinkModal({ line, onClose, onChanged }: {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom: from < today ? from : today, dateTo: today })}`)
+    // Use a wide range (3 years back) to ensure all campaigns appear regardless of date
+    const wideFrom = new Date(Date.parse(`${today}T12:00:00Z`) - 3 * 365 * 86400000).toISOString().slice(0, 10);
+    marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom: wideFrom, dateTo: today })}`)
       .then(result => { if (active) setReport(result); })
       .catch(failure => { if (active) setError(failure instanceof Error ? failure.message : 'تعذر قراءة تقارير الحملات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [from, today]);
+  }, [today]);
 
-  const platformCode = String((line as any).platform_code || '').toLowerCase();
+  const code = platformCode.toLowerCase();
   const term = search.trim().toLocaleLowerCase();
 
-  // Filter to this line's platform only, then by search term
+  // Filter to this target's platform, then by search term
   const rows: CampaignReportRow[] = (report?.rows || []).filter(row => {
-    if (platformCode && row.platform.toLowerCase() !== platformCode) return false;
+    if (code && row.platform.toLowerCase() !== code) return false;
     if (term && !`${row.campaignName} ${row.accountName} ${row.platformName}`.toLocaleLowerCase().includes(term)) return false;
     return true;
   });
@@ -392,12 +395,14 @@ function PrepCampaignLinkModal({ line, onClose, onChanged }: {
     if (!selected || busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
+      // Pass scheduledOn so server records it as the reference date for on-time check
       await workPost('save_prep_campaign_link', {
         lineId: line.id,
         platform: selected.platform,
         accountId: selected.accountId,
         campaignId: selected.campaignId,
         campaignName: selected.campaignName,
+        scheduledOn: String(line.scheduled_on || '').slice(0, 10),
       });
       setMessage('تم ربط الحملة بالمنشور');
       await onChanged();
@@ -409,13 +414,13 @@ function PrepCampaignLinkModal({ line, onClose, onChanged }: {
   }
 
   return (
-    <Modal open level={1} title={`اختيار الحملة الإعلانية — ${(line as any).platform_name || ''}`} onClose={onClose} className="mkw-fullscreen mkw-prep-campaign-chooser">
+    <Modal open level={1} title={`اختيار الحملة الإعلانية — ${platformName || code}`} onClose={onClose} className="mkw-fullscreen mkw-prep-campaign-chooser">
       <div className="mkw mkw-prep-campaign-chooser-content">
         <WorkAlert>{error}</WorkAlert>
         <WorkAlert success>{message}</WorkAlert>
         <p className="mkw-muted">
-          اختر الحملة المنشورة من «تفاعل النشر — تقارير الحملات» الخاصة بمنصة <strong>{(line as any).platform_name || platformCode}</strong>.
-          الحملات المعروضة هي الحملات في الفترة من {showDate(from)} حتى اليوم.
+          اختر الحملة المنشورة من «تفاعل النشر — تقارير الحملات» الخاصة بمنصة <strong>{platformName || code}</strong>.
+          نشر في الموعد يُحسب بمقارنة تاريخ الربط بتاريخ النشر المخطط <strong>{showDate(line.scheduled_on)}</strong>.
         </p>
         <label className="mkw-search">
           <input placeholder="ابحث باسم الحملة أو الحساب" value={search} onChange={event => setSearch(event.target.value)} />
@@ -429,26 +434,17 @@ function PrepCampaignLinkModal({ line, onClose, onChanged }: {
                 <input type="radio" name="prep-campaign" checked={row.key === selectedKey} onChange={() => setSelectedKey(row.key)} />
                 <span>
                   <strong>{row.campaignName}</strong>
-                  <small>{row.platformName} · {row.accountName} {row.status ? `· ${row.status}` : ''}</small>
+                  <small>{row.platformName} · {row.accountName}{row.status ? ` · ${row.status}` : ''}</small>
                 </span>
               </label>
             ))}
             {!rows.length && !loading && (
-              <Empty>
-                {platformCode
-                  ? `لا توجد حملات لمنصة ${(line as any).platform_name || platformCode} في تقارير الحملات للفترة المحددة.`
-                  : 'لا توجد حملات في تقارير الحملات للفترة المحددة.'}
-              </Empty>
+              <Empty>{code ? `لا توجد حملات لمنصة ${platformName || code} في تقارير الحملات.` : 'لا توجد حملات في تقارير الحملات.'}</Empty>
             )}
           </div>
         )}
         <div className="mkw-actions">
-          <button
-            type="button"
-            className="primary"
-            disabled={busy || !selected}
-            onClick={() => void save()}
-          >
+          <button type="button" className="primary" disabled={busy || !selected} onClick={() => void save()}>
             <LinkSimple size={17} />
             ربط الحملة المختارة بهذا المنشور
           </button>

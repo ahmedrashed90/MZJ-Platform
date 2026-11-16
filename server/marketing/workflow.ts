@@ -1760,16 +1760,18 @@ async function savePrepCampaignLink(sql: Sql, user: SessionUser, body: Row) {
   if (!hasPermission(user, 'marketing.publish_prep.manage') && !(await canReviewPlan(sql, user))) throw new Error(W.denied);
   return sql.begin(async tx => {
     await tx`set local lock_timeout='3s'`;
-    const [line] = await tx<any[]>`select l.id,l.plan_id,p.kind,p.review_status,p.is_deleted
+    const [line] = await tx<any[]>`select l.id,l.plan_id,l.scheduled_on::text as scheduled_on,p.kind,p.review_status,p.is_deleted
       from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
       where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
     if (!line || line.kind !== 'campaign') throw new Error(W.notFound);
     if (!['publishing', 'published'].includes(line.review_status)) throw new Error('لا يمكن ربط الحملة قبل الاعتماد');
-    const today = saudiCalendarDay();
+    // Use the planned publish date (scheduled_on) as the reference for on-time calculation,
+    // falling back to today only if scheduled_on is somehow missing.
+    const linkedOn = String(line.scheduled_on || saudiCalendarDay()).slice(0, 10);
     await tx`insert into marketing.strategy_campaign_links(line_id,platform,account_id,campaign_id,campaign_name,linked_on,linked_by)
-      values(${lineId}::uuid,${platform},${accountId},${campaignId},${campaignName},${today}::date,${user.id}::uuid)
+      values(${lineId}::uuid,${platform},${accountId},${campaignId},${campaignName},${linkedOn}::date,${user.id}::uuid)
       on conflict(line_id) do update set platform=excluded.platform,account_id=excluded.account_id,
-        campaign_id=excluded.campaign_id,campaign_name=excluded.campaign_name,updated_at=now()`;
+        campaign_id=excluded.campaign_id,campaign_name=excluded.campaign_name,linked_on=excluded.linked_on,updated_at=now()`;
     await tx`update marketing.work_plan_items set updated_at=now() where id=${lineId}::uuid`;
     return { ok: true, message: 'تم ربط الحملة بتقارير الحملات' };
   });
