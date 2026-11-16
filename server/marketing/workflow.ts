@@ -1747,6 +1747,34 @@ async function savePlanPostUrl(sql: Sql, user: SessionUser, body: Row) {
   });
 }
 
+/** Link a non-strategy campaign plan line to a campaign-report entry.
+ * Uses the same strategy_campaign_links table (line_id PK → upsert).
+ * Requires publish_prep.manage or plan-reviewer permission. */
+async function savePrepCampaignLink(sql: Sql, user: SessionUser, body: Row) {
+  const lineId = id(body.lineId);
+  const platform = text(body.platform, 40).toLowerCase();
+  const accountId = text(body.accountId, 180);
+  const campaignId = text(body.campaignId, 180);
+  const campaignName = text(body.campaignName, 300);
+  if (!platform || !accountId || !campaignId || /[\u0000-\u001f]/.test(accountId + campaignId)) throw new Error(W.invalid);
+  if (!hasPermission(user, 'marketing.publish_prep.manage') && !(await canReviewPlan(sql, user))) throw new Error(W.denied);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    const [line] = await tx<any[]>`select l.id,l.plan_id,p.kind,p.review_status,p.is_deleted
+      from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+      where l.id=${lineId}::uuid and l.is_deleted=false and p.is_deleted=false for update of l`;
+    if (!line || line.kind !== 'campaign') throw new Error(W.notFound);
+    if (!['publishing', 'published'].includes(line.review_status)) throw new Error('لا يمكن ربط الحملة قبل الاعتماد');
+    const today = saudiCalendarDay();
+    await tx`insert into marketing.strategy_campaign_links(line_id,platform,account_id,campaign_id,campaign_name,linked_on,linked_by)
+      values(${lineId}::uuid,${platform},${accountId},${campaignId},${campaignName},${today}::date,${user.id}::uuid)
+      on conflict(line_id) do update set platform=excluded.platform,account_id=excluded.account_id,
+        campaign_id=excluded.campaign_id,campaign_name=excluded.campaign_name,updated_at=now()`;
+    await tx`update marketing.work_plan_items set updated_at=now() where id=${lineId}::uuid`;
+    return { ok: true, message: 'تم ربط الحملة بتقارير الحملات' };
+  });
+}
+
 /** Repair a legacy record where a past revision cleared the URL but retained
  * the original first-published date. Do not fabricate a new date or overwrite
  * a live manual/provider URL. Restricted to configured reviewers/admins. */
@@ -2477,7 +2505,9 @@ async function preparationDetail(sql: Sql, user: SessionUser, lineId: string, se
   const [draft] = await sql<any[]>`select format_ids from marketing.work_product_drafts where product_id=${product.id}::uuid`;
   const [plannedFormat] = line.post_type_id ? await sql<any[]>`select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,p.name as platform_name,p.code as platform_code
     from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id where pt.id=${line.post_type_id}::uuid` : [];
-  return { ok: true, line, product, targets, plannedFormat: plannedFormat || null, draftFormatIds: list(draft?.format_ids),
+  const [prepCampaignLinkRow] = line.kind === 'campaign' ? await sql<any[]>`select platform,account_id,campaign_id,campaign_name,linked_on::text from marketing.strategy_campaign_links where line_id=${lineId}::uuid` : [];
+  const prepCampaignLink = prepCampaignLinkRow ? { platform: prepCampaignLinkRow.platform, accountId: prepCampaignLinkRow.account_id, campaignId: prepCampaignLinkRow.campaign_id, campaignName: prepCampaignLinkRow.campaign_name, linkedOn: prepCampaignLinkRow.linked_on } : null;
+  return { ok: true, line: { ...line, prep_campaign_link: prepCampaignLink }, product, targets, plannedFormat: plannedFormat || null, draftFormatIds: list(draft?.format_ids),
     youtubeDefaults: await services.youtubeDefaults(sql), capabilities: workflowCapabilities(user),
     canSaveLinks: ['publishing', 'published'].includes(line.review_status) &&
       (line.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user, 'marketing.publish.now')),
@@ -3080,6 +3110,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_update_plan_agenda_window') result = await updatePlanAgendaWindow(sql, user, body);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
+    else if (action === 'work_save_prep_campaign_link') result = await savePrepCampaignLink(sql, user, body);
     else if (action === 'work_restore_plan_post_url') result = await restorePlanPostUrl(sql, user, body);
     else if (action === 'work_correct_plan_published_on') result = await correctPlanPublicationDate(sql, user, body);
     else if (action === 'work_activate_plan') {

@@ -1339,3 +1339,15 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw .mkw-capture-editor .mkw-capture-link-section {margin-top:14px}
 @media(max-width:950px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:1fr}}
+
+/* PrepCampaignLinkSection — اختيار الحملة الإعلانية في تجهيز النشر */
+.mkw-prep-campaign-link-section {display:grid;gap:10px;padding:14px 16px;background:var(--surface);border:1px solid var(--line-strong);border-radius:11px;margin-block:4px}
+.mkw-prep-campaign-link-header {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.mkw-prep-campaign-link-header strong {font-size:14px;font-weight:750}
+.mkw-prep-campaign-linked {display:flex;align-items:center;gap:8px;color:var(--success)}
+.mkw-prep-campaign-linked svg {flex-shrink:0}
+.mkw-prep-campaign-linked span {display:grid;gap:2px}
+.mkw-prep-campaign-linked strong {font-size:14px}
+.mkw-prep-campaign-linked small {color:var(--text-secondary);font-size:12px}
+.mkw-prep-campaign-unlinked {margin:0;font-size:13px}
+.mkw-prep-campaign-chooser-content {display:grid;gap:14px;padding:4px 2px}
