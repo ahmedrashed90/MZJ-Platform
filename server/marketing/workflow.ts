@@ -2345,6 +2345,69 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
     canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
     canSaveLinks: ['publishing','published'].includes(plan.review_status) && (plan.created_by === user.id || await canReviewPlan(sql,user) || hasPermission(user,'marketing.publish.now')) }, lines, history };
 }
+/** «بيانات المنتجات» for ANY agenda or campaign — whether it was created from
+ * the content-strategy flow or directly in marketing. One row per product
+ * (work item) in the plan, ordered by its first planned date:
+ *   رقم التاسك · رقم الطلب (task-requirement) · رقم الحملة/الأجندة · التصنيف ·
+ *   المطلوب · المنفذ · الفكرة · تاريخ التنفيذ · الجاهزية.
+ * Readiness uses workItemReadiness over the fully loaded item, i.e. exactly
+ * the requirement readiness shown in the execution section. Visibility is the
+ * same permission-scoped planLines() used by the plan report. */
+async function planProductRows(sql: Sql, user: SessionUser, planId: string) {
+  const lines = await planLines(sql, user, planId);
+  if (!lines.length) throw new Error(W.notFound);
+  const first = lines[0];
+  const order: string[] = [];
+  const lineByProduct = new Map<string, any>();
+  for (const line of [...lines].sort((a, b) => workDate(a.scheduled_on).localeCompare(workDate(b.scheduled_on)))) {
+    const productId = String(line.product_id);
+    if (lineByProduct.has(productId)) continue;
+    lineByProduct.set(productId, line);
+    order.push(productId);
+  }
+  const info = await sql<any[]>`select i.id::text,i.task_id::text,coalesce(ct.name,'') as type_name
+    from marketing.work_items i join marketing.work_tasks t on t.id=i.task_id
+    left join marketing.campaign_types ct on ct.id=t.type_id
+    where i.id=any(${order}::uuid[])`;
+  const infoById = new Map(info.map(row => [row.id, row]));
+  const loaded = new Map<string, { item: WorkItem; requirement: number }>();
+  for (const taskId of [...new Set(info.map(row => String(row.task_id)))]) {
+    (await loadItems(sql, taskId)).forEach((item, index) => loaded.set(String(item.id), { item, requirement: index + 1 }));
+  }
+  // Strategy category and idea code, preferring this plan's own draft entry.
+  const strategy = new Map<string, { category: string; ideaCode: string }>();
+  if (await marketingStrategyDraftsReady(sql)) {
+    const entries = await sql<any[]>`select e.item_id::text,coalesce(e.marketing_category,'') as category,coalesce(e.idea_code,'') as idea_code
+      from marketing.strategy_plan_draft_entries e join marketing.strategy_plan_drafts d on d.id=e.draft_id
+      where e.item_id=any(${order}::uuid[]) order by (d.work_plan_id=${planId}::uuid) desc nulls last,e.added_at`;
+    for (const row of entries) if (!strategy.has(row.item_id)) strategy.set(row.item_id, { category: row.category, ideaCode: row.idea_code });
+  }
+  const rows = order.map((productId, index) => {
+    const line = lineByProduct.get(productId);
+    const entry = loaded.get(productId);
+    const item = entry?.item;
+    const taskNo = String(line.task_no || '');
+    const reqNo = Number(line.requirement_number || entry?.requirement || 0);
+    // The internal keywords product has no files to deliver; it is created approved.
+    const keywords = taskNo === 'MANUAL-KEYWORDS';
+    const approvedOn = item?.approved_at ? saudiCalendarDay(new Date(item.approved_at)) : null;
+    return {
+      serial: index + 1, productId, taskNo,
+      requestNo: taskNo && reqNo && !keywords ? `${taskNo}-${String(reqNo).padStart(2, '0')}` : taskNo,
+      planNo: String(first.plan_no || ''), kind: first.kind,
+      category: strategy.get(productId)?.category || infoById.get(productId)?.type_name || '',
+      mediaKind: item?.media_kind || line.media_kind,
+      assigneeName: item?.assignee_name || line.assignee_name || '',
+      ideaName: item?.idea_name || line.idea_name || '',
+      ideaCode: strategy.get(productId)?.ideaCode || '',
+      approvedOn,
+      executionOn: approvedOn || (item?.due_on ? workDate(item.due_on) : null),
+      readiness: keywords ? (item?.status === 'approved' ? 100 : 0) : item ? workItemReadiness(item) : 0,
+    };
+  });
+  return { ok: true, planNo: String(first.plan_no || ''), kind: first.kind, rows };
+}
+
 /** One confirmed task deletion removes every linked campaign/agenda plan and all its
  * future publication rows, even if that plan also references a product from another
  * task. Those other source tasks and their files remain intact. Published posts and
@@ -3054,8 +3117,10 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       result = await strategyDraftsForDashboard(sql, user);
     } else if (resource === 'work_strategy_draft') {
       result = await strategyDraftDetail(sql, user, id(request.query.id));
+    } else if (resource === 'work_plan_products') {
+      result = await planProductRows(sql, user, id(request.query.planId));
     } else if (resource === 'work_strategy_report') {
-      result = await strategyPlanReport(sql, user, request.query as Row);
+      result = await strategyPlanReport(sql, user, request.query as Row, loadItems);
     } else if (resource === 'work_strategy_plan_products') {
       result = await strategyPlanProducts(sql, user, { productManager: productManager(user), manager: isManager(user), departments: departmentScope(user) });
     } else if (resource === 'work_strategy_products') {

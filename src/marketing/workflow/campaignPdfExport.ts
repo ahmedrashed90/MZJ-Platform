@@ -17,7 +17,17 @@ export type CampaignPdfExportInput = {
   approvedByName?: string | null;
   approvedAt?: string | null;
   publishState?: string;
+  /** productId → requirement readiness (execution section). Missing → «—». */
+  readinessByProduct?: Record<string, number>;
 };
+
+/** رقم الطلب of a plan line: its task number + requirement order (TSK-000212-01).
+ * The internal search-keywords product keeps its bare task number. */
+export function planLineRequestNo(line: Pick<WorkPlanLine, 'task_no' | 'requirement_number'>): string {
+  const taskNo = String(line.task_no || '').trim();
+  const requirement = Number(line.requirement_number || 0);
+  return taskNo && requirement > 0 && taskNo !== 'MANUAL-KEYWORDS' ? `${taskNo}-${String(requirement).padStart(2, '0')}` : taskNo;
+}
 
 export type PlanPdfExportInput = CampaignPdfExportInput & {
   kind: 'campaign' | 'agenda';
@@ -69,8 +79,8 @@ function tile(label: string, value: unknown): string {
 export type PlanPdfScheduleRow = {
   product: string;
   idea: string;
-  /** Date, executor, and platform must remain paired for each scheduled entry. */
-  publications: Array<{ platform: string; date: string | null; executor: string }>;
+  /** Date, executor, platform and request must remain paired for each scheduled entry. */
+  publications: Array<{ platform: string; date: string | null; executor: string; requestNo: string; productId: string }>;
 };
 
 /** Display one product/idea pair once. Combine repeated posts by their
@@ -95,10 +105,12 @@ export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdf
     const rawDate = String(line.scheduled_on || '').slice(0, 10);
     const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? new Date(`${rawDate}T00:00:00Z`) : null;
     const date = parsedDate && !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === rawDate ? rawDate : null;
-    const publicationKey = `${platformKey}\u0000${date || ''}\u0000${campaignSummaryNameKey(executor)}`;
+    const requestNo = planLineRequestNo(line);
+    const productId = String(line.product_id || '');
+    const publicationKey = `${platformKey}\u0000${date || ''}\u0000${campaignSummaryNameKey(executor)}\u0000${productId}`;
     if (!group.publicationKeys.has(publicationKey)) {
       group.publicationKeys.add(publicationKey);
-      group.publications.push({ platform, date, executor });
+      group.publications.push({ platform, date, executor, requestNo, productId });
     }
   }
   return [...grouped.values()].map(group => ({
@@ -123,6 +135,8 @@ export type PlanPdfChronologicalRow = {
   idea: string;
   executors: string[];
   platforms: string[];
+  /** Unique products of this row: رقم الطلب + its product for readiness. */
+  requests: Array<{ requestNo: string; productId: string }>;
 };
 
 export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdfChronologicalRow[] {
@@ -131,6 +145,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
     const dayRows = new Map<string, PlanPdfChronologicalRow & {
       executorKeys: Set<string>;
       platformKeys: Set<string>;
+      requestKeys: Set<string>;
     }>();
     for (const item of group.publications) {
       const dayKey = item.date || '';
@@ -138,9 +153,14 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
       if (!row) {
         row = {
           date: item.date, product: group.product, idea: group.idea,
-          executors: [], platforms: [], executorKeys: new Set(), platformKeys: new Set(),
+          executors: [], platforms: [], requests: [], executorKeys: new Set(), platformKeys: new Set(), requestKeys: new Set(),
         };
         dayRows.set(dayKey, row);
+      }
+      const requestKey = item.productId || item.requestNo;
+      if (requestKey && !row.requestKeys.has(requestKey)) {
+        row.requestKeys.add(requestKey);
+        row.requests.push({ requestNo: item.requestNo, productId: item.productId });
       }
       const executorKey = campaignSummaryNameKey(item.executor);
       if (!row.executorKeys.has(executorKey)) {
@@ -156,7 +176,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
     for (const day of dayRows.values()) {
       chronological.push({
         date: day.date, product: day.product, idea: day.idea,
-        executors: day.executors, platforms: day.platforms,
+        executors: day.executors, platforms: day.platforms, requests: day.requests,
       });
     }
   }
@@ -194,6 +214,15 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
   // adjacent identical products/ideas only when that does not break date order.
   const chronologicalRows = planPdfChronologicalRows(input.lines);
   const uniqueNames = (values: string[]) => values.map(value => `<div class="schedule-unique-name">${htmlText(value)}</div>`).join('');
+  // رقم الطلب and الجاهزية are listed in the same order, one entry per product.
+  const readinessOf = (productId: string) => {
+    const value = input.readinessByProduct?.[productId];
+    return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(Math.max(0, Math.min(100, value)))}%` : '—';
+  };
+  const requestCell = (row: PlanPdfChronologicalRow) => `<td class="schedule-requests">${row.requests.length
+    ? row.requests.map(request => `<div class="schedule-meta-value" dir="ltr">${htmlText(request.requestNo || '—')}</div>`).join('') : '—'}</td>`;
+  const readinessCell = (row: PlanPdfChronologicalRow) => `<td class="schedule-readiness">${row.requests.length
+    ? row.requests.map(request => `<div class="schedule-meta-value">${htmlText(readinessOf(request.productId))}</div>`).join('') : '—'}</td>`;
   const sameContent = (a: PlanPdfChronologicalRow, b: PlanPdfChronologicalRow) =>
     campaignSummaryNameKey(a.product) === campaignSummaryNameKey(b.product) &&
     campaignSummaryNameKey(a.idea) === campaignSummaryNameKey(b.idea);
@@ -213,7 +242,7 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
     const contentCells = contentStarts
       ? `<td class="schedule-product" rowspan="${contentSpan}">${htmlText(row.product)}</td><td class="schedule-idea" rowspan="${contentSpan}">${htmlText(row.idea)}</td>`
       : '';
-    return `<tr>${dateCell}${contentCells}<td class="schedule-executors">${uniqueNames(row.executors)}</td><td class="schedule-platforms">${uniqueNames(row.platforms)}</td></tr>`;
+    return `<tr>${dateCell}${requestCell(row)}${contentCells}<td class="schedule-executors">${uniqueNames(row.executors)}</td>${readinessCell(row)}<td class="schedule-platforms">${uniqueNames(row.platforms)}</td></tr>`;
   }).join('')}</tbody>`;
   const title = campaign ? 'الحملة' : 'الأجندة';
   const periodTitle = campaign ? 'التمويل والميزانية' : 'فترة نشر الأجندة';
@@ -250,13 +279,17 @@ th{background:#f3e8dc}tr{break-inside:avoid}.money{font-weight:800;white-space:n
 .schedule-section{break-inside:auto}.schedule-section thead{display:table-header-group}
 .schedule-section .schedule-chronological tr{break-inside:avoid;page-break-inside:avoid}
 .schedule-section th{font-size:9pt}.schedule-section td{vertical-align:middle;overflow-wrap:anywhere;font-size:9pt}
-.schedule-section th:nth-child(1){width:19%}.schedule-section th:nth-child(2){width:22%}
-.schedule-section th:nth-child(3){width:25%}.schedule-section th:nth-child(4){width:16%}
-.schedule-section th:nth-child(5){width:18%}
+.schedule-section th:nth-child(1){width:12%}.schedule-section th:nth-child(2){width:14%}
+.schedule-section th:nth-child(3){width:17%}.schedule-section th:nth-child(4){width:21%}
+.schedule-section th:nth-child(5){width:12%}.schedule-section th:nth-child(6){width:9%}
+.schedule-section th:nth-child(7){width:15%}
 .schedule-section td.schedule-dates{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
 .schedule-section td.schedule-product,.schedule-section td.schedule-idea{vertical-align:top}
-.schedule-section td.schedule-executors,.schedule-section td.schedule-platforms{padding-top:5px;padding-bottom:5px}
-.schedule-unique-name{line-height:1.5;padding:2px 0}.schedule-unique-name+.schedule-unique-name{border-top:1px dotted #e9ddd5}
+.schedule-section td.schedule-executors,.schedule-section td.schedule-platforms,.schedule-section td.schedule-requests,.schedule-section td.schedule-readiness{padding-top:5px;padding-bottom:5px}
+.schedule-section td.schedule-requests{font-size:8pt;font-variant-numeric:tabular-nums;overflow-wrap:normal;white-space:nowrap}
+.schedule-section td.schedule-readiness{text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+.schedule-unique-name,.schedule-meta-value{line-height:1.5;padding:2px 0}
+.schedule-unique-name+.schedule-unique-name,.schedule-meta-value+.schedule-meta-value{border-top:1px dotted #e9ddd5}
 .schedule-note{margin:0 0 6px;color:#80665c;font-size:8pt}
 ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1px solid #eee3da;overflow-wrap:anywhere;break-inside:avoid}
 .empty{color:#80665c}@media screen{body{background:#eee8e2;padding:24px}main{background:#fff;padding:26px;box-shadow:0 8px 24px #0002}}
@@ -269,8 +302,8 @@ ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1p
 ${campaign ? `<section><h2>الهدف من الحملة حسب المنصة</h2><table><thead><tr><th>المنصة</th><th>الأهداف</th></tr></thead><tbody>${goalTableRows || '<tr><td colspan="2">لا توجد منصات</td></tr>'}</tbody></table></section>` : ''}
 <section class="schedule-section"><h2>جدول النشر المختصر (${scheduleRows.length})</h2>
 <p class="schedule-note">المطلوبات المختلفة (${requirements.length}) · الأفكار المختلفة (${summary.ideas.length}) — مرتب زمنيًا حسب السنة والشهر واليوم؛ لا يتكرر التاريخ داخل اليوم، ولا المنفذ أو المنصة داخل المنتج والفكرة في اليوم نفسه.</p>
-<table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الفكرة</th><th>المنفذ</th><th>المنصة</th></tr></thead>
-${chronologicalRows.length ? scheduleTableRows : '<tbody><tr><td colspan="5">لا توجد منشورات</td></tr></tbody>'}</table></section>
+<table><thead><tr><th>التاريخ</th><th>رقم الطلب</th><th>المنتج</th><th>الفكرة</th><th>المنفذ</th><th>الجاهزية</th><th>المنصة</th></tr></thead>
+${chronologicalRows.length ? scheduleTableRows : '<tbody><tr><td colspan="7">لا توجد منشورات</td></tr></tbody>'}</table></section>
 
 </main></body></html>`;
 }

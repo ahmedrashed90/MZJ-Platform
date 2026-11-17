@@ -1343,3 +1343,10 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 @media(max-width:950px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){.mkw-detail-view .mkw-capture-editor .mkw-execution-quick-row {grid-template-columns:1fr}}
 
+
+/* «بيانات المنتجات» — shared by the plan report and the strategy draft report */
+.mkw-strategy-plan-products { margin-top:16px; }
+.mkw-product-readiness { min-width:96px; display:grid; gap:3px; }
+.mkw-product-readiness span { display:block; height:7px; border-radius:99px; background:var(--surface-soft); border:1px solid var(--line); overflow:hidden; }
+.mkw-product-readiness b { display:block; height:100%; background:var(--brand); }
+.mkw-product-readiness small { color:var(--muted); font-size:.75rem; font-variant-numeric:tabular-nums; }

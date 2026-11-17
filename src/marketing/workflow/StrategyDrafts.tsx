@@ -12,7 +12,7 @@ import './strategyDrafts.css';
 /** Strategy flow (second flow). Native agenda/campaign screens are unchanged;
  * these components only render drafts created from «إنشاء التكليفات». */
 import { StrategyProductsTable, type StrategyDraft, type StrategyDraftIdea, type StrategyDraftPlatform } from './StrategyProductsTable';
-export { StrategyPlanProductsSection, StrategyProductsTable } from './StrategyProductsTable';
+export { PlanProductsSection, PlanProductsTable, StrategyProductsTable } from './StrategyProductsTable';
 export type { StrategyDraft, StrategyDraftIdea, StrategyDraftPlatform } from './StrategyProductsTable';
 
 const kindName = (kind: string) => kind === 'campaign' ? W.campaign : W.agenda;

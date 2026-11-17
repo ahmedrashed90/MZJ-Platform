@@ -17,6 +17,7 @@ import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
 import { StrategyCampaignLinkModal, StrategyLineCopyModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
+import { planProductReadiness, type PlanProductsData } from '../workflow/StrategyProductsTable';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -130,6 +131,8 @@ export function MarketingDashboardPage() {
   }
 
   const chooserSourceLines = groups.get(selectPlan) || [];
+  // Requirement readiness per product for the printable compact schedule.
+  const chooserProducts = useWorkQuery<PlanProductsData>('plan_products', { planId: selectPlan }, Boolean(selectPlan));
   const chooserLines = preparationLinesByDate(chooserSourceLines);
   const chooserIsCampaign = chooserLines[0]?.kind === 'campaign';
 
@@ -283,7 +286,7 @@ export function MarketingDashboardPage() {
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
       {!!chooserSourceLines.length && <div className="mkw-campaign-chooser-toolbar">
         <strong>{chooserIsCampaign ? 'ملخص الحملة وجدول تجهيز المنشورات' : 'ملخص الأجندة وجدول تجهيز المنشورات'}</strong>
-        <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
+        <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" disabled={chooserProducts.loading && !chooserProducts.data} onClick={() => {
           const first = chooserSourceLines[0];
           if (!first) return;
           try {
@@ -294,7 +297,7 @@ export function MarketingDashboardPage() {
               approvedByName: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_by_name : null,
               approvedAt: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_at : null,
               publishState: planStateLabels[planDisplayState(first.review_status || 'in_progress', chooserSourceLines.filter(line => line.published_ready).length, chooserSourceLines.length)],
-              lines: chooserSourceLines };
+              lines: chooserSourceLines, readinessByProduct: planProductReadiness(chooserProducts.data?.rows) };
             if (chooserIsCampaign) exportCampaignSummaryPdf(options);
             else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: first.agenda_from, agendaTo: first.agenda_to });
           } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }

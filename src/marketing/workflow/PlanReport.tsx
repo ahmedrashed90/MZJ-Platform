@@ -9,7 +9,7 @@ import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
-import { StrategyPlanProductsSection } from './StrategyProductsTable';
+import { PlanProductsSection, planProductReadiness, type PlanProductsData } from './StrategyProductsTable';
 import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
@@ -26,6 +26,8 @@ type ReportData = { plan: ReportPlan; lines: WorkPlanLine[]; history: ReportHist
  * (database management); post copy and URLs are entered in PreparationModal. */
 export function PlanReport({ id, onClose }: { id: string; onClose: () => void }) {
   const query = useWorkQuery<ReportData>('plan', { id });
+  // «بيانات المنتجات» for every agenda/campaign, strategy or marketing.
+  const products = useWorkQuery<PlanProductsData>('plan_products', { planId: id });
   const [pdfError, setPdfError] = useState('');
   const plan = query.data?.plan;
   const lines = query.data?.lines || [];
@@ -49,12 +51,13 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
         <div className="mkw-section-title mkw-plan-report-heading">
           <div><span className="mkw-code">{plan.plan_no}</span><strong>{isCampaign ? 'حملة' : 'أجندة'} · {plan.name}</strong></div>
           <div className="mkw-plan-report-badges">
-            <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" onClick={() => {
+            <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" disabled={products.loading && !products.data} onClick={() => {
               try {
                 setPdfError('');
                 const options = { planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
                   createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to,
-                  lines, platformGoals:plan.platform_goals, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at };
+                  lines, platformGoals:plan.platform_goals, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at,
+                  readinessByProduct: planProductReadiness(products.data?.rows) };
                 if (isCampaign) exportCampaignSummaryPdf(options);
                 else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: plan.agenda_from,
                   agendaTo: plan.agenda_to, platforms: query.data?.platforms || [] });
@@ -110,7 +113,7 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
             {entry.note && <div className="mkw-review-document">{parseReviewNote(entry.note).map((block, i) => <p key={i}>{block.text}</p>)}</div>}
           </article>)}
         </details>}
-        <StrategyPlanProductsSection planId={plan.id}/>
+        <PlanProductsSection data={products.data} loading={products.loading} error={products.error}/>
         <section className="mkw-plan-report-list" aria-label="تفاصيل المنشورات">
           <h3>تفاصيل النشر حسب المنصة ونوع المنشور ({lines.length})</h3>
           <div className="mkw-table-wrap mkw-plan-report-table"><table>

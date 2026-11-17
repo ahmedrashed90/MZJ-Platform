@@ -290,11 +290,19 @@ export async function strategyDraftDetail(sql: Sql, user: SessionUser, draftId: 
   return { ok: true, draft, platforms: catalogPlatforms(catalog) };
 }
 /** Report rows for the «التقرير» button: draft card or a plan made from a draft. */
-export async function strategyPlanReport(sql: Sql, user: SessionUser, query: Row) {
+export async function strategyPlanReport(sql: Sql, user: SessionUser, query: Row,
+  loadItems?: (db: any, taskId: string) => Promise<WorkItem[]>) {
   if (!(await marketingStrategyDraftsReady(sql))) return { ok: true, ready: false, draft: null };
   if (!canSeeDrafts(user) && !hasPermission(user, 'marketing.dashboard.view') && !hasPermission(user, 'marketing.database.view')) throw new Error(W.denied);
   const [draft] = query.draftId ? await draftRows(sql, user, { id: id(query.draftId) }) : await draftRows(sql, user, { planId: id(query.planId) });
-  return { ok: true, ready: true, draft: draft || null };
+  if (!draft || !loadItems) return { ok: true, ready: true, draft: draft || null };
+  // «الجاهزية» per idea = the requirement readiness of the execution section.
+  const readiness = new Map<string, number>();
+  for (const taskId of [...new Set(draft.ideas.map(idea => String(idea.taskId)))]) {
+    for (const item of await loadItems(sql, taskId)) readiness.set(String(item.id), workItemReadiness(item));
+  }
+  return { ok: true, ready: true, draft: { ...draft, ideas: draft.ideas.map(idea => ({ ...idea,
+    readiness: readiness.get(String(idea.itemId)) ?? (idea.itemStatus === 'approved' ? 100 : 0) })) } };
 }
 
 /** Products tab «منتجات الاستراتيجية»: every strategy file requirement,
