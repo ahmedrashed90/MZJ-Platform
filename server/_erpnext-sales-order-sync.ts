@@ -433,11 +433,11 @@ async function ensureCrmContact(
   if (!inserted) {
     [contact] = await tx`
       update crm.contacts set
-        -- When the contact existed before this ERP order, keep its CRM identity.
-        -- ERP may fill missing values, but must not overwrite known CRM details.
-        display_name=coalesce(nullif(display_name,''),nullif(${name},'')),
-        primary_phone=coalesce(nullif(primary_phone,''),nullif(${phone},'')),
-        primary_phone_normalized=coalesce(nullif(primary_phone_normalized,''),nullif(${phoneNormalized},'')),
+        -- Always update display_name and phone from the latest ERP Sales Order
+        -- so the contact record reflects the most recent customer identity.
+        display_name=coalesce(nullif(${name},''),display_name),
+        primary_phone=coalesce(nullif(${phone},''),primary_phone),
+        primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
         metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(metadata)}::jsonb,
         updated_at=now()
       where id=${contact.id}::uuid

@@ -621,7 +621,7 @@ export function CrmContactsPage() {
     {contactId ? <div className="crm-contact-profile-backdrop">
       <article className="crm-contact-profile-v2">
         <header className="crm-contact-profile-hero">
-          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile && lead && !lead.is_deleted ? <button type="button" className="crm-secondary-button compact crm-contact-open-conversation-button" onClick={() => openContactConversation({ ...lead, phone: lead.phone || profile.contact.primary_phone || "", phone_normalized: lead.phone_normalized || profile.contact.primary_phone_normalized || "" } as CrmLead)}><ChatCircleDots size={18} />فتح محادثة العميل</button> : null}{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeError(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
+          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile && lead ? <button type="button" className="crm-secondary-button compact crm-contact-open-conversation-button" onClick={() => openContactConversation({ ...lead, phone: lead.phone || profile.contact.primary_phone || "", phone_normalized: lead.phone_normalized || profile.contact.primary_phone_normalized || "" } as CrmLead)}><ChatCircleDots size={18} />فتح محادثة العميل</button> : null}{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeError(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
           {profileLoading && !profile ? <div className="crm-contact-profile-loading">جاري تحميل ملف العميل...</div> : null}
           {profile ? <div className="crm-contact-profile-identity">
             <span className="crm-contact-avatar"><IdentificationCard size={34} weight="duotone" /></span>
@@ -698,7 +698,38 @@ export function CrmContactsPage() {
             <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>الملاحظات</h3><p>الملاحظات المحفوظة في كل ملفات العميل.</p></div><NotePencil size={22} /></div><div className="crm-contact-timeline">{profile.notes.map((note, index) => <article key={`${note.leadId}-${index}`}><strong>{text(note.customerName)}</strong><p>{text(note.text)}</p><small>{formatDate(note.updatedAt)}</small></article>)}{!profile.notes.length ? <div className="crm-contact-empty-section">لا توجد ملاحظات.</div> : null}</div></section>
             <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>طلبات الخدمة</h3><p>الطلبات المفتوحة والمنتهية.</p></div><ClockCounterClockwise size={22} /></div><div className="crm-contact-timeline">{profile.requests.slice(0, 20).map((request) => <article key={request.id}><strong>{text(request.status_label)}</strong><p>{departmentLabel(request.department_code)} · {text(request.assigned_name)}</p><small>{formatDate(request.opened_at)}</small></article>)}{!profile.requests.length ? <div className="crm-contact-empty-section">لا توجد طلبات خدمة.</div> : null}</div></section>
             <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>المحادثات</h3><p>آخر المحادثات المسجلة.</p></div><ChatCircleDots size={22} /></div><div className="crm-contact-timeline">{profile.conversations.slice(0, 20).map((conversation) => <article key={conversation.id}><strong>{text(conversation.channel_code || conversation.platform_code)}</strong><p>{text(conversation.preview_text)}</p><small>{formatDate(conversation.last_message_at || conversation.updated_at)}</small></article>)}{!profile.conversations.length ? <div className="crm-contact-empty-section">لا توجد محادثات.</div> : null}</div></section>
-            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>سجل الحركات</h3><p>أحدث تغييرات الحالة والملكية.</p></div><ClockCounterClockwise size={22} /></div><div className="crm-contact-timeline">{profile.events.slice(0, 30).map((event) => <article key={event.id}><strong>{text(event.event_type)}</strong><p>{text(event.note || `${event.old_status || "—"} ← ${event.new_status || "—"}`)}</p><small>{text(event.actor_name)} · {formatDate(event.created_at)}</small></article>)}{!profile.events.length ? <div className="crm-contact-empty-section">لا توجد حركات.</div> : null}</div></section>
+            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>سجل الحركات</h3><p>أحدث تغييرات الحالة والملكية والبيانات.</p></div><ClockCounterClockwise size={22} /></div><div className="crm-contact-timeline">{profile.events.slice(0, 30).map((event) => {
+              const eventTypeLabels: Record<string, string> = {
+                status_change: "تغيير حالة",
+                department_transfer: "نقل قسم",
+                branch_transfer: "نقل فرع",
+                ownership_change: "تغيير مسؤول",
+                field_change: "تعديل بيانات",
+              };
+              const typeLabel = eventTypeLabels[event.event_type] || event.event_type;
+
+              if (event.event_type === "field_change") {
+                let changes: Array<{ label: string; oldValue: string; newValue: string }> = [];
+                try {
+                  const details = typeof event.details === "string" ? JSON.parse(event.details) : event.details;
+                  if (details?.changes) changes = details.changes;
+                } catch { /* use note fallback */ }
+
+                return <article key={event.id} className="crm-contact-event-field-change">
+                  <strong>{typeLabel}</strong>
+                  {changes.length > 0 ? <div className="crm-field-changes">{changes.map((c, i) => (
+                    <p key={i} className="crm-field-change-row"><span className="crm-field-change-label">{c.label}:</span> <span className="crm-field-change-old">{c.oldValue || "—"}</span> ← <span className="crm-field-change-new">{c.newValue || "—"}</span></p>
+                  ))}</div> : <p>{text(event.note || "تعديل بيانات")}</p>}
+                  <small>{text(event.actor_name)} · {formatDate(event.created_at)}</small>
+                </article>;
+              }
+
+              return <article key={event.id}>
+                <strong>{typeLabel}</strong>
+                <p>{text(event.note || `${event.old_status || "—"} ← ${event.new_status || "—"}`)}</p>
+                <small>{text(event.actor_name)} · {formatDate(event.created_at)}</small>
+              </article>;
+            })}{!profile.events.length ? <div className="crm-contact-empty-section">لا توجد حركات.</div> : null}</div></section>
           </div>
         </div> : null}
       </article>

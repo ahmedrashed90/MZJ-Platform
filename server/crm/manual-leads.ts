@@ -190,6 +190,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (row.created_lead_id && duplicate) return response.status(409).json({ ok: false, error: "رقم الجوال مرتبط بعميل آخر، لا يمكن دمج العميل من شاشة التعديل" });
 
+      // Load old lead data before updating to track field-level changes
+      const [oldLead] = row.created_lead_id ? await sql<any[]>`select * from crm.leads where id=${row.created_lead_id}::uuid` : [null];
+
       await sql.begin(async (tx) => {
         await tx`
           update crm.manual_lead_requests set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},requested_call_center_to=null,car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},duplicate_lead_id=${duplicate?.id || null}::uuid,approval_status=${duplicate ? "pending" : "approved"},updated_at=now()
@@ -204,6 +207,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
           `;
         }
       });
+
+      // Track field-level changes on existing lead from manual-leads edit
+      if (oldLead && row.created_lead_id) {
+        const fieldChanges: Array<{ field: string; label: string; oldValue: string; newValue: string }> = [];
+        const tf = (field: string, label: string, o: unknown, n: unknown) => { const ov = clean(o); const nv = clean(n); if (ov !== nv) fieldChanges.push({ field, label, oldValue: ov, newValue: nv }); };
+        tf("customer_name", "اسم العميل", oldLead.customer_name, customerName);
+        tf("phone", "رقم الجوال", oldLead.phone, phone);
+        tf("notes", "ملاحظات", oldLead.notes, clean(body.notes));
+        tf("car_name", "نوع السيارة", oldLead.car_name, clean(body.carName));
+        tf("car_category", "الفئة", oldLead.car_category, clean(body.carCategory));
+        tf("car_model", "الموديل", oldLead.car_model, clean(body.carModel));
+        tf("color", "اللون", oldLead.color, clean(body.color));
+        tf("location", "المكان", oldLead.location, clean(body.location));
+        tf("finance_type", "نوع التمويل", oldLead.finance_type, clean(body.financeType));
+        if (fieldChanges.length > 0) {
+          await sql`
+            insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,actor_role,note,details)
+            values (${row.created_lead_id}::uuid,'field_change',${oldLead.status_label||null},${oldLead.status_label||null},${oldLead.department_code||null},${oldLead.department_code||null},${oldLead.branch_code||null},${oldLead.branch_code||null},${user.id}::uuid,${user.fullName},${user.roles?.join("، ")||null},${fieldChanges.map((c: any) => `${c.label}: ${c.oldValue || "—"} ← ${c.newValue || "—"}`).join(" | ")},${sql.json({ changes: fieldChanges, source: "manual_lead_edit" })})
+          `.catch((e: any) => console.error("manual-lead field_change event failed", e));
+        }
+      }
 
       let newlyCreatedLead: any = null;
       if (!row.created_lead_id && !duplicate) {

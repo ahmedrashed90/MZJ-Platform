@@ -677,6 +677,44 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     }
   }
 
+  // Track field-level changes (name, phone, notes, car details, etc.)
+  const fieldChanges: Array<{ field: string; label: string; oldValue: string; newValue: string }> = [];
+  const trackField = (field: string, label: string, oldVal: unknown, newVal: unknown) => {
+    const o = clean(oldVal); const n = clean(newVal);
+    if (o !== n) fieldChanges.push({ field, label, oldValue: o, newValue: n });
+  };
+  trackField("customer_name", "اسم العميل", before.customer_name, input.customerName);
+  trackField("phone", "رقم الجوال", before.phone, input.phone);
+  trackField("notes", "ملاحظات", before.notes, input.notes);
+  trackField("car_type", "نوع السيارة", before.car_type, input.carType);
+  trackField("car_category", "الفئة", before.car_category, input.carCategory);
+  trackField("car_model", "الموديل", before.car_model, input.carModel);
+  trackField("color", "اللون", before.color, input.color);
+  trackField("location", "المكان", before.location, input.location);
+  trackField("age", "العمر", before.age, input.age);
+  trackField("salary", "الراتب", before.salary, input.salary);
+  trackField("obligation", "الالتزام", before.obligation, input.obligation);
+  trackField("salary_bank", "بنك الراتب", before.salary_bank, input.salaryBank);
+  trackField("finance_type", "نوع التمويل", before.finance_type, input.financeType);
+  trackField("payment_type", "نوع الدفع", before.payment_type, input.paymentType);
+  trackField("source_code", "المصدر", before.source_code, input.sourceCode);
+  if (fieldChanges.length > 0) {
+    await sql`
+      insert into crm.lead_events(
+        lead_id,event_type,old_status,new_status,old_department,new_department,
+        old_branch,new_branch,actor_id,actor_name,actor_role,note,details
+      ) values (
+        ${id}::uuid,'field_change',
+        ${before.status_label || null},${before.status_label || null},
+        ${before.department_code || null},${before.department_code || null},
+        ${before.branch_code || null},${before.branch_code || null},
+        ${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},
+        ${fieldChanges.map((c) => `${c.label}: ${c.oldValue || "—"} ← ${c.newValue || "—"}`).join(" | ")},
+        ${sql.json({ changes: fieldChanges })}
+      )
+    `.catch((error: any) => console.error("field_change event failed", error));
+  }
+
   row.source_name = input.sourceName;
   row.completion_percent = completionPercent;
   row.credit_limit = credit.amount;

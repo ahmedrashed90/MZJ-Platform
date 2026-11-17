@@ -109,15 +109,16 @@ export function CrmFinanceHistoryPage() {
   }
 
   function openConversationInNewTab(row: CrmLead) {
-    const department = activeTab === "cash" ? "cash" : "finance";
-    const url = `/crm?lead=${encodeURIComponent(row.id)}&department=${department}`;
+    // Open contacts page with the customer's phone as a search query,
+    // so the user can find and open the full profile including sold leads.
+    const searchTerm = row.phone || row.customer_name || row.id;
+    const url = `/crm/contacts?q=${encodeURIComponent(searchTerm)}`;
     const tab = window.open(url, "_blank", "noopener,noreferrer");
     tab?.focus();
   }
 
   const statuses = useMemo(() => [...new Set((meta?.statuses || [])
     .filter((status) => status.department_code === (activeTab === "cash" ? "cash" : "finance"))
-    .filter((status) => status.value !== "تم البيع")
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
     .map((status) => status.value))], [activeTab, meta]);
 
