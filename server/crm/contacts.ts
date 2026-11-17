@@ -312,55 +312,24 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
 
   const rows = await sql<any[]>`
     select
-      c.id::text,c.display_name,c.primary_phone,c.primary_phone_normalized,c.is_active,c.metadata,c.created_at,c.updated_at,
-      coalesce(stats.leads_count,0)::int as leads_count,
-      coalesce(stats.requests_count,0)::int as requests_count,
-      coalesce(stats.open_requests_count,0)::int as open_requests_count,
-      coalesce(stats.conversations_count,0)::int as conversations_count,
+      c.id::text,c.display_name,c.primary_phone,c.primary_phone_normalized,c.is_active,c.created_at,c.updated_at,
       latest.id::text as latest_lead_id,latest.customer_name,latest.status_label,latest.department_code,latest.branch_code,
-      latest.service_key,latest.source_code,latest.source_name,latest.notes,latest.assigned_to::text,latest.call_center_assigned_to::text,
-      sales.full_name as assigned_name,cc.full_name as call_center_name,
-      activity.last_activity_at,
-      coalesce(sales_stats.sales_orders_count,0)::int as sales_orders_count,
-      coalesce(sales_stats.sold_vehicles_count,0)::int as sold_vehicles_count,
-      coalesce(sales_stats.total_sales_amount,0)::float as total_sales_amount,
-      sales_stats.last_sale_at
+      latest.source_code,latest.source_name,latest.assigned_to::text,
+      sales.full_name as assigned_name,
+      coalesce(latest.updated_at,latest.created_at,c.updated_at) as last_activity_at,
+      coalesce(lead_names.all_names,'') as all_lead_names
     from crm.contacts c
     left join lateral (
-      select
-        count(*) filter(where l.is_deleted=false)::int as leads_count,
-        (select count(*) from crm.service_requests r where r.contact_id=c.id)::int as requests_count,
-        (select count(*) from crm.service_requests r where r.contact_id=c.id and r.request_state='open')::int as open_requests_count,
-        (select count(*) from crm.conversations cv where cv.contact_id=c.id)::int as conversations_count
-      from crm.leads l where l.contact_id=c.id
-    ) stats on true
-    left join lateral (
-      select l.* from crm.leads l
+      select l.id,l.customer_name,l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.assigned_to,l.created_at,l.updated_at
+      from crm.leads l
       where l.contact_id=c.id and l.is_deleted=false
       order by coalesce(l.updated_at,l.created_at) desc limit 1
     ) latest on true
     left join core.users sales on sales.id=latest.assigned_to
-    left join core.users cc on cc.id=latest.call_center_assigned_to
     left join lateral (
-      select
-        count(distinct so.id) filter(where coalesce(so.is_cancelled,false)=false)::int as sales_orders_count,
-        coalesce(sum(case when coalesce(so.is_cancelled,false)=false then coalesce(vehicle_stats.vehicle_qty,1) else 0 end),0)::int as sold_vehicles_count,
-        coalesce(sum(case when coalesce(so.is_cancelled,false)=false then coalesce(so.total_incl_vat,0) else 0 end),0)::float as total_sales_amount,
-        max(coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at)) filter(where coalesce(so.is_cancelled,false)=false) as last_sale_at
-      from integrations.erpnext_sales_orders so
-      join crm.leads sales_lead on sales_lead.id=so.crm_lead_id and sales_lead.contact_id=c.id
-      left join lateral (
-        select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
-        from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-      ) vehicle_stats on true
-    ) sales_stats on true
-    left join lateral (
-      select greatest(
-        coalesce((select max(coalesce(l.updated_at,l.created_at)) from crm.leads l where l.contact_id=c.id),'epoch'::timestamptz),
-        coalesce((select max(coalesce(r.updated_at,r.created_at)) from crm.service_requests r where r.contact_id=c.id),'epoch'::timestamptz),
-        coalesce((select max(coalesce(cv.last_message_at,cv.updated_at,cv.created_at)) from crm.conversations cv where cv.contact_id=c.id),'epoch'::timestamptz)
-      ) as last_activity_at
-    ) activity on true
+      select string_agg(distinct l.customer_name,' | ' order by l.customer_name) as all_names
+      from crm.leads l where l.contact_id=c.id and l.is_deleted=false and l.customer_name is not null and l.customer_name<>''
+    ) lead_names on true
     where (
       ${scope.all}::boolean
       or exists (
@@ -379,14 +348,19 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
     )
       and (
         ${like}::text is null
-        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized,latest.customer_name,latest.status_label,latest.notes) ilike ${like}
+        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
+        or exists (
+          select 1 from crm.leads search_lead
+          where search_lead.contact_id=c.id and search_lead.is_deleted=false
+            and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
+        )
         or exists (
           select 1 from integrations.erpnext_sales_orders search_order
           join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
           where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
         )
       )
-    order by activity.last_activity_at desc,c.updated_at desc
+    order by coalesce(latest.updated_at,latest.created_at,c.updated_at) desc
     limit ${limit} offset ${offset}
   `;
 
@@ -464,7 +438,13 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
     )
   `;
 
-  for (const row of rows) row.source_name = sourceLabel(row.source_code, row.source_name);
+  for (const row of rows) {
+    row.source_name = sourceLabel(row.source_code, row.source_name);
+    // Surface all lead names so the table can show them
+    if (row.all_lead_names && row.all_lead_names !== (row.display_name || row.customer_name)) {
+      row.other_names = row.all_lead_names;
+    }
+  }
   return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset, summary: summary || {}, canPurge: canPurgeContact(user) });
 }
 

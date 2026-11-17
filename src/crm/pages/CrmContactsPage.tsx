@@ -596,21 +596,18 @@ export function CrmContactsPage() {
 
       <div className="crm-table-wrap crm-contacts-table-wrap">
         <table className="crm-table crm-contacts-table">
-          <thead><tr><th>العميل</th><th>رقم الجوال</th><th>الحالة الحالية</th><th>القسم / الفرع</th><th>المسؤول</th><th>طلبات البيع</th><th>السيارات المباعة</th><th>إجمالي المبيعات</th><th>آخر نشاط</th></tr></thead>
+          <thead><tr><th>العميل</th><th>رقم الجوال</th><th>الحالة الحالية</th><th>القسم / الفرع</th><th>المسؤول</th><th>آخر نشاط</th></tr></thead>
           <tbody>
             {rows.map((row) => <tr key={row.id} tabIndex={0} onClick={() => openProfile(row.id)} onKeyDown={(event) => { if (event.key === "Enter") openProfile(row.id); }}>
-              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong><small>{sourceLabel(row.source_code, row.source_name)}</small></div></div></td>
+              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong>{row.other_names ? <small className="crm-contact-other-names" title={row.other_names}>{row.other_names}</small> : <small>{sourceLabel(row.source_code, row.source_name)}</small>}</div></div></td>
               <td dir="ltr">{text(row.primary_phone || row.primary_phone_normalized)}</td>
               <td><span className="crm-contact-status-pill">{text(row.status_label)}</span></td>
               <td><strong>{departmentLabel(row.department_code)}</strong><small>{text(row.branch_code)}</small></td>
               <td>{text(row.assigned_name)}</td>
-              <td><b className="crm-contact-sales-number">{number.format(Number(row.sales_orders_count || 0))}</b></td>
-              <td><b className="crm-contact-sales-number">{number.format(Number(row.sold_vehicles_count || 0))}</b></td>
-              <td><strong className="crm-contact-money">{money.format(Number(row.total_sales_amount || 0))}</strong></td>
-              <td>{formatDate(row.last_activity_at || row.last_sale_at)}</td>
+              <td>{formatDate(row.last_activity_at)}</td>
             </tr>)}
-            {!loading && !rows.length ? <tr><td colSpan={9} className="crm-empty-cell">لا توجد جهات اتصال مطابقة</td></tr> : null}
-            {loading ? <tr><td colSpan={9} className="crm-empty-cell">جاري تحميل جهات الاتصال...</td></tr> : null}
+            {!loading && !rows.length ? <tr><td colSpan={6} className="crm-empty-cell">لا توجد جهات اتصال مطابقة</td></tr> : null}
+            {loading ? <tr><td colSpan={6} className="crm-empty-cell">جاري تحميل جهات الاتصال...</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -639,13 +636,38 @@ export function CrmContactsPage() {
           </section>
 
           <section className="crm-contact-info-panel crm-contact-primary-info">
-            <div className="crm-contact-section-title"><div><h3>البيانات الحالية</h3><p>آخر بيانات فعالة مرتبطة بملف العميل.</p></div><IdentificationCard size={23} /></div>
+            <div className="crm-contact-section-title"><div><h3>بيانات العميل</h3><p>كل الملفات والبيانات المرتبطة بجهة الاتصال ({profile.leads.length} ملف).</p></div><IdentificationCard size={23} /></div>
             <div className="crm-contact-info-grid">
-              <article><small>الاسم</small><strong>{contactName}</strong></article><article><small>رقم الجوال</small><strong dir="ltr">{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</strong></article>
-              <article><small>الحالة</small><strong>{text(lead?.status_label)}</strong></article><article><small>المصدر</small><strong>{sourceLabel(lead?.source_code, lead?.source_name)}</strong></article>
-              <article><small>المسؤول الحالي</small><strong>{text(lead?.assigned_name)}</strong></article><article><small>القسم</small><strong>{departmentLabel(lead?.department_code)}</strong></article>
-              <article><small>الفرع</small><strong>{text(lead?.branch_name || lead?.branch_code)}</strong></article><article><small>تاريخ دخول النظام</small><strong>{formatDate(profile.contact.created_at)}</strong></article>
+              <article><small>رقم الجوال</small><strong dir="ltr">{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</strong></article>
+              <article><small>تاريخ دخول النظام</small><strong>{formatDate(profile.contact.created_at)}</strong></article>
             </div>
+            {profile.leads.map((l: any) => (
+              <div key={l.id} className={`crm-contact-lead-card ${l.is_deleted ? "crm-contact-lead-deleted" : ""}`}>
+                <div className="crm-contact-lead-header">
+                  <strong>{text(l.customer_name) || "بدون اسم"}</strong>
+                  <span className="crm-contact-status-pill">{text(l.status_label)}</span>
+                  {l.is_deleted ? <span className="crm-contact-lead-deleted-badge">محذوف</span> : null}
+                </div>
+                <div className="crm-contact-info-grid crm-contact-lead-details">
+                  <article><small>المصدر</small><strong>{sourceLabel(l.source_code, l.catalog_source_name || l.source_name)}</strong></article>
+                  <article><small>المسؤول</small><strong>{text(l.assigned_name)}</strong></article>
+                  <article><small>القسم</small><strong>{departmentLabel(l.department_code)}</strong></article>
+                  <article><small>الفرع</small><strong>{text(l.branch_name || l.branch_code)}</strong></article>
+                  {l.car_name || l.car_type ? <article><small>السيارة</small><strong>{text(l.car_name || l.car_type)}</strong></article> : null}
+                  {l.car_category ? <article><small>الفئة</small><strong>{text(l.car_category)}</strong></article> : null}
+                  {l.car_model ? <article><small>الموديل</small><strong>{text(l.car_model)}</strong></article> : null}
+                  {l.color ? <article><small>اللون</small><strong>{text(l.color)}</strong></article> : null}
+                  {l.location ? <article><small>المكان</small><strong>{text(l.location)}</strong></article> : null}
+                  {l.payment_type ? <article><small>الدفع</small><strong>{text(l.payment_type)}</strong></article> : null}
+                  {l.finance_type ? <article><small>التمويل</small><strong>{text(l.finance_type)}</strong></article> : null}
+                  {l.salary ? <article><small>الراتب</small><strong>{text(l.salary)}</strong></article> : null}
+                  {l.salary_bank ? <article><small>بنك الراتب</small><strong>{text(l.salary_bank)}</strong></article> : null}
+                  {l.obligation ? <article><small>الالتزام</small><strong>{text(l.obligation)}</strong></article> : null}
+                  {l.sold_at ? <article><small>تاريخ البيع</small><strong>{formatDate(l.sold_at)}</strong></article> : null}
+                  <article><small>آخر تحديث</small><strong>{formatDate(l.updated_at || l.created_at)}</strong></article>
+                </div>
+              </div>
+            ))}
           </section>
 
           <section className="crm-contact-sales-orders-panel">

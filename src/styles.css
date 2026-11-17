@@ -6426,6 +6426,15 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-contact-timeline strong { color:var(--ink); font-size:12px; }
 .crm-contact-timeline p { margin:6px 0; color:#65463d; line-height:1.7; white-space:pre-wrap; }
 .crm-contact-timeline small { color:var(--muted); font-size:9px; }
+.crm-contact-other-names { color:#2a6496; font-size:9px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block; }
+.crm-contact-lead-card { margin-top:10px; padding:12px 14px; border:1px solid #eee1db; border-radius:12px; background:#fffaf7; }
+.crm-contact-lead-card.crm-contact-lead-deleted { opacity:.55; border-style:dashed; }
+.crm-contact-lead-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+.crm-contact-lead-header>strong { font-size:14px; color:var(--ink); }
+.crm-contact-lead-deleted-badge { font-size:9px; padding:2px 7px; border-radius:6px; background:#f8d7da; color:#842029; font-weight:700; }
+.crm-contact-lead-details article { padding:4px 0; }
+.crm-contact-lead-details article small { font-size:9px; }
+.crm-contact-lead-details article strong { font-size:11px; }
 .crm-contact-event-field-change { border-color:#d4e6f1 !important; background:#f7fbfe !important; }
 .crm-field-changes { margin:6px 0; display:grid; gap:4px; }
 .crm-field-change-row { margin:0 !important; font-size:11px; line-height:1.6; color:#3e4a52; }

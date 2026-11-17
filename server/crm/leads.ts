@@ -611,6 +611,29 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     await syncLeadConversationContext(sql, id);
   }
 
+  // Re-link lead to correct contact when phone number changes
+  const phoneChanged = input.phoneNormalized && normalizePhone(before.phone) !== input.phoneNormalized;
+  if (phoneChanged && input.phoneNormalized) {
+    const [existingContact] = await sql<any[]>`select id::text from crm.contacts where primary_phone_normalized=${input.phoneNormalized} limit 1`;
+    if (existingContact && existingContact.id !== clean(before.contact_id)) {
+      // Lead's phone now matches a different contact — re-link the lead and its related records
+      const oldContactId = clean(before.contact_id);
+      const newContactId = existingContact.id;
+      await sql`update crm.leads set contact_id=${newContactId}::uuid,updated_at=now() where id=${id}::uuid`;
+      await sql`update crm.conversations set contact_id=${newContactId}::uuid,updated_at=now() where lead_id=${id}::uuid`;
+      await sql`update crm.service_requests set contact_id=${newContactId}::uuid,updated_at=now() where lead_id=${id}::uuid`;
+      // Update the target contact's display_name to the latest customer name
+      await sql`update crm.contacts set display_name=coalesce(nullif(${input.customerName || row.customer_name},''),display_name),updated_at=now() where id=${newContactId}::uuid`;
+      console.log(`[leads] re-linked lead ${id} from contact ${oldContactId} to ${newContactId} (phone changed to ${input.phoneNormalized})`);
+    } else if (!existingContact && clean(before.contact_id)) {
+      // No contact with this phone — update the existing contact's phone
+      await sql`update crm.contacts set primary_phone=${input.phone || null},primary_phone_normalized=${input.phoneNormalized},display_name=coalesce(nullif(${input.customerName || row.customer_name},''),display_name),updated_at=now() where id=${before.contact_id}::uuid`;
+    }
+  } else if (!phoneChanged && input.customerName && clean(before.customer_name) !== input.customerName && clean(before.contact_id)) {
+    // Name changed without phone change — update the contact's display_name
+    await sql`update crm.contacts set display_name=coalesce(nullif(${input.customerName},''),display_name),updated_at=now() where id=${before.contact_id}::uuid`;
+  }
+
   let lifecycleResult: any = null;
   if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
     const [event] = await sql<{ id: number }[]>`
