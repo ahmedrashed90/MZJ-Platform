@@ -124,7 +124,7 @@ export function CrmManualLeadsPage() {
         method: "PATCH",
         body: JSON.stringify({ id: approval.id, action, assignedTo: approvalAgent || undefined }),
       });
-      setNotice(action === "approve" ? "تمت الموافقة وتحديث العميل الأصلي بدون تكرار." : "تم رفض الطلب.");
+      setNotice(action === "approve" ? "تمت الموافقة ونقل المندوب والفرع عند الحاجة، مع الحفاظ على بيانات العميل الأصلية." : "تم رفض الطلب.");
       setApproval(null);
       setApprovalAgent("");
       await loadRows();

@@ -165,6 +165,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!row) return response.status(404).json({ ok: false, error: "الطلب غير موجود" });
 
     if (action === "edit") {
+      // An approved request is an audit record, not a second editor for the canonical lead.
+      if (row.approval_status === "approved" && row.created_lead_id) {
+        return response.status(409).json({ ok: false, error: "الطلب معتمد بالفعل. لتعديل العميل استخدم قاعدة البيانات بصلاحيات التعديل، دون تغيير اسمه تلقائيًا من طلب التسجيل" });
+      }
       if (!isCrmManager(user) && row.requested_by !== user.id) return response.status(403).json({ ok: false, error: "غير مسموح بتعديل هذا العميل" });
       const customerName = clean(body.customerName);
       const phone = clean(body.phone);
@@ -225,30 +229,89 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true });
     }
 
-    if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "اعتماد الطلبات متاح للإدارة فقط" });
+    if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "اعتماد نقل العملاء متاح لمدير المبيعات أو مدير النظام فقط" });
+    if (action !== "approve" && action !== "reject") return response.status(400).json({ ok: false, error: "الإجراء غير صحيح" });
+    if (row.approval_status !== "pending") return response.status(409).json({ ok: false, error: "تمت مراجعة الطلب من قبل، ولا يمكن اعتماده أو رفضه مرة أخرى" });
+
     if (action === "reject") {
-      await sql`update crm.manual_lead_requests set approval_status='rejected',approval_note=${clean(body.note) || null},reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${id}::uuid`;
+      const rejected = await sql.begin(async (tx) => {
+        const [pending] = await tx<any[]>`select id::text from crm.manual_lead_requests where id=${id}::uuid and is_deleted=false and approval_status='pending' for update`;
+        if (!pending) return false;
+        await tx`update crm.manual_lead_requests set approval_status='rejected',approval_note=${clean(body.note) || null},reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${id}::uuid`;
+        return true;
+      });
+      if (!rejected) return response.status(409).json({ ok: false, error: "الطلب لم يعد بانتظار الموافقة" });
       await audit(user, "manual_duplicate_rejected", "manual_lead_request", id, { note: clean(body.note) });
       return response.status(200).json({ ok: true });
     }
-    if (action !== "approve") return response.status(400).json({ ok: false, error: "الإجراء غير صحيح" });
-    const targetId = clean(body.targetLeadId) || row.duplicate_lead_id;
-    if (!targetId) return response.status(400).json({ ok: false, error: "العميل الأصلي غير موجود" });
-    const [lead] = await sql<any[]>`
-      update crm.leads set
-        customer_name=coalesce(nullif(${row.customer_name},''),customer_name),phone=${row.phone},phone_normalized=${row.phone_normalized},
-        source_history=coalesce(source_history,'[]'::jsonb) || ${sql.json([{ source: MANUAL_LEAD_SOURCE_CODE, at: new Date().toISOString() }])}::jsonb,
-        car_name=coalesce(nullif(${row.car_name},''),car_name),car_category=coalesce(nullif(${row.car_category},''),car_category),car_model=coalesce(nullif(${row.car_model},''),car_model),color=coalesce(nullif(${row.color},''),color),finance_type=coalesce(nullif(${row.finance_type},''),finance_type),location=coalesce(nullif(${row.location},''),location),
-        registered_at=coalesce(${row.registered_at}::timestamptz,registered_at),notes=concat_ws(E'\n',notes,${row.notes || null}::text),
-        assigned_to=coalesce(${clean(body.assignedTo) || row.requested_assigned_to}::uuid,assigned_to),
-        updated_by=${user.id}::uuid,updated_at=now()
-      where id=${targetId}::uuid returning id::text
-    `;
-    await sql`update crm.manual_lead_requests set source_code=${MANUAL_LEAD_SOURCE_CODE},approval_status='approved',approval_note=${clean(body.note) || null},reviewed_by=${user.id}::uuid,reviewed_at=now(),created_lead_id=${targetId}::uuid,updated_at=now() where id=${id}::uuid`;
-    await attachLeadToContactAndOpenRequest({ leadId: targetId, actor: user, classificationMethod: "manual_duplicate" });
-    await sql`insert into crm.lead_events(lead_id,event_type,actor_id,actor_name,note,details) values (${targetId}::uuid,'manual_duplicate_approved',${user.id}::uuid,${user.fullName},'تمت الموافقة وتحديث العميل الأصلي بدون تكرار',${sql.json({ requestId: id })})`;
-    await audit(user, "manual_duplicate_approved", "manual_lead_request", id, { targetId });
-    return response.status(200).json({ ok: true, leadId: lead?.id || targetId });
+
+    // Only the current canonical lead with the exact normalized phone may be transferred.
+    // The user-supplied target ID is never trusted as an arbitrary destination.
+    const targetId = clean(row.duplicate_lead_id);
+    const newAgentId = clean(body.assignedTo) || clean(row.requested_assigned_to);
+    if (!targetId) return response.status(409).json({ ok: false, error: "لا يوجد عميل أصلي مرتبط بالطلب. يجب مراجعة رقم الجوال قبل الاعتماد" });
+    if (!newAgentId) return response.status(400).json({ ok: false, error: "حدد المندوب الجديد أولًا" });
+
+    const outcome = await sql.begin(async (tx) => {
+      const [pending] = await tx<any[]>`
+        select id::text,duplicate_lead_id::text,phone_normalized
+        from crm.manual_lead_requests
+        where id=${id}::uuid and is_deleted=false and approval_status='pending'
+        for update
+      `;
+      if (!pending) return { error: "الطلب لم يعد بانتظار الموافقة", status: 409 };
+      if (pending.duplicate_lead_id !== targetId) return { error: "تغير العميل المرتبط بالطلب. أعد تحميل الصفحة", status: 409 };
+
+      const [lead] = await tx<any[]>`
+        select id::text,customer_name,phone_normalized,assigned_to::text,branch_code,status_label,department_code
+        from crm.leads where id=${targetId}::uuid and is_deleted=false for update
+      `;
+      if (!lead || lead.phone_normalized !== pending.phone_normalized) {
+        return { error: "العميل الأصلي غير موجود أو رقم الجوال لا يطابق الطلب. لم يتم تنفيذ النقل", status: 409 };
+      }
+
+      const [agent] = await tx<any[]>`
+        select u.id::text,u.full_name,b.code as branch_code
+        from core.users u
+        left join lateral (
+          select branch.code
+          from core.user_branches ub
+          join core.branches branch on branch.id=ub.branch_id and branch.is_active=true
+          where ub.user_id=u.id
+          order by ub.is_primary desc,branch.sort_order,branch.name
+          limit 1
+        ) b on true
+        where u.id=${newAgentId}::uuid and u.is_active=true
+      `;
+      if (!agent || !agent.branch_code) {
+        return { error: "المندوب الجديد غير نشط أو لا يوجد له فرع معتمد", status: 400 };
+      }
+      const nextBranch = agent.branch_code === lead.branch_code ? lead.branch_code : agent.branch_code;
+      const [updated] = await tx<any[]>`
+        update crm.leads set assigned_to=${newAgentId}::uuid,
+          branch_code=${nextBranch},updated_by=${user.id}::uuid,updated_at=now()
+        where id=${targetId}::uuid and is_deleted=false and phone_normalized=${pending.phone_normalized}
+        returning id::text
+      `;
+      if (!updated) return { error: "فشل تحديث العميل الأصلي، ولم يتم اعتماد الطلب", status: 409 };
+      await tx`
+        update crm.manual_lead_requests
+        set approval_status='approved',approval_note=${clean(body.note) || null},
+          reviewed_by=${user.id}::uuid,reviewed_at=now(),created_lead_id=${targetId}::uuid,updated_at=now()
+        where id=${id}::uuid
+      `;
+      await tx`
+        insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,note,details)
+        values (${targetId}::uuid,'manual_duplicate_approved',${lead.status_label},${lead.status_label},
+          ${lead.department_code},${lead.department_code},${lead.branch_code},${nextBranch},
+          ${user.id}::uuid,${user.fullName},'اعتماد نقل العميل إلى المندوب الجديد مع الحفاظ على بياناته الأصلية',
+          ${tx.json({ requestId: id, oldAgentId: lead.assigned_to, newAgentId, newAgentName: agent.full_name, originalCustomerName: lead.customer_name, previousBranch: lead.branch_code, newBranch: nextBranch })})
+      `;
+      return { leadId: updated.id, oldAgentId: lead.assigned_to, newAgentId, oldBranch: lead.branch_code, newBranch: nextBranch };
+    });
+    if ("error" in outcome) return response.status(outcome.status).json({ ok: false, error: outcome.error });
+    await audit(user, "manual_duplicate_approved", "manual_lead_request", id, outcome);
+    return response.status(200).json({ ok: true, leadId: outcome.leadId, transfer: outcome });
   }
 
   if (request.method === "DELETE") {
