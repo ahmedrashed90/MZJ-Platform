@@ -51,6 +51,8 @@ type ContactRow = {
   total_sales_amount?: number;
   last_sale_at?: string | null;
   last_activity_at?: string | null;
+  other_names?: string | null;
+  all_lead_names?: string | null;
 };
 
 type SalesVehicle = {
