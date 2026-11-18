@@ -25,6 +25,10 @@ function loadModule(code, requireModule, fetcher) {
 }
 const customerId = '1234567890'; const campaignId = '9876543210';
 const inactiveId = '9999999999';
+const videoCampaignId = '8888888888';
+const zeroVideoCampaignId = '7777777777';
+let includeVideoCampaigns = false;
+let failVideoMetric = false;
 const adAccount = {id:customerId, name:'MZJ Account A',currency:'SAR',timeZone:'Asia/Riyadh',manager:false,loginCustomerId:''};
 const calls=[];
 async function fakeFetch(url,init={}) {
@@ -42,10 +46,29 @@ async function fakeFetch(url,init={}) {
       assert.ok(query.includes('campaign.start_date_time') && query.includes('campaign.end_date_time'), 'v26 query must request supported campaign date-time fields');
       assert.ok(!/campaign\.(?:start_date|end_date)(?!_time)/.test(query), 'v26 query must not use removed date-only fields');
       results=[{campaign:{id:campaignId,name:'Sonata Search 2026',status:'PAUSED',advertisingChannelType:'SEARCH',startDateTime:'2026-10-01 00:00:00',endDateTime:'2026-12-31 23:59:59'},campaignBudget:{amountMicros:'30000000'}}];
+      if (includeVideoCampaigns) results.push(
+        {campaign:{id:videoCampaignId,name:'MZJ Video',status:'ENABLED',advertisingChannelType:'VIDEO'},campaignBudget:{amountMicros:'20000000'}},
+        {campaign:{id:zeroVideoCampaignId,name:'MZJ Video Zero',status:'PAUSED',advertisingChannelType:'VIDEO'},campaignBudget:{amountMicros:'10000000'}});
     }
-    else if(query.includes('metrics.cost_micros'))results=[{campaign:{id:campaignId},metrics:{costMicros:'50000000',impressions:'2000',clicks:'80',ctr:'4',engagements:'30',conversions:'7'}}];
+    else if(query.includes('metrics.cost_micros')) {
+      results=[{campaign:{id:campaignId},metrics:{costMicros:'50000000',impressions:'2000',clicks:'80',ctr:'4',engagements:'30',conversions:'7'}}];
+      if (includeVideoCampaigns) results.push(
+        {campaign:{id:videoCampaignId},metrics:{costMicros:'20000000',impressions:'800',clicks:'45',engagements:'25',conversions:'0'}},
+        {campaign:{id:zeroVideoCampaignId},metrics:{costMicros:'0',impressions:'10',clicks:'0',engagements:'0',conversions:'0'}});
+    }
+    else if(query.includes('metrics.video_trueview_views')) {
+      if (failVideoMetric) return {ok:false,status:400,json:async()=>({error:{message:'Video metric temporarily unavailable'}})};
+      results=[{campaign:{id:campaignId},metrics:{videoTrueviewViews:'0'}}];
+      if (includeVideoCampaigns) results.push(
+        {campaign:{id:videoCampaignId},metrics:{videoTrueviewViews:'147'}},
+        {campaign:{id:zeroVideoCampaignId},metrics:{videoTrueviewViews:'0'}});
+    }
     else if(query.includes('segments.conversion_action_category'))results=[{campaign:{id:campaignId},segments:{conversionActionCategory:'SUBMIT_LEAD_FORM'},metrics:{conversions:'5'}}];
-    else if(query.includes('FROM ad_group_ad'))results=[{campaign:{id:campaignId},adGroup:{name:'Sonata'},adGroupAd:{status:'ENABLED',ad:{id:'222333444',type:'RESPONSIVE_SEARCH_AD'}}}];
+    else if(query.includes('FROM ad_group_ad')) {
+      results=[{campaign:{id:campaignId},adGroup:{name:'Sonata'},adGroupAd:{status:'ENABLED',ad:{id:'222333444',type:'RESPONSIVE_SEARCH_AD'}}}];
+      if (includeVideoCampaigns) results.push(
+        {campaign:{id:videoCampaignId},adGroup:{name:'Youtube'},adGroupAd:{status:'ENABLED',ad:{id:'444333222',type:'VIDEO_RESPONSIVE_AD'}}});
+    }
     else if(query.includes('FROM campaign'))results=[{campaign:{id:campaignId,status:'PAUSED'}}];
     return {ok:true,json:async()=>({results})};
   }
@@ -74,6 +97,22 @@ check(loaded.reports[0].campaigns[0].metrics.costPerLead===10,'Google cost per l
 check(loaded.reports[0].campaigns[0].dailyBudget===30,'Daily budget correctly read from attributed campaign_budget');
 check(loaded.reports[0].campaigns[0].startTime==='2026-10-01 00:00:00' && loaded.reports[0].campaigns[0].stopTime==='2026-12-31 23:59:59', 'Google Ads v26 start/end date-times are mapped to campaign reports');
 check(loaded.reports[0].campaigns[0].ads.length===1,'Google ads and campaign details are connected');
+check(loaded.reports[0].campaigns[0].metrics.impressions === 2000, 'Google impressions are read from the existing period-scoped metrics query');
+check(loaded.reports[0].campaigns[0].metrics.videoViews === null, 'A Search campaign does not display a misleading zero as a video view count');
+check(calls.some(c=>String(c.body.query||'').includes('metrics.video_trueview_views') && String(c.body.query).includes('segments.date')), 'Video views use an independent date-scoped GAQL read');
+includeVideoCampaigns = true;
+const videoLoaded = await report.googleAdsData(null,'last_30d','','2026-11-01','2026-11-18');
+check(videoLoaded.reports[0].campaigns.find(c=>c.id===videoCampaignId).metrics.videoViews === 147, 'A video campaign displays actual TrueView video views');
+check(videoLoaded.reports[0].campaigns.find(c=>c.id===videoCampaignId).metrics.impressions === 800, 'Video impressions remain distinct from TrueView views');
+check(videoLoaded.reports[0].campaigns.find(c=>c.id===zeroVideoCampaignId).metrics.videoViews === 0, 'A confirmed video campaign with API-reported zero views displays zero');
+check(videoLoaded.reports[0].campaigns.find(c=>c.id===campaignId).metrics.videoViews === null, 'Search campaigns without video creatives continue to show unavailable video views');
+check(calls.filter(c=>String(c.body.query||'').includes('metrics.video_trueview_views')).some(c=>String(c.body.query).includes("BETWEEN '2026-11-01' AND '2026-11-18'")), 'Video KPI is scoped to the report filter window');
+failVideoMetric = true;
+const videoUnavailable = await report.googleAdsData(null,'last_30d','','2026-11-01','2026-11-18');
+check(videoUnavailable.status==='ready' && videoUnavailable.reports[0].campaigns[0].metrics.spend===50 && videoUnavailable.reports[0].campaigns.find(c=>c.id===videoCampaignId).metrics.videoViews===null, 'If the video query fails, Google spend and existing campaign metrics remain intact');
+check(videoUnavailable.reports[0].incomplete && videoUnavailable.reports[0].warnings.some(x=>x.includes('مشاهدات الفيديو')), 'Video metric failure is exposed as a warning, not a silent zero');
+includeVideoCampaigns = false;
+failVideoMetric = false;
 check(calls.filter(c=>c.endpoint.endsWith('googleAds:search')).every(c=>!c.body.pageSize),'v26 fixed page size is respected');
 selectedAccounts = [adAccount,disabledAccount];
 const partiallyLoaded = await report.googleAdsData(null,'last_30d','','','');

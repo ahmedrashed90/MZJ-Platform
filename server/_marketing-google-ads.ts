@@ -20,15 +20,19 @@ function period(presetValue: unknown, start: unknown, end: unknown) {
 
 async function loadAccountCampaigns(token: string, account: GoogleAdsAccount, clause: string) {
   const meta = await googleAdsSearch(token, account.id, `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.start_date_time, campaign.end_date_time, campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2);
-  const [metricsResult, leadsResult, adsResult] = await Promise.allSettled([
+  const [metricsResult, videoViewsResult, leadsResult, adsResult] = await Promise.allSettled([
     googleAdsSearch(token, account.id, `SELECT campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.ctr, metrics.engagements, metrics.conversions FROM campaign WHERE segments.date ${clause} AND campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2),
+    // An optional, read-only query: video metrics must never break spending, leads or clicks.
+    googleAdsSearch(token, account.id, `SELECT campaign.id, metrics.video_trueview_views FROM campaign WHERE segments.date ${clause} AND campaign.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2),
     googleAdsSearch(token, account.id, `SELECT campaign.id, segments.conversion_action_category, metrics.conversions FROM campaign WHERE segments.date ${clause} AND campaign.status != 'REMOVED' LIMIT 2000`, account.loginCustomerId, 3),
     googleAdsSearch(token, account.id, `SELECT campaign.id, ad_group_ad.ad.id, ad_group_ad.ad.type, ad_group_ad.status, ad_group.name FROM ad_group_ad WHERE ad_group_ad.status != 'REMOVED' LIMIT 1000`, account.loginCustomerId, 2),
   ]);
   const metricsRows = metricsResult.status === 'fulfilled' ? metricsResult.value.rows : [];
+  const videoViewsRows = videoViewsResult.status === 'fulfilled' ? videoViewsResult.value.rows : [];
   const leadRows = leadsResult.status === 'fulfilled' ? leadsResult.value.rows : [];
   const adRows = adsResult.status === 'fulfilled' ? adsResult.value.rows : [];
   const metricsById = new Map(metricsRows.map(row => [clean(row.campaign?.id), row.metrics || {}]));
+  const videoViewsById = new Map(videoViewsRows.map(row => [clean(row.campaign?.id), row.metrics?.videoTrueviewViews]));
   const leadsById = new Map<string, number>();
   for (const row of leadRows) {
     if (!LEAD_CATEGORIES.has(clean(row.segments?.conversionActionCategory))) continue;
@@ -51,13 +55,22 @@ async function loadAccountCampaigns(token: string, account: GoogleAdsAccount, cl
     const metric = metricsById.get(id) || {};
     const leads = leadsResult.status === 'fulfilled' ? (leadsById.get(id) || 0) : null;
     const spend = number(metric.costMicros) / 1_000_000;
+    const channel = clean(campaign.advertisingChannelType);
+    const videoViewsValue = videoViewsById.get(id);
+    // Non-video campaigns may report a zero for TrueView views; that is not a
+    // supported video KPI. Only show zero for a confirmed video campaign/ad.
+    const hasVideoCreative = (adsByCampaign.get(id) || []).some(ad => /(^VIDEO_|_VIDEO_|VIDEO_AD$)/.test(ad.type));
+    const hasVideoFormat = channel === 'VIDEO' || hasVideoCreative;
+    const videoViews = videoViewsResult.status === 'fulfilled' && videoViewsValue !== undefined && videoViewsValue !== null && clean(videoViewsValue) !== ''
+      && (hasVideoFormat || number(videoViewsValue) > 0) ? number(videoViewsValue) : null;
     return {
       id, accountId: account.id, name: clean(campaign.name) || `حملة ${id}`,
-      status: clean(campaign.status), channel: clean(campaign.advertisingChannelType),
+      status: clean(campaign.status), channel,
       startTime: clean(campaign.startDateTime), stopTime: clean(campaign.endDateTime),
       dailyBudget: campaign.campaignBudget?.amountMicros === undefined && row.campaignBudget?.amountMicros === undefined ? null : number(row.campaignBudget?.amountMicros) / 1_000_000,
       metrics: {
-        spend, impressions: number(metric.impressions), clicks: number(metric.clicks),
+        spend, impressions: metricsResult.status === 'fulfilled' ? number(metric.impressions) : null,
+        videoViews, clicks: number(metric.clicks),
         ctr: number(metric.ctr), engagements: number(metric.engagements),
         conversions: number(metric.conversions), leads,
         costPerLead: leads !== null && leads > 0 ? spend / leads : null,
@@ -67,12 +80,15 @@ async function loadAccountCampaigns(token: string, account: GoogleAdsAccount, cl
   }).filter(row => row.id);
   const warnings = [
     metricsResult.status === 'rejected' ? 'تعذر قراءة أداء الحملات للفترة المختارة' : '',
+    videoViewsResult.status === 'rejected' ? 'تعذر قراءة مشاهدات الفيديو من Google Ads؛ بقية مؤشرات الحملات متاحة' : '',
     leadsResult.status === 'rejected' ? 'تعذر تصنيف تحويلات الليد؛ ستظهر — بدلًا من عدد الليدات' : '',
     adsResult.status === 'rejected' ? 'تعذر قراءة الإعلانات الفرعية' : '',
   ].filter(Boolean);
   return {
     account, campaigns,
-    incomplete: meta.incomplete || (metricsResult.status === 'fulfilled' && metricsResult.value.incomplete) || (leadsResult.status === 'fulfilled' && leadsResult.value.incomplete) || (adsResult.status === 'fulfilled' && adsResult.value.incomplete),
+    incomplete: meta.incomplete || (metricsResult.status === 'fulfilled' && metricsResult.value.incomplete)
+      || videoViewsResult.status === 'rejected' || (videoViewsResult.status === 'fulfilled' && videoViewsResult.value.incomplete)
+      || (leadsResult.status === 'fulfilled' && leadsResult.value.incomplete) || (adsResult.status === 'fulfilled' && adsResult.value.incomplete),
     warnings,
   };
 }

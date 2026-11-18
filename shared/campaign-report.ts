@@ -9,6 +9,7 @@ export type CampaignReportRow = {
   accountName: string; currency: string; sourceCurrency: string; exchangeRate: number | null; campaignId: string; campaignName: string;
   status: string; spend: CampaignReportMetric; clicks: CampaignReportMetric; leads: CampaignReportMetric;
   costPerLead: CampaignReportMetric; interactions: CampaignReportMetric;
+  impressions: CampaignReportMetric; videoViews: CampaignReportMetric;
   interactionsDefinition: string; managerName: string;
 };
 export type CampaignReportProvider = {
@@ -70,7 +71,12 @@ export function normalizeCampaignReportRow(input: {
     accountId, accountName: String(input.accountName || accountId), currency: REPORT_CURRENCY, sourceCurrency, exchangeRate,
     campaignId, campaignName: String(input.campaignName || campaignId), status: String(input.status || ''),
     spend, clicks: finiteMetric(metrics.clicks), leads, costPerLead: spend !== null && leads !== null && leads > 0 ? spend / leads : null,
-    interactions, interactionsDefinition: input.interactionsDefinition, managerName: String(input.managerName || '').trim(),
+    interactions,
+    // Only Google Ads reporting has been expanded. Leave every other provider
+    // and its existing metric definitions unchanged. Unknown means null, not 0.
+    impressions: platform === 'google' ? finiteMetric(metrics.impressions) : null,
+    videoViews: platform === 'google' ? finiteMetric(metrics.videoViews) : null,
+    interactionsDefinition: input.interactionsDefinition, managerName: String(input.managerName || '').trim(),
   };
 }
 export function validateCampaignReportRange(from: unknown, to: unknown) {

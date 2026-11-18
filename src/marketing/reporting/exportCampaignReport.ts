@@ -69,8 +69,8 @@ function zip(parts: Array<[string, string]>) {
 export function campaignReportXlsx(rows: CampaignReportRow[], providers: CampaignReportProvider[], from: string, to: string) {
   // An empty export previously produced a valid but misleading blank workbook.
   if (!rows.length) throw new Error('لا توجد حملات مطابقة للتاريخ والفلاتر المحددة لتصديرها إلى Excel.');
-  const columns = 'ABCDEFGHI'.split('');
-  const heading = ['المنصة', 'الحساب الإعلاني', 'الحملة', 'العملة', 'المبلغ المصروف', 'إجمالي الليدات', 'تكلفة الليد', 'تفاعلات الإعلانات', 'النقرات'];
+  const columns = 'ABCDEFGHIJK'.split('');
+  const heading = ['المنصة', 'الحساب الإعلاني', 'الحملة', 'العملة', 'المبلغ المصروف', 'إجمالي الليدات', 'تكلفة الليد', 'تفاعلات الإعلانات', 'النقرات', 'مرات الظهور', 'مشاهدات الفيديو'];
   const values: string[] = [];
   const row = (n: number, cells: string[], height = 22) => `<row r="${n}" ht="${height}" customHeight="1">${cells.join('')}</row>`;
   values.push(row(1, [cell('A', 1, 'محمد ذعار العجمي للسيارات | تقرير الحملات الإعلانية', 2)], 34));
@@ -89,6 +89,8 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
       cell('G', n, item.costPerLead, item.costPerLead === null ? 6 : 5, item.costPerLead !== null),
       cell('H', n, item.interactions, item.interactions === null ? 6 : 4, item.interactions !== null),
       cell('I', n, item.clicks, item.clicks === null ? 6 : 4, item.clicks !== null),
+      cell('J', n, item.impressions, item.impressions === null ? 6 : 4, item.impressions !== null),
+      cell('K', n, item.videoViews, item.videoViews === null ? 6 : 4, item.videoViews !== null),
     ], 25));
   });
   const notesStart = rows.length + 9;
@@ -97,18 +99,19 @@ export function campaignReportXlsx(rows: CampaignReportRow[], providers: Campaig
   values.push(row(notesStart + 2, [cell('A', notesStart + 2, 'جميع المبالغ بالريال السعودي (SAR). الدولار الأمريكي يحوّل × 3.75؛ العملة غير المحددة لا تُحوّل بالتخمين. تكلفة الليد = الإنفاق ÷ الليدات.', 9)], 27));
   values.push(row(notesStart + 3, [cell('A', notesStart + 3, 'التفاعلات هي مقاييس المنصات الإعلانية المتاحة، وقد تختلف طريقة احتسابها بين المنصات.', 9)], 27));
   values.push(row(notesStart + 4, [cell('A', notesStart + 4, 'المبلغ المصروف يعكس تكلفة الإعلانات خلال الفترة، وليس خصومات البطاقة أو الدفعات والفواتير؛ قد تختلف الضرائب وتواريخ الخصم وفترات الحساب.', 9)], 27));
-  providers.forEach((provider, index) => values.push(row(notesStart + 5 + index, [cell('A', notesStart + 5 + index,
+  values.push(row(notesStart + 5, [cell('A', notesStart + 5, 'مرات الظهور ومشاهدات الفيديو من Google Ads فقط. مشاهدات الفيديو = TrueView Views؛ وهي ليست عدد مرات ظهور الإعلان.', 9)], 27));
+  providers.forEach((provider, index) => values.push(row(notesStart + 6 + index, [cell('A', notesStart + 6 + index,
     `${provider.name}: ${provider.status === 'ready' ? 'متصل' : 'غير متاح'} | ${provider.note || ''} ${provider.incomplete ? '| بعض النتائج غير مكتملة' : ''}`, 9)], 27)));
   const last = Math.max(6, 6 + rows.length);
-  const merges = ['A1:I1','A2:I2','A4:C4','D4:I4', ...Array.from({length: 5 + providers.length}, (_, i) => `A${notesStart + i}:I${notesStart + i}`)];
-  const finalRow = notesStart + 4 + providers.length;
+  const merges = ['A1:K1','A2:K2','A4:C4','D4:K4', ...Array.from({length: 6 + providers.length}, (_, i) => `A${notesStart + i}:K${notesStart + i}`)];
+  const finalRow = notesStart + 5 + providers.length;
   const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:I${finalRow}"/><sheetViews><sheetView workbookViewId="0" rightToLeft="1" showGridLines="0"><pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A7" sqref="A7"/></sheetView></sheetViews>`+
-    `<sheetFormatPr defaultRowHeight="20"/><cols>${[21,32,56,14,23,23,23,23,19].map((w,i) => `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols>`+
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:K${finalRow}"/><sheetViews><sheetView workbookViewId="0" rightToLeft="1" showGridLines="0"><pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A7" sqref="A7"/></sheetView></sheetViews>`+
+    `<sheetFormatPr defaultRowHeight="20"/><cols>${[21,32,56,14,23,23,23,23,19,20,22].map((w,i) => `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols>`+
     `<sheetData>${values.join('')}</sheetData>`+
     // OOXML CT_Worksheet sequence requires autoFilter BEFORE mergeCells.
     // Reversing these generated files that Excel opened only after repair, dropping sheet1.xml.
-    `<autoFilter ref="A6:I${last}"/>`+
+    `<autoFilter ref="A6:K${last}"/>`+
     `<mergeCells count="${merges.length}">${merges.map(ref => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>`+
     `<printOptions horizontalCentered="1"/><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>`+
     `<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
@@ -158,12 +161,12 @@ export function printCampaignReportPdf(rows: CampaignReportRow[], providers: Cam
     .stat {background:#edf4f7;border:1px solid #dae5eb;border-radius:9px;padding:12px 17px;min-width:125px; -webkit-print-color-adjust:exact;print-color-adjust:exact;}
     .stat small{display:block;color:#657487;font-size:10px}.stat b{display:block;font-size:16px;margin-top:6px}
     h2 {font-size:13px;margin:0 0 12px;color:#1d3853;} table {width:100%;border-collapse:collapse;table-layout:fixed;} th {background:#1d3853;color:white;padding:10px 7px;text-align:right;-webkit-print-color-adjust:exact;print-color-adjust:exact;} td {padding:9px 7px;border-bottom:1px solid #e6edf1;vertical-align:middle;overflow-wrap:anywhere;} tbody tr:nth-child(even) {background:#f2f7f9;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    th:nth-child(3){width:29%} .n{direction:ltr;unicode-bidi:isolate;white-space:nowrap;text-align:center} .chart {border:1px solid #e0e8ee;border-radius:10px;margin:20px 0;padding:14px;break-inside:avoid;page-break-inside:avoid;} .barrow {display:grid;grid-template-columns:150px 1fr 95px;gap:10px;align-items:center;margin:8px 0;} .barrow span {overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.barrow i {height:10px;display:block;background:#edf4f7;border-radius:9px;overflow:hidden;} .barrow u{display:block;height:100%;border-radius:9px;background:#258995;-webkit-print-color-adjust:exact;print-color-adjust:exact;}.barrow strong{font-weight:600;text-align:left}
+    th:nth-child(3){width:26%} .n{direction:ltr;unicode-bidi:isolate;white-space:nowrap;text-align:center} .chart {border:1px solid #e0e8ee;border-radius:10px;margin:20px 0;padding:14px;break-inside:avoid;page-break-inside:avoid;} .barrow {display:grid;grid-template-columns:150px 1fr 95px;gap:10px;align-items:center;margin:8px 0;} .barrow span {overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.barrow i {height:10px;display:block;background:#edf4f7;border-radius:9px;overflow:hidden;} .barrow u{display:block;height:100%;border-radius:9px;background:#258995;-webkit-print-color-adjust:exact;print-color-adjust:exact;}.barrow strong{font-weight:600;text-align:left}
     .notice {color:#5c6f82;line-height:1.8;background:#f7fafb;border-radius:9px;padding:10px;margin:16px 0;}.footer {margin-top:24px;border-top:1px solid #d9e4eb;padding-top:12px;color:#718296;}thead{display:table-header-group}tr{break-inside:avoid;}@media print{body{padding:0;}}
     </style></head><body><header class="cover"><h1>تقرير الحملات الإعلانية</h1><p>محمد ذعار العجمي للسيارات • من ${html(from)} إلى ${html(to)} • أُعد ${html(new Date().toLocaleString('ar-SA-u-nu-latn'))}</p></header>
     <div class="facts">${stat('عدد الحملات', String(rows.length))}${sums}</div>
-    <h2>الحملات ومؤشرات الأداء</h2><table><thead><tr>${['المنصة','الحساب','الحملات','العملة','المبلغ المصروف','إجمالي الليدات','تكلفة الليد','تفاعلات الإعلانات','النقرات'].map(label=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr><td>${html(row.platformName)}</td><td>${html(row.accountName)}</td><td>${html(row.campaignName)}</td><td class="n">SAR</td><td class="n">${html(fmt(row.spend))}</td><td class="n">${html(fmt(row.leads))}</td><td class="n">${html(fmt(row.costPerLead))}</td><td class="n">${html(fmt(row.interactions))}</td><td class="n">${html(fmt(row.clicks))}</td></tr>`).join('') || '<tr><td colspan="9">لا توجد حملات في النطاق المحدد.</td></tr>'}</tbody></table>
-    <div class="charts">${charts}</div><aside class="notice">— تعني أن منصة الإعلانات لم توفر المقياس أو لا يمكن حسابه؛ لا تعني صفرًا. تكلفة الليد = الإنفاق ÷ عدد الليدات. جميع المبالغ بالريال السعودي؛ الدولار الأمريكي يُحوّل × 3.75. العملات غير المعروفة لا تُحوّل بالتخمين. مقاييس التفاعلات تختلف بين المنصات. ${providers.filter(p=>p.status!=='ready'||p.incomplete).map(p=>`${html(p.name)}: ${html(p.note||'البيانات غير مكتملة')}`).join(' • ')}</aside>
+    <h2>الحملات ومؤشرات الأداء</h2><table><thead><tr>${['المنصة','الحساب','الحملات','العملة','المبلغ المصروف','إجمالي الليدات','تكلفة الليد','تفاعلات الإعلانات','النقرات','مرات الظهور','مشاهدات الفيديو'].map(label=>`<th>${label}</th>` ).join('')}</tr></thead><tbody>${rows.map(row=>`<tr><td>${html(row.platformName)}</td><td>${html(row.accountName)}</td><td>${html(row.campaignName)}</td><td class="n">SAR</td><td class="n">${html(fmt(row.spend))}</td><td class="n">${html(fmt(row.leads))}</td><td class="n">${html(fmt(row.costPerLead))}</td><td class="n">${html(fmt(row.interactions))}</td><td class="n">${html(fmt(row.clicks))}</td><td class="n">${html(fmt(row.impressions))}</td><td class="n">${html(fmt(row.videoViews))}</td></tr>`).join('') || '<tr><td colspan="11">لا توجد حملات في النطاق المحدد.</td></tr>'}</tbody></table>
+    <div class="charts">${charts}</div><aside class="notice">— تعني أن منصة الإعلانات لم توفر المقياس أو لا يمكن حسابه؛ لا تعني صفرًا. تكلفة الليد = الإنفاق ÷ عدد الليدات. جميع المبالغ بالريال السعودي؛ الدولار الأمريكي يُحوّل × 3.75. العملات غير المعروفة لا تُحوّل بالتخمين. مقاييس التفاعلات تختلف بين المنصات. مرات الظهور ومشاهدات TrueView للفيديو مخصصة لـ Google Ads ولا تعني الشيء نفسه. ${providers.filter(p=>p.status!=='ready'||p.incomplete).map(p=>`${html(p.name)}: ${html(p.note||'البيانات غير مكتملة')}`).join(' • ')}</aside>
     <footer class="footer">تقرير MZJ • مصدر البيانات: واجهات المنصات الإعلانية المرتبطة بالنظام، وليس سجلات CRM.</footer>
     <script>window.addEventListener('load',()=>{setTimeout(()=>{window.focus();window.print()},250)});<\/script></body></html>`;
   printWindow.document.open(); printWindow.document.write(page); printWindow.document.close();

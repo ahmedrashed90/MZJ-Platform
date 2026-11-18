@@ -229,7 +229,7 @@ export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
         <article><ChartBar size={23}/><span>تفاعلات الإعلانات</span><strong>{allInteractionsKnown ? number(totalInteractions) : '—'}</strong><small>{allInteractionsKnown ? 'وفق تعريف كل منصة' : 'بعض المنصات لا تعيد التفاعلات'}</small></article>
       </section>
       <section className="panel mcr-table-panel"><header><div><h4>الحملات</h4><p>{number(rows.length)} حملة • {data.from} إلى {data.to}</p></div><small title="وقت جلب تقرير MZJ؛ وقد تكون بيانات Windsor.ai مخزنة لدى المزود">آخر تحديث: {new Date(data.generatedAt).toLocaleString('ar-SA-u-nu-latn')}</small></header>
-        <div className="mcr-table-scroll"><table><thead><tr><th>المنصة</th><th>الحساب</th><th>الحملات</th><th>مدير الحملة</th><th>العملة</th><th>المبلغ المصروف</th><th>إجمالي الليدات</th><th>تكلفة الليد</th><th>تفاعلات الإعلانات</th><th>النقرات</th></tr></thead>
+        <div className="mcr-table-scroll"><table><thead><tr><th>المنصة</th><th>الحساب</th><th>الحملات</th><th>مدير الحملة</th><th>العملة</th><th>المبلغ المصروف</th><th>إجمالي الليدات</th><th>تكلفة الليد</th><th>تفاعلات الإعلانات</th><th>النقرات</th><th title="عدد مرات عرض الإعلان كما تقيسها Google Ads">مرات الظهور</th><th title="مشاهدات TrueView المسجّلة في Google Ads، وليست مرات الظهور">مشاهدات الفيديو</th></tr></thead>
           {rows.map(row => <tbody key={row.key} className={row.key === selectedKey ? 'mcr-selected-campaign' : ''}>
             <tr ref={element => { if (row.key === selectedKey) highlightedRow.current = element; }}
               tabIndex={0} role="button" aria-label={`تفاصيل الحملة ${row.campaignName}`}
@@ -238,9 +238,9 @@ export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
               <td><span className={`mcr-platform-label ${row.platform}`}>{row.platformName}</span></td><td dir="auto">{row.accountName}</td>
               <td><bdi dir="auto">{row.campaignName}</bdi></td><td>{row.managerName || 'غير محدد'}</td>
               <td title={row.exchangeRate === 3.75 ? 'تم التحويل من USD × 3.75' : row.exchangeRate === null ? 'العملة الأصلية غير معروفة أو غير مدعومة؛ الإنفاق غير محتسب' : 'العملة الأصلية SAR'}>SAR</td>
-              <td dir="ltr">{currencyValue(row.spend,'ر.س')}</td><td>{number(row.leads)}</td><td dir="ltr">{currencyValue(row.costPerLead,'ر.س')}</td><td title={row.interactionsDefinition}>{number(row.interactions)}</td><td>{number(row.clicks)}</td>
+              <td dir="ltr">{currencyValue(row.spend,'ر.س')}</td><td>{number(row.leads)}</td><td dir="ltr">{currencyValue(row.costPerLead,'ر.س')}</td><td title={row.interactionsDefinition}>{number(row.interactions)}</td><td>{number(row.clicks)}</td><td>{number(row.impressions)}</td><td title={row.platform === 'google' ? 'مشاهدات TrueView الفعلية، ولا تشمل مرات الظهور' : 'المؤشر مخصص لـ Google Ads'}>{number(row.videoViews)}</td>
             </tr>
-            {row.key === selectedKey && <tr className="mcr-selected-details"><td colSpan={10}>
+            {row.key === selectedKey && <tr className="mcr-selected-details"><td colSpan={12}>
               <div className="mcr-campaign-details">
                 <div><strong>{row.campaignName}</strong><small>{row.platformName} · {row.accountName}</small></div>
                 <div className="mcr-campaign-details-numbers">
@@ -249,6 +249,10 @@ export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
                   <span>تكلفة الليد <b>{currencyValue(row.costPerLead,'ر.س')}</b></span>
                   <span>التفاعلات <b>{number(row.interactions)}</b></span>
                   <span>النقرات <b>{number(row.clicks)}</b></span>
+                  {row.platform === 'google' && <>
+                    <span>مرات الظهور <b>{number(row.impressions)}</b></span>
+                    <span title="مشاهدات TrueView المسجّلة، وليست مرات الظهور">مشاهدات الفيديو <b>{number(row.videoViews)}</b></span>
+                  </>}
                 </div>
                 <div className="mcr-campaign-manager"><label><span>مدير الحملة</span><input type="text" maxLength={120} value={managerDraft}
                   disabled={!data.canEditManager || managerBusy} placeholder="اكتب اسم مدير الحملة"
@@ -262,7 +266,7 @@ export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
               </div>
             </td></tr>}
           </tbody>)}
-          {!rows.length && <tbody><tr><td colSpan={10} className="mcr-empty">لا توجد حملات في الفترة أو الفلاتر المختارة، أو أن جميع حسابات الإعلانات غير متاحة.</td></tr></tbody>}
+          {!rows.length && <tbody><tr><td colSpan={12} className="mcr-empty">لا توجد حملات في الفترة أو الفلاتر المختارة، أو أن جميع حسابات الإعلانات غير متاحة.</td></tr></tbody>}
         </table></div>
       </section>
     </>}

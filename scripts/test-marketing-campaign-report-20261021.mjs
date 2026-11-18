@@ -47,7 +47,7 @@ const adapter = (provider, campaigns, extra = {}) => async (sql, preset, id, fro
 };
 const server = loadTS('server/_marketing-campaign-report.ts', {
   './_marketing-meta-ads.js': { metaAdsData: adapter('meta', [{id:'A',name:'Meta A',status:'ACTIVE',metrics:{spend:500,leads:10,interactions:40}}]) },
-  './_marketing-google-ads.js': { googleAdsData: adapter('google',[{id:'B',name:'Google B',status:'ENABLED',metrics:{spend:45,leads:2,engagements:80}}]) },
+  './_marketing-google-ads.js': { googleAdsData: adapter('google',[{id:'B',name:'Google B',status:'ENABLED',metrics:{spend:45,leads:2,engagements:80,clicks:28,impressions:290,videoViews:147}}]) },
   './_marketing-tiktok-ads.js': { tiktokAdsData: async (...args) => { paidRefreshCalls.tiktok.push(args[5]); throw Error('Timeout'); } },
   './_marketing-windsor-snapchat.js': { windsorSnapchatAdsData: async (from,to,fresh) => {
     paidRefreshCalls.snapchat.push({from,to,fresh});
@@ -66,6 +66,9 @@ const report = await server.consolidatedCampaignReport(sql, '2026-10-01', '2026-
 check(report.rows.length === 3 && report.providers.length === 4, 'All registered providers appear even when one fails');
 check(report.providers.find(p => p.platform === 'tiktok').status === 'failed', 'Provider errors isolate rather than erase successful data');
 check(report.rows.find(r => r.platform === 'google').interactions === 80, 'Google engagements map to interactions without converting to likes');
+check(report.rows.find(r => r.platform === 'google').impressions === 290 && report.rows.find(r => r.platform === 'google').videoViews === 147, 'Google impressions and TrueView views are preserved independently');
+check(report.rows.filter(r => r.platform !== 'google').every(r => r.impressions === null && r.videoViews === null), 'Other providers keep their original metrics and do not invent Google video values');
+check(shared.normalizeCampaignReportRow({...args,platform:'google',metrics:{spend:0,impressions:0,videoViews:null}}).impressions===0 && shared.normalizeCampaignReportRow({...args,platform:'google',metrics:{spend:0,impressions:0,videoViews:null}}).videoViews===null, 'Real zero impressions are not confused with unavailable video views');
 check(report.rows.find(r => r.platform === 'meta').leads === 10, 'Meta lead attribution preserved');
 check(report.rows.find(r => r.platform === 'meta').managerName === 'MZJ manager', 'Saved local campaign manager is joined on its account/campaign');
 check(report.rows.find(r => r.platform === 'snapchat').clicks === 60 && report.rows.find(r => r.platform === 'snapchat').interactions === null, 'Snapchat clicks are distinct from engagements');
@@ -87,9 +90,12 @@ const binary = await exporters.campaignReportXlsx(report.rows,report.providers,r
 check(new Uint8Array(binary)[0] === 0x50 && new Uint8Array(binary)[1] === 0x4b && binary.byteLength > 1000, 'Export generates a native Excel ZIP container');
 const xlsxText = Buffer.from(binary).toString('utf8');
 check(xlsxText.includes('168.75') && xlsxText.includes('84.375') && xlsxText.includes('SAR'), 'Excel exports actually converted USD spend/CPL and labeled currency SAR');
+check(xlsxText.includes('مشاهدات الفيديو') && xlsxText.includes('مرات الظهور') && xlsxText.includes('147'), 'Excel export retains Google views, impressions, and both new headings');
 try { exporters.printCampaignReportPdf(report.rows,report.providers,report.from,report.to); }
 finally { delete globalThis.window; }
 check(printHtml.includes('168.75') && printHtml.includes('SAR') && printHtml.includes('3.75'), 'PDF print markup actually shows SAR amounts and fixed USD conversion');
+check(printHtml.includes('مشاهدات الفيديو') && printHtml.includes('مرات الظهور') && printHtml.includes('147'), 'PDF report includes both Google impression and TrueView metrics');
+check(fs.readFileSync('src/marketing/components/CampaignReportPage.tsx','utf8').includes('number(row.videoViews)') && fs.readFileSync('src/marketing/components/CampaignReportPage.tsx','utf8').includes('number(row.impressions)') && fs.readFileSync('src/marketing/components/CampaignReportPage.tsx','utf8').includes('colSpan={12}'), 'Campaign table and expanded details include both new Google Ads metrics');
 for (const file of ['src/marketing/components/CampaignReportPage.tsx','src/marketing/pages/EngagementPage.tsx','src/marketing/components/TikTokAdsPanel.tsx','server/_marketing-tiktok-ads.ts']) {
   const source = fs.readFileSync(file,'utf8');
   const output = ts.transpileModule(source,{fileName:file,reportDiagnostics:true,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}});

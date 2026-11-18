@@ -6,7 +6,7 @@ import { marketingDate, marketingFetch, marketingLocalDateKey, marketingQuery } 
 import { MarketingAlert } from './MarketingPage';
 
 type AdsAccount = { id: string; name: string; currency: string; timeZone: string; manager: boolean; loginCustomerId: string };
-type AdsMetrics = { spend: number; impressions: number; clicks: number; ctr: number; engagements: number; conversions: number; leads: number | null; costPerLead: number | null };
+type AdsMetrics = { spend: number; impressions: number | null; videoViews: number | null; clicks: number; ctr: number; engagements: number; conversions: number; leads: number | null; costPerLead: number | null };
 type GoogleCampaign = { id: string; accountId: string; name: string; status: string; channel: string; startTime: string; stopTime: string; dailyBudget: number | null; metrics: AdsMetrics; ads: { id: string; name: string; status: string; type: string }[] };
 type AccountReport = { account: AdsAccount; campaigns: GoogleCampaign[]; incomplete: boolean; warnings: string[] };
 type AdsResponse = { ok: true; status: string; accounts: AdsAccount[]; reports: AccountReport[]; errors: { accountId: string; message: string }[]; preset: string; dateRange: { since: string; until: string } | null; syncedAt: string; note: string };
@@ -83,7 +83,7 @@ export function GoogleAdsPanel() {
       all.campaigns += 1;
       all.spend += campaign.metrics.spend;
       all.clicks += campaign.metrics.clicks;
-      all.impressions += campaign.metrics.impressions;
+      all.impressions += campaign.metrics.impressions || 0;
       all.engagements += campaign.metrics.engagements;
       if (campaign.metrics.leads === null) all.leadsKnown = false;
       else all.leads += campaign.metrics.leads;

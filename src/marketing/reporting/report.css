@@ -27,7 +27,7 @@
 .mcr-currency-fixed{align-self:end;min-height:39px;display:inline-flex;align-items:center;padding:8px 12px;border:1px solid #d9e5e8;background:var(--surface,#f2f7f8);border-radius:10px;font-size:12px;font-weight:700;color:var(--ink,#315364)}
 
 /* Campaign graph selection and local manager annotation. */
-.mcr-table-scroll table { min-width:1200px; }
+.mcr-table-scroll table { min-width:1450px; }
 .mcr-table-scroll tbody.mcr-selected-campaign > tr:first-child { background:#fff3ed; outline:1px solid #e1bdaa; outline-offset:-1px; }
 .mcr-table-scroll tbody tr[role=button] { cursor:pointer; }
 .mcr-table-scroll tbody tr[role=button]:focus-visible { outline:2px solid #b4765c; outline-offset:-2px; }
