@@ -1,0 +1,9 @@
+name = "mzj-facebook-worker"
+main = "src/index.js"
+compatibility_date = "2026-07-23"
+workers_dev = true
+
+[vars]
+PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/facebook"
+FB_GRAPH_API_VERSION = "v20.0"
+MAX_MEDIA_BYTES = "52428800"

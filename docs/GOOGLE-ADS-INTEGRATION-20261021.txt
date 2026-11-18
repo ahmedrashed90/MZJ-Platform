@@ -1,0 +1,88 @@
+MZJ Platform - Google Ads OAuth, publishing and unified paid campaigns
+Release date: 2026-10-21
+Source: MZJ-Platform-ATTENDANCE-EXCEPTIONAL-PERMISSIONS-CLEAN-FULL-20261020(1).zip
+
+PURPOSE
+- Extend the existing platform, never replace the YouTube or Meta connection.
+- Use the SAME Google email as YouTube at the Google consent screen.
+- Use a dedicated Google Ads OAuth client in the existing approved Explorer Google Cloud project.
+- Select both accessible Google Ads customers (or a subset) in Marketing -> Connections.
+- Inside Marketing -> Engagement -> Paid Campaigns, show Meta and Google in ONE dashboard, filter All / Meta / Google.
+- Read Google campaigns, spend, impressions, clicks, CTR, lead conversions, CPL, budgets and ad summaries per customer.
+- Create complete Google Search campaigns with PAUSED status and activate only after a second explicit confirmation.
+- Protect Google credentials and tokens on the server, encrypted in PostgreSQL.
+
+STEP 1 - GOOGLE CLOUD (already configured in this conversation)
+Project: MZJ-Google-Ads, project ID black-beach-512323-f5.
+Google Ads API enabled; access level Explorer approved.
+OAuth Client: MZJ Google Ads Integration, Web application.
+External Audience and the Google account added as test user; Data Access includes:
+  https://www.googleapis.com/auth/adwords
+Additional standard OAuth scopes used by the server: openid email.
+
+In Google Auth Platform -> Clients -> MZJ Google Ads Integration -> edit:
+Authorized redirect URI (add EXACTLY this address):
+  https://mzj-platform.vercel.app/api/marketing/platform-connections/callback/google_ads
+This is a server-side OAuth flow; Authorized JavaScript origins is not required.
+Do NOT change the existing YouTube Authorized Redirect URI or client ID/secret.
+
+STEP 2 - VERCEL ENVIRONMENT VARIABLES
+Project: mzj-platform (correct Vercel project/environment required).
+Add in Vercel -> Settings -> Environment Variables -> Production:
+  GOOGLE_ADS_CLIENT_ID = Client ID from Google Cloud Web application (not shared in chat)
+  GOOGLE_ADS_CLIENT_SECRET = secret from same OAuth client (never put in browser/chat)
+  GOOGLE_ADS_REDIRECT_URI = https://mzj-platform.vercel.app/api/marketing/platform-connections/callback/google_ads
+Retain existing DATABASE_URL and MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY unchanged.
+Retain YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REDIRECT_URI and all Meta config unchanged.
+Redeploy after Vercel environment variables change.
+
+STEP 3 - DATABASE SCHEMA
+Marketing legacy schema version 2 upgrades automatically to version 3 on the first ordinary marketing API request, using an advisory lock and a narrow transaction that only extends four provider check constraints.
+A standalone idempotent SQL migration is also included:
+  database/migrations/20261021_marketing_google_ads_oauth.sql
+Do not run both manually unless required by deployment procedures. The upgrade does NOT clear or alter existing YouTube/Meta tokens, rows or campaign reports.
+
+STEP 4 - CONNECT WITH THE SAME GOOGLE ACCOUNT
+In Marketing -> Connections, find the Google Ads card and press Connect.
+At the Google consent screen SELECT the SAME email used to link YouTube (even though its OAuth credentials are intentionally separate to avoid breaking YouTube).
+After consent the system discovers accessible customer accounts; both accounts will be selectable by customer ID.
+Select the desired accounts, click Save selected accounts. The Google Ads connection shows the signed-in email and existing YouTube channel status as context.
+If an account does not appear, verify the Google email has suitable Google Ads permissions. If using an MCC manager, choose the child advertising accounts, not the manager itself.
+
+STEP 5 - MANAGE AND VIEW
+Marketing -> Engagement -> Paid Campaigns (Meta + Google):
+  All platforms = existing Meta Ads panel + new Google Ads panel
+  Meta = original Meta Ads panel, no changes to its reports or token logic
+  Google Ads = only Google accounts and campaign results
+Google account/campaign status/date filters are independent of the Meta filters.
+Campaigns can be paused. Enabling campaigns requires marketing.campaign.edit permission and an explicit confirmation that this may cause actual spend.
+Creating a Google Search campaign requires marketing.campaign.create permission. Campaign + daily budget + Saudi location targeting + ad group + phrase keywords + responsive text ad are validated and created atomically, with the campaign PAUSED.
+Existing non-Search campaigns may be shown and reported, subject to Google Ads API fields and account permissions; creating them inside MZJ is not included in this release.
+
+DATA ACCURACY AND SECURITY
+- Google lead figures are based on Google Ads conversion-action categories. They are NOT CRM customer records; this release does NOT implement Google Lead Form webhooks or CRM ingestion.
+- Never add Meta and Google spend across different currencies. The UI keeps amounts by advertising account/currency.
+- Read-only report requests never activate campaigns or cause ad spend.
+- Google OAuth refresh tokens are stored encrypted server-side; existing YouTube tokens are left intact.
+- If External OAuth consent remains in Testing status, Google may expire refresh tokens after 7 days; complete verification/publishing steps for durable production authorization when eligible.
+- Google Ads Explorer level has production access with daily request limits and possible feature restrictions.
+- API version: v26. Paging uses Google Ads fixed 10,000-row pages without an unsupported pageSize argument.
+- Important: Search campaign creation and monitoring were mocked/tested without actual production API access. Run acceptance checks on your own accounts AFTER deploying with real OAuth credentials. Do not enable a real campaign until creatives, targeting, bidding, billing and tracking are reviewed.
+
+SUGGESTED ACCEPTANCE TEST
+[ ] Google Ads OAuth browser popup succeeds and reports the expected Google email.
+[ ] Existing YouTube connection, publish settings, and existing videos still work.
+[ ] Both accessible Google Ads customer IDs appear and remain selected after reload.
+[ ] Meta report still matches Meta Ads Manager without changed filters or naming.
+[ ] Google campaign totals match Google Ads UI over an identical reporting period/currency.
+[ ] Search campaign creation produces a PAUSED campaign with budget, ad group, keywords and ad.
+[ ] Campaign remains PAUSED (zero new spend from creation alone) until an authorized user explicitly enables it.
+[ ] Users without editing rights cannot create, pause, or enable campaigns.
+
+VALIDATION PERFORMED IN LOCAL SOURCE WORKSPACE
+22/22 Google Ads mocked provider and UI checks passed.
+62/62 existing Meta Ads campaign regression checks passed.
+102/102 existing marketing workflow regression checks passed.
+All modified TypeScript/TSX files parsed with TypeScript transpileModule.
+Full Vite production build was not executed because project dependencies were unavailable in the isolated test environment (no network package installation).
+Production OAuth/Google Ads/DB E2E tests require actual credentials and a deployed environment; not performed.

@@ -1,0 +1,639 @@
+import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
+import { ensureAttendanceSchema } from "./_attendance-schema.js";
+
+export const ATTENDANCE_TIME_ZONE = "Asia/Riyadh";
+
+export type ActiveAttendancePeriod = {
+  assignment_id: string;
+  user_id: string;
+  schedule_id: string;
+  schedule_name: string;
+  period_id: string;
+  period_name: string;
+  period_sort_order: number;
+  start_time: string;
+  end_time: string;
+  grace_minutes: number;
+  work_date: string;
+  scheduled_start_at: string;
+  scheduled_end_at: string;
+};
+
+export class AttendanceError extends Error {
+  code: string;
+  status: number;
+  details?: Record<string, unknown>;
+
+  constructor(code: string, message: string, status = 400, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "AttendanceError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+function dateOnly(value: unknown) {
+  return String(value ?? "").slice(0, 10);
+}
+
+export function formatMinutes(minutes: number) {
+  const safe = Math.max(0, Math.floor(Number(minutes) || 0));
+  const hours = Math.floor(safe / 60);
+  const rest = safe % 60;
+  if (!hours) return `${rest} د`;
+  if (!rest) return `${hours} س`;
+  return `${hours} س ${rest} د`;
+}
+
+export async function isAttendanceEnforcementEnabled() {
+  await ensureAttendanceSchema();
+  const sql = getSql();
+  const [row] = await sql<{ enforcement_enabled: boolean }[]>`
+    select enforcement_enabled
+    from core.attendance_settings
+    where id=1
+    limit 1
+  `;
+  return Boolean(row?.enforcement_enabled);
+}
+
+async function officialAttendanceDayState() {
+  const sql = getSql();
+  const [row] = await sql<{ official_day_end: string; after_official_day_end: boolean }[]>`
+    select
+      official_day_end::text as official_day_end,
+      ((now() at time zone ${ATTENDANCE_TIME_ZONE})::time >= official_day_end) as after_official_day_end
+    from core.attendance_settings
+    where id=1
+    limit 1
+  `;
+  return {
+    officialDayEnd: String(row?.official_day_end || "21:00").slice(0, 5),
+    afterOfficialDayEnd: Boolean(row?.after_official_day_end),
+  };
+}
+
+async function currentAssignment(userId: string) {
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select
+      a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
+      a.weekly_off_day,a.period_ids,coalesce(a.period_overrides,'{}'::jsonb) as period_overrides,
+      a.effective_from::text,a.effective_to::text,
+      (a.weekly_off_day is not null and extract(dow from (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)::int=a.weekly_off_day) as is_day_off
+    from core.attendance_user_schedules a
+    join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
+    where a.user_id=${userId}::uuid
+      and a.effective_from <= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date
+      and (a.effective_to is null or a.effective_to >= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+    order by a.effective_from desc,a.created_at desc
+    limit 1
+  `;
+  return row || null;
+}
+
+async function currentDayRecord(userId: string) {
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,
+      work_date::text as work_date
+    from core.attendance_records
+    where user_id=${userId}::uuid
+      and work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date
+      and check_in is not null
+    order by check_in desc nulls last,created_at desc
+    limit 1
+  `;
+  return row || null;
+}
+
+export async function getActiveAttendancePeriod(userId: string): Promise<ActiveAttendancePeriod | null> {
+  await ensureAttendanceSchema();
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    with clock as (
+      select now() as current_at,
+        (now() at time zone ${ATTENDANCE_TIME_ZONE})::date as local_date,
+        (now() at time zone ${ATTENDANCE_TIME_ZONE})::time as local_time
+    ),
+    candidates_base as (
+      select
+        a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
+        a.weekly_off_day,a.period_ids,
+        p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
+        row_number() over (partition by a.id order by p.sort_order,p.start_time,p.id) as assigned_period_rank,
+        case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
+        end as regular_start_time,
+        case
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
+          when p.end_time::time='12:00'::time then '12:00'::time
+          when p.end_time::time='21:00'::time then '21:00'::time
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'::time
+            else '22:00'::time
+          end
+          else coalesce(
+            nullif(a.period_overrides -> p.id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> p.id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
+        end as regular_end_time,
+        st.friday_start_time,st.friday_end_time,
+        p.grace_minutes,
+        a.effective_from,a.effective_to,c.local_date,c.local_time,c.current_at
+      from clock c
+      join core.attendance_user_schedules a
+        on a.user_id=${userId}::uuid
+       and a.effective_from <= c.local_date
+       and (a.effective_to is null or a.effective_to >= c.local_date - 1)
+      join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
+      join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
+       and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
+      join core.attendance_settings st on st.id=1
+    ),
+    candidates as (
+      select *,
+        case
+          when friday_start_time is not null and friday_end_time is not null
+            and extract(dow from local_date)::int=6
+            and friday_end_time <= friday_start_time and local_time < friday_end_time then local_date - 1
+          when regular_end_time <= regular_start_time and local_time < regular_end_time then local_date - 1
+          else local_date
+        end as work_date
+      from candidates_base
+    ),
+    effective as (
+      select *,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_start_time else regular_start_time end as start_time,
+        case when extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null
+          then friday_end_time else regular_end_time end as end_time
+      from candidates
+      where not (extract(dow from work_date)::int=5 and friday_start_time is not null and friday_end_time is not null and assigned_period_rank <> 1)
+    ),
+    timed as (
+      select *,
+        ((work_date + start_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
+        (((work_date + case when end_time <= start_time then 1 else 0 end) + end_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+      from effective
+      where effective_from <= work_date and (effective_to is null or effective_to >= work_date)
+        and (weekly_off_day is null or extract(dow from work_date)::int <> weekly_off_day)
+    )
+    select *
+    from timed
+    where current_at >= scheduled_start_at and current_at < scheduled_end_at
+    order by period_sort_order,start_time
+    limit 1
+  `;
+
+  if (!row) return null;
+  return {
+    assignment_id: String(row.assignment_id),
+    user_id: String(row.user_id),
+    schedule_id: String(row.schedule_id),
+    schedule_name: String(row.schedule_name || ""),
+    period_id: String(row.period_id),
+    period_name: String(row.period_name || ""),
+    period_sort_order: Number(row.period_sort_order || 0),
+    start_time: String(row.start_time || "").slice(0, 5),
+    end_time: String(row.end_time || "").slice(0, 5),
+    grace_minutes: Math.max(0, Number(row.grace_minutes || 0)),
+    work_date: dateOnly(row.work_date),
+    scheduled_start_at: new Date(row.scheduled_start_at).toISOString(),
+    scheduled_end_at: new Date(row.scheduled_end_at).toISOString(),
+  };
+}
+
+async function recordForPeriod(userId: string, period: ActiveAttendancePeriod) {
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,
+      work_date::text as work_date
+    from core.attendance_records
+    where user_id=${userId}::uuid
+      and period_id=${period.period_id}::uuid
+      and work_date=${period.work_date}::date
+    limit 1
+  `;
+  return row || null;
+}
+
+async function syncCurrentAttendanceSchedules(userId: string | null = null) {
+  const sql = getSql();
+  const updated = await sql<{ id: string }[]>`
+    with resolved_times as (
+      select
+        r.id,r.work_date,
+        case
+          when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
+            then st.friday_start_time
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
+          when p.end_time::time in ('12:00'::time,'21:00'::time) then p.start_time::time
+          else coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'startTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'start_time',''),
+            p.start_time::text
+          )::time
+        end as start_time,
+        case
+          when extract(dow from r.work_date)::int=5 and st.friday_start_time is not null and st.friday_end_time is not null and r.period_id=first_period.id
+            then st.friday_end_time
+          when position('فترة واحدة' in coalesce(p.name,'')) > 0 then coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
+          when p.end_time::time='12:00'::time then '12:00'::time
+          when p.end_time::time='21:00'::time then '21:00'::time
+          when p.end_time::time='22:00'::time then case
+            when coalesce(
+              nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+              nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+              p.end_time::text
+            )::time='21:00'::time then '21:00'::time
+            else '22:00'::time
+          end
+          else coalesce(
+            nullif(a.period_overrides -> r.period_id::text ->> 'endTime',''),
+            nullif(a.period_overrides -> r.period_id::text ->> 'end_time',''),
+            p.end_time::text
+          )::time
+        end as end_time
+      from core.attendance_records r
+      join core.attendance_user_schedules a on a.id=r.assignment_id
+      join core.attendance_periods p on p.id=r.period_id
+      join core.attendance_settings st on st.id=1
+      left join lateral (
+        select fp.id
+        from core.attendance_periods fp
+        where fp.schedule_id=a.schedule_id and fp.is_active=true
+          and (a.period_ids is null or cardinality(a.period_ids)=0 or fp.id=any(a.period_ids))
+        order by fp.sort_order,fp.start_time,fp.id
+        limit 1
+      ) first_period on true
+      where r.check_in is not null
+        and (${userId}::uuid is null or r.user_id=${userId}::uuid)
+        and r.work_date >= ((now() at time zone ${ATTENDANCE_TIME_ZONE})::date - 1)
+        and (
+          r.check_out is null
+          or r.checkout_source='auto'
+          or (r.checkout_source='manual' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+        )
+    ),
+    resolved as (
+      select
+        id,
+        ((work_date + start_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_start_at,
+        (((work_date + case when end_time <= start_time then 1 else 0 end) + end_time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
+      from resolved_times
+    )
+    update core.attendance_records r
+    set
+      scheduled_start_at=x.scheduled_start_at,
+      scheduled_end_at=x.scheduled_end_at,
+      check_out=case
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now() then x.scheduled_end_at
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then null
+        else r.check_out
+      end,
+      checkout_source=case
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now() then 'auto'
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then null
+        else r.checkout_source
+      end,
+      work_minutes=case
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at <= now()
+          then greatest(0,floor(extract(epoch from (x.scheduled_end_at-r.check_in))/60))::int
+        when r.checkout_source in ('auto','manual') and x.scheduled_end_at > now() then 0
+        else r.work_minutes
+      end,
+      updated_at=now()
+    from resolved x
+    where r.id=x.id
+      and (
+        r.scheduled_start_at is distinct from x.scheduled_start_at
+        or r.scheduled_end_at is distinct from x.scheduled_end_at
+        or (r.checkout_source in ('auto','manual') and r.check_out is distinct from case when x.scheduled_end_at <= now() then x.scheduled_end_at else null end)
+        or (r.checkout_source='manual' and r.work_date=(now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+      )
+    returning r.id::text
+  `;
+  return updated.length;
+}
+
+async function closeExpiredAttendanceRecords(userId: string | null = null) {
+  const sql = getSql();
+  // Permissions are accounting intervals, never physical punches.
+  // Only the normal scheduled end can automatically close a real check-in.
+  const automatic = await sql<{ id: string; user_id: string }[]>`
+    update core.attendance_records r
+    set
+      check_out=r.scheduled_end_at,
+      checkout_source='auto',
+      work_minutes=greatest(0,floor(extract(epoch from (r.scheduled_end_at-r.check_in))/60))::int,
+      updated_at=now()
+    where r.check_in is not null
+      and r.check_out is null
+      and r.scheduled_end_at <= now()
+      and (${userId}::uuid is null or r.user_id=${userId}::uuid)
+    returning r.id::text,r.user_id::text
+  `;
+  return automatic;
+}
+
+export async function getLoginAttendanceState(userId: string) {
+  await ensureAttendanceSchema();
+  await syncCurrentAttendanceSchedules(userId);
+  await closeExpiredAttendanceRecords(userId);
+  const [activePeriod, officialDay] = await Promise.all([
+    getActiveAttendancePeriod(userId),
+    officialAttendanceDayState(),
+  ]);
+  const assignment = activePeriod ? null : await currentAssignment(userId);
+  if (!activePeriod) {
+    const record = await currentDayRecord(userId);
+    return {
+      assigned: Boolean(assignment),
+      activePeriod: null,
+      record,
+      scheduleName: assignment?.schedule_name || null,
+      isDayOff: Boolean(assignment?.is_day_off),
+      weeklyOffDay: assignment?.weekly_off_day === null || assignment?.weekly_off_day === undefined ? null : Number(assignment.weekly_off_day),
+      officialDayEnd: officialDay.officialDayEnd,
+      afterOfficialDayEnd: officialDay.afterOfficialDayEnd,
+    };
+  }
+  const record = await recordForPeriod(userId, activePeriod);
+  return {
+    assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name, isDayOff: false, weeklyOffDay: null,
+    officialDayEnd: officialDay.officialDayEnd, afterOfficialDayEnd: officialDay.afterOfficialDayEnd,
+  };
+}
+
+function isoOrNull(value: unknown) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export async function getSelfAttendanceState(userId: string) {
+  const [state, enforcementEnabled] = await Promise.all([
+    getLoginAttendanceState(userId),
+    isAttendanceEnforcementEnabled(),
+  ]);
+  const period = state.activePeriod;
+  const record = state.record;
+  const checkedIn = Boolean(record?.check_in);
+  const checkedOut = Boolean(record?.check_out);
+
+  return {
+    enforcementEnabled,
+    assigned: state.assigned,
+    scheduleName: state.scheduleName || null,
+    isDayOff: Boolean(state.isDayOff),
+    weeklyOffDay: state.weeklyOffDay,
+    officialDayEnd: state.officialDayEnd,
+    afterOfficialDayEnd: Boolean(state.afterOfficialDayEnd),
+    activePeriod: period ? {
+      id: period.period_id,
+      name: period.period_name,
+      startTime: period.start_time,
+      endTime: period.end_time,
+      graceMinutes: period.grace_minutes,
+      workDate: period.work_date,
+      scheduledStartAt: period.scheduled_start_at,
+      scheduledEndAt: period.scheduled_end_at,
+    } : null,
+    record: record ? {
+      id: String(record.id || ""),
+      checkIn: isoOrNull(record.check_in),
+      checkOut: isoOrNull(record.check_out),
+      checkoutSource: record.checkout_source || null,
+      delayMinutes: Math.max(0, Number(record.delay_minutes || 0)),
+      workMinutes: Math.max(0, Number(record.work_minutes || 0)),
+      status: String(record.status || ""),
+    } : null,
+    canCheckIn: Boolean(period && !checkedIn),
+    hasOpenAttendance: Boolean(checkedIn && !checkedOut),
+  };
+}
+
+// Exemption from device verification changes the login gate, not the
+// employee's attendance obligations. The login button explicitly requests
+// check-in, so record the real active shift without restricting access outside
+// that shift. Never manufacture punches on days off, outside work periods, or
+// after the same shift has already been recorded/closed.
+export async function registerExemptLoginAttendance(userId: string, confirmCheckIn: boolean) {
+  if (!confirmCheckIn) return false;
+  const state = await getLoginAttendanceState(userId);
+  if (!state.activePeriod || state.record?.check_in || state.record?.check_out) return false;
+  await registerAttendanceCheckIn(userId, state.activePeriod);
+  return true;
+}
+
+export async function checkInCurrentAttendance(userId: string) {
+  const state = await getLoginAttendanceState(userId);
+  if (!state.assigned) {
+    throw new AttendanceError("ATTENDANCE_NOT_ASSIGNED", "لم يتم تحديد جدول عمل لهذا المستخدم", 400);
+  }
+  if (!state.activePeriod) {
+    if (state.isDayOff) {
+      throw new AttendanceError("WEEKLY_DAY_OFF", "اليوم هو يوم الإجازة الأسبوعية المحدد لك", 400);
+    }
+    throw new AttendanceError("OUTSIDE_WORK_PERIOD", "لا توجد فترة عمل فعالة الآن لتسجيل الحضور", 400);
+  }
+  if (state.record?.check_in && !state.record?.check_out) return state.record;
+  if (state.record?.check_out) {
+    throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم تسجيل الانصراف لهذه الفترة بالفعل", 400);
+  }
+  return registerAttendanceCheckIn(userId, state.activePeriod);
+}
+
+// Device-verified accounts may access the platform only during their own
+// configured work period (including Friday and per-user overrides). Users
+// exempt from device verification are intentionally not subject to this gate.
+export async function requireVerifiedDeviceWorkPeriod(userId: string) {
+  const period = await getActiveAttendancePeriod(userId);
+  if (!period) {
+    throw new AttendanceError(
+      "OUTSIDE_WORK_PERIOD",
+      "الدخول متاح خلال مواعيد العمل المحددة لك فقط. تواصل مع مدير النظام إذا كان جدولك غير محدد.",
+      403,
+    );
+  }
+  return period;
+}
+
+export async function requireAttendanceForLogin(
+  userId: string,
+  options: { confirmCheckIn?: boolean; forceEnforcement?: boolean } = {},
+) {
+  const enforcementEnabled = options.forceEnforcement === true || await isAttendanceEnforcementEnabled();
+  const state = await getLoginAttendanceState(userId);
+
+  if (!state.assigned) return { enforced: false, checkedIn: false, state };
+
+  if (!state.activePeriod) {
+    return { enforced: false, checkedIn: false, state };
+  }
+
+  const attendanceDetails = {
+    attendanceRequired: true,
+    scheduleName: state.activePeriod.schedule_name,
+    periodName: state.activePeriod.period_name,
+    startTime: state.activePeriod.start_time,
+    endTime: state.activePeriod.end_time,
+  };
+
+  if (state.record?.check_in && !state.record?.check_out) {
+    return { enforced: enforcementEnabled, checkedIn: true, state };
+  }
+  if (state.record?.check_out && state.record?.checkout_source === "authorized") {
+    return { enforced: enforcementEnabled, checkedIn: true, state };
+  }
+  if (state.record?.check_out) {
+    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
+    throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم إنهاء هذه الفترة بالفعل. انتظر فترة العمل التالية.", 403);
+  }
+
+  if (options.confirmCheckIn) {
+    const record = await registerAttendanceCheckIn(userId, state.activePeriod);
+    return { enforced: enforcementEnabled, checkedIn: true, state: { ...state, record } };
+  }
+
+  if (enforcementEnabled) {
+    throw new AttendanceError(
+      "ATTENDANCE_REQUIRED",
+      "سجل الحضور لإكمال الدخول إلى المنصة",
+      409,
+      attendanceDetails,
+    );
+  }
+
+  return { enforced: false, checkedIn: false, state };
+}
+
+export async function registerAttendanceCheckIn(
+  userId: string,
+  period: ActiveAttendancePeriod,
+) {
+  await ensureAttendanceSchema();
+  return withDatabaseAdvisoryLock(`mzj:attendance-check-in:${userId}`, async () => {
+    const sql = getSql();
+    const existing = await recordForPeriod(userId, period);
+    if (existing?.check_in) return existing;
+
+    const scheduledStart = new Date(period.scheduled_start_at).getTime();
+    const lateAfter = scheduledStart + period.grace_minutes * 60000;
+    const delayMinutes = Math.max(0, Math.floor((Date.now() - lateAfter) / 60000));
+    const status = delayMinutes > 0 ? "late" : "present";
+
+    const [row] = await sql<any[]>`
+      insert into core.attendance_records(
+        user_id,assignment_id,schedule_id,period_id,work_date,
+        period_name,period_sort_order,scheduled_start_at,scheduled_end_at,grace_minutes,
+        check_in,delay_minutes,work_minutes,status,created_at,updated_at
+      ) values (
+        ${userId}::uuid,${period.assignment_id}::uuid,${period.schedule_id}::uuid,${period.period_id}::uuid,${period.work_date}::date,
+        ${period.period_name},${period.period_sort_order},${period.scheduled_start_at}::timestamptz,${period.scheduled_end_at}::timestamptz,${period.grace_minutes},
+        now(),${delayMinutes},0,${status},now(),now()
+      )
+      on conflict(user_id,period_id,work_date) where period_id is not null
+      do update set
+        assignment_id=excluded.assignment_id,
+        schedule_id=excluded.schedule_id,
+        period_name=excluded.period_name,
+        period_sort_order=excluded.period_sort_order,
+        scheduled_start_at=excluded.scheduled_start_at,
+        scheduled_end_at=excluded.scheduled_end_at,
+        grace_minutes=excluded.grace_minutes,
+        check_in=coalesce(core.attendance_records.check_in,excluded.check_in),
+        check_out=case when core.attendance_records.check_in is null then null else core.attendance_records.check_out end,
+        checkout_source=case when core.attendance_records.check_in is null then null else core.attendance_records.checkout_source end,
+        delay_minutes=case when core.attendance_records.check_in is null then excluded.delay_minutes else core.attendance_records.delay_minutes end,
+        work_minutes=case when core.attendance_records.check_in is null then 0 else core.attendance_records.work_minutes end,
+        status=case when core.attendance_records.check_in is null then excluded.status else core.attendance_records.status end,
+        updated_at=now()
+      returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
+    `;
+    if (!row?.check_in) {
+      throw new AttendanceError("ATTENDANCE_CHECK_IN_NOT_SAVED", "تعذر حفظ وقت الحضور. حاول مرة أخرى.", 500);
+    }
+    return row;
+  });
+}
+
+export async function isAttendanceSessionAllowed(userId: string, verifiedDeviceId?: string | null) {
+  await ensureAttendanceSchema();
+  const sql = getSql();
+  const deviceId = String(verifiedDeviceId || "").trim();
+  // No policy row (or an explicit exemption) means unrestricted access hours.
+  // Do not swallow database errors and accidentally treat a required user as exempt.
+  const [device] = await sql<{ verification_required: boolean; status: string | null; is_primary: boolean | null }[]>`
+    select coalesce(p.verification_required,false) as verification_required,d.status,d.is_primary
+    from core.users u
+    left join core.user_device_policies p on p.user_id=u.id
+    left join core.user_devices d on d.user_id=u.id and d.device_id=${deviceId || "__NO_DEVICE__"}
+    where u.id=${userId}::uuid
+    limit 1
+  `;
+  if (!device) return false;
+  if (!device.verification_required) return true;
+  if (!deviceId || device.status !== "approved") return false;
+
+  // Apply the time gate to both primary and secondary approved devices.
+  const activePeriod = await getActiveAttendancePeriod(userId);
+  if (!activePeriod) return false;
+  // Secondary devices can access during the shift but cannot create attendance.
+  if (device.is_primary === false) return true;
+
+  // Primary devices must have a real check-in for the active shift. An older
+  // authorized checkout is accepted for historical compatibility only.
+  const [record] = await sql<{ check_in: string | null; check_out: string | null; checkout_source: string | null }[]>`
+    select check_in,check_out,checkout_source
+    from core.attendance_records
+    where user_id=${userId}::uuid
+      and period_id=${activePeriod.period_id}::uuid
+      and work_date=${activePeriod.work_date}::date
+    limit 1
+  `;
+  return Boolean(record?.check_in && (!record.check_out || record.checkout_source === "authorized"));
+}
+
+export async function runAttendanceTick() {
+  await ensureAttendanceSchema();
+  const enforcementEnabled = await isAttendanceEnforcementEnabled();
+  await syncCurrentAttendanceSchedules();
+  const closed = await closeExpiredAttendanceRecords();
+
+  return {
+    ok: true,
+    enforcementEnabled,
+    closedRecords: closed.length,
+    forcedLogoutUsers: 0,
+  };
+}

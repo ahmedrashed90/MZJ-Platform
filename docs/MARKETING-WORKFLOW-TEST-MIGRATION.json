@@ -1,0 +1,485 @@
+{
+  "note": "Intentional specification migration, not production test results. Removed assertions target retired marketing-only UI/creation behavior. All other assertions remain enabled. Replacement: check-marketing-workflow-v2.cjs and browser QA.",
+  "retired": [
+    {
+      "script": "scripts/check-marketing-dashboard-creative-labels-v49.mjs",
+      "label": "task card shows a dedicated creative type label",
+      "previous_assertion": "[\"task card shows a dedicated creative type label\", dashboard.includes(\"<span>نوع الكرييتيف</span>\") && dashboard.includes(\"task.creative_type_name\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-creative-labels-v49.mjs",
+      "label": "task card shows a dedicated creative name label",
+      "previous_assertion": "[\"task card shows a dedicated creative name label\", dashboard.includes(\"<span>اسم الكرييتيف</span>\") && dashboard.includes(\"task.creative_name\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-creative-labels-v49.mjs",
+      "label": "creative name row spans the card width for readability",
+      "previous_assertion": "[\"creative name row spans the card width for readability\", dashboard.includes(\"marketing-dashboard-task-meta-name\") && css.includes(\".marketing-dashboard-task-meta-name { grid-column: 1 / -1; }\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-monotonic-sequence-v38.mjs",
+      "label": "campaign creative creation uses monotonic allocator",
+      "previous_assertion": "['campaign creative creation uses monotonic allocator', server.includes('const creativeIndex = await allocateCreativeIndex(tx, \"campaign\", campaign.id);')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-monotonic-sequence-v38.mjs",
+      "label": "agenda creative creation uses monotonic allocator",
+      "previous_assertion": "['agenda creative creation uses monotonic allocator', server.includes('const creativeIndex = await allocateCreativeIndex(tx, \"agenda\", agenda.id);')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-edit-delete-v1235.mjs",
+      "label": "database page shows an explicit creative delete button",
+      "previous_assertion": "['database page shows an explicit creative delete button', page.includes('marketing-creative-delete-button') && page.includes('delete_entity_creative')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-edit-delete-v1235.mjs",
+      "label": "database page requires confirmation before deleting a creative",
+      "previous_assertion": "['database page requires confirmation before deleting a creative', page.includes('تأكيد مسح الكرييتيف')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-edit-delete-v1235.mjs",
+      "label": "database delete refreshes the selected record and list",
+      "previous_assertion": "['database delete refreshes the selected record and list', page.includes('await open(selected);') && page.includes('await load();')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-wholesale-branch-marketing-budget-v11916.mjs",
+      "label": "budget display is a clean detail table",
+      "previous_assertion": "check(\"budget display is a clean detail table\", marketingDatabase.includes(\"marketing-budget-details-table\") && [\"Funnel\", \"الكرييتيف\", \"المنصات والميزانية\", \"عدد الإعلانات\", \"هدف المحتوى\", \"الهدف المتوقع\", \"إجمالي البند\"].every((label) => marketingDatabase.includes(`>${label}<`)));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-wholesale-branch-marketing-budget-v11916.mjs",
+      "label": "budget display uses the custom creative name first",
+      "previous_assertion": "check(\"budget display uses the custom creative name first\", marketingDatabase.includes(\"creative?.name || creative?.creative_type_name\") && budgetManager.includes(\"creative.name || creative.creative_type_name\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-wholesale-branch-marketing-budget-v11916.mjs",
+      "label": "budget totals are recalculated from platform amounts before legacy stored totals",
+      "previous_assertion": "check(\"budget totals are recalculated from platform amounts before legacy stored totals\", marketingDatabase.includes(\"if (platformDetails.length)\") && marketingDatabase.indexOf(\"if (platformDetails.length)\") < marketingDatabase.indexOf(\"const storedTotal = Number(item?.total)\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-database-wholesale-department-v11915.mjs",
+      "label": "marketing budget overview has explicit item and platform types",
+      "previous_assertion": "check(\"marketing budget overview has explicit item and platform types\", marketingDatabase.includes(\"type BudgetOverviewItem\") && marketingDatabase.includes(\"type BudgetOverviewPlatform\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-database-wholesale-department-v11915.mjs",
+      "label": "the Vercel implicit-any budget callbacks are explicitly typed",
+      "previous_assertion": "check(\"the Vercel implicit-any budget callbacks are explicitly typed\", marketingDatabase.includes(\"(item: BudgetOverviewItem, index: number)\") && marketingDatabase.includes(\"(name: string, nameIndex: number)\") && marketingDatabase.includes(\"(platform: BudgetOverviewPlatform)\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-customer-registry-operations-budget-v11914.mjs",
+      "label": "campaign detail exposes create or edit budget action",
+      "previous_assertion": "check(\"campaign detail exposes create or edit budget action\", marketingPage.includes(\"CampaignBudgetManager\") && marketingPage.includes(\"إنشاء الميزانية\") && marketingPage.includes(\"تعديل الميزانية\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-customer-registry-operations-budget-v11914.mjs",
+      "label": "campaign budget uses the professional overview",
+      "previous_assertion": "check(\"campaign budget uses the professional overview\", marketingPage.includes(\"marketing-budget-overview\") && marketingCss.includes(\".marketing-budget-overview\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-customer-registry-operations-budget-v11914.mjs",
+      "label": "campaign budget result is rendered as a clean table",
+      "previous_assertion": "check(\"campaign budget result is rendered as a clean table\", marketingPage.includes(\"marketing-budget-details-table\") && marketingPage.includes(\">الكرييتيف<\") && marketingPage.includes(\">المنصات والميزانية<\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "campaign creation shows creative name and hides quantity",
+      "previous_assertion": "check(\"campaign creation shows creative name and hides quantity\", campaign.includes(\"showNameField showQuantity={false}\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "new campaign creatives store one row and the custom name",
+      "previous_assertion": "check(\"new campaign creatives store one row and the custom name\", marketingServer.includes(\"${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeName}\") && marketingServer.includes(\"creativeName,\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "campaign budget total is no longer multiplied by linked creatives",
+      "previous_assertion": "check(\"campaign budget total is no longer multiplied by linked creatives\", !campaign.includes(\"platformTotal * creativeCount\") && campaign.includes(\"return item.platformAmounts.reduce\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "database grand total sums each stored budget item once",
+      "previous_assertion": "check(\"database grand total sums each stored budget item once\", database.includes(\"budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0)\") && !database.includes(\"budgetPerCreativeTotal\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "database budget display does not cross-product creatives and platforms",
+      "previous_assertion": "check(\"database budget display does not cross-product creatives and platforms\", database.includes(\"marketing-budget-overview\") && database.includes(\"budgetOverview\") && !database.includes(\"creativeEntries.flatMap\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "new Funnel can be added inline in creation and edit",
+      "previous_assertion": "check(\"new Funnel can be added inline in creation and edit\", funnel.includes('action: \"create_funnel\"') && campaign.includes(\"<FunnelSelect\") && manager.includes(\"<FunnelSelect\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "dashboard TASK display uses the central creative name",
+      "previous_assertion": "check(\"dashboard TASK display uses the central creative name\", dashboard.includes(\"task.creative_name\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-crm-branch-marketing-creative-funnel-v11913.mjs",
+      "label": "publish preparation displays the central creative name",
+      "previous_assertion": "check(\"publish preparation displays the central creative name\", publishPrep.includes(\"row.creative_name\") && marketingServer.includes(\"c.name as creative_name\"));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-fresh-import-v1195.mjs",
+      "label": "import action reuses canonical campaign creator",
+      "previous_assertion": "[\"import action reuses canonical campaign creator\", server.includes(\"createCampaignInTransaction\") && server.includes(\"createCampaign(sql\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-fresh-import-v1195.mjs",
+      "label": "import action reuses canonical agenda creator",
+      "previous_assertion": "[\"import action reuses canonical agenda creator\", server.includes(\"createAgendaInTransaction\") && server.includes(\"createAgenda(sql\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-fresh-import-v1195.mjs",
+      "label": "one transaction and idempotent migration key",
+      "previous_assertion": "[\"one transaction and idempotent migration key\", server.includes(\"importFreshMarketingBundle\") && server.includes(\"marketing.data_migrations\") && server.includes(\"for update\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-fresh-import-v1195.mjs",
+      "label": "old campaign code is preserved only for import",
+      "previous_assertion": "[\"old campaign code is preserved only for import\", server.includes(\"preserveRequestedCode\") && server.includes(\"كود الحملة موجود بالفعل\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-fresh-import-v1195.mjs",
+      "label": "database page exposes fresh import",
+      "previous_assertion": "[\"database page exposes fresh import\", page.includes(\"FreshMarketingImportModal\") && page.includes(\"نقل حملة وأجندة\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "campaign budget selects multiple creatives",
+      "previous_assertion": "[\"campaign budget selects multiple creatives\", campaign.includes(\"creativeTempIds: string[]\") && campaign.includes('label=\"المنتج / الكرييتيف\"')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "campaign schedule selects multiple creatives per day",
+      "previous_assertion": "[\"campaign schedule selects multiple creatives per day\", campaign.includes('hint=\"يمكن اختيار أكثر من كرييتيف لنفس اليوم\"')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "campaign creation persists all budget creative links",
+      "previous_assertion": "[\"campaign creation persists all budget creative links\", server.includes(\"for (const creativeId of creativeIds)\") && server.includes(\"insert into marketing.budget_item_creatives\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "campaign schedule expands all selected creatives",
+      "previous_assertion": "[\"campaign schedule expands all selected creatives\", server.includes(\"for (const creativeId of creativeIds)\") && server.includes(\"marketing.publish_schedule\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "database add creative action is redesigned",
+      "previous_assertion": "[\"database add creative action is redesigned\", database.includes(\"marketing-add-creative-button-copy\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs",
+      "label": "archive actions are redesigned",
+      "previous_assertion": "[\"archive actions are redesigned\", database.includes(\"marketing-archive-panel\") && database.includes(\"marketing-row-archive-button\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-database-report-redesign-v1224.mjs",
+      "label": "dedicated printable report window",
+      "previous_assertion": "[\"dedicated printable report window\", database.includes('window.open(\"\", \"_blank\"') && database.includes(\"popup.document.write\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-database-report-redesign-v1224.mjs",
+      "label": "PDF includes entity data tasks and results",
+      "previous_assertion": "[\"PDF includes entity data tasks and results\", database.includes(\"بيانات ${escapePrintHtml(entityKind)} والتاسكات وجدول النشر ونتائج النشر والتفاعل\") && database.includes(\"<h2>التاسكات</h2>\") && database.includes(\"نتائج النشر والتفاعل\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-database-report-redesign-v1224.mjs",
+      "label": "campaign budget is included in PDF",
+      "previous_assertion": "[\"campaign budget is included in PDF\", database.includes(\"<h2>الميزانية</h2>\") && database.includes(\"budgetRows\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-database-report-redesign-v1224.mjs",
+      "label": "creatives use compact table",
+      "previous_assertion": "[\"creatives use compact table\", database.includes(\"marketing-entity-creatives-table\") && !database.includes(\"marketing-entity-creative-card\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-entity-creative-management-v1223.mjs",
+      "label": "database add creative button",
+      "previous_assertion": "[\"database add creative button\", database.includes(\"إضافة كرييتيف\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-entity-creative-management-v1223.mjs",
+      "label": "database edit creative button",
+      "previous_assertion": "[\"database edit creative button\", database.includes(\"setCreativeManager({ open: true, row: creative })\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-entity-creative-management-v1223.mjs",
+      "label": "creative table styling",
+      "previous_assertion": "[\"creative table styling\", css.includes(\"marketing-entity-creatives-table\") && database.includes(\"marketing-entity-creatives-table\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-zoho-final-upload-raw-folders-v1195.mjs",
+      "label": "Campaign raw-folder button still calls platform API",
+      "previous_assertion": "[\"Campaign raw-folder button still calls platform API\", files.campaign.includes('action: \"create_raw_folders\"') && files.campaign.includes(\"إنشاء فولدرات الخام\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-zoho-final-upload-raw-folders-v1195.mjs",
+      "label": "Agenda raw-folder button still calls platform API",
+      "previous_assertion": "[\"Agenda raw-folder button still calls platform API\", files.agenda.includes('action: \"create_raw_folders\"') && files.agenda.includes(\"إنشاء فولدرات الخام\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs",
+      "label": "complete button is outside task details",
+      "previous_assertion": "[\"complete button is outside task details\", marketingDashboard.includes(\"marketing-dashboard-complete-task\") && marketingDashboard.includes('action: \"complete_task\"') && !taskModal.includes(\"marketing-complete-task-button\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs",
+      "label": "complete button is limited to received execution tasks at 100 percent",
+      "previous_assertion": "[\"complete button is limited to received execution tasks at 100 percent\", marketingDashboard.includes('task.task_kind === \"execution\"') && marketingDashboard.includes(\"progress >= 100\") && marketingDashboard.includes('task.status !== \"completed\"') && marketingDashboard.includes(\"Boolean(task.received_at)\") && marketingDashboard.includes(\"task.can_complete_task\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs",
+      "label": "publish prep distinguishes automatic task preparation from isolated manual publishing",
+      "previous_assertion": "[\"publish prep distinguishes automatic task preparation from isolated manual publishing\", publishPrep.includes(\"تجهيز التاسكات\") && publishPrep.includes(\"تجهيز نشر يدوي جديد\") && publishPrep.includes(\"marketing-publish-task-kind\") && marketingApi.includes(\"where t.task_kind in ('execution','manual_publish')\") && marketingApi.includes(\"t.task_kind in ('task_template','execution')\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs",
+      "label": "automatic publish prep save remains linked to the resolved execution task through the shared schedule service",
+      "previous_assertion": "[\"automatic publish prep save remains linked to the resolved execution task through the shared schedule service\", publishPrep.includes('taskId: editing.task_id || \"\"') && marketingApi.includes(\"requestedTaskId\") && marketingApi.includes(\"activePublishTask(sql,taskId,['execution','manual_publish'])\") && marketingApi.includes(\"replacePublishScheduleGroup\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "publish prep is a vertical list instead of a two-column card board",
+      "previous_assertion": "[\"publish prep is a vertical list instead of a two-column card board\", publishPrep.includes(\"marketing-publish-list-row\") && !publishPrep.includes(\"marketing-publish-card-v2\") && css.includes(\".marketing-publish-list { display: grid; gap: 9px; }\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "manual publish is not blocked by a future date",
+      "previous_assertion": "[\"manual publish is not blocked by a future date\", !publishPrep.includes(\"T23:59:59\") && publishPrep.includes(\"تاريخ النشر مرجع للجدول\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "each task has a direct publish-now action",
+      "previous_assertion": "[\"each task has a direct publish-now action\", publishPrep.includes(\"void publish([row.id])\") && publishPrep.includes(\"نشر الآن\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "publish errors are shown with platform and post type",
+      "previous_assertion": "[\"publish errors are shown with platform and post type\", publishPrep.includes(\"نتيجة تنفيذ النشر\") && publishPrep.includes(\"item.platformName\") && publishPrep.includes(\"item.postTypeName\") && publishPrep.includes(\"item.error\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "final files open from publish prep",
+      "previous_assertion": "[\"final files open from publish prep\", publishPrep.includes(\"downloadMarketingFile\") && publishPrep.includes(\"marketing-publish-file-links\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "database only shows current ready final files",
+      "previous_assertion": "[\"database only shows current ready final files\", database.includes('file.category === \"final-file\" && file.status === \"ready\"') && database.includes(\"activeGroupIds\") && database.includes(\"activeFileIds\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-publish-prep-errors-files-v1215.mjs",
+      "label": "database final file controls use the clean file-row design",
+      "previous_assertion": "[\"database final file controls use the clean file-row design\", database.includes(\"marketing-product-file-row\") && database.includes(\"فتح الملف\") && css.includes(\".marketing-product-file-open\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-unified-dashboard-task-completion-template-v1213.mjs",
+      "label": "execution task shows the completion button on its dashboard card only at 100 percent",
+      "previous_assertion": "[\"execution task shows the completion button on its dashboard card only at 100 percent\", marketingDashboard.includes('className=\"marketing-dashboard-complete-task\"') && marketingDashboard.includes('action: \"complete_task\"') && marketingDashboard.includes('task.task_kind === \"execution\"') && marketingDashboard.includes(\"progress >= 100\") && marketingDashboard.includes(\"Boolean(task.received_at)\") && marketingDashboard.includes(\"task.can_complete_task\") && !taskModal.includes('className=\"marketing-complete-task-button\"')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-unified-dashboard-task-completion-template-v1213.mjs",
+      "label": "marketing dashboard exposes completed tasks list",
+      "previous_assertion": "[\"marketing dashboard exposes completed tasks list\", marketingDashboard.includes(\"marketing-completed-tasks-trigger\") && marketingDashboard.includes(\"data.completed\") && marketingDashboard.includes(\"marketing-completed-tasks-modal\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-unified-dashboard-task-completion-template-v1213.mjs",
+      "label": "completed list shows completion actor and date",
+      "previous_assertion": "[\"completed list shows completion actor and date\", marketingDashboard.includes(\"task.completed_by_name\") && marketingDashboard.includes(\"task.completed_at\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-ui-batch-v1208.mjs",
+      "label": "database keeps the professional PDF command and removes broken Excel exports",
+      "previous_assertion": "check('database keeps the professional PDF command and removes broken Excel exports', database.includes('marketing-detail-command') && database.includes('تصدير PDF كامل') && !database.includes('تصدير جدول النشر') && !database.includes('تصدير مراجعة Excel'));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-ui-batch-v1208.mjs",
+      "label": "budget display uses the professional canonical overview and budget manager",
+      "previous_assertion": "check('budget display uses the professional canonical overview and budget manager', database.includes('marketing-budget-overview') && database.includes('marketing-budget-manage-button') && database.includes('إجمالي الميزانية كاملة') && database.includes('budgetGrandTotal'));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-ui-batch-v1208.mjs",
+      "label": "publish preparation uses redesigned list and full editor",
+      "previous_assertion": "check('publish preparation uses redesigned list and full editor', publishPrep.includes('marketing-publish-list') && publishPrep.includes('marketing-publish-list-row') && publishPrep.includes('marketing-publish-edit-modal'));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-ui-batch-v1208.mjs",
+      "label": "agenda day editor is rebuilt with sidebar and full workspace",
+      "previous_assertion": "check('agenda day editor is rebuilt with sidebar and full workspace', agenda.includes('marketing-agenda-editor-v2') && agenda.includes('marketing-agenda-add-panel'));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-ui-batch-v1208.mjs",
+      "label": "agenda car selection uses a dedicated modal",
+      "previous_assertion": "check('agenda car selection uses a dedicated modal', agenda.includes('carsModal') && creative.includes('marketing-cars-modal'));",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-compact-v1206.mjs",
+      "label": "campaign completion is shown in a dedicated readable stat",
+      "previous_assertion": "[\"campaign completion is shown in a dedicated readable stat\", dashboard.includes('className=\"marketing-dashboard-entity-stats\"') && dashboard.includes('{formatProgress(entity.progress)}')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-compact-v1206.mjs",
+      "label": "department task count and completion use a compact rectangular summary",
+      "previous_assertion": "[\"department task count and completion use a compact rectangular summary\", dashboard.includes('className=\"marketing-dashboard-department-summary\"') && css.includes(\"border-radius: 8px\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-compact-v1206.mjs",
+      "label": "dashboard live refresh remains enabled",
+      "previous_assertion": "[\"dashboard live refresh remains enabled\", dashboard.includes(\"DASHBOARD_LIVE_POLL_MS = 1000\") && dashboard.includes('resource: \"dashboard_version\"')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-compact-v1206.mjs",
+      "label": "responsible colors remain sourced from marketing settings",
+      "previous_assertion": "[\"responsible colors remain sourced from marketing settings\", dashboard.includes(\"task.assigned_user_color\") && dashboard.includes(\"task.content_user_color\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "duplicate content writer is hidden when it is the responsible user",
+      "previous_assertion": "[\"duplicate content writer is hidden when it is the responsible user\", dashboard.includes(\"sameAssignedUser(task)\") && dashboard.includes(\"!sameAssignedUser(task)\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "responsible color comes from marketing settings",
+      "previous_assertion": "[\"responsible color comes from marketing settings\", dashboard.includes(\"task.assigned_user_color\") && api.includes(\"auc.color as assigned_user_color\") && api.includes(\"left join marketing.user_colors auc\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "content writer color comes from marketing settings",
+      "previous_assertion": "[\"content writer color comes from marketing settings\", dashboard.includes(\"task.content_user_color\") && api.includes(\"cuc.color as content_user_color\") && api.includes(\"left join marketing.user_colors cuc\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "completion percentages use a stable visible LTR format",
+      "previous_assertion": "[\"completion percentages use a stable visible LTR format\", dashboard.includes('toLocaleString(\"en-US\"') && dashboard.includes('dir=\"ltr\"') && dashboard.includes(\"نسبة الاكتمال\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "dashboard polls version while visible",
+      "previous_assertion": "[\"dashboard polls version while visible\", dashboard.includes(\"DASHBOARD_LIVE_POLL_MS = 1000\") && dashboard.includes(\"document.visibilityState\") && dashboard.includes('resource: \"dashboard_version\"')]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-live-colors-v1204.mjs",
+      "label": "live refresh is silent and preserves expanded cards",
+      "previous_assertion": "[\"live refresh is silent and preserves expanded cards\", dashboard.includes(\"await load(true)\") && dashboard.includes(\"setExpandedRequired\") && dashboard.includes(\"setExpandedEntities\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-review-workflow-v1202.mjs",
+      "label": "required tasks grouped by department",
+      "previous_assertion": "[\"required tasks grouped by department\", dashboard.includes(\"requiredByDepartment\") && dashboard.includes(\"marketing-dashboard-department\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-review-workflow-v1202.mjs",
+      "label": "readiness grouped by campaign and department",
+      "previous_assertion": "[\"readiness grouped by campaign and department\", dashboard.includes(\"receivedBySource\") && dashboard.includes(\"expandedReadinessDepartments\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-review-workflow-v1202.mjs",
+      "label": "receive action still uses canonical backend flow",
+      "previous_assertion": "[\"receive action still uses canonical backend flow\", dashboard.includes('action: \"receive_task\"') && api.includes(\"async function receiveTask\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-review-workflow-v1202.mjs",
+      "label": "dashboard task cards preserve responsible and content writer",
+      "previous_assertion": "[\"dashboard task cards preserve responsible and content writer\", dashboard.includes(\"task.assigned_name\") && dashboard.includes(\"task.content_user_name\")]",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-content-users-v1200.mjs",
+      "label": "Campaign, agenda, and post-creation creative task flows use the explicit content department ID",
+      "previous_assertion": "expect(\n  \"Campaign, agenda, and post-creation creative task flows use the explicit content department ID\",\n  explicitContentTaskCreationCount >= 3\n);",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-content-users-v1200.mjs",
+      "label": "Campaign and agenda initialize the explicit content department field",
+      "previous_assertion": "expect(\n  \"Campaign and agenda initialize the explicit content department field\",\n  campaign.includes('contentDepartmentId: \"\"') && agenda.includes('contentDepartmentId: \"\"')\n);",
+      "reason": "Superseded marketing creation/dashboard/database UI requirement; replaced by workflow-v2 domain/API/UI tests. Non-marketing assertions retained."
+    },
+    {
+      "script": "scripts/check-marketing-dashboard-build-v1203.mjs",
+      "label": "Two old department accumulators replaced by task/plan typed data",
+      "previous_assertion": "import fs from \"node:fs\";\n\nconst source = fs.readFileSync(\"src/marketing/pages/MarketingDashboardPage.tsx\", \"utf8\");\nconst checks = [\n  [\n    \"required-task department accumulator has an explicit mutable task-array type\",\n    /const current:\\s*\\{\\s*name:\\s*string;\\s*tasks:\\s*any\\[\\]\\s*\\}\\s*=\\s*map\\.get\\(key\\)/,\n  ],\n  [\n    \"readiness department accumulator has an explicit mutable task-array type\",\n    /const current:\\s*\\{\\s*name:\\s*string;\\s*tasks:\\s*any\\[\\]\\s*\\}\\s*=\\s*departments\\.get\\(departmentKey\\)/,\n  ],\n];\n\nlet passed = 0;\nfor (const [name, pattern] of checks) {\n  if (!pattern.test(source)) {\n    console.error(`FAIL: ${name}`);\n    process.exitCode = 1;\n  } else {\n    console.log(`PASS: ${name}`);\n    passed += 1;\n  }\n}\n\nif (process.exitCode) process.exit(process.exitCode);\nconsole.log(`Marketing dashboard build regression v1.20.3: ${passed}/${checks.length} passed.`);\n",
+      "reason": "Dashboard now has two task/product-plan columns, not required/readiness department accumulators."
+    }
+  ]
+}
