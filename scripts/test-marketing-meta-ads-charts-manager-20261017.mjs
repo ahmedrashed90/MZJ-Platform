@@ -135,12 +135,34 @@ async function simulatedSchemaSetup(initialVersion) {
   await exports.ensureMarketingSchema();
   return migrations;
 }
+// The schema is now v4: existing installs must run only the missing *additive*
+// migrations, and a fresh install must bootstrap v3 before adding v4 sizes.
+// Verify each historical starting version rather than assuming v3 is current.
 const upgradeV1 = await simulatedSchemaSetup(1);
-check(upgradeV1.length === 2 && upgradeV1[0].includes('create table if not exists marketing.meta_ads_campaign_managers') && upgradeV1[1].includes('platform_connections_platform_check') && !upgradeV1[0].includes('marketing.work_tasks'), 'Existing v1 databases run only the lightweight manager-table migration');
+check(upgradeV1.length === 3
+  && upgradeV1[0].includes('create table if not exists marketing.meta_ads_campaign_managers')
+  && upgradeV1[1].includes('platform_connections_platform_check')
+  && upgradeV1[2].includes('create table if not exists marketing.production_dimensions')
+  && !upgradeV1.some(script => script.includes('marketing.work_tasks')),
+  'Existing v1 databases run only the additive manager, Google-provider, and dimensions migrations');
 const upgradeV0 = await simulatedSchemaSetup(0);
-check(upgradeV0.length === 1 && upgradeV0[0].includes('marketing.departments') && upgradeV0[0].includes('meta_ads_campaign_managers'), 'Fresh databases include the manager table in full schema bootstrap');
-check((await simulatedSchemaSetup(2)).length === 1, 'Legacy v2 databases run only the narrow Google provider migration');
-check((await simulatedSchemaSetup(3)).length === 0, 'Current databases never rerun Marketing DDL on regular requests');
+check(upgradeV0.length === 2
+  && upgradeV0[0].includes('marketing.departments')
+  && upgradeV0[0].includes('meta_ads_campaign_managers')
+  && upgradeV0[1].includes('marketing.production_dimensions'),
+  'Fresh databases bootstrap existing Marketing tables then add independent production dimensions');
+const upgradeV2 = await simulatedSchemaSetup(2);
+check(upgradeV2.length === 2
+  && upgradeV2[0].includes('platform_connections_platform_check')
+  && upgradeV2[1].includes('marketing.production_dimensions'),
+  'Legacy v2 databases run only the narrow Google-provider and dimensions migrations');
+const upgradeV3 = await simulatedSchemaSetup(3);
+check(upgradeV3.length === 1
+  && upgradeV3[0].includes('create table if not exists marketing.production_dimensions')
+  && upgradeV3[0].includes('on conflict(width,height) do nothing'),
+  'Existing v3 databases only add deduplicated production dimensions');
+check((await simulatedSchemaSetup(4)).length === 0,
+  'Current v4 databases never rerun Marketing DDL on regular requests');
 // Render the actual TSX card functions with a small JSX runtime mock to catch
 // layout/data regressions beyond string-based source checks.
 const debugFrontend = ts.transpileModule(front.replace('export function MetaAdsPanel()', 'export const __campaignMetricCardForTest = CampaignMetricCard;\nexport const __campaignNameForTest = campaignDisplayName;\nexport const __campaignNameTextForTest = CampaignNameText;\nexport function MetaAdsPanel()'), {
