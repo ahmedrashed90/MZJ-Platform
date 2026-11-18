@@ -24,6 +24,7 @@ import { MessagingWindowBadge } from "./MessagingWindowBadge";
 import type { MessagingWindow } from "../../../shared/crm-messaging-window";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta, CrmSaleTransaction } from "../types";
+import { POSTPONED_FOLLOW_UP_INVALID, POSTPONED_FOLLOW_UP_REQUIRED, isPostponedStatus, postponedFollowUpError } from "../../../shared/crm-follow-up";
 
 type Props = {
   lead: CrmLead | null;
@@ -166,10 +167,6 @@ function paymentTypeFor(key: ServiceKey) {
   return "كاش";
 }
 
-function isPostponed(status?: string) {
-  return String(status || "").trim() === "مؤجل";
-}
-
 function normalizeOptions(field: CrmCustomerField) {
   if (!Array.isArray(field.options)) return [];
   return field.options.map((item) => typeof item === "string" ? ({ value: item, label: item }) : item).filter((item) => item?.value);
@@ -244,6 +241,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [salesHistory, setSalesHistory] = useState<CrmSaleTransaction[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const messagesListRef = useRef<HTMLDivElement | null>(null);
+  const followUpDateRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -427,10 +425,18 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   const configuredFields = useMemo(() => {
     const source = meta?.customerFields?.length ? meta.customerFields : fallbackFields;
-    return source.filter((field) => field.is_active !== false && (!field.department_keys?.length || field.department_keys.includes(department)))
+    const postponed = isPostponedStatus(form?.values.status_label);
+    const visible = source.filter((field) => field.is_active !== false && (!field.department_keys?.length || field.department_keys.includes(department)))
       .filter((field) => showConversation || !["status_label", "department_code", "department_transfer"].includes(field.field_key))
-      .filter((field) => field.field_key !== "follow_up_at" || isPostponed(form?.values.status_label))
-      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+      .filter((field) => field.field_key !== "follow_up_at" || postponed);
+    // Required business data must remain visible even if an old admin field layout
+    // has the follow-up field inactive or missing.
+    if (postponed && !visible.some((field) => field.field_key === "follow_up_at")) {
+      const saved = source.find((field) => field.field_key === "follow_up_at");
+      const fallback = fallbackFields.find((field) => field.field_key === "follow_up_at");
+      if (saved || fallback) visible.push({ ...(saved || fallback)!, is_active: true });
+    }
+    return visible.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   }, [meta?.customerFields, department, form?.values.status_label, showConversation]);
 
   function renderTemplateInComposer(template: { content?: string | null } | undefined, sourceForm: CustomerForm | null = form) {
@@ -525,6 +531,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         values: {
           ...activeForm.values,
           status_label: next,
+          follow_up_at: isPostponedStatus(next) && isPostponedStatus(activeForm.values.status_label) ? activeForm.values.follow_up_at : "",
           sold_quantity: next === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
           sold_at: next === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
         },
@@ -607,6 +614,13 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   async function saveLead() {
     const currentLead = lead;
     if (!currentLead) return;
+    const followUpError = postponedFollowUpError(activeForm.values.status_label, activeForm.values.follow_up_at);
+    if (followUpError) {
+      setNotice(followUpError);
+      setMobilePanel("details");
+      followUpDateRef.current?.focus();
+      return;
+    }
     if (!showConversation && isWholesaleDepartmentCode(activeForm.departmentCode) && !activeForm.branchCode) {
       setNotice("اختر فرع قسم الجملة قبل حفظ بيانات العميل");
       return;
@@ -681,6 +695,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       setNoteDraft("");
       onSaved(result.row);
       setNotice("تم حفظ بيانات العميل");
+      setStatusNotice("");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر حفظ بيانات العميل");
     } finally {
@@ -698,19 +713,30 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       values: {
         ...activeForm.values,
         status_label: nextStatus,
-        follow_up_at: isPostponed(nextStatus) ? activeForm.values.follow_up_at : "",
+        follow_up_at: isPostponedStatus(nextStatus) ? activeForm.values.follow_up_at : "",
         sold_quantity: nextStatus === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
         sold_at: nextStatus === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
       },
     };
 
+    if (isPostponedStatus(nextStatus)) {
+      // A quick status selection is not a saved postponement. The date and
+      // status must be committed together through Save customer data.
+      nextForm.values.follow_up_at = "";
+      setForm(nextForm);
+      applyStatusTemplate(nextForm);
+      setMobilePanel("details");
+      setNotice(POSTPONED_FOLLOW_UP_REQUIRED);
+      setStatusNotice("اختر تاريخ المتابعة ثم احفظ بيانات العميل");
+      return;
+    }
     setForm(nextForm);
     applyStatusTemplate(nextForm);
     setSavingStatus(true);
     setStatusNotice("");
     try {
       const payload: Record<string, unknown> = { id: nextForm.id, statusLabel: nextStatus };
-      if (!isPostponed(nextStatus) && previousFollowUpAt) payload.followUpAt = null;
+      if (!isPostponedStatus(nextStatus) && previousFollowUpAt) payload.followUpAt = null;
       if (nextStatus === "تم البيع") payload.soldQuantity = Math.max(1, Math.floor(Number(nextForm.values.sold_quantity || 1)));
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
       setForm((current) => current ? {
@@ -878,7 +904,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   function renderField(field: CrmCustomerField) {
     const currentValue = fieldValue(field);
-    const label = <span>{field.label}{field.is_required ? <b className="crm-required-mark"> *</b> : null}</span>;
+    const requiredFollowUp = field.field_key === "follow_up_at" && isPostponedStatus(activeForm.values.status_label);
+    const label = <span>{field.label}{field.is_required || requiredFollowUp ? <b className="crm-required-mark"> *</b> : null}</span>;
+    if (requiredFollowUp) return <label key={field.id}>{label}<input ref={followUpDateRef} type="date" required aria-required="true" aria-invalid={notice === POSTPONED_FOLLOW_UP_REQUIRED || notice === POSTPONED_FOLLOW_UP_INVALID} value={currentValue} onChange={(event) => { setField(field, event.target.value); if (notice === POSTPONED_FOLLOW_UP_REQUIRED || notice === POSTPONED_FOLLOW_UP_INVALID) setNotice(""); }} />{notice === POSTPONED_FOLLOW_UP_REQUIRED || notice === POSTPONED_FOLLOW_UP_INVALID ? <small role="alert" className="crm-required-mark">{notice}</small> : null}</label>;
     if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{currentValue && !statuses.some((status) => status.value === currentValue) ? <option value={currentValue}>{currentValue}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
     if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} disabled={showConversation} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
     if (field.field_type === "department") return <label key={field.id}>{label}<input value={departmentLabel(activeForm.departmentCode)} readOnly /></label>;
@@ -995,7 +1023,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                       values: {
                         ...current.values,
                         status_label: nextStatus,
-                        follow_up_at: isPostponed(nextStatus) ? current.values.follow_up_at : "",
+                        follow_up_at: isPostponedStatus(nextStatus) && isPostponedStatus(current.values.status_label) ? current.values.follow_up_at : "",
                         sold_at: nextStatus === "تم البيع" ? (current.values.sold_at || riyadhDateInput()) : current.values.sold_at,
                       },
                     } : current);

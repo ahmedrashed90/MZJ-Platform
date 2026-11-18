@@ -1,8 +1,0 @@
-server/_operations-inventory-metrics.ts
-server/_dashboard-data.ts
-server/operations/index.ts
-scripts/check-operations-dashboard-card-calculations-clean.mjs
-scripts/check-operations-dashboard-inventory-approval-pdf-clean.mjs
-package.json
-docs/OPERATIONS-DASHBOARD-CARD-CALCULATIONS-CLEAN-AR.md
-docs/OPERATIONS-DASHBOARD-CARD-CALCULATIONS-CHANGED-FILES.txt
