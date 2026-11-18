@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarBlank, CheckCircle, FolderOpen, LinkSimple, PaperPlaneTilt, Trash, WarningCircle } from '@phosphor-icons/react';
+import { CalendarBlank, CaretLeft, CaretRight, CheckCircle, FolderOpen, LinkSimple, MagnifyingGlass, PaperPlaneTilt, Trash, WarningCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { Empty, Readiness, W, WorkAlert } from './components';
 import { showDate, useWorkQuery, workPost } from './api';
@@ -74,7 +74,7 @@ type CatalogPlatform = { platformId: string; platformName: string; platformCode:
 function formFromIdea(idea: StrategyDraftIdea): EntryForm {
   const platforms: EntryForm['platforms'] = {};
   for (const platform of idea.platforms) platforms[platform.platformId] = Object.fromEntries(platform.postTypes.map(type => [type.postTypeId, String(type.budget ?? '')]));
-  return { scheduledOn: idea.scheduledOn || idea.publishOn || idea.fundingOn || '', fundingOn: idea.fundingOn || '', platforms };
+  return { scheduledOn: idea.publishOn || '', fundingOn: idea.fundingOn || '', platforms };
 }
 const money = (value: number) => value.toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function formPlatforms(form: EntryForm, campaign: boolean): StrategyDraftPlatform[] {
@@ -93,6 +93,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   const goalsQuery = useWorkQuery<{ goals: CampaignGoalOption[]; migrationRequired: boolean }>('campaign_goal_settings', {}, campaign);
   const goalOptions = goalsQuery.data?.goals || [];
   const [selectedId, setSelectedId] = useState(''), [filter, setFilter] = useState<'all' | 'incomplete' | 'ready'>('all');
+  const [search, setSearch] = useState('');
   const [form, setForm] = useState<EntryForm | null>(null), [dirty, setDirty] = useState(false);
   const [dateDirty, setDateDirty] = useState(false), [configurationDirty, setConfigurationDirty] = useState(false);
   const [goals, setGoals] = useState<Record<string, string[]>>({});
@@ -105,7 +106,10 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   const usedPlatforms = draft?.platforms || [];
   const platformsWithoutGoal = campaign ? usedPlatforms.filter(platform => !(draft!.platformGoals.find(row => row.platformId === platform.platformId)?.goalIds.length)) : [];
   const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !platformsWithoutGoal.length);
-  const visibleIdeas = ideas.filter(idea => filter === 'all' || (filter === 'ready' ? idea.ready : !idea.ready));
+  const term = search.trim().toLocaleLowerCase('ar');
+  const visibleIdeas = ideas.filter(idea => (filter === 'all' || (filter === 'ready' ? idea.ready : !idea.ready)) &&
+    (!term || [idea.ideaName, idea.ideaCode, idea.assignmentNo, idea.taskNo].some(value => String(value || '').toLocaleLowerCase('ar').includes(term))));
+  const selectedIndex = ideas.findIndex(idea => idea.id === selectedId);
   const producedIds = new Set(selected?.formats.map(format => format.id) || []);
   const rows = selected ? catalog.map(platform => ({ ...platform, postTypes: platform.postTypes.filter(type => type.mediaKinds.includes(selected.mediaKind)) })) : [];
   const usable = rows.filter(row => row.postTypes.length), unusable = rows.filter(row => !row.postTypes.length);
@@ -118,6 +122,11 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
     try { await workPost(action, body); await query.reload(); onChanged(); setMessage(done); return true; }
     catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); return false; }
     finally { setBusy(false); }
+  }
+  function selectIdea(nextId: string) {
+    if (nextId === selectedId) return;
+    if (dirty && !window.confirm('توجد تعديلات غير محفوظة على الفكرة الحالية. الانتقال بدون حفظ؟')) return;
+    setSelectedId(nextId);
   }
   function update(next: (current: EntryForm) => EntryForm, scope: 'dates' | 'configuration' = 'configuration') {
     setForm(current => current ? next(current) : current); setDirty(true); setMessage('');
@@ -140,8 +149,8 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   }
   function validate(): string {
     if (!form || !draft) return W.invalid;
-    if (!form.scheduledOn) return 'حدد تاريخ النشر';
     if (campaign && !form.fundingOn) return 'حدد تاريخ التمويل';
+    if (!campaign && !form.scheduledOn) return 'حدد تاريخ النشر';
     const entries = Object.entries(form.platforms);
     if (!entries.length) return 'اختر منصة واحدة على الأقل';
     if (entries.some(([, types]) => !Object.keys(types).length)) return 'اختر نوع نشر واحدًا على الأقل لكل منصة محددة';
@@ -159,7 +168,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
     setBusy(true); setError(''); setMessage('');
     try {
       await workPost('strategy_save_entry', { draftId: draft.id, entryId: selected.id, version: selected.version,
-        scheduledOn: form.scheduledOn, ...(campaign ? { fundingOn: form.fundingOn } : {}), platforms: formPlatforms(form, campaign) });
+        ...(campaign ? { fundingOn: form.fundingOn } : { scheduledOn: form.scheduledOn }), platforms: formPlatforms(form, campaign) });
       if (campaign) await workPost('strategy_save_draft', { draftId: draft.id, platformGoals: goalsPayload(Object.keys(form.platforms)) });
       await query.reload(); onChanged(); setDirty(false); setDateDirty(false); setConfigurationDirty(false); setMessage('تم حفظ إعداد الفكرة');
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
@@ -169,16 +178,16 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
    * has been entered. Keep unsaved publication settings in the editor. */
   async function saveDates() {
     if (!selected || !form || !draft) return;
-    if (!/^20\d\d-\d\d-\d\d$/.test(form.scheduledOn) ||
-      (campaign && form.fundingOn && !/^20\d\d-\d\d-\d\d$/.test(form.fundingOn))) {
-      setError('حدد تاريخ نشر صحيحًا أولًا'); return;
+    const date = campaign ? form.fundingOn : form.scheduledOn;
+    if (!/^20\d\d-\d\d-\d\d$/.test(date)) {
+      setError(campaign ? 'حدد تاريخ تمويل صحيحًا أولًا' : 'حدد تاريخ نشر صحيحًا أولًا'); return;
     }
     setBusy(true); setError(''); setMessage('');
     try {
       await workPost('strategy_save_entry_dates', { draftId: draft.id, entryId: selected.id, version: selected.version,
-        scheduledOn: form.scheduledOn, ...(campaign && form.fundingOn ? { fundingOn: form.fundingOn } : {}) });
+        ...(campaign ? { fundingOn: form.fundingOn } : { scheduledOn: form.scheduledOn }) });
       await query.reload(); onChanged(); setDateDirty(false); setDirty(configurationDirty);
-      setMessage('تم حفظ تاريخ الفكرة، ويمكن استكمال الميزانية وأنواع النشر لاحقًا');
+      setMessage(campaign ? 'تم حفظ تاريخ التمويل. تاريخ النشر يُقرأ من الأجندة المرتبطة.' : 'تم حفظ تاريخ النشر، ويمكن استكمال أنواع النشر لاحقًا');
     } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
@@ -199,10 +208,10 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
         const platforms = formPlatforms(form, campaign).map(platform => ({ ...platform, postTypes: platform.postTypes.filter(type =>
           catalog.find(row => row.platformId === platform.platformId)?.postTypes.find(row => row.id === type.postTypeId)?.mediaKinds.includes(idea.mediaKind)) }))
           .filter(platform => platform.postTypes.length);
-        const scheduledOn = idea.scheduledOn || idea.publishOn || form.scheduledOn;
-        if (!platforms.length || !scheduledOn) { skipped.push(idea.ideaName); continue; }
-        await workPost('strategy_save_entry', { draftId: draft.id, entryId: idea.id, version: idea.version, scheduledOn,
-          ...(campaign ? { fundingOn: idea.fundingOn || form.fundingOn } : {}), platforms });
+        const plannedOn = campaign ? idea.fundingOn || form.fundingOn : idea.scheduledOn || form.scheduledOn;
+        if (!platforms.length || !plannedOn) { skipped.push(idea.ideaName); continue; }
+        await workPost('strategy_save_entry', { draftId: draft.id, entryId: idea.id, version: idea.version,
+          ...(campaign ? { fundingOn: plannedOn } : { scheduledOn: plannedOn }), platforms });
         done++;
       }
       if (campaign) await workPost('strategy_save_draft', { draftId: draft.id, platformGoals: goalsPayload(Object.keys(form.platforms)) });
@@ -211,19 +220,14 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
     finally { setBusy(false); await query.reload(); onChanged(); }
   }
 
-  return <Modal open title={draft ? `مسودة ${kindName(draft.kind)} — ${draft.name}` : 'المسودة'} onClose={onClose} className="mkw-fullscreen mkw-strategy-draft-modal" footer={draft?.canEdit ? <div className="mkw-strategy-draft-footer">
-      <span className={allReady ? 'mkw-sd-ready-note' : 'mkw-muted'}>{allReady ? 'كل الأفكار مكتملة الإعداد — جاهزة للإرسال للمراجعة.'
-        : `يمكن حفظ التواريخ الآن، وإكمال الميزانية والإعداد لاحقًا · مكتمل ${draft.readyCount} من ${draft.productCount}.`}</span>
-      <button type="button" className="danger secondary" disabled={busy} onClick={() => { if (window.confirm('حذف المسودة؟ لن يتم حذف التاسكات أو المنتجات.')) void run('strategy_delete_draft', { draftId: draft.id }, 'تم حذف المسودة').then(ok => { if (ok) onClose(); }); }}><Trash size={17}/>حذف المسودة</button>
-      <button type="button" className="primary" disabled={busy || !allReady} onClick={() => void run('strategy_submit_draft', { draftId: draft.id }, 'تم الإرسال للمراجعة').then(ok => { if (ok) onClose(); })}><PaperPlaneTilt size={17}/>إرسال للمراجعة</button>
-    </div> : undefined}>
+  return <Modal open title={draft ? `مسودة ${kindName(draft.kind)} — ${draft.name}` : 'المسودة'} onClose={onClose} className="mkw-strategy-draft-modal">
     <div className="mkw mkw-strategy-draft-editor">
       {!draft ? <Empty>{query.loading ? W.loading : query.error || W.noData}</Empty> : <>
         <section className="mkw-sd-hero">
           <div className="mkw-sd-hero-title">
             <span className="mkw-code">{draft.planNo || 'الكود يُحدد عند الإرسال للمراجعة'}</span>
-            <h2>{draft.name}</h2>
-            <div className="mkw-sd-chips"><span className="mkw-strategy-draft-badge">مسودة {kindName(draft.kind)}</span><span>تاريخ الإنشاء: {showDate(draft.createdAt)}</span></div>
+            <h2>أفكار {kindName(draft.kind)} · {draft.name}</h2>
+            <div className="mkw-sd-chips"><span className="mkw-strategy-draft-badge">مسودة {kindName(draft.kind)}</span><span>تاريخ الإنشاء: {showDate(draft.createdAt)}</span><span>جاهز للإرسال: {draft.readyCount} من {draft.productCount}</span></div>
           </div>
           <div className="mkw-sd-tiles">
             <div><small>عدد الأفكار</small><strong>{draft.ideaCount}</strong></div>
@@ -231,17 +235,26 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
             <div><small>تم التنفيذ</small><strong>{draft.executedCount}<em>/ {draft.productCount}</em></strong></div>
             <div><small>{draft.kind === 'agenda' ? 'فترة نشر الأجندة' : 'فترة التمويل'}</small><strong className="mkw-sd-period">{period(draft.periodFrom, draft.periodTo)}</strong></div>
           </div>
-          <Readiness value={readiness} label={`جاهز للإرسال ${draft.readyCount} من ${draft.productCount}`}/>
+          <Readiness value={readiness} label={`تقدم إعداد المسودة: ${readiness}%`}/>
+          {draft.canEdit && <div className="mkw-sd-management" aria-label="إجراءات المسودة">
+            <p className={allReady && !dirty ? 'mkw-sd-ready-note' : 'mkw-muted'}>{dirty ? 'احفظ تعديلات الفكرة الحالية قبل إرسال المسودة للمراجعة.'
+              : allReady ? 'جميع الأفكار مكتملة وجاهزة للمراجعة.'
+                : `المسودة محفوظة · يمكنك استكمال إعداد الأفكار لاحقًا (${draft.readyCount} من ${draft.productCount} مكتمل).`}</p>
+            <button type="button" className="primary mkw-sd-submit" disabled={busy || !allReady || dirty} onClick={() => void run('strategy_submit_draft', { draftId: draft.id }, 'تم الإرسال للمراجعة').then(ok => { if (ok) onClose(); })}><PaperPlaneTilt size={18}/>إرسال للمراجعة</button>
+            <button type="button" className="secondary mkw-sd-delete" disabled={busy} onClick={() => { if (window.confirm('حذف المسودة؟ لن يتم حذف التاسكات أو المنتجات.')) void run('strategy_delete_draft', { draftId: draft.id }, 'تم حذف المسودة').then(ok => { if (ok) onClose(); }); }}><Trash size={17}/>حذف المسودة</button>
+          </div>}
         </section>
         <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
         <div className="mkw-strategy-draft-layout">
           <aside className="mkw-strategy-draft-ideas" aria-label="أفكار المسودة">
+            <div className="mkw-sd-sidebar-head"><strong>أفكار {kindName(draft.kind)} ({ideas.length})</strong><span>{draft.readyCount} جاهزة</span></div>
+            <label className="mkw-sd-search"><MagnifyingGlass size={18}/><input type="search" placeholder="ابحث باسم الفكرة أو كود الفكرة" aria-label="البحث في أفكار المسودة" value={search} onChange={event => setSearch(event.target.value)}/></label>
             <div className="mkw-sd-filter" role="tablist">
               {([['all', `الكل (${ideas.length})`], ['incomplete', `غير مكتمل (${ideas.filter(idea => !idea.ready).length})`], ['ready', `مكتمل (${draft.readyCount})`]] as const).map(([key, label]) =>
                 <button key={key} type="button" role="tab" aria-selected={filter === key} onClick={() => setFilter(key)}>{label}</button>)}
             </div>
             {visibleIdeas.map(idea => <button type="button" key={idea.id} className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
-              onClick={() => { if (dirty && !window.confirm('توجد تعديلات غير محفوظة على الفكرة الحالية. الانتقال بدون حفظ؟')) return; setSelectedId(idea.id); }}>
+              onClick={() => selectIdea(idea.id)}>
               <span className="mkw-sd-idea-index">{ideas.indexOf(idea) + 1}</span>
               <span className="mkw-sd-idea-body">
                 <strong>{idea.ideaName}</strong>
@@ -258,18 +271,27 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
           <section className="mkw-strategy-draft-panel">
             {!selected || !form ? <Empty>اختر فكرة من القائمة.</Empty> : <>
               <header className="mkw-sd-idea-head">
-                <div><strong>{selected.ideaName}</strong>
+                <div><div className="mkw-sd-idea-heading"><strong>{selected.ideaName}</strong><span className={`mkw-publish-timing ${selected.executed ? 'is-on-time' : 'is-pending'}`}>{selected.executed ? 'تم التنفيذ والاعتماد' : 'لم يتم التنفيذ بعد'}</span></div>
                   <div className="mkw-sd-chips"><span>{mediaName(selected.mediaKind)}</span><span>{selected.category || 'بدون تصنيف'}</span><span dir="ltr">{selected.taskNo}</span><span>المنفذ: {selected.assigneeName || '—'}</span><span>موعد التسليم: {showDate(selected.dueOn)}</span></div></div>
-                <span className={`mkw-publish-timing ${selected.executed ? 'is-on-time' : 'is-pending'}`} title={selected.executed ? '' : 'لا يمنع الإرسال للمراجعة؛ تجهيز النشر ينتظر التنفيذ'}>{selected.executed ? 'تم التنفيذ والاعتماد' : 'لم يتم التنفيذ بعد'}</span>
+                <nav className="mkw-sd-idea-nav" aria-label="التنقل بين الأفكار">
+                  <button type="button" className="secondary" disabled={selectedIndex <= 0} title="الفكرة السابقة" onClick={() => selectIdea(ideas[selectedIndex - 1].id)}><CaretRight size={18}/></button>
+                  <span>الفكرة {selectedIndex + 1} من {ideas.length}</span>
+                  <button type="button" className="secondary" disabled={selectedIndex >= ideas.length - 1} title="الفكرة التالية" onClick={() => selectIdea(ideas[selectedIndex + 1].id)}><CaretLeft size={18}/></button>
+                </nav>
               </header>
               {!!selected.missing.length && <div className="mkw-sd-missing"><WarningCircle size={16} weight="fill"/>{selected.missing.join(' · ')}</div>}
               <div className="mkw-sd-setup">
                 <div className="mkw-sd-setup-top">
-                  <label className="mkw-field"><span>تاريخ النشر</span><input type="date" value={form.scheduledOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, scheduledOn: event.target.value }), 'dates')}/></label>
-                  {campaign && <label className="mkw-field"><span>تاريخ التمويل</span><input type="date" value={form.fundingOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, fundingOn: event.target.value }), 'dates')}/></label>}
-                  {draft.canEdit && <button type="button" className="primary mkw-sd-save-dates" disabled={busy || !form.scheduledOn} onClick={() => void saveDates()}><CalendarBlank size={17}/>{dateDirty ? 'حفظ التاريخ *' : 'حفظ التاريخ'}</button>}
+                  <div className={`mkw-sd-date-field ${campaign ? 'mkw-sd-agenda-date' : ''}`}>
+                    <label>تاريخ النشر <CalendarBlank size={17}/></label>
+                    {campaign ? <><output className="mkw-sd-date-output" aria-label="تاريخ النشر من مسودة الأجندة">{selected.publishOn ? showDate(selected.publishOn) : 'غير محدد في الأجندة'}</output>
+                      <small>{selected.agendaName ? `مرتبط بأجندة «${selected.agendaName}» · التعديل من مسودة الأجندة` : 'لا توجد أجندة مرتبطة بنفس التكليف لهذه الفكرة'}</small></>
+                      : <input type="date" value={form.scheduledOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, scheduledOn: event.target.value }), 'dates')}/>}
+                  </div>
+                  {campaign && <div className="mkw-sd-date-field mkw-sd-funding-date"><label htmlFor="mkw-sd-funding-input">تاريخ التمويل <CalendarBlank size={17}/></label><input id="mkw-sd-funding-input" type="date" value={form.fundingOn} disabled={!draft.canEdit || busy} onChange={event => update(current => ({ ...current, fundingOn: event.target.value }), 'dates')}/><small>مستقل عن تاريخ النشر في الأجندة</small></div>}
+                  {draft.canEdit && <button type="button" className="primary mkw-sd-save-dates" disabled={busy || !(campaign ? form.fundingOn : form.scheduledOn)} onClick={() => void saveDates()}><CalendarBlank size={17}/>{campaign ? (dateDirty ? 'حفظ تاريخ التمويل *' : 'حفظ تاريخ التمويل') : (dateDirty ? 'حفظ تاريخ النشر *' : 'حفظ تاريخ النشر')}</button>}
                   <div className="mkw-sd-summary"><strong>{Object.keys(form.platforms).length}</strong> منصة · <strong>{selectedCount}</strong> نوع نشر{campaign && <> · الإجمالي <strong>{money(ideaBudget)}</strong> ر.س</>}</div>
-                  {draft.canEdit && <small className="mkw-sd-date-note">يمكن حفظ تاريخ كل فكرة الآن دون إدخال ميزانية أو استكمال إعداد النشر.</small>}
+                  {draft.canEdit && <small className="mkw-sd-date-note">{campaign ? 'تاريخ النشر مأخوذ من الأجندة المرتبطة بنفس الفكرة. يمكن حفظ التمويل دون إدخال الميزانيات.' : 'يمكن حفظ تاريخ النشر لكل فكرة الآن دون إدخال المنصات أو استكمال إعداد النشر.'}</small>}
                 </div>
                 <div className={`mkw-sd-rows ${campaign ? 'is-campaign' : ''}`} role="table" aria-label="المنصات وأنواع النشر">
                   <div className="mkw-sd-row mkw-sd-row-head" role="row"><span role="columnheader">المنصة</span><span role="columnheader">{campaign ? 'أنواع النشر والميزانية (ر.س)' : 'أنواع النشر'}</span>{campaign && <span role="columnheader">الهدف من الحملة</span>}</div>

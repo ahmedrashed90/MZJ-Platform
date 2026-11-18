@@ -142,7 +142,7 @@ export async function applyStrategyPlacements(sql: Sql, user: SessionUser, input
       for (const itemId of itemIds) {
         await tx`insert into marketing.strategy_plan_draft_entries(draft_id,item_id,task_id,idea_code,marketing_category,target_on,scheduled_on,request_key,added_by)
           values(${draft.id}::uuid,${itemId}::uuid,${input.taskId}::uuid,${placement.ideaCode},${text(placement.category, 120)},
-            ${placement.date}::date,${placement.date}::date,${input.requestKey}::uuid,${user.id}::uuid)
+            ${placement.date}::date,${placement.kind === 'agenda' ? placement.date : null}::date,${input.requestKey}::uuid,${user.id}::uuid)
           on conflict(draft_id,item_id) do nothing`;
       }
       await tx`update marketing.strategy_plan_drafts set updated_at=now() where id=${draft.id}::uuid`;
@@ -187,6 +187,7 @@ async function draftEntries(sql: Sql, draftIds: string[]) {
   if (!draftIds.length) return [] as Row[];
   return sql<any[]>`select e.id::text,e.draft_id::text,e.item_id::text,e.task_id::text,e.idea_code,e.marketing_category,
       e.target_on::text,e.scheduled_on::text,e.platforms,e.version,e.added_at,
+      agenda_link.publish_on as agenda_publish_on,agenda_link.agenda_name,agenda_link.agenda_draft_id,
       i.idea_name,i.media_kind,i.status as item_status,i.due_on::text,i.approved_at,i.formats,i.delivery_mode,
       t.task_no,t.name as task_name,t.created_at as task_created_at,t.is_deleted as task_deleted,
       coalesce(u.full_name,'') as assignee_name,requirement.requirement_number,
@@ -197,6 +198,18 @@ async function draftEntries(sql: Sql, draftIds: string[]) {
     from marketing.strategy_plan_draft_entries e
     join marketing.work_items i on i.id=e.item_id join marketing.work_tasks t on t.id=e.task_id
     left join core.users u on u.id=i.assigned_to
+    -- A campaign displays the publication date from the SAME work item's
+    -- agenda entry; it must never infer it from the funding date. Reading the
+    -- linked agenda at query time also reflects later agenda date edits.
+    left join lateral (
+      select a.scheduled_on::text as publish_on,ag.name as agenda_name,ag.id::text as agenda_draft_id
+      from marketing.strategy_plan_draft_entries a
+      join marketing.strategy_plan_drafts ag on ag.id=a.draft_id
+      where a.item_id=e.item_id and ag.kind='agenda' and ag.status in ('draft','submitted')
+        and a.scheduled_on is not null
+      order by case when ag.status='draft' then 0 else 1 end,a.updated_at desc,a.id
+      limit 1
+    ) agenda_link on true
     left join lateral (select numbered.requirement_number from (
       select candidate.id,row_number() over(order by candidate.sort_order,candidate.created_at,candidate.id)::int as requirement_number
       from marketing.work_items candidate where candidate.task_id=i.task_id) numbered where numbered.id=i.id) requirement on true
@@ -210,7 +223,7 @@ function entryState(kind: string, entry: Row, catalog: Map<string, CatalogType>)
     const type = catalog.get(postTypeId);
     return Boolean(type && type.platformId === platformId && supportsWorkMedia(entry.media_kind, type.name));
   };
-  const configured = Boolean(entry.scheduled_on) && platforms.length > 0 && platforms.every(platform =>
+  const configured = Boolean(kind === 'agenda' ? entry.scheduled_on : entry.target_on) && platforms.length > 0 && platforms.every(platform =>
     list(platform.postTypes).length > 0 && list(platform.postTypes).every((type: any) => allowed(String(platform.platformId), String(type.postTypeId)) &&
       (kind !== 'campaign' || (type.budget !== '' && type.budget != null && Number.isFinite(Number(type.budget)) && Number(type.budget) >= 0))));
   const executed = entry.item_status === 'approved' && !entry.task_deleted &&
@@ -221,7 +234,8 @@ function entryState(kind: string, entry: Row, catalog: Map<string, CatalogType>)
   const notes: string[] = [];
   if (entry.task_deleted) missing.push('التاسك محذوف');
   else if (!executed) notes.push(entry.item_status === 'approved' ? 'المقاسات النهائية غير مكتملة' : 'لم يتم تنفيذ واعتماد الفكرة بعد');
-  if (!entry.scheduled_on) missing.push('حدد تاريخ النشر');
+  if (kind === 'agenda' && !entry.scheduled_on) missing.push('حدد تاريخ النشر');
+  if (kind === 'campaign' && !entry.target_on) missing.push('حدد تاريخ التمويل');
   if (!platforms.length) missing.push('اختر المنصة ونوع النشر');
   else if (!configured) missing.push(kind === 'campaign' ? 'أكمل نوع النشر والميزانية لكل منصة' : 'أكمل نوع النشر لكل منصة');
   return { configured, executed, ready: configured && !entry.task_deleted, missing, notes };
@@ -237,9 +251,15 @@ function presentEntry(kind: string, planNo: string, entry: Row, catalog: Map<str
     orderNo: planNo, requirementNumber: reqNo, assigneeName: entry.assignee_name,
     createdAt: entry.task_created_at || entry.added_at, dueOn: day(entry.due_on), approvedOn: entry.approved_at ? saudiCalendarDay(new Date(entry.approved_at)) : null,
     executionOn: entry.approved_at ? saudiCalendarDay(new Date(entry.approved_at)) : day(entry.due_on),
-    publishOn: day(entry.scheduled_on) || (kind === 'agenda' ? day(entry.target_on) : null),
+    // Publication belongs to the agenda, funding belongs to the campaign.
+    // Older campaign rows might have scheduled_on=funding date: never render it
+    // as a publication date, even before they are saved again.
+    publishOn: kind === 'campaign' ? day(entry.agenda_publish_on) : (day(entry.scheduled_on) || day(entry.target_on)),
     fundingOn: kind === 'campaign' ? day(entry.target_on) : null,
-    targetOn: day(entry.target_on), scheduledOn: day(entry.scheduled_on),
+    agendaName: kind === 'campaign' ? String(entry.agenda_name || '') : '',
+    agendaDraftId: kind === 'campaign' ? String(entry.agenda_draft_id || '') : '',
+    targetOn: day(entry.target_on),
+    scheduledOn: kind === 'campaign' ? day(entry.agenda_publish_on) : (day(entry.scheduled_on) || day(entry.target_on)),
     platforms: list(entry.platforms),
     formats: (list(entry.formats) as WorkFormat[]).map(format => ({ id: String(format.id), platformId: String(format.platform_id),
       platformName: String(format.platform_name || ''), platformCode: String(format.platform_code || ''), name: String(format.name || '') })),
@@ -385,14 +405,10 @@ export async function saveStrategyDraftEntry(sql: Sql, user: SessionUser, body: 
       join marketing.work_items i on i.id=e.item_id where e.id=${entryId}::uuid and e.draft_id=${draftId}::uuid for update`;
     if (!entry) throw new Error(W.notFound);
     if (body.version !== undefined && Number(body.version) !== Number(entry.version)) throw new Error(W.conflict);
-    const scheduledOn = text(body.scheduledOn, 10);
-    if (!isWorkDate(scheduledOn)) throw new Error('حدد تاريخ النشر');
-    let targetOn = day(entry.target_on)!;
-    if (draft.kind === 'campaign') {
-      const fundingOn = text(body.fundingOn ?? targetOn, 10);
-      if (!isWorkDate(fundingOn)) throw new Error('حدد تاريخ التمويل');
-      targetOn = fundingOn;
-    } else targetOn = scheduledOn;
+    const scheduledOn = draft.kind === 'agenda' ? text(body.scheduledOn, 10) : null;
+    if (draft.kind === 'agenda' && !isWorkDate(scheduledOn || '')) throw new Error('حدد تاريخ النشر');
+    const targetOn = draft.kind === 'campaign' ? text(body.fundingOn ?? day(entry.target_on), 10) : scheduledOn!;
+    if (draft.kind === 'campaign' && !isWorkDate(targetOn)) throw new Error('حدد تاريخ التمويل');
     // Any active platform / publish type that supports the idea's media, exactly
     // like the native agenda/campaign composer (not limited to produced sizes).
     const byId = new Map((await postTypeCatalog(tx as unknown as Sql)).map(type => [type.id, type]));
@@ -440,20 +456,16 @@ export async function saveStrategyDraftEntryDates(sql: Sql, user: SessionUser, b
       where id=${entryId}::uuid and draft_id=${draftId}::uuid for update`;
     if (!entry) throw new Error(W.notFound);
     if (body.version !== undefined && Number(body.version) !== Number(entry.version)) throw new Error(W.conflict);
-    const scheduledOn = text(body.scheduledOn, 10);
-    if (!isWorkDate(scheduledOn)) throw new Error('حدد تاريخ نشر صحيحًا للفكرة');
-    const fundingInput = body.fundingOn === undefined || body.fundingOn === null ? '' : text(body.fundingOn, 10);
-    if (fundingInput && !isWorkDate(fundingInput)) throw new Error('حدد تاريخ تمويل صحيحًا للفكرة');
-    // A campaign's funding date is independent from the publication date.
-    // Saving publication date must never wipe, infer, or require a funding date.
+    // Agenda is the only source of publication dates. Campaign's target_on is
+    // exclusively its funding date, never a second copy of publication.
+    const date = text(draft.kind === 'agenda' ? body.scheduledOn : body.fundingOn, 10);
+    if (!isWorkDate(date)) throw new Error(draft.kind === 'agenda' ? 'حدد تاريخ نشر صحيحًا للفكرة' : 'حدد تاريخ تمويل صحيحًا للفكرة');
     const [saved] = await tx<any[]>`update marketing.strategy_plan_draft_entries
-      set scheduled_on=${scheduledOn}::date,
-        target_on=case when ${draft.kind === 'agenda'}::boolean then ${scheduledOn}::date
-          when ${Boolean(fundingInput)}::boolean then ${fundingInput || scheduledOn}::date else target_on end,
-        version=version+1,updated_at=now()
+      set scheduled_on=${draft.kind === 'agenda' ? date : null}::date,
+        target_on=${date}::date,version=version+1,updated_at=now()
       where id=${entryId}::uuid returning version`;
     await tx`update marketing.strategy_plan_drafts set updated_at=now(),version=version+1 where id=${draftId}::uuid`;
-    return {ok:true,id:entryId,version:saved.version,message:'تم حفظ تاريخ النشر دون اشتراط الميزانية أو تاريخ التمويل'};
+    return {ok:true,id:entryId,version:saved.version,message:draft.kind === 'agenda' ? 'تم حفظ تاريخ النشر في الأجندة' : 'تم حفظ تاريخ التمويل مستقلًا عن الأجندة'};
   });
 }
 
@@ -515,11 +527,14 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
   const goals = list(current.platformGoals).filter((row: any) => platformIds.includes(String(row.platformId)));
   if (current.kind === 'campaign' && (goals.length !== platformIds.length || goals.some((row: any) => !list(row.goalIds).length)))
     throw new Error('اختر الهدف من الحملة لكل منصة قبل الإرسال للمراجعة');
-  const dates = current.ideas.map(idea => idea.scheduledOn!).sort();
-  const funding = current.ideas.map(idea => idea.fundingOn!).filter(Boolean).sort();
+  const publishDates = current.kind === 'agenda' ? current.ideas.map(idea => idea.scheduledOn!).sort() : [];
+  const funding = current.kind === 'campaign' ? current.ideas.map(idea => idea.fundingOn!).filter(Boolean).sort() : [];
   const payload: Row = { requestKey: draftId, kind: current.kind, name: current.name,
-    entries: current.ideas.map(idea => ({ productId: idea.itemId, date: idea.scheduledOn, platforms: idea.platforms })) };
-  if (current.kind === 'agenda') Object.assign(payload, { agendaFrom: dates[0], agendaTo: dates.at(-1) });
+    // The native campaign plan uses funding as its internal date. Its
+    // read-only "publication date" in the draft UI comes from the agenda.
+    entries: current.ideas.map(idea => ({ productId: idea.itemId,
+      date: current.kind === 'campaign' ? idea.fundingOn : idea.scheduledOn, platforms: idea.platforms })) };
+  if (current.kind === 'agenda') Object.assign(payload, { agendaFrom: publishDates[0], agendaTo: publishDates.at(-1) });
   else Object.assign(payload, { fundingFrom: funding[0], fundingTo: funding.at(-1), platformGoals: goals });
   // The AGD/CMP code is reserved only now (idempotent on retry).
   const code = await sql.begin(async tx => {

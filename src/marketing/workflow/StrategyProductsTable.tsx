@@ -9,6 +9,8 @@ export type StrategyDraftIdea = {
   taskNo: string; taskName: string; assignmentNo: string; orderNo: string; assigneeName: string;
   createdAt: string; dueOn: string | null; approvedOn: string | null; executionOn: string | null;
   publishOn: string | null; fundingOn: string | null; targetOn: string | null; scheduledOn: string | null;
+  /** Read-only publication date linked to the same idea's agenda (campaign only). */
+  agendaName?: string; agendaDraftId?: string;
   platforms: StrategyDraftPlatform[];
   formats: Array<{ id: string; platformId: string; platformName: string; platformCode: string; name: string }>;
   configured: boolean; executed: boolean; ready: boolean; missing: string[]; notes?: string[];
