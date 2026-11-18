@@ -375,7 +375,11 @@ async function claimLatestServiceSelection(input: {
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
   if (isLeadImportEvent(routeSource, payload)) {
-    return processLeadImportEvent(routeSource, eventId, payload);
+    // All integration results share the same routing-diagnostics contract.
+    // Imported leads never use the Mersal second-message fallback, so report null
+    // without changing the lead-import pipeline or its assignment behavior.
+    const imported = await processLeadImportEvent(routeSource, eventId, payload);
+    return { ...imported, defaultFinanceFallback: null };
   }
 
   const sql = getSql();
