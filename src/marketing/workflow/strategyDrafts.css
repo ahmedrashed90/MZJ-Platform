@@ -131,3 +131,13 @@
 .mkw-sp-readiness span { display:block; height:7px; border-radius:99px; background:var(--surface-soft); border:1px solid var(--line); overflow:hidden; }
 .mkw-sp-readiness b { display:block; height:100%; background:var(--brand); }
 .mkw-sp-readiness small { color:var(--muted); font-size:.75rem; }
+
+/* Draft editor is one contained dialog: no detached action bar outside the popup. */
+.mkw-strategy-draft-modal { border:1px solid var(--line-strong); box-shadow:0 22px 90px rgba(41,19,17,.2); }
+.mkw-strategy-draft-modal .mzj-modal-header { background:linear-gradient(125deg,var(--surface),var(--surface-soft)); border-bottom:1px solid var(--line); }
+.mkw-strategy-draft-modal .mzj-modal-body { min-height:0; overflow-y:auto; }
+.mkw-strategy-draft-modal .mzj-modal-footer { background:var(--surface); border-top:1px solid var(--line-strong); padding:12px 20px; box-shadow:0 -7px 24px rgba(74,33,28,.05); }
+.mkw-strategy-draft-modal .mkw-strategy-draft-footer { position:static; width:100%; margin:0; padding:0; background:transparent; border:0; }
+.mkw-sd-save-dates { display:inline-flex; align-items:center; gap:7px; white-space:nowrap; min-height:39px; }
+.mkw-sd-date-note { flex-basis:100%; color:var(--brand); background:var(--surface); padding:5px 9px; border-radius:8px; }
+@media(max-width:760px){ .mkw-strategy-draft-modal .mzj-modal-footer { padding:10px; } .mkw-strategy-draft-footer>span { flex-basis:100%; } }

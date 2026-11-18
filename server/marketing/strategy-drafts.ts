@@ -137,7 +137,7 @@ export async function applyStrategyPlacements(sql: Sql, user: SessionUser, input
         left join marketing.work_plans p on p.id=d.work_plan_id
         where e.item_id=any(${itemIds}::uuid[]) and e.draft_id<>${draft.id}::uuid
           and d.kind=${placement.kind}
-          and (d.status='draft' or coalesce(p.is_deleted,false)=false) limit 1`;
+          and (d.status='draft' or (d.status='submitted' and coalesce(p.is_deleted,false)=false)) limit 1`;
       if (elsewhere) throw new Error(`Invalid placement: الفكرة ${placement.ideaCode} مرتبطة بالفعل بـ ${placement.kind === 'agenda' ? 'أجندة' : 'حملة'} «${elsewhere.name}»${elsewhere.plan_no ? ` (${elsewhere.plan_no})` : ''}.`);
       for (const itemId of itemIds) {
         await tx`insert into marketing.strategy_plan_draft_entries(draft_id,item_id,task_id,idea_code,marketing_category,target_on,scheduled_on,request_key,added_by)
@@ -355,7 +355,7 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
       taskName: row.task_name, mediaKind: row.media_kind, itemStatus: row.item_status,
       assignmentNo: row.task_no && reqNo ? `${row.task_no}-${String(reqNo).padStart(2, '0')}` : row.task_no,
       taskNo: row.task_no, orderNo: placement?.plan_no || '', orderName: placement?.draft_name || '', orderKind: kind,
-      orderStatus: placement ? (placement.draft_status === 'draft' ? 'draft' : placement.plan_status || 'submitted') : '',
+      orderStatus: placement ? (placement.draft_status === 'draft' || placement.draft_status === 'archived' ? placement.draft_status : placement.plan_status || 'submitted') : '',
       assigneeName: row.assignee_name, ideaName: row.idea_name, readiness: readiness.get(String(row.item_id)) ?? (row.item_status === 'approved' ? 100 : 0),
       dueOn: day(row.due_on), approvedOn: row.approved_at ? saudiCalendarDay(new Date(row.approved_at)) : null,
       publishOn: placement ? (day(placement.scheduled_on) || (kind === 'agenda' ? day(placement.target_on) : null)) : null,
@@ -426,6 +426,37 @@ export async function saveStrategyDraftEntry(sql: Sql, user: SessionUser, body: 
     return { ok: true, id: entryId, version: saved.version, message: W.saved };
   });
 }
+/** Persist each idea's publishing/funding dates independently of the platform and
+ * budget editor. A partial campaign remains a draft until its publication types,
+ * budgets and goals pass the existing submission validator. */
+export async function saveStrategyDraftEntryDates(sql: Sql, user: SessionUser, body: Row) {
+  await requireReady(sql);
+  const draftId = id(body.draftId), entryId = id(body.entryId);
+  return sql.begin(async tx => {
+    await tx`set local lock_timeout = '3s'`;
+    const draft = await lockedDraft(tx, user, draftId);
+    if (draft.status !== 'draft') throw new Error('تم إرسال المسودة للمراجعة؛ لا يمكن تعديل التاريخ هنا.');
+    const [entry] = await tx<any[]>`select id::text,version,target_on from marketing.strategy_plan_draft_entries
+      where id=${entryId}::uuid and draft_id=${draftId}::uuid for update`;
+    if (!entry) throw new Error(W.notFound);
+    if (body.version !== undefined && Number(body.version) !== Number(entry.version)) throw new Error(W.conflict);
+    const scheduledOn = text(body.scheduledOn, 10);
+    if (!isWorkDate(scheduledOn)) throw new Error('حدد تاريخ نشر صحيحًا للفكرة');
+    const fundingInput = body.fundingOn === undefined || body.fundingOn === null ? '' : text(body.fundingOn, 10);
+    if (fundingInput && !isWorkDate(fundingInput)) throw new Error('حدد تاريخ تمويل صحيحًا للفكرة');
+    // A campaign's funding date is independent from the publication date.
+    // Saving publication date must never wipe, infer, or require a funding date.
+    const [saved] = await tx<any[]>`update marketing.strategy_plan_draft_entries
+      set scheduled_on=${scheduledOn}::date,
+        target_on=case when ${draft.kind === 'agenda'}::boolean then ${scheduledOn}::date
+          when ${Boolean(fundingInput)}::boolean then ${fundingInput || scheduledOn}::date else target_on end,
+        version=version+1,updated_at=now()
+      where id=${entryId}::uuid returning version`;
+    await tx`update marketing.strategy_plan_drafts set updated_at=now(),version=version+1 where id=${draftId}::uuid`;
+    return {ok:true,id:entryId,version:saved.version,message:'تم حفظ تاريخ النشر دون اشتراط الميزانية أو تاريخ التمويل'};
+  });
+}
+
 export async function saveStrategyDraftSettings(sql: Sql, user: SessionUser, body: Row) {
   await requireReady(sql);
   const draftId = id(body.draftId);
@@ -456,9 +487,12 @@ export async function deleteStrategyDraft(sql: Sql, user: SessionUser, body: Row
     if (draft.status !== 'draft') throw new Error(W.immutable);
     if (!isManager(user) && draft.created_by !== user.id && !hasPermission(user, 'platform.superadmin') &&
         !hasPermission(user, draft.kind === 'agenda' ? 'marketing.agenda.delete' : 'marketing.campaign.delete')) throw new Error(W.denied);
-    // Tasks and products are never removed; only the draft grouping is.
-    await tx`delete from marketing.strategy_plan_drafts where id=${draftId}::uuid and status='draft'`;
-    return { ok: true, id: draftId, message: 'تم حذف المسودة دون حذف التاسكات أو المنتجات' };
+    // A deleted draft is archived, NOT physically deleted; any previously linked
+    // items, audit history and planning dates remain available for tracing.
+    await tx`update marketing.strategy_plan_drafts
+      set status='archived',version=version+1,updated_at=now()
+      where id=${draftId}::uuid and status='draft'`;
+    return { ok: true, id: draftId, message: 'تم أرشفة المسودة؛ التكليفات والروابط السابقة محفوظة' };
   });
 }
 
@@ -661,9 +695,11 @@ export async function strategyPlanProducts(sql: Sql, user: SessionUser, scope: {
  * products are never removed. Called by the integration (owner session). */
 export async function deleteStrategyDraftFromIntegration(sql: Sql, draftId: string) {
   if (!(await marketingStrategyDraftsReady(sql))) throw new Error(`Invalid placement: ${STRATEGY_DRAFT_MIGRATION_MESSAGE}`);
-  const [removed] = await sql<any[]>`delete from marketing.strategy_plan_drafts where id=${draftId}::uuid and status='draft' returning id::text,name`;
-  if (!removed) throw new Error('Invalid placement: الاسم غير موجود أو تم إرساله للمراجعة بالفعل؛ احذفه من التسويق.');
-  return { ok: true, id: removed.id, name: removed.name };
+  const [removed] = await sql<any[]>`update marketing.strategy_plan_drafts
+    set status='archived',version=version+1,updated_at=now()
+    where id=${draftId}::uuid and status='draft' returning id::text,name`;
+  if (!removed) throw new Error('Invalid placement: المسودة غير موجودة أو تم إرسالها للمراجعة.');
+  return { ok: true, id: removed.id, name: removed.name, archived: true };
 }
 
 /** Strategy plans: caption + hashtags of a publication can be written before

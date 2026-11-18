@@ -160,7 +160,7 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
   response.setHeader('Cache-Control', 'no-store, max-age=0');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   const method = String(request.method || 'GET').toUpperCase();
-  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'agenda-products', 'plan-drafts'].includes(resource);
+  const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'idea-assignments', 'agenda-products', 'plan-drafts'].includes(resource);
   const isAssignment = method === 'POST' && resource === 'assignments';
   const isAgenda = method === 'POST' && resource === 'agenda';
   const isDraftDelete = method === 'POST' && resource === 'plan-drafts';
@@ -179,6 +179,44 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
         return response.status(403).json({ok:false,error:'Integration user cannot read approved products'});
       const payload=await listStrategyApprovedProducts(sql,user);
       return response.status(200).json(payload);
+    }
+    if (isRead && resource === 'idea-assignments') {
+      const ideaCode=typeof request.query.ideaCode==='string'?request.query.ideaCode:'';
+      const planId=typeof request.query.planId==='string'?request.query.planId:'';
+      if (!/^[A-Za-z0-9_-]{3,44}$/.test(ideaCode) || planId!=='mzj-2026-launch-cycle-01')
+        return response.status(400).json({ok:false,error:'Invalid strategy idea identifier'});
+      const actorId=String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID||'').trim();
+      if(!isUuid(actorId))return response.status(503).json({ok:false,error:'Integration user is not configured'});
+      // Historical task identity comes from the immutable strategy_assigned audit
+      // marker, not from whatever task currently happens to be on a Firestore asset.
+      const tasks=await sql<any[]>`select t.id::text,t.task_no,t.name,t.created_at,t.is_deleted,h.data as marker
+        from marketing.work_tasks t
+        join lateral (select data from marketing.work_history h
+          where h.task_id=t.id and h.action='strategy_assigned'
+            and h.data->>'source'='mzj-content-strategy'
+          order by h.created_at desc,h.id desc limit 1) h on true
+        where t.created_by=${actorId}::uuid and h.data->>'planId'=${planId}
+          and h.data->'ideaCodes' @> ${sql.json([ideaCode])}::jsonb
+        order by t.created_at desc,t.id desc limit 150`;
+      if(!tasks.length)return response.status(200).json({ok:true,ideaCode,tasks:[]});
+      const taskIds=tasks.map(row=>row.id);
+      const items=await sql<any[]>`select i.task_id::text,i.client_key::text,i.due_on::text,
+        coalesce(u.full_name,'غير محدد') as assignee_name,i.delivery_mode
+        from marketing.work_items i left join core.users u on u.id=i.assigned_to
+        where i.task_id=any(${taskIds}::uuid[]) order by i.task_id,i.sort_order,i.id`;
+      const grouped=new Map<string,any[]>();
+      for(const row of items)grouped.set(row.task_id,[...(grouped.get(row.task_id)||[]),row]);
+      return response.status(200).json({ok:true,ideaCode,tasks:tasks.map(task=>{
+        const marker=task.marker||{},keys=Array.isArray(marker.clientKeys)?marker.clientKeys:[],
+          codes=Array.isArray(marker.itemIdeaCodes)?marker.itemIdeaCodes:[],
+          ideaCodes=Array.isArray(marker.ideaCodes)?marker.ideaCodes:[];
+        const rows=(grouped.get(task.id)||[]).filter(row=>{
+          const idx=keys.indexOf(row.client_key);
+          return idx>=0? (codes[idx]|| (ideaCodes.length===1?ideaCodes[0]:''))===ideaCode : ideaCodes.length===1;
+        });
+        return {taskId:task.id,taskNo:task.task_no,name:task.name,createdAt:task.created_at,
+          isDeleted:Boolean(task.is_deleted),assignees:rows.map(row=>({name:row.assignee_name,dueOn:row.due_on,deliveryMode:row.delivery_mode}))};
+      })});
     }
     if (isRead && resource === 'plan-drafts') {
       // Names of open agenda/campaign drafts only (status «مسودة»), for the dropdown.

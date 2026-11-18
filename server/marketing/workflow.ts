@@ -17,7 +17,7 @@ import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/ma
 import { buildCalendarPlanEvents, type CalendarPlanRow } from '../../shared/marketing-plan-calendar.js';
 import { evaluationSettings, manageEvaluationSetting, saveItemRating, manageItemReviewNote, ratingsReport, canGradeWorkItem, saveRejectedItemRating } from './evaluations.js';
 import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingProduct, strategyPlanProducts, saveStrategyLineCopy, strategyDraftsForDashboard, strategyDraftDetail, strategyPlanReport, strategyProducts,
-  saveStrategyDraftEntry, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
+  saveStrategyDraftEntry, saveStrategyDraftEntryDates, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
 
@@ -3242,6 +3242,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_create_manual_keywords_product') result = await createManualKeywordsProduct(sql, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_strategy_save_entry') result = await saveStrategyDraftEntry(sql, user, body);
+    else if (action === 'work_strategy_save_entry_dates') result = await saveStrategyDraftEntryDates(sql, user, body);
     else if (action === 'work_strategy_save_line_copy') result = await saveStrategyLineCopy(sql, user, body, planLines);
     else if (action === 'work_strategy_save_draft') result = await saveStrategyDraftSettings(sql, user, body);
     else if (action === 'work_strategy_delete_draft') result = await deleteStrategyDraft(sql, user, body);
