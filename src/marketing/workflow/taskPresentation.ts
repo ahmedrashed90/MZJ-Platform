@@ -1,11 +1,12 @@
 /** One source of truth for Strategy task titles across execution, detail and delivery calendar.
  * Persisted task and requirement titles are deliberately never modified here. */
+/** «بيعي» covers قسط and كاش: the strategy system groups them into one task,
+ * so both the grouped title and the older per-kind titles read as «بيعي». */
 export const STRATEGY_TASK_CATEGORIES = [
   'تعريفي - مواصفات السيارات',
   'تعريفي - بالويب سايت',
   'تعريفي - بالبراند',
-  'بيعي - قسط',
-  'بيعي - كاش',
+  'بيعي',
 ] as const;
 
 export function taskCategoryLabel(name: string): string {
