@@ -228,6 +228,7 @@ export async function classifyConversationService(input: {
   assignPrimary?: boolean; assignCallCenter?: boolean; requestedBranchCode?: string;
   financeImportRouting?: boolean;
   marketingFormImportRouting?: boolean;
+  requirePrimaryAssignment?: boolean;
 }) {
   const sql = getSql();
   const serviceKey = departmentKey(input.serviceKey);
@@ -277,6 +278,9 @@ export async function classifyConversationService(input: {
           : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
         if (input.marketingFormImportRouting && needsPrimaryAssignment && !assignment.assignedTo) {
           throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+        }
+        if (input.requirePrimaryAssignment && needsPrimaryAssignment && !assignment.assignedTo) {
+          throw new Error('تعذر توزيع عميل واتساب على مندوب تمويل نشط حسب قواعد CRM');
         }
         const callCenter = needsCallCenterAssignment
           ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
@@ -330,6 +334,9 @@ export async function classifyConversationService(input: {
     // a lead with a missing owner; existing CRM customers are not redistributed.
     if (input.marketingFormImportRouting && !assignment.assignedTo) {
       throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
+    }
+    if (input.requirePrimaryAssignment && !assignment.assignedTo) {
+      throw new Error('تعذر توزيع عميل واتساب على مندوب تمويل نشط حسب قواعد CRM');
     }
     const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
       ? await chooseCallCenterAssignment(sourceCode, "online")

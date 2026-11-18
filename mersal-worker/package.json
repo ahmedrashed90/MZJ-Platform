@@ -1,6 +1,6 @@
 {
   "name": "mzj-mersal-postgres-worker",
-  "version": "1.12.4",
+  "version": "1.12.8",
   "private": true,
   "type": "module",
   "scripts": {

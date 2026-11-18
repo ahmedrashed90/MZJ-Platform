@@ -21,17 +21,29 @@
  *   MERSAL_TEMPLATE_URL
  *   MERSAL_MEDIA_SEND_URL
  *   MERSAL_ATTACHMENT_SEND_URL
+ *   MERSAL_AUDIO_SEND_URL      optional; supports {contact_id} placeholder
+ *   MERSAL_DOCUMENT_SEND_URL   optional; supports {contact_id} placeholder
+ *
+ * Optional dashboard-session secrets for Mersal internal audio/document routes:
+ *   MERSAL_DASHBOARD_COOKIE    complete Cookie header copied from an authenticated Mersal request
+ *   MERSAL_X_XSRF_TOKEN        exact X-XSRF-TOKEN request-header value from the same session
+ *
+ * Alternative granular dashboard-session secrets:
+ *   MERSAL_XSRF_COOKIE         XSRF-TOKEN cookie value
+ *   MERSAL_API_SESSION         mersal_api_session cookie value
  *
  * Optional binding:
  *   DEBUG_KV
  *
  * This Worker contains no Firebase/Firestore storage. CRM messages, conversations,
  * unread state, assignments, service changes, finance-data collection, and automations
- * are owned by PostgreSQL in the platform. Mersal keeps the visible welcome flow; this
+ * are owned by PostgreSQL in the platform. The worker requests CRM assignment,
+ * but the platform API is responsible for selecting and saving the real assignee.
+ * Mersal keeps the visible welcome flow; this
  * Worker identifies the customer selection and forwards a trusted flow instruction.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.12.4-attachment-formdata";
+const VERSION = "mzj-mersal-postgres-v1.12.8-default-finance-fallback";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
@@ -227,13 +239,29 @@ async function sendMersalMedia(env, input) {
       `out-${Date.now()}`,
     );
     const bytes = await mediaResponse.arrayBuffer();
+    const blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
+
+    if (mediaType === "audio" || mediaType === "document") {
+      const contactLookupToken = clean(env?.MERSAL_API_TOKEN || token);
+      const contactId = await findMersalContactId(env, contactLookupToken, phone);
+      if (!contactId) return failedProviderResult(`Mersal contact not found for ${phone}`);
+
+      return postMersalContactMediaProvider(env, {
+        url: exactEndpoint(env, mediaType, contactId),
+        mediaType,
+        blob,
+        fileName,
+        token,
+      });
+    }
+
     const form = new FormData();
     form.set("token", token);
     form.set("phone", phone);
     form.set("message", clean(input.caption) || fileName || "مرفق");
     form.set("media_url", mediaUrl);
     form.set("type", mediaType);
-    form.set("image", new Blob([bytes], { type: mimeType || "application/octet-stream" }), fileName);
+    form.set("image", blob, fileName);
 
     return postMersalMultipartProvider(exactEndpoint(env, "attachment"), form);
   } catch (error) {
@@ -241,12 +269,196 @@ async function sendMersalMedia(env, input) {
   }
 }
 
-function exactEndpoint(env, type) {
+function exactEndpoint(env, type, contactId = "") {
   const base = clean(env?.MERSAL_API_ENDPOINT || DEFAULT_MERSAL_BASE).replace(/\/+$/, "");
   if (type === "template") return clean(env?.MERSAL_TEMPLATE_URL) || `${base}/api/wpbox/sendtemplatemessage`;
+  if (type === "audio") return contactEndpoint(clean(env?.MERSAL_AUDIO_SEND_URL) || `${base}/api/wpbox/sendaudio/{contact_id}`, contactId);
+  if (type === "document") return contactEndpoint(clean(env?.MERSAL_DOCUMENT_SEND_URL) || `${base}/api/wpbox/sendfile/{contact_id}`, contactId);
   if (type === "attachment") return clean(env?.MERSAL_ATTACHMENT_SEND_URL || env?.MERSAL_MEDIA_SEND_URL || env?.MERSAL_SEND_URL) || `${base}/api/wpbox/sendmessage`;
   if (type === "media") return clean(env?.MERSAL_MEDIA_SEND_URL) || `${base}/api/wpbox/sendmedia`;
   return clean(env?.MERSAL_SEND_URL) || `${base}/api/wpbox/sendmessage`;
+}
+
+function contactEndpoint(template, contactId) {
+  const id = encodeURIComponent(clean(contactId));
+  if (!id) return clean(template);
+  const value = clean(template);
+  if (value.includes("{contact_id}")) return value.replaceAll("{contact_id}", id);
+  return `${value.replace(/\/+$/, "")}/${id}`;
+}
+
+function mersalDashboardAuth(env) {
+  const fullCookie = clean(env?.MERSAL_DASHBOARD_COOKIE);
+  const explicitXsrfHeader = clean(env?.MERSAL_X_XSRF_TOKEN || env?.MERSAL_XSRF_TOKEN);
+  if (fullCookie && explicitXsrfHeader) {
+    return { cookie: fullCookie, xsrfHeader: explicitXsrfHeader };
+  }
+
+  const xsrfCookie = clean(env?.MERSAL_XSRF_COOKIE);
+  const apiSession = clean(env?.MERSAL_API_SESSION);
+  if (!xsrfCookie || !apiSession) return null;
+
+  let xsrfHeader = explicitXsrfHeader;
+  if (!xsrfHeader) {
+    try {
+      xsrfHeader = decodeURIComponent(xsrfCookie);
+    } catch {
+      xsrfHeader = xsrfCookie;
+    }
+  }
+
+  return {
+    cookie: `XSRF-TOKEN=${xsrfCookie}; mersal_api_session=${apiSession}`,
+    xsrfHeader,
+  };
+}
+
+function contactMediaForm(input, includeToken) {
+  const form = new FormData();
+  if (includeToken && clean(input.token)) form.set("token", clean(input.token));
+  form.set(input.mediaType === "audio" ? "audio" : "file", input.blob, input.fileName);
+  form.set("reply_to_id", "null");
+  return form;
+}
+
+async function postMersalContactMediaProvider(env, input) {
+  const dashboardAuth = mersalDashboardAuth(env);
+  const attempts = [];
+
+  // Mersal's dashboard routes are session-authenticated. When the optional session
+  // secrets are configured, use the same authenticated request shape seen in the
+  // dashboard: multipart body plus Cookie and X-XSRF-TOKEN headers.
+  if (dashboardAuth) {
+    const result = await postMersalContactMediaAttempt(input.url, contactMediaForm(input, false), {
+      cookie: dashboardAuth.cookie,
+      xsrfHeader: dashboardAuth.xsrfHeader,
+      base: mersalBase(env),
+      mediaType: input.mediaType,
+      authMode: "dashboard_session",
+    });
+    attempts.push(mediaAttemptSummary(result));
+    if (result.ok) return { ...result, attempts };
+  }
+
+  // Keep a token-based attempt for accounts where Mersal enabled API-token access to
+  // the same routes. It is validated strictly and can no longer return a false success
+  // for HTML login pages or JSON responses that lack both the media URL and wamid.
+  const tokenResult = await postMersalContactMediaAttempt(input.url, contactMediaForm(input, true), {
+    base: mersalBase(env),
+    mediaType: input.mediaType,
+    authMode: "api_token",
+  });
+  attempts.push(mediaAttemptSummary(tokenResult));
+  if (tokenResult.ok) return { ...tokenResult, attempts };
+
+  const sessionHint = dashboardAuth
+    ? "Mersal rejected both dashboard-session and API-token attempts"
+    : "Mersal dashboard authentication is required; configure MERSAL_DASHBOARD_COOKIE and MERSAL_X_XSRF_TOKEN, or obtain an official token-authenticated media endpoint";
+
+  return {
+    ...tokenResult,
+    error: first(tokenResult.error, sessionHint),
+    attempts,
+  };
+}
+
+async function postMersalContactMediaAttempt(url, form, options) {
+  try {
+    const headers = { accept: "application/json" };
+    if (clean(options?.cookie)) headers.cookie = clean(options.cookie);
+    if (clean(options?.xsrfHeader)) headers["x-xsrf-token"] = clean(options.xsrfHeader);
+    if (clean(options?.base)) {
+      headers.origin = clean(options.base).replace(/\/+$/, "");
+      headers.referer = `${clean(options.base).replace(/\/+$/, "")}/chat`;
+    }
+    headers["x-requested-with"] = "XMLHttpRequest";
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: form,
+      redirect: "manual",
+    });
+    const rawText = await response.text();
+    const raw = parseJson(rawText);
+    return normalizeContactMediaResponse(
+      response.status,
+      response.ok,
+      raw,
+      rawText,
+      options?.mediaType,
+      options?.authMode,
+      response.headers.get("content-type"),
+      response.headers.get("location"),
+    );
+  } catch (error) {
+    return failedProviderResult(errorMessage(error));
+  }
+}
+
+function normalizeContactMediaResponse(httpStatus, httpOk, raw, rawText, mediaType, authMode, contentType, location) {
+  const normalizedType = normalizeMediaType(mediaType);
+  const message = raw?.message && typeof raw.message === "object" ? raw.message : null;
+  const providerMessageId = providerMessageIdFrom(raw);
+  const providerMediaUrl = normalizedType === "audio"
+    ? first(message?.header_audio, message?.headerAudio)
+    : first(message?.header_document, message?.headerDocument);
+  const providerAccepted = raw?.status === true;
+  const htmlResponse = looksLikeHtml(rawText, contentType);
+  const redirected = httpStatus >= 300 && httpStatus < 400;
+  const accepted = Boolean(httpOk && !htmlResponse && !redirected && providerAccepted && providerMessageId && providerMediaUrl);
+
+  let error = "";
+  if (!accepted) {
+    if (redirected) {
+      error = `Mersal redirected the ${normalizedType} request${location ? ` to ${location}` : ""}; dashboard authentication is not valid`;
+    } else if (htmlResponse) {
+      error = "Mersal returned an HTML login/session page instead of a media-send JSON response";
+    } else if (!httpOk) {
+      error = first(raw?.errMsg, raw?.error, raw?.message, rawText, `HTTP ${httpStatus}`);
+    } else if (raw?.status !== true) {
+      error = first(raw?.errMsg, raw?.error, typeof raw?.message === "string" ? raw.message : "", "Mersal did not return status=true");
+    } else if (!providerMessageId) {
+      error = "Mersal response did not include fb_message_id/message_wamid";
+    } else if (!providerMediaUrl) {
+      error = normalizedType === "audio"
+        ? "Mersal response did not include header_audio"
+        : "Mersal response did not include header_document";
+    } else {
+      error = "Mersal media request was not confirmed";
+    }
+  }
+
+  return {
+    ok: accepted,
+    status: accepted ? "sent" : "failed",
+    provider_status: accepted ? "sent" : "failed",
+    provider_message_id: accepted ? providerMessageId : "",
+    providerMessageId: accepted ? providerMessageId : "",
+    message_wamid: accepted ? providerMessageId : "",
+    provider_media_url: providerMediaUrl || "",
+    http_status: httpStatus,
+    httpStatus,
+    auth_mode: clean(authMode),
+    error,
+    raw: htmlResponse ? null : raw,
+    raw_preview: htmlResponse ? clean(rawText).slice(0, 240) : "",
+  };
+}
+
+function looksLikeHtml(rawText, contentType) {
+  const type = clean(contentType).toLowerCase();
+  const text = clean(rawText).toLowerCase();
+  return type.includes("text/html") || text.startsWith("<!doctype html") || text.startsWith("<html") || text.includes("<form") && text.includes("password");
+}
+
+function mediaAttemptSummary(result) {
+  return {
+    authMode: clean(result?.auth_mode),
+    ok: result?.ok === true,
+    httpStatus: Number(result?.http_status || result?.httpStatus || 0),
+    error: clean(result?.error),
+  };
 }
 
 async function postMersalMultipartProvider(url, form) {
@@ -285,8 +497,8 @@ function normalizeProviderResponse(httpStatus, httpOk, raw, rawText) {
     raw?.result?.status,
     raw?.response?.status,
   ));
-  const explicitFailure = raw?.ok === false || raw?.success === false || FAILURE_STATUSES.has(statusValue);
-  const explicitSuccess = raw?.ok === true || raw?.success === true || SUCCESS_STATUSES.has(statusValue);
+  const explicitFailure = raw?.ok === false || raw?.success === false || raw?.status === false || FAILURE_STATUSES.has(statusValue);
+  const explicitSuccess = raw?.ok === true || raw?.success === true || raw?.status === true || SUCCESS_STATUSES.has(statusValue);
 
   // A real WhatsApp/Mersal message id is definitive acceptance evidence. This is the
   // specific case that previously displayed "failed" even though the template arrived.
@@ -330,6 +542,13 @@ function providerMessageIdFrom(raw) {
     raw?.messageWamid,
     raw?.wamid,
     raw?.message_id,
+    raw?.message?.provider_message_id,
+    raw?.message?.providerMessageId,
+    raw?.message?.message_wamid,
+    raw?.message?.messageWamid,
+    raw?.message?.wamid,
+    raw?.message?.fb_message_id,
+    raw?.message?.fbMessageId,
     raw?.data?.provider_message_id,
     raw?.data?.providerMessageId,
     raw?.data?.message_wamid,
@@ -376,6 +595,17 @@ async function processInboundWebhook(incoming, env) {
       status: result.status,
       conversationId: result.data?.result?.conversationId || null,
       messageId: result.data?.result?.messageId || null,
+      // Read-only diagnostics: a successful webhook is not proof of assignment.
+      assignedUserId: first(
+        result.data?.result?.assignedUserId,
+        result.data?.result?.assigneeId,
+        result.data?.result?.assignedTo,
+        result.data?.result?.ownerId,
+      ) || null,
+      assignedBranchId: first(result.data?.result?.branchId, result.data?.result?.assignedBranchId) || null,
+      assignedBranchCode: first(result.data?.result?.branchCode, result.data?.result?.assignedBranchCode) || null,
+      assignmentAcknowledged: result.data?.result?.assignmentAcknowledged === true ? true : null,
+      defaultFinanceFallbackApplied: result.data?.result?.defaultFinanceFallback?.applied === true,
     });
   }
 
@@ -413,7 +643,6 @@ function normalizeInboundEvents(incoming) {
         const messageId = first(message?.id, message?.message_id, message?.fb_message_id) || stableEventId({ phone, message });
         events.push({
           eventId: messageId,
-          providerMessageId: messageId,
           phone,
           displayName: first(contacts?.[0]?.profile?.name, contacts?.[0]?.name, "عميل"),
           timestamp: message?.timestamp || Date.now(),
@@ -433,8 +662,7 @@ function normalizeInboundEvents(incoming) {
     const roots = [incoming, incoming?.data, incoming?.body, incoming?.payload, incoming?.event]
       .filter((value) => value && typeof value === "object");
     for (const root of roots) {
-      const hasNestedMessage = Boolean(root?.message && typeof root.message === "object");
-      const message = hasNestedMessage ? root.message : root;
+      const message = root?.message && typeof root.message === "object" ? root.message : root;
       const direction = normalizeStatus(first(message?.direction, root?.direction, "in"));
       const isContact = message?.is_message_by_contact ?? message?.isMessageByContact ?? root?.is_message_by_contact ?? root?.isMessageByContact;
       if (["out", "outbound", "sent"].includes(direction) || Number(isContact) === 0) continue;
@@ -443,32 +671,12 @@ function normalizeInboundEvents(incoming) {
       const text = inboundText(message) || first(root?.text, root?.body, root?.customer_message, root?.last_input_text);
       const attachment = inboundAttachment(message) || genericAttachment(root);
       if (!text && !attachment) continue;
-      const providerMessageId = first(
-        message?.message_wamid, message?.messageWamid, message?.wamid,
-        message?.provider_message_id, message?.providerMessageId,
-        hasNestedMessage ? message?.id : "", message?.message_id, message?.messageId, message?.fb_message_id,
-        root?.eventId, root?.event_id,
-      );
-      const rawTimestamp = message?.timestamp || root?.timestamp || root?.createdAt || root?.created_at || root?.receivedAt || root?.received_at || "";
-      const eventId = providerMessageId || stableEventId({
-        phone,
-        timestamp: rawTimestamp,
-        text,
-        attachment: attachment ? {
-          type: attachment.attachmentType || "",
-          mediaId: attachment.mediaId || "",
-          fileName: attachment.fileName || "",
-          mimeType: attachment.mimeType || "",
-          caption: attachment.caption || "",
-        } : null,
-        message,
-      });
+      const messageId = first(message?.id, message?.message_id, message?.fb_message_id, root?.eventId, root?.event_id, root?.id) || stableEventId({ phone, message, text, attachment });
       events.push({
-        eventId,
-        providerMessageId: providerMessageId || eventId,
+        eventId: messageId,
         phone,
         displayName: first(root?.customerName, root?.displayName, root?.name, root?.contact?.name, "عميل"),
-        timestamp: rawTimestamp || Date.now(),
+        timestamp: message?.timestamp || root?.timestamp || root?.createdAt || Date.now(),
         message: { ...message, ...(text && !message?.text ? { text: { body: text } } : {}) },
         envelope: null,
         generic: root,
@@ -494,7 +702,7 @@ async function buildPlatformInboundPayload(event, env) {
     if (!direct || isProtectedWhatsappMediaUrl(direct)) {
       const resolved = await resolveInboundMedia(env, {
         phone: event.phone,
-        providerMessageId: event.providerMessageId || event.eventId,
+        providerMessageId: event.eventId,
         mediaId: attachment.mediaId,
         messageType: attachment.attachmentType,
         messageTimestamp: event.timestamp,
@@ -537,6 +745,7 @@ async function buildPlatformInboundPayload(event, env) {
 
   const messageText = text || attachment?.caption || (attachment?.hasAttachment ? attachmentLabel(attachment.attachmentType) : "");
   const serviceSelection = detectMersalServiceSelection(message, event.generic || {});
+  const routing = crmRoutingRequest(serviceSelection);
   const base = {
     eventId: event.eventId,
     event_id: event.eventId,
@@ -553,8 +762,6 @@ async function buildPlatformInboundPayload(event, env) {
     customerName: event.displayName,
     messageId: event.eventId,
     providerMessageId: event.eventId,
-    providerOriginalMessageId: event.providerMessageId || event.eventId,
-    provider_original_message_id: event.providerMessageId || event.eventId,
     text: messageText,
     message: messageText,
     messageType: attachment?.hasAttachment ? attachment.attachmentType : normalizeMediaType(message?.type || "text"),
@@ -582,6 +789,10 @@ async function buildPlatformInboundPayload(event, env) {
     entry_flow_provider: "mersal",
     flowAction: serviceSelection ? "service_selection" : "customer_input",
     flow_action: serviceSelection ? "service_selection" : "customer_input",
+    // Advisory only. CRM checks the persisted message count and existing
+    // ownership; this must never masquerade as a customer service selection.
+    crmNoSelectionFallbackPolicy: serviceSelection ? "" : "finance_after_second_inbound",
+    crm_no_selection_fallback_policy: serviceSelection ? "" : "finance_after_second_inbound",
     serviceSelectionKey: serviceSelection?.key || "",
     service_selection_key: serviceSelection?.key || "",
     serviceSelectionLabel: serviceSelection?.label || "",
@@ -596,9 +807,46 @@ async function buildPlatformInboundPayload(event, env) {
     finance_details_required: serviceSelection?.key === "finance",
     entryFlowInputText: messageText,
     entry_flow_input_text: messageText,
+    ...routing,
   };
 
   return event.envelope ? { ...event.envelope, ...base } : base;
+}
+
+/**
+ * Assignment request for the CRM inbound endpoint, not a locally fabricated assignment.
+ * Cash and finance use THE SAME sales-representative pool; the service choice
+ * classifies the lead but never partitions or hardcodes the salesperson list.
+ * Branch must be taken from the CRM assignee's actual branch.
+ * Existing owners remain subject to the platform's own retention/reassignment rules.
+ * A plain message without a confirmed service selection must not overwrite a
+ * previously classified customer's department.
+ *
+ * IMPORTANT: These metadata fields require matching support in the platform API.
+ * This worker cannot query PostgreSQL or force an owner into its database.
+ */
+function crmRoutingRequest(serviceSelection) {
+  if (!serviceSelection) return {
+    crmAssignmentRequested: true,
+    crm_assignment_requested: true,
+    crmAssignmentMode: "platform_existing_rules",
+  };
+
+  const isSales = serviceSelection.key === "cash" || serviceSelection.key === "finance";
+  return {
+    crmAssignmentRequested: true,
+    crm_assignment_requested: true,
+    crmAssignmentMode: "platform_existing_rules",
+    crm_assignment_mode: "platform_existing_rules",
+    crmServiceDepartment: serviceSelection.key,
+    crm_service_department: serviceSelection.key,
+    crmRepresentativePool: isSales ? "sales_shared" : "customer_service",
+    crm_representative_pool: isSales ? "sales_shared" : "customer_service",
+    crmBranchPolicy: "assignee_actual_branch",
+    crm_branch_policy: "assignee_actual_branch",
+    crmPreserveExistingOwner: true,
+    crm_preserve_existing_owner: true,
+  };
 }
 
 async function forwardToPlatform(payload, env) {

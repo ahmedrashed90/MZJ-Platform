@@ -272,6 +272,86 @@ function isExplicitServiceSelection(payload: any) {
     [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
 }
 
+/**
+ * Mersal owns the visible entry menu. If a customer sends a SECOND inbound
+ * message without choosing a service, request the finance department using
+ * the real CRM assignment rules. This is never an explicit service change:
+ * existing classified contacts, owners and open requests are protected.
+ * The worker only transports messages; PostgreSQL owns this decision.
+ */
+async function applyMersalNoSelectionFinanceFallback(input: {
+  routeSource: string;
+  source: string;
+  direction: string;
+  payload: any;
+  knownService: string;
+  explicitServiceSelection: boolean;
+  conversationId: string;
+  messageId: string;
+  existingLeadAssignedTo?: string | null;
+  eventId: string;
+}) {
+  if (input.routeSource !== "whatsapp" || input.source !== "whatsapp" || input.direction !== "in") return null;
+  if (!bool(input.payload.providerEntryFlowHandled ?? input.payload.provider_entry_flow_handled)) return null;
+  if (clean(first(input.payload.entryFlowProvider, input.payload.entry_flow_provider)).toLowerCase() !== "mersal") return null;
+  if (clean(first(input.payload.crmNoSelectionFallbackPolicy, input.payload.crm_no_selection_fallback_policy)) !== "finance_after_second_inbound") return null;
+  if (input.knownService || input.explicitServiceSelection) return null;
+
+  const sql = getSql();
+  const [pending] = await sql<any[]>`
+    select c.id::text,c.classification_state,c.service_request_id::text,
+      c.assigned_to::text as conversation_assigned_to,
+      l.assigned_to::text as lead_assigned_to,
+      exists(
+        select 1 from crm.service_requests r
+        where r.contact_id=c.contact_id and r.request_state='open'
+      ) as has_open_request,
+      exists(
+        select 1 from crm.messages m
+        where m.conversation_id=c.id and m.direction='in' and m.sender_type='customer'
+          and m.id<>${input.messageId}::uuid
+      ) as has_previous_customer_message,
+      exists(
+        select 1 from crm.automation_sessions s
+        where s.conversation_id=c.id and s.selected_choice_id is not null
+      ) as has_automation_selected_choice
+    from crm.conversations c
+    left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
+    where c.id=${input.conversationId}::uuid limit 1
+  `;
+  if (!pending || !["new", "awaiting_service"].includes(clean(pending.classification_state))) return null;
+  if (!pending.has_previous_customer_message || pending.has_open_request || pending.service_request_id || pending.has_automation_selected_choice) return null;
+  if (pending.conversation_assigned_to || pending.lead_assigned_to || input.existingLeadAssignedTo) return null;
+
+  const classified = await classifyConversationService({
+    conversationId: input.conversationId,
+    serviceKey: "finance",
+    sourceCode: "whatsapp",
+    classificationMethod: "mersal_no_selection_default",
+    eventKey: `mersal:no-selection:${input.eventId}`,
+    skipAutomaticTemplate: true,
+    assignPrimary: true,
+    assignCallCenter: true,
+    requirePrimaryAssignment: true,
+  });
+  // Concurrent explicit choices always take priority; the lifecycle preserves
+  // an existing service because our method is deliberately non-explicit.
+  if (clean(classified.request?.service_key) !== "finance") return null;
+  if (!classified.request?.assigned_to) {
+    throw new Error("Mersal finance fallback could not assign an eligible CRM salesperson");
+  }
+  // The unanswered entry-menu session must not keep asking for a department
+  // after the CRM has already assigned the customer to a finance agent.
+  await sql`
+    update crm.automation_sessions
+    set status='completed',completed_at=now(),last_activity_at=now(),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('completionReason','mersal_no_selection_finance_fallback')
+    where conversation_id=${input.conversationId}::uuid
+      and status='awaiting_choice' and selected_choice_id is null
+  `.catch((error: any) => console.error("Unable to close Mersal unanswered automation session", error));
+  return classified;
+}
+
 async function claimLatestServiceSelection(input: {
   conversationId: string;
   eventKey: string;
@@ -737,6 +817,32 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       console.error("Inbound message persisted; customer automation failed", { routeSource, eventId, conversationId: conversation.id, messageId: message.id, error: errorMessage });
     }
   }
+  // Do not let a second free-form Mersal message remain in Unclassified.
+  // This runs after customer automation so genuine CRM choice replies win.
+  const defaultFinanceFallback = direction === "in"
+    ? await applyMersalNoSelectionFinanceFallback({
+        routeSource,
+        source,
+        direction,
+        payload,
+        knownService,
+        explicitServiceSelection,
+        conversationId: conversation.id,
+        messageId: message.id,
+        existingLeadAssignedTo: matchedLead?.assigned_to || null,
+        eventId,
+      })
+    : null;
+  if (defaultFinanceFallback) {
+    openRequest = defaultFinanceFallback.request;
+    createdByKnownSource = createdByKnownSource || defaultFinanceFallback.reused !== true;
+    [conversation] = await sql<any[]>`
+      select *,id::text,lead_id::text,contact_id::text,service_request_id::text,
+        assigned_to::text,call_center_assigned_to::text
+      from crm.conversations where id=${conversation.id}::uuid
+    `;
+  }
+
   try {
     await publishBackgroundEvent({
       eventKey: `${source}:${eventId}:background`,
@@ -771,5 +877,8 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     automationError: automationError || null,
     automaticTemplate,
     serviceSelectionAccepted: explicitServiceSelection ? selectionAccepted : null,
+    defaultFinanceFallback: defaultFinanceFallback
+      ? { applied: true, serviceKey: "finance", assignedTo: defaultFinanceFallback.request.assigned_to, branchCode: defaultFinanceFallback.request.branch_code }
+      : null,
   };
 }

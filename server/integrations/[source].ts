@@ -87,6 +87,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
           createdLead: result.createLead,
           serviceSelectionAccepted: result.serviceSelectionAccepted,
           automaticTemplate: result.automaticTemplate,
+          // Read-only routing diagnostics consumed by the Mersal worker /debug/last.
+          assignedUserId: result.conversation?.assigned_to || null,
+          assignedBranchCode: result.conversation?.branch_code || null,
+          assignmentAcknowledged: Boolean(result.conversation?.assigned_to),
+          defaultFinanceFallback: result.defaultFinanceFallback || null,
         },
       });
     } catch (error: any) {

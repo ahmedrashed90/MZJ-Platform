@@ -57,14 +57,14 @@ async function invoke(path, body, env = {}, headers = {}) {
 }
 
 
-// 3) Outbound attachments must use the SendImage endpoint as multipart/form-data.
+// 3) Outbound images continue to use the SendImage endpoint as multipart/form-data.
 {
   let calls = 0;
   globalThis.fetch = async (url, options = {}) => {
     calls += 1;
     if (calls === 1) {
-      assert(String(url) === 'https://files.example.com/test.pdf', 'worker did not download the stored attachment');
-      return new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="test.pdf"' } });
+      assert(String(url) === 'https://files.example.com/test.jpg', 'worker did not download the stored attachment');
+      return new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { 'content-type': 'image/jpeg', 'content-disposition': 'attachment; filename="test.jpg"' } });
     }
     assert(String(url).endsWith('/api/wpbox/sendmessage'), 'wrong attachment endpoint');
     assert(options.body instanceof FormData, 'attachment body must be multipart FormData');
@@ -75,7 +75,7 @@ async function invoke(path, body, env = {}, headers = {}) {
     assert(file && typeof file.arrayBuffer === 'function', 'attachment file field image missing');
     return new Response(JSON.stringify({ ok: true, status: 'success', message_wamid: 'wamid.media.1' }), { status: 200 });
   };
-  const response = await invoke('/send/mersal', { type: 'media', phone: '0541421013', media_url: 'https://files.example.com/test.pdf', media_type: 'document', file_name: 'test.pdf', caption: 'ملف اختبار' }, { MERSAL_ATTACHMENT_SEND_URL: 'https://w-mersal.com/api/wpbox/sendmessage' });
+  const response = await invoke('/send/mersal', { type: 'media', phone: '0541421013', media_url: 'https://files.example.com/test.jpg', media_type: 'image', file_name: 'test.jpg', caption: 'ملف اختبار' }, { MERSAL_ATTACHMENT_SEND_URL: 'https://w-mersal.com/api/wpbox/sendmessage' });
   const data = await response.json();
   assert(response.status === 200 && data.ok === true, 'attachment should succeed');
   assert(data.provider_message_id === 'wamid.media.1', 'attachment provider id missing');
@@ -108,6 +108,11 @@ async function invoke(path, body, env = {}, headers = {}) {
   assert(platformBody.phone === '966541421013', 'inbound phone missing');
   assert(platformBody.text === 'رد من التليفون', 'inbound text missing');
   assert(platformBody.direction === 'in' && platformBody.provider === 'mersal', 'inbound direction/provider wrong');
+  assert(platformBody.providerEntryFlowHandled === true && platformBody.entryFlowProvider === 'mersal', 'Mersal external entry menu hint missing');
+  assert(platformBody.flowAction === 'customer_input' && !platformBody.serviceSelectionKey, 'free text must not invent a service selection');
+  assert(platformBody.crmAssignmentRequested === true, 'CRM assignment should be requested for free text');
+  assert(platformBody.crmNoSelectionFallbackPolicy === 'finance_after_second_inbound', 'finance fallback policy hint missing');
+  assert(platformBody.trustedServiceClassification === false, 'fallback must not be trusted explicit classification');
   assert(platformHeaders['x-mzj-gateway-secret'] === 'secret', 'gateway secret missing');
   assert(platformHeaders['x-event-id'] === 'wamid.in.1', 'x-event-id missing');
 }
@@ -171,6 +176,7 @@ async function invoke(path, body, env = {}, headers = {}) {
     assert(platformBody.trustedServiceClassification === true, `${key} selection was not trusted`);
     assert(platformBody.forceServiceReclassification === true, `${key} selection did not force reclassification`);
     assert(platformBody.flowAction === 'service_selection', `${key} flow action is wrong`);
+    assert(!platformBody.crmNoSelectionFallbackPolicy, `${key} explicit choice must disable no-selection fallback`);
   }
 }
 
