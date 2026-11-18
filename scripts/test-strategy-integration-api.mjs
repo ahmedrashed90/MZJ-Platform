@@ -66,6 +66,18 @@ try {
   assert.equal(mock.placementCalls.length,1);assert.equal(mock.placementCalls[0].placements[0].name,'أجندة ديسمبر');
   assert.equal(mock.placementCalls[0].itemIdeaCodes.get(uuid(4)),'V01');assert.equal(r.result.drafts.length,1);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...placed,placements:[{ideaCode:'V01',kind:'campaign',draftId:uuid(60),date:'2026-12-20',category:''}]});assert.equal(r.status,201);
+  // «مشتركة»: one idea may carry an agenda AND a campaign in the same assignment.
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...placed,placements:[
+    {ideaCode:'V01',kind:'agenda',name:'أجندة ديسمبر',date:'2026-12-01',category:''},
+    {ideaCode:'V01',kind:'campaign',name:'حملة ديسمبر',date:'2026-12-20',category:''}]});
+  assert.equal(r.status,201,'agenda + campaign for the same idea is accepted');
+  assert.equal(mock.placementCalls.at(-1).placements.length,2);
+  assert.deepEqual(mock.placementCalls.at(-1).placements.map(p=>p.kind),['agenda','campaign']);
+  // ...but never two destinations of the same kind for one idea.
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...placed,placements:[
+    {ideaCode:'V01',kind:'agenda',name:'أجندة ديسمبر',date:'2026-12-01',category:''},
+    {ideaCode:'V01',kind:'agenda',name:'أجندة يناير',date:'2026-12-02',category:''}]});
+  assert.equal(r.status,400,'two agendas for the same idea stay rejected');
   const before=mock.calls.length;
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...placed,placements:[{ideaCode:'X99',kind:'agenda',name:'n',date:'2026-12-01',category:''}]});assert.equal(r.status,400);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...placed,placements:[{ideaCode:'V01',kind:'agenda',name:'n',draftId:uuid(60),date:'2026-12-01',category:''}]});assert.equal(r.status,400);

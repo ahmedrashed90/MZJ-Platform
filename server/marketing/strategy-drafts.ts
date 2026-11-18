@@ -130,13 +130,15 @@ export async function applyStrategyPlacements(sql: Sql, user: SessionUser, input
             returning id::text,kind,name,plan_no,status`;
         }
       }
-      // An idea belongs to one open draft (or one live plan made from a draft).
+      // An idea belongs to one open draft PER KIND: it may sit in one agenda and one
+      // campaign at the same time, but never in two agendas or two campaigns.
       const [elsewhere] = await tx<any[]>`select d.name,d.plan_no from marketing.strategy_plan_draft_entries e
         join marketing.strategy_plan_drafts d on d.id=e.draft_id
         left join marketing.work_plans p on p.id=d.work_plan_id
         where e.item_id=any(${itemIds}::uuid[]) and e.draft_id<>${draft.id}::uuid
+          and d.kind=${placement.kind}
           and (d.status='draft' or coalesce(p.is_deleted,false)=false) limit 1`;
-      if (elsewhere) throw new Error(`Invalid placement: الفكرة ${placement.ideaCode} مرتبطة بالفعل بـ «${elsewhere.name}»${elsewhere.plan_no ? ` (${elsewhere.plan_no})` : ''}.`);
+      if (elsewhere) throw new Error(`Invalid placement: الفكرة ${placement.ideaCode} مرتبطة بالفعل بـ ${placement.kind === 'agenda' ? 'أجندة' : 'حملة'} «${elsewhere.name}»${elsewhere.plan_no ? ` (${elsewhere.plan_no})` : ''}.`);
       for (const itemId of itemIds) {
         await tx`insert into marketing.strategy_plan_draft_entries(draft_id,item_id,task_id,idea_code,marketing_category,target_on,scheduled_on,request_key,added_by)
           values(${draft.id}::uuid,${itemId}::uuid,${input.taskId}::uuid,${placement.ideaCode},${text(placement.category, 120)},

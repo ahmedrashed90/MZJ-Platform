@@ -52,7 +52,7 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
   if (!keysOnly(strategySource, ['planId', 'ideaCodes'])) throw Error('Invalid strategy source');
   const planId = stringValue(strategySource.planId, 120);
   const ideaCodes = strategySource.ideaCodes;
-  if (!planId || !Array.isArray(ideaCodes) || ideaCodes.length < 1 || ideaCodes.length > 30 ||
+  if (!planId || !Array.isArray(ideaCodes) || ideaCodes.length < 1 || ideaCodes.length > 100 ||
       !ideaCodes.every(value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(value))) throw Error('Invalid strategy idea identifiers');
   const items = body.items;
   if (new Set(ideaCodes).size !== ideaCodes.length || !Array.isArray(items) || !items.length || items.length > 100) throw Error('Invalid assignment item count');
@@ -95,10 +95,12 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
 }
 
 /** Optional strategy-flow destination per idea: an agenda draft (publish date)
- * or a campaign draft (funding date), chosen by draft id or typed as a new name. */
+ * and/or a campaign draft (funding date), chosen by draft id or typed as a new name.
+ * One idea may carry BOTH kinds at once («مشتركة» in the strategy system), but never
+ * two of the same kind. */
 function normalizePlacements(body: Record<string, unknown>, ideaCodes: string[]): StrategyPlacement[] {
   if (body.placements === undefined) return [];
-  if (!Array.isArray(body.placements) || body.placements.length > 30) throw Error('Invalid placement list');
+  if (!Array.isArray(body.placements) || body.placements.length > 200) throw Error('Invalid placement list');
   const allowed = new Set(ideaCodes), seen = new Set<string>();
   const validDate = (value: string) => /^20\d\d-\d\d-\d\d$/.test(value) && !Number.isNaN(Date.parse(`${value}T12:00:00Z`)) &&
     new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value;
@@ -109,9 +111,12 @@ function normalizePlacements(body: Record<string, unknown>, ideaCodes: string[])
     const ideaCode = stringValue(row.ideaCode, 40), kind = row.kind, date = stringValue(row.date, 10);
     const name = stringValue(row.name ?? '', 250).replace(/\s+/g, ' '), category = stringValue(row.category ?? '', 120);
     const draftId = row.draftId === undefined || row.draftId === '' ? '' : row.draftId;
-    if (!allowed.has(ideaCode) || seen.has(ideaCode) || (kind !== 'agenda' && kind !== 'campaign') || !validDate(date) ||
+    if (kind !== 'agenda' && kind !== 'campaign') throw Error('Invalid placement values');
+    // Dedupe per idea AND kind, so «أجندة + حملة» for the same idea both pass.
+    const seenKey = `${ideaCode}:${kind}`;
+    if (!allowed.has(ideaCode) || seen.has(seenKey) || !validDate(date) ||
         (draftId ? !isUuid(draftId) || name : !name)) throw Error('Invalid placement values');
-    seen.add(ideaCode);
+    seen.add(seenKey);
     return { ideaCode, kind, date, category, ...(draftId ? { draftId: draftId as string } : { name }) } as StrategyPlacement;
   });
 }
