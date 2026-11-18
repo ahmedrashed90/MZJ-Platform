@@ -310,142 +310,119 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
   const offset = Math.max(0, Number(request.query.offset || 0) || 0);
   const like = q ? `%${q}%` : null;
 
-  const rows = await sql<any[]>`
-    select
-      c.id::text,c.display_name,c.primary_phone,c.primary_phone_normalized,c.is_active,c.created_at,c.updated_at,
-      latest.id::text as latest_lead_id,latest.customer_name,latest.status_label,latest.department_code,latest.branch_code,
-      latest.source_code,latest.source_name,latest.assigned_to::text,
-      sales.full_name as assigned_name,
-      coalesce(latest.updated_at,latest.created_at,c.updated_at) as last_activity_at,
-      coalesce(lead_names.all_names,'') as all_lead_names
-    from crm.contacts c
-    left join lateral (
-      select l.id,l.customer_name,l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.assigned_to,l.created_at,l.updated_at
-      from crm.leads l
-      where l.contact_id=c.id and l.is_deleted=false
-      order by coalesce(l.updated_at,l.created_at) desc limit 1
-    ) latest on true
-    left join core.users sales on sales.id=latest.assigned_to
-    left join lateral (
-      select string_agg(distinct l.customer_name,' | ' order by l.customer_name) as all_names
-      from crm.leads l where l.contact_id=c.id and l.is_deleted=false and l.customer_name is not null and l.customer_name<>''
-    ) lead_names on true
-    where (
-      ${scope.all}::boolean
-      or exists (
-        select 1 from crm.leads l
-        where l.contact_id=c.id and l.is_deleted=false
-          and (
-            (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-            or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
-          )
-      )
-      or exists (
-        select 1 from crm.conversations cv
-        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
-      )
-    )
-      and (
-        ${like}::text is null
-        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
-        or exists (
-          select 1 from crm.leads search_lead
-          where search_lead.contact_id=c.id and search_lead.is_deleted=false
-            and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
-        )
-        or exists (
-          select 1 from integrations.erpnext_sales_orders search_order
-          join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
-          where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
-        )
-      )
-    order by coalesce(latest.updated_at,latest.created_at,c.updated_at) desc
-    limit ${limit} offset ${offset}
-  `;
-
-  const [count] = await sql<{ total: number }[]>`
-    select count(*)::int as total from crm.contacts c
-    where (
-      ${scope.all}::boolean
-      or exists (
-        select 1 from crm.leads l
-        where l.contact_id=c.id and l.is_deleted=false
-          and (
-            (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-            or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
-          )
-      )
-      or exists (
-        select 1 from crm.conversations cv
-        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
-      )
-    )
-      and (
-        ${like}::text is null
-        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
-        or exists (
-          select 1 from crm.leads search_lead
-          where search_lead.contact_id=c.id and search_lead.is_deleted=false
-            and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
-        )
-        or exists (
-          select 1 from integrations.erpnext_sales_orders search_order
-          join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
-          where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
-        )
-      )
-  `;
-
-  const [summary] = await sql<any[]>`
-    select
-      count(*)::int as total_contacts,
-      count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='open'))::int as open_contacts,
-      count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='closed'))::int as completed_contacts,
-      count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations,
-      coalesce(sum(contact_sales.sales_orders_count),0)::int as total_sales_orders,
-      coalesce(sum(contact_sales.sold_vehicles_count),0)::int as total_sold_vehicles
-    from crm.contacts c
-    left join (
+  // Run all three queries in parallel for speed
+  const [rows, countResult, summaryResult] = await Promise.all([
+    // Main listing — lightweight: latest lead + assigned user only
+    sql<any[]>`
       select
-        sales_lead.contact_id,
-        count(*)::int as sales_orders_count,
-        coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_vehicles_count
-      from integrations.erpnext_sales_orders so
-      join crm.leads sales_lead on sales_lead.id=so.crm_lead_id
+        c.id::text,c.display_name,c.primary_phone,c.primary_phone_normalized,c.is_active,c.created_at,c.updated_at,
+        latest.id::text as latest_lead_id,latest.customer_name,latest.status_label,latest.department_code,latest.branch_code,
+        latest.source_code,latest.source_name,latest.assigned_to::text,
+        sales.full_name as assigned_name,
+        coalesce(latest.updated_at,latest.created_at,c.updated_at) as last_activity_at
+      from crm.contacts c
       left join lateral (
-        select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
-        from integrations.erpnext_sales_order_vehicles sov
-        where sov.sales_order_id=so.id
-      ) vehicle_stats on true
-      where coalesce(so.is_cancelled,false)=false
-      group by sales_lead.contact_id
-    ) contact_sales on contact_sales.contact_id=c.id
-    where (
-      ${scope.all}::boolean
-      or exists(
-        select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false and (
-          (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-          or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-          or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
+        select l.id,l.customer_name,l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.assigned_to,l.created_at,l.updated_at
+        from crm.leads l
+        where l.contact_id=c.id and l.is_deleted=false
+        order by coalesce(l.updated_at,l.created_at) desc limit 1
+      ) latest on true
+      left join core.users sales on sales.id=latest.assigned_to
+      where (
+        ${scope.all}::boolean
+        or exists (
+          select 1 from crm.leads l
+          where l.contact_id=c.id and l.is_deleted=false
+            and (
+              (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+              or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+              or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
+            )
+        )
+        or exists (
+          select 1 from crm.conversations cv
+          where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
         )
       )
-      or exists (
-        select 1 from crm.conversations cv
-        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
+        and (
+          ${like}::text is null
+          or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
+          or exists (
+            select 1 from crm.leads search_lead
+            where search_lead.contact_id=c.id and search_lead.is_deleted=false
+              and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
+          )
+          or exists (
+            select 1 from integrations.erpnext_sales_orders search_order
+            join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
+            where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
+          )
+        )
+      order by coalesce(latest.updated_at,latest.created_at,c.updated_at) desc
+      limit ${limit} offset ${offset}
+    `,
+
+    // Count — simple, no joins needed
+    sql<{ total: number }[]>`
+      select count(*)::int as total from crm.contacts c
+      where (
+        ${scope.all}::boolean
+        or exists (
+          select 1 from crm.leads l
+          where l.contact_id=c.id and l.is_deleted=false
+            and (
+              (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+              or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+              or (l.department_code=any(${scope.departmentCodes}::text[]) and (not ${scope.branchRestricted}::boolean or ${currentCrmLeadBranchSql(sql)}=any(${scope.branchCodes}::text[])))
+            )
+        )
+        or exists (
+          select 1 from crm.conversations cv
+          where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
+        )
       )
-    )
-  `;
+        and (
+          ${like}::text is null
+          or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
+          or exists (
+            select 1 from crm.leads search_lead
+            where search_lead.contact_id=c.id and search_lead.is_deleted=false
+              and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
+          )
+          or exists (
+            select 1 from integrations.erpnext_sales_orders search_order
+            join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
+            where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
+          )
+        )
+    `,
+
+    // Summary — simplified: separate fast counts instead of one mega-query
+    Promise.all([
+      sql<any[]>`select count(*)::int as v from crm.contacts`,
+      sql<any[]>`select count(distinct r.contact_id)::int as v from crm.service_requests r where r.request_state='open'`,
+      sql<any[]>`select count(distinct r.contact_id)::int as v from crm.service_requests r where r.request_state='closed'`,
+      sql<any[]>`select count(distinct cv.contact_id)::int as v from crm.conversations cv`,
+      sql<any[]>`select count(*)::int as v from integrations.erpnext_sales_orders where coalesce(is_cancelled,false)=false`,
+      sql<any[]>`select coalesce(sum(greatest(coalesce(sov.qty,1),1)),0)::int as v from integrations.erpnext_sales_order_vehicles sov join integrations.erpnext_sales_orders so on so.id=sov.sales_order_id where coalesce(so.is_cancelled,false)=false and coalesce(sov.is_cancelled,false)=false`,
+    ]),
+  ]);
+
+  const count = countResult[0];
+  const [totalC, openC, completedC, convC, salesC, vehiclesC] = summaryResult;
+  const summary = {
+    total_contacts: totalC[0]?.v || 0,
+    open_contacts: openC[0]?.v || 0,
+    completed_contacts: completedC[0]?.v || 0,
+    contacts_with_conversations: convC[0]?.v || 0,
+    total_sales_orders: salesC[0]?.v || 0,
+    total_sold_vehicles: vehiclesC[0]?.v || 0,
+  };
 
   for (const row of rows) {
     row.source_name = sourceLabel(row.source_code, row.source_name);
-    // Surface all lead names so the table can show them
-    if (row.all_lead_names && row.all_lead_names !== (row.display_name || row.customer_name)) {
-      row.other_names = row.all_lead_names;
-    }
   }
-  return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset, summary: summary || {}, canPurge: canPurgeContact(user) });
+  return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset, summary, canPurge: canPurgeContact(user) });
 }
 
 async function contactProfile(request: VercelRequest, response: VercelResponse, user: any, id: string) {

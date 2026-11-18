@@ -601,7 +601,7 @@ export function CrmContactsPage() {
           <thead><tr><th>العميل</th><th>رقم الجوال</th><th>الحالة الحالية</th><th>القسم / الفرع</th><th>المسؤول</th><th>آخر نشاط</th></tr></thead>
           <tbody>
             {rows.map((row) => <tr key={row.id} tabIndex={0} onClick={() => openProfile(row.id)} onKeyDown={(event) => { if (event.key === "Enter") openProfile(row.id); }}>
-              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong>{row.other_names ? <small className="crm-contact-other-names" title={row.other_names}>{row.other_names}</small> : <small>{sourceLabel(row.source_code, row.source_name)}</small>}</div></div></td>
+              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong><small>{sourceLabel(row.source_code, row.source_name)}</small></div></div></td>
               <td dir="ltr">{text(row.primary_phone || row.primary_phone_normalized)}</td>
               <td><span className="crm-contact-status-pill">{text(row.status_label)}</span></td>
               <td><strong>{departmentLabel(row.department_code)}</strong><small>{text(row.branch_code)}</small></td>
