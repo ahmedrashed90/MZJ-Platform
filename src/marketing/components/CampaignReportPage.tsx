@@ -7,7 +7,6 @@ import { downloadCampaignReportXlsx, filterCampaignReportRows, printCampaignRepo
 
 const number = (value: number | null, decimals = 0) => value === null ? '—' : value.toLocaleString('ar-SA-u-nu-latn', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
 const currencyValue = (value: number | null, currency: string) => value === null ? '—' : `${number(value, 2)} ${currency || 'ر.س'}`;
-const RECENT = 29 * 86_400_000;
 type ChartMetric = 'interactions' | 'leads' | 'costPerLead';
 const CHART_COLORS: Record<ChartMetric, string> = { interactions: '#167d91', leads: '#2e8b68', costPerLead: '#ca8741' };
 
@@ -61,9 +60,15 @@ function CampaignBars({ title, metric, rows, onSelect }: { title: string; metric
 export function CampaignReportPage({ refreshToken = 0, onLoadingChange }: {
   refreshToken?: number; onLoadingChange?: (busy: boolean) => void;
 } = {}) {
-  const [from, setFrom] = useState(() => marketingLocalDateKey(new Date(Date.now() - RECENT)));
-  const [to, setTo] = useState(() => marketingLocalDateKey());
-  const [applied, setApplied] = useState(() => ({from: marketingLocalDateKey(new Date(Date.now() - RECENT)), to: marketingLocalDateKey()}));
+  // Always start on the current calendar month in the same local date basis as
+  // the report inputs. Manual date changes remain untouched.
+  const [initialRange] = useState(() => {
+    const today = marketingLocalDateKey();
+    return {from: `${today.slice(0, 7)}-01`, to: today};
+  });
+  const [from, setFrom] = useState(initialRange.from);
+  const [to, setTo] = useState(initialRange.to);
+  const [applied, setApplied] = useState(initialRange);
   const [data, setData] = useState<CampaignReportPayload | null>(null);
   const [platform, setPlatform] = useState('all');
   const [search, setSearch] = useState('');

@@ -201,6 +201,26 @@ function latestLead(profile: ContactProfile | null) {
   return profile?.leads?.find((lead) => !lead.is_deleted) || profile?.leads?.[0] || null;
 }
 
+function contactStatusTone(value?: string | null) {
+  switch (String(value || "").trim()) {
+    case "تم البيع": return "sold";
+    case "غير مؤهل": return "unqualified";
+    case "عميل جديد": return "new";
+    case "مؤهل": return "qualified";
+    default: return "default";
+  }
+}
+
+function contactBranchName(value?: string | null) {
+  const branch = String(value || "").trim();
+  const names: Record<string, string> = {
+    hall: "الصالة", multaqa: "الملتقى", qadisiyah: "القادسية",
+    wholesale: "الجملة", wholesale_sales: "الجملة", online: "أونلاين",
+  };
+  return names[branch.toLowerCase()] || text(branch);
+}
+
+
 function SummaryCard({ icon: Icon, label, value, sub }: { icon: typeof AddressBook; label: string; value: string; sub?: string }) {
   return <article className="crm-contact-summary-card"><span><Icon size={21} weight="duotone" /></span><div><small>{label}</small><strong>{value}</strong>{sub ? <p>{sub}</p> : null}</div></article>;
 }
@@ -215,7 +235,10 @@ export function CrmContactsPage() {
   const [q, setQ] = useState(searchParams.get("q") || "");
   const [appliedQ, setAppliedQ] = useState(searchParams.get("q") || "");
   const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page") || 1)));
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsReady, setStatsReady] = useState(false);
+  const [statsError, setStatsError] = useState("");
   const [error, setError] = useState("");
   const [profile, setProfile] = useState<ContactProfile | null>(null);
   const [conversationLead, setConversationLead] = useState<CrmLead | null>(null);
@@ -243,6 +266,10 @@ export function CrmContactsPage() {
   const [deletingSalesOrder, setDeletingSalesOrder] = useState(false);
   const openedFromList = useRef(false);
   const listScroll = useRef(0);
+  const listRequestSequence = useRef(0);
+  const statsRequestSequence = useRef(0);
+  const listAbort = useRef<AbortController | null>(null);
+  const statsAbort = useRef<AbortController | null>(null);
 
   useEscapeToClose(Boolean(contactId && !conversationLead && !purgeOpen && !editingOrder && !creatingOrder && !deletingOrder), () => closeProfile());
   useEscapeToClose(purgeOpen, () => setPurgeOpen(false));
@@ -250,18 +277,47 @@ export function CrmContactsPage() {
   useEscapeToClose(creatingOrder, () => { setCreatingOrder(false); setCreateOrderDraft(null); setCreateOrderError(""); });
   useEscapeToClose(Boolean(deletingOrder), () => { setDeletingOrder(null); setDeleteOrderConfirmation(""); setDeleteOrderError(""); });
 
-  async function loadList() {
+  async function loadStats() {
+    const requestId = ++statsRequestSequence.current;
+    statsAbort.current?.abort();
+    const controller = new AbortController();
+    statsAbort.current = controller;
+    setStatsLoading(true);
+    setStatsError("");
+    try {
+      const result = await crmFetch<{ total: number; summary: any }>(`/api/crm/contacts${queryString({ q: appliedQ, mode: "stats" })}`, { signal: controller.signal });
+      if (requestId !== statsRequestSequence.current) return;
+      setTotal(Number(result.total || 0));
+      setSummary(result.summary || {});
+      setStatsReady(true);
+    } catch (failure) {
+      if (requestId === statsRequestSequence.current) {
+        setStatsError(failure instanceof Error ? failure.message : "تعذر تحديث عدادات جهات الاتصال");
+      }
+    } finally {
+      if (requestId === statsRequestSequence.current) { statsAbort.current = null; setStatsLoading(false); }
+    }
+  }
+
+  async function loadList(refreshStats = false) {
+    // Only fetch the visible page. Counts run independently, so the table never
+    // waits for the six global CRM statistics or a whole-database count.
+    if (refreshStats) void loadStats();
+    const requestId = ++listRequestSequence.current;
+    listAbort.current?.abort();
+    const controller = new AbortController();
+    listAbort.current = controller;
     setLoading(true);
     setError("");
     try {
-      const result = await crmFetch<{ rows: ContactRow[]; total: number; summary: any }>(`/api/crm/contacts${queryString({ q: appliedQ, limit: pageSize, offset: (page - 1) * pageSize })}`);
-      setRows(result.rows || []);
-      setTotal(Number(result.total || 0));
-      setSummary(result.summary || {});
+      const result = await crmFetch<{ rows: ContactRow[] }>(`/api/crm/contacts${queryString({ q: appliedQ, limit: pageSize, offset: (page - 1) * pageSize, mode: "rows" })}`, { signal: controller.signal });
+      if (requestId === listRequestSequence.current) setRows(result.rows || []);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل جهات الاتصال");
+      if (requestId === listRequestSequence.current) {
+        setError(failure instanceof Error ? failure.message : "تعذر تحميل جهات الاتصال");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === listRequestSequence.current) { listAbort.current = null; setLoading(false); }
     }
   }
 
@@ -280,7 +336,16 @@ export function CrmContactsPage() {
     }
   }
 
-  useEffect(() => { void loadList(); }, [appliedQ, page]);
+  useEffect(() => {
+    setRows([]);
+    void loadList();
+    return () => { ++listRequestSequence.current; listAbort.current?.abort(); };
+  }, [appliedQ, page]);
+  useEffect(() => {
+    setStatsReady(false);
+    void loadStats();
+    return () => { ++statsRequestSequence.current; statsAbort.current?.abort(); };
+  }, [appliedQ]);
   useEffect(() => {
     setConversationLead(null);
     if (contactId) void loadProfile(contactId);
@@ -315,7 +380,8 @@ export function CrmContactsPage() {
   }
 
   function changePage(nextPage: number) {
-    const safe = Math.max(1, Math.min(Math.max(1, Math.ceil(total / pageSize)), nextPage));
+    const maxPage = statsReady && !statsLoading ? Math.max(1, Math.ceil(total / pageSize)) : page + (rows.length === pageSize ? 1 : 0);
+    const safe = Math.max(1, Math.min(maxPage, nextPage));
     const next = new URLSearchParams(searchParams);
     next.set("page", String(safe));
     next.delete("contact");
@@ -412,7 +478,7 @@ export function CrmContactsPage() {
       });
       setCreatingOrder(false);
       setCreateOrderDraft(null);
-      await Promise.all([loadProfile(profile.contact.id), loadList()]);
+      await Promise.all([loadProfile(profile.contact.id), loadList(true)]);
       setExpandedOrderId(result.orderId);
     } catch (failure) {
       setCreateOrderError(failure instanceof Error ? failure.message : "تعذر إنشاء طلب البيع");
@@ -441,7 +507,7 @@ export function CrmContactsPage() {
       const next = new URLSearchParams(searchParams);
       next.delete("contact");
       setSearchParams(next, { replace: true });
-      await loadList();
+      await loadList(true);
     } catch (failure) {
       setPurgeError(failure instanceof Error ? failure.message : "تعذر حذف الملف");
     } finally {
@@ -522,7 +588,7 @@ export function CrmContactsPage() {
       const updatedOrderId = editingOrder.id;
       setEditingOrder(null);
       setOrderDraft(null);
-      await Promise.all([loadProfile(profile.contact.id), loadList()]);
+      await Promise.all([loadProfile(profile.contact.id), loadList(true)]);
       setExpandedOrderId(updatedOrderId);
     } catch (failure) {
       setOrderEditError(failure instanceof Error ? failure.message : "تعذر تعديل طلب البيع");
@@ -554,7 +620,7 @@ export function CrmContactsPage() {
       });
       setDeletingOrder(null);
       setDeleteOrderConfirmation("");
-      await Promise.all([loadProfile(profile.contact.id), loadList()]);
+      await Promise.all([loadProfile(profile.contact.id), loadList(true)]);
     } catch (failure) {
       setDeleteOrderError(failure instanceof Error ? failure.message : "تعذر حذف طلب البيع");
     } finally {
@@ -573,48 +639,58 @@ export function CrmContactsPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const firstVisible = rows.length ? (page - 1) * pageSize + 1 : 0;
+  const lastVisible = rows.length ? (page - 1) * pageSize + rows.length : 0;
+  const nextPageAvailable = statsReady && !statsLoading ? page < totalPages : rows.length === pageSize;
   const lead = latestLead(profile);
   const contactName = profile ? text(profile.contact.display_name || lead?.customer_name) : "";
 
   return <div className="crm-page crm-contacts-page-v2">
     {error ? <div className="crm-error-banner">{error}</div> : null}
+    {statsError ? <div className="crm-error-banner">تعذر تحميل الإحصائيات: {statsError} <button type="button" className="crm-secondary-button compact" onClick={() => void loadStats()}>إعادة المحاولة</button></div> : null}
 
-    <section className="crm-contact-overview-grid">
-      <SummaryCard icon={AddressBook} label="إجمالي جهات الاتصال" value={number.format(Number(summary.total_contacts || total || 0))} />
-      <SummaryCard icon={ClockCounterClockwise} label="لديها طلبات مفتوحة" value={number.format(Number(summary.open_contacts || 0))} />
-      <SummaryCard icon={CheckCircle} label="لديها طلبات منتهية" value={number.format(Number(summary.completed_contacts || 0))} />
-      <SummaryCard icon={ChatCircleDots} label="لديها محادثات" value={number.format(Number(summary.contacts_with_conversations || 0))} />
-      <SummaryCard icon={Car} label="إجمالي السيارات المباعة" value={number.format(Number(summary.total_sold_vehicles || 0))} />
-      <SummaryCard icon={Receipt} label="إجمالي طلبات البيع" value={number.format(Number(summary.total_sales_orders || 0))} />
+    <section className="crm-contact-overview-grid" aria-busy={!statsReady}>
+      <SummaryCard icon={AddressBook} label="إجمالي جهات الاتصال" value={statsReady ? number.format(Number(summary.total_contacts || 0)) : "—"} />
+      <SummaryCard icon={ClockCounterClockwise} label="لديها طلبات مفتوحة" value={statsReady ? number.format(Number(summary.open_contacts || 0)) : "—"} />
+      <SummaryCard icon={CheckCircle} label="لديها طلبات منتهية" value={statsReady ? number.format(Number(summary.completed_contacts || 0)) : "—"} />
+      <SummaryCard icon={ChatCircleDots} label="لديها محادثات" value={statsReady ? number.format(Number(summary.contacts_with_conversations || 0)) : "—"} />
+      <SummaryCard icon={Car} label="إجمالي السيارات المباعة" value={statsReady ? number.format(Number(summary.total_sold_vehicles || 0)) : "—"} />
+      <SummaryCard icon={Receipt} label="إجمالي طلبات البيع" value={statsReady ? number.format(Number(summary.total_sales_orders || 0)) : "—"} />
     </section>
 
     <section className="crm-contact-list-shell">
       <form className="crm-contact-search-v2" onSubmit={(event) => { event.preventDefault(); applySearch(); }}>
-        <label><MagnifyingGlass size={20} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث بالاسم أو رقم الجوال أو الحالة أو رقم طلب البيع أو الملاحظات" /></label>
-        <button type="submit" className="crm-primary-button">بحث</button>
-        <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
-        <span>النتائج: {number.format(total)}</span>
+        <label><MagnifyingGlass size={20} /><input value={q} onChange={(event) => setQ(event.target.value)} aria-label="بحث عن جهة اتصال" placeholder="ابحث بالاسم، رقم الجوال، الحالة، طلب البيع أو الملاحظات" /></label>
+        <button type="submit" className="crm-primary-button"><MagnifyingGlass size={17} /> بحث</button>
+        <button type="button" className="crm-secondary-button" onClick={() => void loadList(true)} disabled={loading}><ArrowClockwise size={18} className={loading ? "crm-contacts-spin" : ""} />تحديث</button>
+        <span className="crm-contact-result-count">النتائج <strong>{statsReady && !statsLoading ? number.format(total) : "…"}</strong></span>
       </form>
 
-      <div className="crm-table-wrap crm-contacts-table-wrap">
+      <div className="crm-contact-list-heading">
+        <div className="crm-contact-list-label"><span><UsersThree size={19} weight="duotone" /></span><div><strong>سجل العملاء</strong><small>اختر أي عميل لعرض ملفه الكامل</small></div></div>
+        <span className="crm-contact-list-range" aria-live="polite">{loading ? "جاري تجهيز العملاء الظاهرين…" : rows.length ? `عرض ${number.format(firstVisible)}–${number.format(lastVisible)}${statsReady && !statsLoading ? ` من ${number.format(total)}` : " · جاري حساب الإجمالي"}` : "لا توجد نتائج مطابقة"}</span>
+      </div>
+
+      <div className="crm-table-wrap crm-contacts-table-wrap" aria-busy={loading}>
         <table className="crm-table crm-contacts-table">
-          <thead><tr><th>العميل</th><th>رقم الجوال</th><th>الحالة الحالية</th><th>القسم / الفرع</th><th>المسؤول</th><th>آخر نشاط</th></tr></thead>
+          <thead><tr><th scope="col">العميل</th><th scope="col">رقم الجوال</th><th scope="col">الحالة الحالية</th><th scope="col">القسم / الفرع</th><th scope="col">المسؤول</th><th scope="col">آخر نشاط</th><th scope="col" className="crm-contact-open-column">الملف</th></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id} tabIndex={0} onClick={() => openProfile(row.id)} onKeyDown={(event) => { if (event.key === "Enter") openProfile(row.id); }}>
-              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong><small>{sourceLabel(row.source_code, row.source_name)}</small></div></div></td>
-              <td dir="ltr">{text(row.primary_phone || row.primary_phone_normalized)}</td>
-              <td><span className="crm-contact-status-pill">{text(row.status_label)}</span></td>
-              <td><strong>{departmentLabel(row.department_code)}</strong><small>{text(row.branch_code)}</small></td>
-              <td>{text(row.assigned_name)}</td>
-              <td>{formatDate(row.last_activity_at)}</td>
+            {rows.map((row) => <tr key={row.id} role="button" aria-label={`فتح ملف ${text(row.display_name || row.customer_name)}`} tabIndex={0} onClick={() => openProfile(row.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openProfile(row.id); } }}>
+              <td><div className="crm-contact-table-name"><span className="crm-contact-row-avatar"><UserCircle size={24} weight="duotone" /></span><div><strong title={text(row.display_name || row.customer_name)}>{text(row.display_name || row.customer_name)}</strong><small>{sourceLabel(row.source_code, row.source_name)}</small></div></div></td>
+              <td><span className="crm-contact-phone-value"><Phone size={15} /><bdi dir="ltr">{text(row.primary_phone || row.primary_phone_normalized)}</bdi></span></td>
+              <td><span className={`crm-contact-status-pill crm-contact-status-${contactStatusTone(row.status_label)}`}>{text(row.status_label)}</span></td>
+              <td><div className="crm-contact-department"><strong>{departmentLabel(row.department_code)}</strong><small><Storefront size={13} />{contactBranchName(row.branch_code)}</small></div></td>
+              <td><span className={`crm-contact-assignee ${row.assigned_name ? "" : "is-empty"}`}><span className="crm-contact-assignee-dot" />{text(row.assigned_name)}</span></td>
+              <td><span className="crm-contact-activity"><ClockCounterClockwise size={15} />{formatDate(row.last_activity_at)}</span></td>
+              <td className="crm-contact-open-cell"><span aria-hidden="true" className="crm-contact-row-open"><ArrowRight size={18} /></span></td>
             </tr>)}
-            {!loading && !rows.length ? <tr><td colSpan={6} className="crm-empty-cell">لا توجد جهات اتصال مطابقة</td></tr> : null}
-            {loading ? <tr><td colSpan={6} className="crm-empty-cell">جاري تحميل جهات الاتصال...</td></tr> : null}
+            {loading && !rows.length ? Array.from({length: 7}, (_, index) => <tr key={`skeleton-${index}`} className="crm-contact-skeleton-row"><td colSpan={7}><span className="crm-contact-skeleton-bar" /></td></tr>) : null}
+            {!loading && !rows.length ? <tr><td colSpan={7} className="crm-empty-cell">لا توجد جهات اتصال مطابقة. جرب تغيير كلمة البحث أو تحديث القائمة.</td></tr> : null}
           </tbody>
         </table>
       </div>
 
-      <footer className="crm-contact-pagination"><button type="button" disabled={page <= 1 || loading} onClick={() => changePage(page - 1)}>السابق</button><span>صفحة {number.format(page)} من {number.format(totalPages)}</span><button type="button" disabled={page >= totalPages || loading} onClick={() => changePage(page + 1)}>التالي</button></footer>
+      <footer className="crm-contact-pagination"><button type="button" disabled={page <= 1 || loading} onClick={() => changePage(page - 1)}>السابق</button><span>{statsLoading ? `صفحة ${number.format(page)} · جاري حساب الإجمالي…` : statsReady ? `صفحة ${number.format(page)} من ${number.format(totalPages)}` : `صفحة ${number.format(page)} · العدد غير متاح`}</span><button type="button" disabled={!nextPageAvailable || loading} onClick={() => changePage(page + 1)}>التالي</button></footer>
     </section>
 
     {contactId ? <div className="crm-contact-profile-backdrop">

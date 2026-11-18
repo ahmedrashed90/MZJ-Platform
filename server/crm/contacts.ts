@@ -309,11 +309,13 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
   const limit = positiveInt(request.query.limit, 60, 200);
   const offset = Math.max(0, Number(request.query.offset || 0) || 0);
   const like = q ? `%${q}%` : null;
+  const mode = clean(request.query.mode);
 
-  // Run all three queries in parallel for speed
+  // The list can render before the global counts finish. Legacy callers without
+  // a mode still receive the original combined response and identical query rules.
   const [rows, countResult, summaryResult] = await Promise.all([
     // Main listing — lightweight: latest lead + assigned user only
-    sql<any[]>`
+    mode === "stats" ? Promise.resolve([] as any[]) : sql<any[]>`
       select
         c.id::text,c.display_name,c.primary_phone,c.primary_phone_normalized,c.is_active,c.created_at,c.updated_at,
         latest.id::text as latest_lead_id,latest.customer_name,latest.status_label,latest.department_code,latest.branch_code,
@@ -362,8 +364,8 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       limit ${limit} offset ${offset}
     `,
 
-    // Count — simple, no joins needed
-    sql<{ total: number }[]>`
+    // Count — identical permissions and search across the entire database
+    mode === "rows" ? Promise.resolve([] as Array<{ total: number }>) : sql<{ total: number }[]>`
       select count(*)::int as total from crm.contacts c
       where (
         ${scope.all}::boolean
@@ -397,8 +399,8 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         )
     `,
 
-    // Summary — simplified: separate fast counts instead of one mega-query
-    Promise.all([
+    // Global KPI counters do not block the first page of customer rows.
+    mode === "rows" ? Promise.resolve([] as any[][]) : Promise.all([
       sql<any[]>`select count(*)::int as v from crm.contacts`,
       sql<any[]>`select count(distinct r.contact_id)::int as v from crm.service_requests r where r.request_state='open'`,
       sql<any[]>`select count(distinct r.contact_id)::int as v from crm.service_requests r where r.request_state='closed'`,
@@ -407,6 +409,13 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       sql<any[]>`select coalesce(sum(greatest(coalesce(sov.qty,1),1)),0)::int as v from integrations.erpnext_sales_order_vehicles sov join integrations.erpnext_sales_orders so on so.id=sov.sales_order_id where coalesce(so.is_cancelled,false)=false and coalesce(sov.is_cancelled,false)=false`,
     ]),
   ]);
+
+  for (const row of rows) {
+    row.source_name = sourceLabel(row.source_code, row.source_name);
+  }
+  if (mode === "rows") {
+    return response.status(200).json({ ok: true, rows, limit, offset });
+  }
 
   const count = countResult[0];
   const [totalC, openC, completedC, convC, salesC, vehiclesC] = summaryResult;
@@ -419,8 +428,8 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
     total_sold_vehicles: vehiclesC[0]?.v || 0,
   };
 
-  for (const row of rows) {
-    row.source_name = sourceLabel(row.source_code, row.source_name);
+  if (mode === "stats") {
+    return response.status(200).json({ ok: true, total: Number(count?.total || 0), summary });
   }
   return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset, summary, canPurge: canPurgeContact(user) });
 }
