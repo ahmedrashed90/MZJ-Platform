@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let ready: Promise<void> | null = null;
-const MARKETING_SCHEMA_VERSION = 3;
+const MARKETING_SCHEMA_VERSION = 4;
 
 const MARKETING_SCHEMA_SQL = String.raw`begin;
 
@@ -1256,6 +1256,31 @@ alter table marketing.platform_connection_drafts add constraint platform_connect
 update marketing.schema_state set version=greatest(version,3),updated_at=now() where id=1;
 commit;`;
 
+// Independent content-production dimensions. Campaign publishing continues to use
+// platform_post_types; finished creative files are matched by width and height.
+// No existing tasks, files, plans or platform associations are rewritten.
+const MARKETING_SCHEMA_V4_SQL = String.raw`begin;
+set local lock_timeout = '3s';
+set local statement_timeout = '12s';
+create table if not exists marketing.production_dimensions (
+  id uuid primary key default gen_random_uuid(),
+  width integer not null check(width between 1 and 16384),
+  height integer not null check(height between 1 and 16384),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(width,height)
+);
+insert into marketing.production_dimensions(width,height)
+select distinct pt.width,pt.height
+from marketing.platform_post_types pt
+join marketing.platforms p on p.id=pt.platform_id
+where pt.is_active=true and p.is_active=true
+  and pt.width between 1 and 16384 and pt.height between 1 and 16384
+on conflict(width,height) do nothing;
+update marketing.schema_state set version=greatest(version,4),updated_at=now() where id=1;
+commit;`;
+
 async function marketingSchemaVersion(): Promise<number> {
   const sql = getSql();
   const [relation] = await sql<{ relation: string | null }[]>`select to_regclass('marketing.schema_state')::text as relation`;
@@ -1279,8 +1304,9 @@ export async function ensureMarketingSchema() {
           if (version === 0) await runSqlScript(MARKETING_SCHEMA_SQL);
           else {
             if (version < 2) await runSqlScript(MARKETING_SCHEMA_V2_SQL);
-            await runSqlScript(MARKETING_SCHEMA_V3_SQL);
+            if (version < 3) await runSqlScript(MARKETING_SCHEMA_V3_SQL);
           }
+          if (version < 4) await runSqlScript(MARKETING_SCHEMA_V4_SQL);
         }
       });
     })().catch(error => { ready = null; throw error; });

@@ -5,6 +5,7 @@ import { W, Empty, Field, FormatSelector, ProductViewButton, WorkAlert, WorkHead
 import { showDate, uploadWorkFile, useWorkQuery, workPost, type WorkMeta } from './api';
 import { ideaFileAllowed, isWorkDate, supportsWorkMedia, type WorkFormat, type WorkMediaKind, type WorkProduct } from '../../../shared/marketing-workflow';
 import { splitRequiredMediaSelection } from './requiredMedia';
+import { productionWorkFormats } from './productionDimensions';
 import { productChoiceGroups, productChoiceLabel } from './productChoice';
 import { CampaignGoalPicker } from './CampaignGoals';
 import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
@@ -49,10 +50,7 @@ function TaskComposer({ meta }: { meta: WorkMeta }) {
     catch (e) { setError(e instanceof Error ? e.message : W.invalid); }
   }, []);
   useEffect(() => { void reserve(); }, [reserve]);
-  const formats = useMemo<WorkFormat[]>(() => meta.postTypes.flatMap(post => {
-    const platform = meta.platforms.find(item => item.id === post.platform_id);
-    return platform ? [{ ...post, platform_name: platform.name, platform_code: platform.code }] : [];
-  }), [meta]);
+  const formats = useMemo<WorkFormat[]>(() => productionWorkFormats(meta.productionDimensions || []), [meta.productionDimensions]);
   const assignees = useMemo(() => meta.departments.flatMap(department =>
     department.users.map(user => ({ departmentId: department.id, departmentName: department.name, user })))
     .sort((a, b) => String(a.user.fullName || a.user.full_name || '').localeCompare(String(b.user.fullName || b.user.full_name || ''), 'ar')), [meta.departments]);
@@ -306,7 +304,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
                     <span><b>التاسك:</b> {product.task_no} — {product.task_name}</span>
                     {!!product.idea_code && <span><b>كود الفكرة:</b> {product.idea_code}</span>}
                     <span><b>الفكرة:</b> {product.idea || '—'}</span>
-                    <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {product.formats.length}</span>
+                    <span><b>النوع:</b> {product.media_kind === 'video' ? 'فيديو' : 'صورة'} · <b>المنفذ:</b> {product.assignee_name || '—'} · <b>المقاسات:</b> {[...new Set(product.formats.map(format => Number(format.width) > 0 && Number(format.height) > 0 ? `${format.width} × ${format.height}` : format.name))].join('، ') || '—'}</span>
                   </>}
                   <div className="mkw-plan-product-view"><ProductViewButton id={product.id}/></div>
                 </div>}

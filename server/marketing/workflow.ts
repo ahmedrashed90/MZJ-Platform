@@ -318,11 +318,20 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
   const readiness = workReadiness(items);
   const dates = items.map(i => workDate(i.due_on)).sort();
   const [type] = await db`select name from marketing.campaign_types where id=${task.type_id}::uuid`;
-  const formatOptions: WorkFormat[] = hasPermission(user, 'marketing.task.review')
-    ? await db`select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,
-      p.name as platform_name,p.code as platform_code
-      from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
-      where pt.is_active=true order by p.name,pt.name,pt.id`
+  const canReviewFormats = hasPermission(user, 'marketing.task.review');
+  const [dimensionSchema] = canReviewFormats
+    ? await db`select to_regclass('marketing.production_dimensions') is not null as ready`
+    : [{ ready: false }];
+  const formatOptions: WorkFormat[] = canReviewFormats
+    ? dimensionSchema?.ready
+      ? await db`select id::text,''::text as platform_id,''::text as platform_name,''::text as platform_code,
+          concat(width,' × ',height) as name,width,height
+          from marketing.production_dimensions where is_active=true order by width,height,id`
+      : await db`select distinct on(pt.width,pt.height) pt.id::text,''::text as platform_id,
+          ''::text as platform_name,''::text as platform_code,concat(pt.width,' × ',pt.height) as name,pt.width,pt.height
+          from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id
+          where pt.is_active=true and p.is_active=true and pt.width>0 and pt.height>0
+          order by pt.width,pt.height,pt.id`
     : [];
   const itemIds = items.map(i => i.id);
   const events = await db`select id,action,note,actor_name,created_at,item_id,data from marketing.work_history
@@ -420,6 +429,37 @@ async function validateFormats(db: any, kind: 'image' | 'video', ids: string[]):
   if (rows.length !== uniqueIds.length || rows.some((r: WorkFormat) => !supportsWorkMedia(kind, r.name))) throw new Error(W.selectFormats);
   return rows as WorkFormat[];
 }
+/** Canonical creative output dimensions; legacy platform IDs are accepted only
+ * as inputs and translated to a single dimension. Publishing still validates
+ * platform post type IDs with validateFormats above. */
+async function validateProductionFormats(db: any, _kind: 'image' | 'video', ids: string[]): Promise<WorkFormat[]> {
+  if (!ids.length || ids.length > 150) throw new Error(W.selectFormats);
+  const uniqueIds = [...new Set(ids.map(id))];
+  const [sizes,legacy] = await Promise.all([
+    db`select id::text,width,height from marketing.production_dimensions
+      where id=any(${uniqueIds}::uuid[]) and is_active=true`,
+    // Accept historical platform format IDs from strategy/older clients, but
+    // resolve every output to the same unique platform-independent dimension.
+    db`select pt.id::text,d.id::text as dimension_id,d.width,d.height
+      from marketing.platform_post_types pt join marketing.platforms p on p.id=pt.platform_id
+      join marketing.production_dimensions d on d.width=pt.width and d.height=pt.height and d.is_active=true
+      where pt.id=any(${uniqueIds}::uuid[]) and pt.is_active=true and p.is_active=true`,
+  ]);
+  const byId = new Map<string,any>();
+  for(const row of sizes)byId.set(row.id,row);
+  for(const row of legacy)byId.set(row.id,{id:row.dimension_id,width:row.width,height:row.height});
+  if(uniqueIds.some(value=>!byId.has(value)))throw new Error(W.selectFormats);
+  const uniqueDimensions = new Map<string,WorkFormat>();
+  for(const requestedId of uniqueIds){
+    const size=byId.get(requestedId), key=`${size.width}x${size.height}`;
+    if(!uniqueDimensions.has(key))uniqueDimensions.set(key,{
+      id:size.id,name:`${size.width} × ${size.height}`,width:size.width,height:size.height,
+      platform_id:'',platform_name:'',platform_code:'',
+    });
+  }
+  if(!uniqueDimensions.size)throw new Error(W.selectFormats);
+  return [...uniqueDimensions.values()];
+}
 async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker?: { planId: string; ideaCodes: string[]; requestKey: string; clientKeys: string[]; itemIdeaCodes: string[] }) {
   requirePermission(user, 'marketing.task.create');
   const reservationId = id(body.reservationId), typeId = id(body.typeId), name = text(body.name, 250);
@@ -447,7 +487,7 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
       const idea = text(input.idea, 20000), dueOn = text(input.dueOn, 10), fileIds = [...new Set(list(input.ideaFileIds).map(id))];
       if (!kind || !isWorkDate(dueOn) || (!idea && !fileIds.length)) throw new Error(W.requiredFields);
       await validateAssignee(tx, departmentId, assigneeId);
-      const formats = await validateFormats(tx, kind, list(input.formatIds));
+      const formats = await validateProductionFormats(tx, kind, list(input.formatIds));
       const [item] = await tx<any[]>`insert into marketing.work_items(task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,sort_order,delivery_mode,creative_treatment)
         values(${reservationId}::uuid,${clientKey}::uuid,${departmentId}::uuid,${assigneeId}::uuid,${kind},
           ${text(input.ideaName, 250) || idea.split('\n')[0].slice(0, 120) || `${name} - ${index + 1}`},${idea},${tx.json(json(formats))},${dueOn}::date,${index},
@@ -587,7 +627,13 @@ async function addItemFormats(sql: Sql, body: Row, user: SessionUser) {
     if (requestedIds.some(value => existing.has(value)) || original.length + requestedIds.length > 150) throw new Error(W.selectFormats);
     // Same active catalog and image/video checks as task creation. An invalid
     // video size on an image requirement (or vice versa) never gets persisted.
-    const added = await validateFormats(tx, locked.media_kind, requestedIds);
+    const added = await validateProductionFormats(tx, locked.media_kind, requestedIds);
+    // A legacy task may already contain a platform-specific format with the
+    // same pixel dimensions. Never add the canonical size a second time.
+    const dimensionKey = (format: WorkFormat) => format.width && format.height
+      ? `${format.width}x${format.height}` : format.id;
+    const existingDimensions = new Set(original.map(dimensionKey));
+    if (added.some(format => existingDimensions.has(dimensionKey(format)))) throw new Error(W.selectFormats);
     const wasApproved = locked.status === 'approved';
     const [updated] = await tx<any[]>`update marketing.work_items
       set formats=${tx.json(json([...original, ...added]))},
@@ -602,7 +648,7 @@ async function addItemFormats(sql: Sql, body: Row, user: SessionUser) {
         from marketing.assignment_actions a
         where ap.item_id=${itemId}::uuid and ap.action_id=a.id and a.is_final_approval=true`;
     }
-    const names = added.map(format => `${format.platform_name} - ${format.name}`);
+    const names = added.map(format => format.width && format.height ? `${format.width} × ${format.height}` : format.name);
     await history(tx, user, visible.task_id, itemId, 'formats_added', names.join(', '), {
       formatIds: added.map(format => format.id), formats: names,
     });

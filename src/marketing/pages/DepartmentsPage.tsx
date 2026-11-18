@@ -26,6 +26,7 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
   const [creative, setCreative] = useState({ id: "", name: "", shortCode: "", primaryDepartmentId: "", supportedPublishFormats: [] as string[] });
   const [campaignType, setCampaignType] = useState({ id: "", name: "", shortCode: "", codePrefix: "" });
   const [platform, setPlatform] = useState({ id: "", name: "", code: "", postTypes: [{ name: "", width: "", height: "" }] as PlatformPostDraft[] });
+  const [dimension, setDimension] = useState({ id: "", width: "", height: "" });
 
   async function load() {
     setError("");
@@ -134,17 +135,43 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
       </section>
 
       <section className="marketing-card">
-        <h2>إضافة منصة</h2>
+        <h2>مقاسات المحتوى</h2>
+        <p className="marketing-dimensions-hint">حدد أبعاد الملف المطلوب من المنفذ. المقاسات مستقلة عن المنصات وأنواع النشر؛ كل عرض × ارتفاع يُحفظ مرة واحدة فقط.</p>
+        <div className="marketing-form-row">
+          <label>العرض (px)<input type="number" min="1" max="16384" step="1" dir="ltr" value={dimension.width} onChange={event => setDimension(current => ({ ...current, width: event.target.value }))} /></label>
+          <label>الارتفاع (px)<input type="number" min="1" max="16384" step="1" dir="ltr" value={dimension.height} onChange={event => setDimension(current => ({ ...current, height: event.target.value }))} /></label>
+        </div>
+        <div className="marketing-settings-sticky-action">
+          <button type="button" className="marketing-primary" disabled={busy || !dimension.width || !dimension.height} onClick={() => void save('save_production_dimension', dimension, () => setDimension({ id: '', width: '', height: '' }))}>{dimension.id ? 'حفظ تعديل المقاس' : 'إضافة مقاس'}</button>
+          {dimension.id ? <button type="button" className="marketing-secondary" disabled={busy} onClick={() => setDimension({ id: '', width: '', height: '' })}>إلغاء التعديل</button> : null}
+        </div>
+      </section>
+      <section className="marketing-card marketing-list-card">
+        <h2>المقاسات المعتمدة</h2>
+        <p className="marketing-dimensions-hint">سيظهر للمنفذ المقاس فقط، مثل 1080 × 1920، بصرف النظر عن المنصة.</p>
+        {!(meta?.productionDimensions || []).length ? <p className="marketing-dimensions-hint">لا توجد مقاسات. أضف المقاسات المطلوبة من النموذج.</p> : null}
+        {(meta?.productionDimensions || []).map(item => <article key={item.id}>
+          <div><strong dir="ltr">{item.width} × {item.height}</strong><small>px</small></div>
+          <div className="marketing-inline-actions"><button type="button" title="تعديل المقاس" aria-label={`تعديل ${item.width} × ${item.height}`} disabled={busy} onClick={() => { setDimension({ id: item.id, width: String(item.width), height: String(item.height) }); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><PencilSimple /></button><button type="button" className="danger" aria-label={`حذف ${item.width} × ${item.height}`} disabled={busy} onClick={() => void remove('production_dimension', item.id)}><Trash /></button></div>
+        </article>)}
+      </section>
+      <details className="marketing-card marketing-publish-platform-settings">
+        <summary><strong>إعدادات قنوات النشر للحملات والأجندة</strong><span>إدارة المنصات وأنواع المنشورات للنشر فقط؛ لا تظهر ضمن مقاسات التنفيذ.</span></summary>
+        <div className="marketing-platform-config-grid">
+        <section className="marketing-platform-config-card">
+        <h2>إضافة / تعديل قناة النشر</h2>
         <label>اسم المنصة<input value={platform.name} onChange={(e) => setPlatform({ ...platform, name: e.target.value })} /></label>
         <label>الكود<input dir="ltr" value={platform.code} onChange={(e) => setPlatform({ ...platform, code: e.target.value })} /></label>
         <div className="marketing-repeat-list">{platform.postTypes.map((item, index) => <div className="marketing-form-row three" key={index}><label>نوع النشر<input value={item.name} onChange={(e) => setPlatform({ ...platform, postTypes: platform.postTypes.map((row, rowIndex) => rowIndex === index ? { ...row, name: e.target.value } : row) })} /></label><label>العرض<input type="number" value={item.width} onChange={(e) => setPlatform({ ...platform, postTypes: platform.postTypes.map((row, rowIndex) => rowIndex === index ? { ...row, width: e.target.value } : row) })} /></label><label>الارتفاع<input type="number" value={item.height} onChange={(e) => setPlatform({ ...platform, postTypes: platform.postTypes.map((row, rowIndex) => rowIndex === index ? { ...row, height: e.target.value } : row) })} /></label></div>)}</div>
         <button className="marketing-secondary" onClick={() => setPlatform({ ...platform, postTypes: [...platform.postTypes, { name: "", width: "", height: "" }] })}><Plus />إضافة نوع نشر</button>
         <button className="marketing-primary" disabled={busy} onClick={() => void save("save_platform", platform, () => setPlatform({ id: "", name: "", code: "", postTypes: [{ name: "", width: "", height: "" }] }))}>{platform.id ? "تعديل المنصة" : "إضافة المنصة"}</button>
       </section>
-      <section className="marketing-card marketing-list-card">
-        <h2>المنصات</h2>
+        <section className="marketing-platform-config-card marketing-list-card">
+        <h2>قنوات النشر</h2>
         {(meta?.platforms || []).map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{(postTypesByPlatform.get(item.id) || []).map((post) => `${post.name} ${post.width && post.height ? `(${post.width}×${post.height})` : ""}`).join("، ") || "لا يوجد أنواع نشر"}</small></div><div className="marketing-inline-actions"><button onClick={() => setPlatform({ id: item.id, name: item.name, code: item.code, postTypes: postTypesByPlatform.get(item.id) || [{ name: "", width: "", height: "" }] })}><PencilSimple /></button><button className="danger" onClick={() => void remove("platform", item.id)}><Trash /></button></div></article>)}
       </section>
+        </div>
+      </details>
     </div>
   </>;
 

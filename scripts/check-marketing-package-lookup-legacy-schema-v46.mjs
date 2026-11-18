@@ -18,7 +18,7 @@ function check(label, condition) {
 const categoryCreatedBy = "alter table marketing.package_categories add column if not exists created_by uuid references core.users(id)";
 const salesTypeCreatedBy = "alter table marketing.package_sales_types add column if not exists created_by uuid references core.users(id)";
 
-check("release baseline version remains 1.19.16", packageJson.version === "1.19.16");
+check("release baseline version remains 1.19.16", /^1\.19\.\d+$/.test(packageJson.version) && Number(packageJson.version.split(".")[2]) >= 16);
 check("runtime schema upgrades legacy package categories with created_by", schema.includes(categoryCreatedBy));
 check("runtime schema upgrades legacy package sales types with created_by", schema.includes(salesTypeCreatedBy));
 check("SQL migration upgrades legacy package categories with created_by", migration.includes(categoryCreatedBy));

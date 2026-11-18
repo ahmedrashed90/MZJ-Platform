@@ -15,7 +15,7 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release baseline version remains 1.19.16", packageJson.version === "1.19.16");
+check("release baseline version remains 1.19.16", /^1\.19\.\d+$/.test(packageJson.version) && Number(packageJson.version.split(".")[2]) >= 16);
 check("public package catalog loads active sales types", ownersApi.includes("from marketing.package_sales_types where is_active=true"));
 check("public package catalog exposes sales type lookup list", ownersApi.includes("packageSalesTypes: salesTypes.map"));
 check("public package rows expose sales type id", ownersApi.includes("p.sales_type_id::text") && ownersApi.includes('salesTypeId: row.sales_type_id || ""'));

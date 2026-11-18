@@ -18,7 +18,11 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release baseline version remains 1.19.16", packageJson.version === "1.19.16");
+// This is a feature baseline, not a fixed release number: later patch releases
+// must retain the same guarantees without causing a false production build failure.
+const releaseParts = String(packageJson.version || '').split('.').map(Number);
+check("release baseline is 1.19.16 or newer", releaseParts.length === 3 && releaseParts.every(Number.isInteger) &&
+  (releaseParts[0] > 1 || (releaseParts[0] === 1 && (releaseParts[1] > 19 || (releaseParts[1] === 19 && releaseParts[2] >= 16)))));
 check("package schema stores insurance description", schema.includes("insurance_description text") && schema.includes("add column if not exists insurance_description text"));
 check("package form models insurance description", packagesPage.includes("insuranceDescription: string") && packagesPage.includes("وصف التأمين"));
 check("insurance description field only renders when insurance is selected", packagesPage.includes("form.insurance ? <label className=\"marketing-insurance-description\""));

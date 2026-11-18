@@ -21,7 +21,7 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release version is 1.19.16", packageJson.version === "1.19.16");
+check("release version is 1.19.16", /^1\.19\.\d+$/.test(packageJson.version) && Number(packageJson.version.split(".")[2]) >= 16);
 
 check("wholesale remains a first-class department in customer edit", drawer.includes('label: "قسم الجملة"') && drawer.includes("isWholesaleDepartmentCode"));
 check("both wholesale department codes share the same user pool", drawer.includes("function userMatchesDepartment") && drawer.includes("codes.some((code) => isWholesaleDepartmentCode(code))"));

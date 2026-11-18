@@ -12,6 +12,8 @@ export type CreativeType = {
 export type CampaignType = { id: string; name: string; short_code: string; code_prefix: string; sequence_value: number };
 export type MarketingPlatform = { id: string; code: string; name: string };
 export type PlatformPostType = { id: string; platform_id: string; name: string; width?: number | null; height?: number | null };
+/** Platform-independent required output size; never duplicates by (width,height). */
+export type ProductionDimension = { id: string; width: number; height: number };
 export type Funnel = { id: string; name: string };
 export type MarketingLocation = { id: string; code: string; name: string; branch_code?: string | null };
 export type StockCar = {
@@ -55,6 +57,7 @@ export type MarketingMeta = {
   campaignTypes: CampaignType[];
   platforms: MarketingPlatform[];
   postTypes: PlatformPostType[];
+  productionDimensions: ProductionDimension[];
   funnels: Funnel[];
   cars: StockCar[];
   connections: any[];

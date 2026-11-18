@@ -420,7 +420,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser, 
       where is_content=true or id=${contentDepartmentIdValue}::uuid
     `;
   }
-  const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
+  const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, productionRows] = await Promise.all([
     sql<any[]>`
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
       from core.users u
@@ -452,9 +452,14 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser, 
     sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
     sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
     sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
+    sql<any[]>`select to_regclass('marketing.production_dimensions') is not null as ready`,
   ]);
+  const productionDimensions = productionRows[0]?.ready
+    ? await sql<any[]>`select id::text,width,height from marketing.production_dimensions where is_active=true order by width,height,id`
+    : [...new Map(postTypes.filter((row:any) => Number(row.width)>0 && Number(row.height)>0)
+        .map((row:any) => [`${row.width}x${row.height}`,{id:row.id,width:row.width,height:row.height}])).values()];
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
-  return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicPlatformConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
+  return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, productionDimensions, funnels, connections: connections.map(publicPlatformConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
 }
 
 async function createFunnel(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
@@ -2343,6 +2348,34 @@ function creativeSupportedPublishFormats(value:unknown):MarketingPublishFormat[]
 async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId),supportedPublishFormats=creativeSupportedPublishFormats(body.supportedPublishFormats);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,supported_publish_formats=${sql.json(dbJson(supportedPublishFormats))},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id,supported_publish_formats) values(${name},${shortCode},${departmentId}::uuid,${sql.json(dbJson(supportedPublishFormats))}) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
 
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
+async function saveProductionDimension(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,'settings.marketing.manage'))throw new Error('لا توجد صلاحية لتعديل مقاسات التسويق');
+  const dimensionId=clean(body.id);
+  const width=Number(body.width),height=Number(body.height);
+  if(!Number.isInteger(width)||!Number.isInteger(height)||width<1||height<1||width>16384||height>16384)
+    throw new Error('العرض والارتفاع مطلوبان بأرقام صحيحة من 1 إلى 16384');
+  const [existing]=await sql<any[]>`select id::text,is_active from marketing.production_dimensions
+    where width=${width} and height=${height} limit 1`;
+  if(existing && existing.id!==dimensionId){
+    // Editing a different dimension must never reactivate another row and
+    // silently leave the edited one unchanged. New additions may revive an
+    // archived size while preserving its historic UUID in existing tasks.
+    if(!dimensionId && !existing.is_active){
+      await sql`update marketing.production_dimensions set is_active=true,updated_at=now() where id=${existing.id}::uuid`;
+      return {ok:true,message:'تم إعادة تفعيل المقاس الموجود دون تكراره'};
+    }
+    throw new Error('المقاس موجود بالفعل. لا يمكن تكرار نفس العرض والارتفاع');
+  }
+  if(dimensionId){
+    const [current]=await sql<any[]>`select id from marketing.production_dimensions where id=${dimensionId}::uuid and is_active=true`;
+    if(!current)throw new Error('المقاس المحدد غير موجود');
+    await sql`update marketing.production_dimensions set width=${width},height=${height},updated_at=now() where id=${dimensionId}::uuid`;
+  }else{
+    await sql`insert into marketing.production_dimensions(width,height) values(${width},${height})`;
+  }
+  return {ok:true,message:'تم حفظ المقاس المستقل عن المنصات'};
+}
+
 async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
 async function packageSettings(sql:ReturnType<typeof getSql>){
   const[categories,salesTypes]=await Promise.all([
@@ -2387,7 +2420,13 @@ async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUs
     :await sql<any[]>`insert into marketing.packages(name,category,category_id,sales_type,sales_type_id,price,cash_discount,registration_fees,insurance,insurance_description,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category.name},${categoryId}::uuid,${salesType.name},${salesTypeId}::uuid,${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${insurance},${insuranceDescription||null},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text,category_id::text,sales_type_id::text`;
   return{ok:true,row,message:"تم حفظ الباقة"};
 }
-async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const entity=clean(body.entity),id=clean(body.id);if((entity==='package_category'||entity==='package_sales_type')&&!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='package_category'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and category_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف التصنيف لأنه مستخدم داخل باقات حالية");}if(entity==='package_sales_type'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and sales_type_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف نوع المبيعات لأنه مستخدم داخل باقات حالية");}if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages",package_category:"marketing.package_categories",package_sales_type:"marketing.package_sales_types"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
+async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const entity=clean(body.entity),id=clean(body.id);if(entity==='production_dimension'){
+  if(!hasPermission(user,'settings.marketing.manage'))throw new Error('لا توجد صلاحية لتعديل مقاسات التسويق');
+  if(!id)throw new Error('المقاس المطلوب غير صالح');
+  // Soft-delete only; existing task snapshots, uploaded files and approvals survive.
+  await sql`update marketing.production_dimensions set is_active=false,updated_at=now() where id=${id}::uuid`;
+  return {ok:true,message:'تم إخفاء المقاس من التكليفات الجديدة مع الاحتفاظ بالتاريخ'};
+}if((entity==='package_category'||entity==='package_sales_type')&&!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='package_category'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and category_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف التصنيف لأنه مستخدم داخل باقات حالية");}if(entity==='package_sales_type'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and sales_type_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف نوع المبيعات لأنه مستخدم داخل باقات حالية");}if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages",package_category:"marketing.package_categories",package_sales_type:"marketing.package_sales_types"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
 
 async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -4529,7 +4568,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     // Page reads are strictly read-only: never enqueue ALTER TABLE behind
     // active imports/cron syncs. Writes keep the existing migration guard.
     const workflowRequest = clean(request.query.resource).startsWith('work_') || clean(initialBody.action).startsWith('work_');
-    if (request.method !== 'GET' && !workflowRequest) {
+    const dimensionWriteActions = new Set(['work_create_task','work_add_item_formats','work_strategy_save_entry','work_strategy_save_draft','work_strategy_submit_draft']);
+    if (request.method !== 'GET' && (!workflowRequest || dimensionWriteActions.has(clean(initialBody.action)))) {
       await ensureMarketingSchema();
     }
     const user = await requireUser(request,response); if(!user)return;
@@ -4649,6 +4689,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
     else if(action==='save_campaign_type')result=await saveCampaignType(sql,body);
     else if(action==='save_platform')result=await savePlatform(sql,body);
+    else if(action==='save_production_dimension')result=await saveProductionDimension(sql,body,user);
     else if(action==='delete_setting')result=await softDeleteSetting(sql,body,user);
     else if(action==='save_package')result=await savePackage(sql,body,user);
     else if(action==='save_package_lookup')result=await savePackageLookup(sql,body,user);

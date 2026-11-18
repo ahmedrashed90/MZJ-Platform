@@ -111,7 +111,7 @@ check(styles.includes('marketing-meta-ads-chart-tooltip') && styles.includes('ma
 check(front.includes('aria-pressed={activeCampaignKey === point.key}') && front.includes('onClick={() => setActiveCampaignKey(') && front.includes('role="group"'), 'Every chart column is an accessible click target with independent active state');
 check(front.includes('مدير الحملة:') && front.includes('CampaignManagerEditor') && front.includes('save_meta_ads_campaign_manager'), 'Campaign manager is editable and displayed beside each chart campaign');
 check(front.includes('type="date"') && front.includes('dateFrom:') && front.includes('dateTo:'), 'Date From/To filters are wired to campaign report query');
-check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 3'), 'Dedicated additive schema migration persists manager names');
+check(schema.includes('create table if not exists marketing.meta_ads_campaign_managers') && schema.includes('MARKETING_SCHEMA_VERSION = 4'), 'Dedicated additive schema migration persists manager names');
 check(route.includes("action==='save_meta_ads_campaign_manager'") && route.includes("hasPermission(user,'marketing.engagement.view')") && route.includes("hasPermission(user,'marketing.campaign.edit')"), 'Server requires authenticated marketing permissions before save');
 
 const schemaCompiled = ts.transpileModule(schema, { fileName: '_marketing-schema.ts', compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;

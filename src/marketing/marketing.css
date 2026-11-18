@@ -6817,3 +6817,13 @@
 .mkw-campaign-goal-settings-list>article>div:first-child>strong { font-size:14px; color:var(--ink); }
 .mkw-campaign-goal-settings-list>article>div:first-child>small { color:var(--muted); font-size:11px; }
 .mkw-campaign-goal-actions { display:flex; gap:8px; }
+
+/* Independent production-size catalog; publishing platform settings are separate. */
+.marketing-dimensions-hint {font-size:.875rem;color:var(--text-muted,#806f69);line-height:1.7;margin:.35rem 0 1rem}
+.marketing-publish-platform-settings {grid-column:1/-1}
+.marketing-publish-platform-settings > summary {cursor:pointer;display:flex;gap:.7rem;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.marketing-publish-platform-settings > summary span {font-size:.85rem;color:var(--text-muted,#806f69)}
+.marketing-platform-config-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1fr));gap:1.2rem;margin-top:1.1rem}
+.marketing-platform-config-card {min-width:0}
+.mkw-dimension-options {display:flex;flex-wrap:wrap;gap:.65rem;align-items:center}
+.mkw-dimension-options .mkw-format-chip {min-width:115px;justify-content:center}

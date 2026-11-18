@@ -23,19 +23,38 @@ export function MediaLabel({ kind }: { kind: WorkMediaKind }) { return <span cla
 const statuses: Record<string, string> = { in_progress: W.in_progress, submitted: W.submitted, revision: W.revision, editing: "قيد التعديل", approved: W.approved, completed: W.completed, active: W.execution, empty: W.emptyTask, waiting: W.waiting, ready_publish: W.prepared, publishing: W.processing, prepared: W.prepared, processing: W.processing, scheduled: "مجدول للنشر", published: W.published, failed: W.failed, verification_required: W.verificationRequired, cancelled: W.cancel, created: W.createdEvent, edited: W.edit, file_removed: W.fileRemoved, formats_added: W.addFormats, action: W.assignmentActions, rejected: 'مرفوض' };
 export function Status({ value }: { value: string }) { return <span className={`mkw-status status-${value}`}>{value === 'rejected' && <XCircle size={15} weight="fill" aria-hidden="true" />}{statuses[value] || value}</span>; }
 export function Readiness({ value, label = W.readiness }: { value: number; label?: string }) { const normalized = Math.max(0, Math.min(100, Number(value) || 0)); return <div className="mkw-readiness"><span>{label}<strong>{normalized}%</strong></span><progress aria-label={label} max={100} value={normalized} /></div>; }
+export function workFormatDisplay(format: WorkFormat): string {
+  return Number(format.width) > 0 && Number(format.height) > 0
+    ? `${format.width} × ${format.height}` : format.name;
+}
 export function Formats({ formats }: { formats: WorkFormat[] }) {
-  return <div className="mkw-chips">{formats.map(format => <span key={format.id}>{format.platform_name} · {format.name}{format.width && format.height ? <b dir="ltr">{format.width} × {format.height}</b> : null}</span>)}</div>;
+  // Task/performer views show the requested OUTPUT SIZE, never the source
+  // platform or its publishing purpose. Historical format IDs stay intact.
+  const seen = new Set<string>();
+  return <div className="mkw-chips">{formats.filter(format => {
+    const label = workFormatDisplay(format);
+    if(seen.has(label))return false;
+    seen.add(label);return true;
+  }).map(format => <span key={format.id} dir="ltr">{workFormatDisplay(format)}</span>)}</div>;
 }
 export function FormatSelector({ formats, selected, onChange, disabled }: { formats: WorkFormat[]; selected: string[]; onChange: (ids: string[]) => void; disabled?: boolean }) {
-  const platforms = [...new Set(formats.map(format => format.platform_id))];
-  return <details className="mkw-format-disclosure" open={formats.length <= 5}>
-    <summary><strong>{W.sizes}</strong><span className="mkw-muted">{selected.length} / {formats.length} ▾</span></summary>
+  // One visible checkbox per output dimension, even for older published formats.
+  const uniqueFormats = [...new Map(formats.map(format => [workFormatDisplay(format),format])).values()];
+  const selectedDimensions = new Set(formats.filter(format => selected.includes(format.id)).map(workFormatDisplay));
+  return <details className="mkw-format-disclosure" open={uniqueFormats.length <= 5}>
+    <summary><strong>{W.sizes}</strong><span className="mkw-muted">{selectedDimensions.size} / {uniqueFormats.length} ▾</span></summary>
     <div className="mkw-format-select">
-      <div className="mkw-section-title"><strong>{W.sizes}</strong><label className="mkw-checkbox" onClick={event => event.stopPropagation()}><input type="checkbox" disabled={disabled || !formats.length} checked={!!formats.length && formats.every(format => selected.includes(format.id))} onChange={event => onChange(event.target.checked ? formats.map(format => format.id) : [])} />{W.selectAll}</label></div>
-      {!formats.length ? <Empty>{W.noSizes}</Empty> : platforms.map(platformId => <div className="mkw-format-platform" key={platformId}>
-        <strong>{formats.find(format => format.platform_id === platformId)?.platform_name}</strong>
-        <div className="mkw-chips">{formats.filter(format => format.platform_id === platformId).map(format => <label key={format.id} className={`mkw-format-chip ${selected.includes(format.id) ? 'selected' : ''}`}><input type="checkbox" disabled={disabled} checked={selected.includes(format.id)} onChange={event => onChange(event.target.checked ? [...selected, format.id] : selected.filter(id => id !== format.id))} /><span>{format.name}{format.width && format.height ? <b dir="ltr">{format.width} × {format.height}</b> : null}</span></label>)}</div>
-      </div>)}
+      <div className="mkw-section-title"><strong>مقاسات التنفيذ</strong><label className="mkw-checkbox" onClick={event => event.stopPropagation()}><input type="checkbox" disabled={disabled || !uniqueFormats.length} checked={!!uniqueFormats.length && uniqueFormats.every(format => selectedDimensions.has(workFormatDisplay(format)))} onChange={event => onChange(event.target.checked ? uniqueFormats.map(format => format.id) : [])} />{W.selectAll}</label></div>
+      {!uniqueFormats.length ? <Empty>{W.noSizes}</Empty> : <div className="mkw-chips mkw-dimension-options">{uniqueFormats.map(format => {
+        const label = workFormatDisplay(format);
+        const checked = selectedDimensions.has(label);
+        return <label key={format.id} className={`mkw-format-chip ${checked ? 'selected' : ''}`}>
+          <input type="checkbox" disabled={disabled} checked={checked} onChange={event => {
+            const remainder=selected.filter(id => !formats.some(source => source.id === id && workFormatDisplay(source) === label));
+            onChange(event.target.checked ? [...remainder,format.id] : remainder);
+          }}/><span dir="ltr">{label}</span>
+        </label>;
+      })}</div>}
     </div>
   </details>;
 }

@@ -120,7 +120,7 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
       <label className="mkw-checkbox"><input type="checkbox" disabled={!canSave || busy || !product.formats.length} checked={!!product.formats.length && product.formats.every(f => selected.includes(f.id))} onChange={event => setSelected(event.target.checked ? product.formats.map(f => f.id) : [])}/>{W.selectAll}</label>
     </div></header>
     <div className="mkw-publish-platforms">{[...groups.entries()].map(([id, formats]) => <section className="mkw-publish-platform" key={id}>
-      <header><strong>{formats[0].platform_name}</strong><span className="mkw-muted">{formats.filter(f => selected.includes(f.id)).length} / {formats.length}</span></header>
+      <header><strong>{formats[0].platform_name || "مقاسات الملفات"}</strong><span className="mkw-muted">{formats.filter(f => selected.includes(f.id)).length} / {formats.length}</span></header>
       <div className="mkw-publish-format-grid">{formats.map(format => <label key={format.id} className={`mkw-publish-format ${selected.includes(format.id) ? 'selected' : ''}`}>
         <input type="checkbox" disabled={!canSave || busy} checked={selected.includes(format.id)} onChange={event => setSelected(current => event.target.checked ? [...current, format.id] : current.filter(id => id !== format.id))}/>
         <span>{format.name}{format.width && format.height ? <small dir="ltr">{format.width} × {format.height}</small> : null}</span>

@@ -304,10 +304,11 @@ test('Calendar gives regular user readiness from only their visible requirement'
   assert.equal(result.rows[0].item_readiness,50);db.assertDone();
 });
 test('Reviewer can append additional configured photo sizes without touching existing files and approvals',async()=>{
-  const next={...format,id:uid(11),name:'Photo Square',platform_id:uid(21),platform_name:'Facebook'};
+  const next={...format,id:uid(11),name:'1080 × 1350',width:1080,height:1350,platform_id:'',platform_name:'',platform_code:''};
   const db=scriptedSql([
     itemRead([item]),taskLock(),itemLock([item]),
-    step('from marketing.platform_post_types pt join marketing.platforms p',[next],v=>assert.deepEqual(v,[[next.id]])),
+    step('from marketing.production_dimensions',[next],v=>assert.deepEqual(v,[[next.id]])),
+    step('join marketing.production_dimensions d',[]),
     step('update marketing.work_items',[{version:2}],(v,query)=>{
       assert.deepEqual(v[0].map(f=>f.id),[format.id,next.id]);
       assert.deepEqual(v.slice(1,4),[false,false,false]);
@@ -325,13 +326,14 @@ test('Reviewer can append additional configured photo sizes without touching exi
   db.assertDone();
 });
 test('Appending sizes to an approved requirement reopens ONLY its final approval',async()=>{
-  const next={...format,id:uid(12),name:'Photo Square',platform_id:uid(21)};
+  const next={...format,id:uid(12),name:'1080 × 1350',width:1080,height:1350,platform_id:'',platform_name:'',platform_code:''};
   const approved={...item,status:'approved',format_reviews:[{format_id:format.id,status:'approved'}]};
   const reopened={...approved,status:'in_progress',formats:[format,next]};
   assert.equal(domain.workItemReadiness(reopened),50);
   const db=scriptedSql([
     itemRead([approved]),taskLock(),itemLock([approved]),
-    step('from marketing.platform_post_types pt join marketing.platforms p',[next]),
+    step('from marketing.production_dimensions',[next]),
+    step('join marketing.production_dimensions d',[]),
     step('update marketing.work_items',[{version:2}],v=>{
       assert.deepEqual(v[0].map(f=>f.id),[format.id,next.id]);
       assert.deepEqual(v.slice(1,4),[true,true,true]);
@@ -348,12 +350,13 @@ test('Appending sizes to an approved requirement reopens ONLY its final approval
 });
 test('Reviewer can append configured video sizes to a VIDEO requirement',async()=>{
   const initial={...format,name:'Video'};
-  const added={...format,id:uid(13),name:'Video Reels',platform_id:uid(21)};
+  const added={...format,id:uid(13),name:'1920 × 1080',width:1920,height:1080,platform_id:'',platform_name:'',platform_code:''};
   const video={...item,status:'in_progress',media_kind:'video',formats:[initial],files:[]};
   const db=scriptedSql([
     itemRead([video]),taskLock(),itemLock([video]),
-    step('from marketing.platform_post_types pt join marketing.platforms p',[added]),
-    step('update marketing.work_items',[{version:2}],v=>assert.deepEqual(v[0].map(f=>f.name),['Video','Video Reels'])),
+    step('from marketing.production_dimensions',[added]),
+    step('join marketing.production_dimensions d',[]),
+    step('update marketing.work_items',[{version:2}],v=>assert.deepEqual(v[0].map(f=>f.name),['Video','1920 × 1080'])),
     step('insert into marketing.work_history'),
     ...recalc([{...video,formats:[initial,added]}],'active'),
   ]);
@@ -388,7 +391,7 @@ test('Client only shows unselected sizes compatible with the requirement media k
   const api=fs.readFileSync(path.join(root,'server/marketing/workflow.ts'),'utf8');
   assert(front.includes("workPost('add_item_formats'"));
   assert(front.includes("capabilities.review && item.status !== 'rejected'"));
-  assert(front.includes('!configuredIds.has(format.id) && supportsWorkMedia(item.media_kind, format.name)'));
+  assert(front.includes('!configuredIds.has(format.id) && !configuredSizes.has(workFormatDisplay(format)) && supportsWorkMedia(item.media_kind, format.name)'));
   assert(front.includes('<FormatSelector formats={availableFormats} selected={newFormatIds}'));
   assert(api.includes("requirePermission(user, 'marketing.task.review')"));
   assert(api.includes("else if (action === 'work_add_item_formats') result = await addItemFormats(sql, body, user)"));
@@ -650,7 +653,8 @@ test('Task preview allows platform admin to see rejected grading archive',async(
     itemLoad([item]),
     step('from marketing.work_rejected_items',[rejected],v=>assert.deepEqual(v,[item.task_id,true,admin.id])),
     step('select name from marketing.campaign_types',[{name:'Cash'}]),
-    step('from marketing.platform_post_types pt join marketing.platforms p',[format]),
+    step("to_regclass('marketing.production_dimensions')",[{ready:true}]),
+    step('from marketing.production_dimensions',[format]),
     step('select id,action,note'),
   ]);
   const r=await api.taskSummary(db,admin,item.task_id);
@@ -666,7 +670,7 @@ test('Products preserve original headers and add serial, approval date and assig
 test('Selected calendar day only passes its outputs to the detail view',()=>{const s=read('src/marketing/pages/ReceiptCalendarPage.tsx');assert(s.includes('row.due_on === selectedDay'));assert(s.includes('onlyItems={opened.items}'));});
 test('Native publish engines are used for prepared outputs',()=>{const s=read('server/marketing/index.ts');assert(s.includes('publishItem:publishScheduleItem'));assert(s.includes('workflowScheduleFiles(sql'));assert(s.includes('assertLegacyMarketingTarget'));});
 test('Marketing schema and workflow share a serial DDL lock',()=>{const m=read('server/_marketing-schema.ts'),w=read('server/_marketing-workflow-schema.ts');assert(m.includes("withDatabaseAdvisoryLock('mzj:marketing:schema-setup'"));assert(w.includes("tryWithDatabaseAdvisoryLock('mzj:marketing:schema-setup'"));});
-test('Marketing does not trigger operations DDL and workflow skips legacy Marketing migration',()=>{const s=read('server/marketing/index.ts');assert(!s.includes('ensureOperationsSchema'));assert(s.includes("if (request.method !== 'GET' && !workflowRequest) {\n      await ensureMarketingSchema();"));const schema=read('server/_marketing-schema.ts');assert(schema.includes('const MARKETING_SCHEMA_VERSION = 3;'));});
+test('Marketing migrates dimensions on writes only and never triggers operations DDL',()=>{const s=read('server/marketing/index.ts');assert(!s.includes('ensureOperationsSchema'));assert(s.includes('dimensionWriteActions.has(clean(initialBody.action))'));assert(s.includes("request.method !== 'GET'"));const schema=read('server/_marketing-schema.ts');assert(schema.includes('const MARKETING_SCHEMA_VERSION = 4;'));assert(schema.includes('MARKETING_SCHEMA_V4_SQL'));assert(schema.includes('unique(width,height)'));});
 test('Small additive draft migration runs without resetting marketing',()=>{const s=read('server/_marketing-workflow-schema.ts');assert(s.includes('MARKETING_WORKFLOW_UPGRADE_SQL'));assert(s.includes('create table if not exists marketing.work_product_drafts'));assert(s.includes("values('schema-2')"));assert(s.includes("values('schema-3')"));assert(s.includes('MARKETING_MIGRATION_BUSY'));});
 test('Executor has no permission to prepare a product draft',async()=>{await assert.rejects(()=>api.saveProductDraft(identitySql,worker,{productId:item.id,formatIds:[format.id],caption:'test'}));});
 test('Publishing preparation is inside the product view with format, caption and hashtags',()=>{const s=read('src/marketing/workflow/PublishPage.tsx');assert(s.includes('ProductDraftEditor'));assert(s.includes("workPost('save_product_draft'"));assert(s.includes('W.platforms'));assert(s.includes('W.caption'));assert(s.includes('W.hashtags'));});

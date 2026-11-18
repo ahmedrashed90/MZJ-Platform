@@ -14,7 +14,7 @@ const createStart = server.indexOf("async function createPhotoRequest");
 const createEnd = server.indexOf("async function userColors", createStart);
 const createSection = createStart >= 0 && createEnd > createStart ? server.slice(createStart, createEnd) : "";
 
-check("release baseline version remains 1.19.16", packageJson.version === "1.19.16");
+check("release baseline version remains 1.19.16", /^1\.19\.\d+$/.test(packageJson.version) && Number(packageJson.version.split(".")[2]) >= 16);
 check("photo request picker no longer locks additions to the first source location", !page.includes("selectedSourceLocationId") && !page.includes("موجودة في مكان مصدر مختلف. أنشئ لها طلب تصوير مستقل"));
 check("selected cars still show each current location", page.includes('{ key: "location", label: "المكان الحالي"'));
 check("server photo request no longer rejects mixed source locations", createSection.length > 0 && !createSection.includes("يجب أن تكون كل سيارات طلب التصوير في المكان المصدر نفسه") && !createSection.includes("cars.some((vehicle)=>String(vehicle.location_id)!==String(source.location_id))"));

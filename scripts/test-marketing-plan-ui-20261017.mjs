@@ -49,6 +49,7 @@ vm.runInNewContext(transpiled.outputText, { exports: frontExports, crypto,
     if (name === './CampaignGoals') return { CampaignGoalPicker: Stub };
     if (name === '../../../shared/marketing-workflow') return shared;
     if (name === './requiredMedia') return { splitRequiredMediaSelection: () => [] };
+    if (name === './productionDimensions') return { productionWorkFormats: () => [] };
     if (name === './planComposer') return plan;
     if (name === './productChoice') return productChoice;
     throw new Error('Unexpected frontend module ' + name);

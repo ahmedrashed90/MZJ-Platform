@@ -16,7 +16,7 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release keeps the v1.19.15 database-edit foundation", ["1.19.15", "1.19.16"].includes(packageJson.version));
+check("release keeps the v1.19.15 database-edit foundation", /^1\.19\.\d+$/.test(packageJson.version) && Number(packageJson.version.split(".")[2]) >= 15);
 check("CRM database edit keeps the canonical department selector", drawer.includes('>القسم</span><select value={activeForm.departmentCode}') && drawer.includes("changeDatabaseDepartment"));
 check("wholesale is a selectable CRM department", drawer.includes('label: "قسم الجملة"') && drawer.includes('serviceKey: "cash" as ServiceKey'));
 check("both wholesale department codes are supported", drawer.includes('code === "wholesale"') && drawer.includes('code === "wholesale_sales"'));
