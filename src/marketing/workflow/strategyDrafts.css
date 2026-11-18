@@ -20,13 +20,15 @@
 .mkw-sp-readiness b { display:block; height:100%; background:var(--brand); }
 .mkw-sp-readiness small { color:var(--muted); font-size:.75rem; }
 
-/* Draft editor dialog: no full-screen takeover and NO detached fixed footer. */
-.mzj-modal-backdrop:has(> .mkw-strategy-draft-modal) { padding:clamp(10px,2.4vw,30px); background:rgba(33,19,16,.55); backdrop-filter:blur(7px); }
-.mzj-modal-card.mkw-strategy-draft-modal { width:min(1480px,calc(100vw - 28px))!important; height:min(910px,calc(100dvh - 28px)); min-height:0; max-width:none!important; max-height:calc(100dvh - 28px); grid-template-rows:auto minmax(0,1fr); border:1px solid #dec9bd; border-radius:24px; background:#fbf6f0; box-shadow:0 28px 100px rgba(36,17,14,.29); }
+/* Strategy-origin draft editor: full-screen, with NO detached fixed footer. */
+/* The agenda and campaign draft editor share this single full-screen workspace.
+ * Keep the title bar visible while the form and idea list can scroll naturally. */
+.mzj-modal-backdrop:has(> .mkw-strategy-draft-modal) { padding:0; background:#fbf6f0; backdrop-filter:none; }
+.mzj-modal-card.mkw-strategy-draft-modal { position:fixed; inset:0; box-sizing:border-box; width:100vw!important; height:100dvh; min-height:100dvh; max-width:none!important; max-height:none!important; grid-template-rows:auto minmax(0,1fr); border:0; border-radius:0; background:#fbf6f0; box-shadow:none; }
 .mkw-strategy-draft-modal > .mzj-modal-header { min-height:75px; align-items:center; padding:16px 26px; border-bottom:1px solid #ead8cc; background:linear-gradient(120deg,#fbf6f0 10%,#f2e7dd 72%,#f8eee6); }
 .mkw-strategy-draft-modal > .mzj-modal-header h2 { color:#4a211c; font-size:clamp(19px,1.75vw,24px); font-weight:850; }
 .mkw-strategy-draft-modal > .mzj-modal-header > button { border:1px solid #e1cbbd; color:#4a211c; background:#fbf6f0; }
-.mkw-strategy-draft-modal > .mzj-modal-body { padding:14px 18px 24px; overflow:auto; background:#fbf6f0; overscroll-behavior:contain; }
+.mkw-strategy-draft-modal > .mzj-modal-body { min-height:0; padding:18px clamp(14px,2.2vw,40px) 36px; overflow:auto; background:#fbf6f0; overscroll-behavior:contain; }
 .mkw-strategy-draft-editor { display:grid; align-content:start; gap:12px; color:#492b25; }
 
 /* Compact summary and management actions live INSIDE the scrollable dialog. */
@@ -52,7 +54,7 @@
 
 /* Right-hand idea list and one focused editor panel. */
 .mkw-strategy-draft-layout { display:grid; grid-template-columns:minmax(255px,310px) minmax(0,1fr); gap:13px; align-items:start; min-width:0; }
-.mkw-strategy-draft-ideas { display:flex; flex-direction:column; gap:8px; position:sticky; top:0; height:min(630px,calc(100dvh - 275px)); min-height:310px; padding:13px; overflow:auto; border:1px solid #e6d2c5; border-radius:17px; background:#f8eee6; scrollbar-width:thin; }
+.mkw-strategy-draft-ideas { display:flex; flex-direction:column; gap:8px; position:sticky; top:0; height:clamp(310px,calc(100dvh - 290px),850px); padding:13px; overflow:auto; border:1px solid #e6d2c5; border-radius:17px; background:#f8eee6; scrollbar-width:thin; }
 .mkw-sd-sidebar-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .mkw-sd-sidebar-head strong { color:#4a211c; font-size:1rem; }
 .mkw-sd-sidebar-head span { color:#79594f; font-size:.75rem; background:#fffaf6; padding:4px 9px; border-radius:999px; }
@@ -136,8 +138,6 @@
   .mkw-sd-row-head { display:none; }
 }
 @media(max-width:720px) {
-  .mzj-modal-backdrop:has(> .mkw-strategy-draft-modal) { padding:0; }
-  .mzj-modal-card.mkw-strategy-draft-modal { width:100vw!important; height:100dvh; max-height:100dvh; min-height:100dvh; border:0; border-radius:0; }
   .mkw-strategy-draft-modal > .mzj-modal-header { padding:13px 15px; }
   .mkw-strategy-draft-modal > .mzj-modal-body { padding:10px; }
   .mkw-sd-hero { padding:12px; }
