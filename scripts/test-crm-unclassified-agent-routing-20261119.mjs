@@ -100,7 +100,12 @@ function createTestbed({member = 'cash',alreadyAssigned = false,dedicatedPhone =
   assert.equal(t.select[0].serviceKey,'cash');
   assert.equal(t.select[0].source,'instagram');
   assert.equal(t.send.length,0);
-  assert.ok(t.calls.some(x=>x.query.includes('update crm.conversations set assigned_to=')));
+  const assignmentUpdate=t.calls.find(x=>x.query.includes('update crm.conversations set assigned_to='));
+  assert.ok(assignmentUpdate);
+  assert.equal(assignmentUpdate.params[2],'cash');
+  // PostgreSQL cannot infer the type of an uncast argument to jsonb_build_object(any).
+  // This check catches the production error: could not determine data type of parameter $3.
+  assert.match(assignmentUpdate.query,/jsonb_build_object\('unclassifiedAutoAssignedAt',now\(\),'unclassifiedAutoAssignSource',\s*\?\s*::text\)/);
   const candidateQuery=t.calls.find(x=>x.query.includes('order by (case when c.classification_state'));
   assert.ok(candidateQuery);
   assert.ok(candidateQuery.params.includes(2),'minimum delay is two minutes even when stored setting is one');

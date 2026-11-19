@@ -148,7 +148,7 @@ export async function runAutoAssign(): Promise<{ assigned: number; skipped: numb
             status=case when classification_state='closed' then 'open' else status end,
             classification_state=case when classification_state='closed' then 'new' else classification_state end,
             closed_at=case when classification_state='closed' then null else closed_at end,
-            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('unclassifiedAutoAssignedAt',now(),'unclassifiedAutoAssignSource',${routeSource}),
+            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('unclassifiedAutoAssignedAt',now(),'unclassifiedAutoAssignSource',${routeSource}::text),
             updated_at=now()
           where id=${current.id}::uuid and assigned_to is null and service_request_id is null
             and (classification_state in ('new','awaiting_service')
