@@ -3,189 +3,231 @@ import { chooseAssignment, clean, normalizePhone, sourceLabel } from "./_crm-uti
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 
 // ---------------------------------------------------------------------------
-// Unclassified inbox: assign a responsible rep after two minutes, without
-// inventing a customer service selection or creating a service request.
-// Routing uses the SAME configured CRM assignment rules as normal leads.
+// The unclassified inbox is an intake queue, not a permanent worklist.
+// Only conversations received AFTER this new workflow is enabled are classified
+// automatically. Historical rows remain available for manual review or dismissal.
 // ---------------------------------------------------------------------------
+import { randomUUID } from "node:crypto";
+import { classifyConversationService } from "./_crm-lifecycle.js";
+
+type InferredService = 'cash' | 'finance' | 'service';
+type SelectedRep = { assignedTo: string; assignedName?: string; branchCode?: string; ruleId?: string | null };
+
+function serviceFromKnownCode(value: unknown): InferredService | null {
+  const raw = clean(value).toLowerCase();
+  if (!raw) return null;
+  if (['finance','finance_sales','call_center'].includes(raw) || raw.includes('تمويل')) return 'finance';
+  if (['service','customer_service','cs'].includes(raw) || raw.includes('خدمة')) return 'service';
+  if (['cash','cash_sales'].includes(raw) || raw.includes('كاش')) return 'cash';
+  return null; // Wholesale / unrelated departments must never be guessed as cash.
+}
+
+async function serviceFromRepDepartments(sql: ReturnType<typeof getSql>, userId: string): Promise<InferredService | null> {
+  const rows = await sql<any[]>`
+    select distinct d.code from core.user_system_departments usd
+    join core.departments d on d.id=usd.department_id and d.is_active=true
+    where usd.user_id=${userId}::uuid and usd.system_code='crm'
+  `;
+  // Older users may only have the legacy department mapping.
+  const legacy = rows.length ? [] : await sql<any[]>`
+    select distinct d.code from core.user_departments ud
+    join core.departments d on d.id=ud.department_id and d.is_active=true
+    where ud.user_id=${userId}::uuid and d.system_code='crm'
+  `;
+  const services = new Set([...rows,...legacy].map((r) => serviceFromKnownCode(r.code)).filter(Boolean));
+  // The same sales rep can belong to CASH and FINANCE. In that case, use the
+  // route that selected them (below); never fabricate a customer preference.
+  return services.size === 1 ? [...services][0] as InferredService : null;
+}
+
+/** A database-time lease expires even if Vercel terminates a process mid-work.
+ * Session advisory locks used by the previous cron could outlive timed-out
+ * invocations and keep returning `previous_tick_running` indefinitely. */
+export async function acquireInboxAutoAssignLease(): Promise<{ acquired: boolean; release: () => Promise<void> }> {
+  await ensureInboxAgentEngineSchema();
+  const sql = getSql();
+  const leaseOwner = randomUUID();
+  const [entry] = await sql<any[]>`
+    update crm.inbox_agent_settings
+       set auto_assign_lease_owner=${leaseOwner}::text,
+           auto_assign_lease_expires_at=now()+interval '90 seconds'
+     where id='default'
+       and (auto_assign_lease_expires_at is null or auto_assign_lease_expires_at<=now())
+     returning id
+  `;
+  return {
+    acquired: Boolean(entry),
+    release: async () => {
+      if (!entry) return;
+      await sql`
+        update crm.inbox_agent_settings
+           set auto_assign_lease_owner=null,auto_assign_lease_expires_at=null
+         where id='default' and auto_assign_lease_owner=${leaseOwner}::text
+      `;
+    },
+  };
+}
+
+/** Assign and CLASSIFY fresh unanswered conversations after two minutes.
+ * The real CRM classification workflow creates/reuses the lead and request,
+ * preserves the responsible rep chosen by CRM rules and removes the conversation
+ * from the unclassified queue. Historical items are never auto-accepted. */
 export async function runAutoAssign(): Promise<{ assigned: number; skipped: number; failed: number }> {
   await ensureInboxAgentEngineSchema();
   const sql = getSql();
-  const [settings] = await sql<any[]>`
-    select * from crm.inbox_agent_settings where id='default'
-  `;
-  if (!settings?.enabled) return { assigned: 0, skipped: 0, failed: 0 };
+  const [settings] = await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`;
+  if (!settings?.enabled || !settings.auto_classify_started_at) return { assigned: 0, skipped: 0, failed: 0 };
   const delayMinutes = Math.max(2, Number(settings.auto_assign_minutes) || 2);
-
-  // Only the actual unclassified queue; do not redistribute classified leads,
-  // closed conversations or conversations that already have a responsible rep.
-  // created_at is the queue-entry anchor for new conversations (not the latest
-  // message, which can change while a customer is still writing).
   const candidates = await sql<any[]>`
     select c.id::text,c.contact_id::text,c.lead_id::text,c.channel_code,c.service_key,
       c.department_code,c.branch_code,c.customer_name,c.last_customer_message_at,
       c.service_selection_sent_at,c.created_at,c.closed_at,c.classification_state
     from crm.conversations c
     where c.service_request_id is null
-      and c.assigned_to is null
-      and (
-        c.classification_state in ('new','awaiting_service')
-        or (c.classification_state='closed' and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz))
-      )
+      -- Historical backlog is untouched; an OLD contact who sends a NEW
+      -- message after activation is a fresh inquiry and may be processed.
+      and c.last_customer_message_at >= ${settings.auto_classify_started_at}::timestamptz
+      and (c.metadata->>'inboxDismissedAt' is null
+           or c.last_customer_message_at > (c.metadata->>'inboxDismissedAt')::timestamptz)
+      and (c.classification_state in ('new','awaiting_service')
+        or (c.classification_state='closed' and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz)))
       and (coalesce(c.status,'open') <> 'closed'
         or (c.classification_state='closed' and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz)))
       and c.last_customer_message_at is not null
-      and (case when c.classification_state='closed' then c.last_customer_message_at
-        else greatest(c.created_at,coalesce(c.service_selection_sent_at,c.created_at)) end)
+      and (case when c.classification_state='closed' or c.created_at < ${settings.auto_classify_started_at}::timestamptz
+          then c.last_customer_message_at
+          else greatest(c.created_at,coalesce(c.service_selection_sent_at,c.created_at)) end)
         <= now() - (${delayMinutes}||' minutes')::interval
-    order by (case when c.classification_state='closed' then c.last_customer_message_at
+    order by (case when c.classification_state='closed' or c.created_at < ${settings.auto_classify_started_at}::timestamptz
+      then c.last_customer_message_at
       else greatest(c.created_at,coalesce(c.service_selection_sent_at,c.created_at)) end) asc
-    limit 100
+    limit 50
   `;
 
-  let assigned = 0;
-  let skipped = 0;
-  let failed = 0;
-  let handled = 0;
-  const startedAt = Date.now();
-  // Bounded batch: crons fire every minute and must stay well under 120s.
-  // Unhandled conversations are retried next minute, oldest first.
+  let assigned=0,skipped=0,failed=0,handled=0;
+  const startedAt=Date.now();
   for (const candidate of candidates) {
-    if (handled >= 20 || Date.now() - startedAt > 50_000) break;
+    if (handled>=12 || Date.now()-startedAt>38_000) break;
+    handled+=1;
     try {
-      // Classification uses this contact lock too. This protects the existing
-      // owner and prevents parallel cron executions from assigning twice.
-      const lockKey = `mzj:crm:service-classification:${candidate.contact_id || candidate.id}`;
-      const lock = await tryWithDatabaseAdvisoryLock(lockKey, async () => {
+      const lockKey=`mzj:crm:service-classification:${candidate.contact_id || candidate.id}`;
+      // Do not hold this same contact lock while calling classifyConversationService:
+      // that canonical function obtains it itself to serialize new requests.
+      const selection = await tryWithDatabaseAdvisoryLock(lockKey,async () => {
         const [current] = await sql<any[]>`
           select c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
             c.assigned_to::text,c.classification_state,c.service_key,c.department_code,
-            c.channel_code,c.customer_name,c.branch_code,c.status,c.closed_at,c.last_customer_message_at,
-            l.assigned_to::text as lead_assigned_to,
-            l.branch_code as lead_branch_code,
-            l.service_key as lead_service_key,
-            l.department_code as lead_department_code
+            c.channel_code,c.customer_name,c.branch_code,c.status,c.closed_at,c.last_customer_message_at,c.metadata,
+            l.assigned_to::text as lead_assigned_to,l.branch_code as lead_branch_code,
+            l.service_key as lead_service_key,l.department_code as lead_department_code
           from crm.conversations c
           left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
           where c.id=${candidate.id}::uuid limit 1
         `;
-        const reopened = current?.classification_state === 'closed'
-          && current.last_customer_message_at
-          && new Date(current.last_customer_message_at).getTime() > new Date(current.closed_at || 0).getTime();
-        if (!current || current.assigned_to || current.service_request_id ||
+        const reopened=current?.classification_state==='closed' && current.last_customer_message_at
+          && new Date(current.last_customer_message_at).getTime()>new Date(current.closed_at||0).getTime();
+        if (!current || current.service_request_id ||
             (!['new','awaiting_service'].includes(clean(current.classification_state)) && !reopened) ||
-            (clean(current.status) === 'closed' && !reopened)) {
-          skipped += 1;
-          return;
-        }
+            (clean(current.status)==='closed' && !reopened)) return null;
 
-        // Never take a returning customer's request from an existing owner.
         const [openRequest] = await sql<any[]>`
-          select assigned_to::text,branch_code,service_key,department_code
-          from crm.service_requests
-          where contact_id=${current.contact_id || null}::uuid
-            and request_state='open' and assigned_to is not null
+          select assigned_to::text,branch_code,service_key,department_code from crm.service_requests
+          where contact_id=${current.contact_id || null}::uuid and request_state='open'
           order by opened_at desc limit 1
         `;
-        const existingOwner = clean(openRequest?.assigned_to || current.lead_assigned_to);
-        let rep: { assignedTo: string | null; assignedName?: string; branchCode?: string; ruleId?: string | null };
-        let routeSource = 'existing_owner';
+        const existingOwner=clean(current.assigned_to || openRequest?.assigned_to || current.lead_assigned_to);
+        let rep: SelectedRep | null=null;
+        let routeSource: InferredService | null=null;
         if (existingOwner) {
-          const [user] = await sql<any[]>`
-            select id::text,full_name from core.users where id=${existingOwner}::uuid limit 1
-          `;
-          if (!user) { skipped += 1; return; }
-          rep = { assignedTo: existingOwner, assignedName: user.full_name,
-            branchCode: openRequest?.branch_code || current.lead_branch_code || current.branch_code };
+          const [u] = await sql<any[]>`select id::text,full_name from core.users where id=${existingOwner}::uuid and is_active=true limit 1`;
+          if (!u) return null;
+          rep={assignedTo:existingOwner,assignedName:u.full_name,
+            branchCode:clean(current.branch_code || openRequest?.branch_code || current.lead_branch_code)};
+          routeSource=serviceFromKnownCode(current.service_key || current.department_code)
+            || serviceFromKnownCode(openRequest?.service_key || openRequest?.department_code)
+            || serviceFromKnownCode(current.lead_service_key || current.lead_department_code)
+            || serviceFromKnownCode(current.metadata?.unclassifiedAutoAssignSource)
+            || await serviceFromRepDepartments(sql,existingOwner);
         } else {
-          const service = clean(current.service_key || current.department_code || current.lead_service_key || current.lead_department_code).toLowerCase();
-          const selectedServices = service.includes('finance') || service.includes('تمويل')
-            ? ['finance']
-            : service.includes('customer_service') || service.includes('service') || service.includes('خدم')
-              ? ['service']
-              : service.includes('cash') || service.includes('كاش')
-                ? ['cash']
-                : ['cash','finance']; // unclassified: sales pool, not a service classification
-          const branch = clean(current.branch_code || current.lead_branch_code);
-          const requestedBranch = ['online','website'].includes(branch) ? '' : branch;
-          rep = { assignedTo: null };
-          for (const serviceKey of selectedServices) {
-            const selected = await chooseAssignment(serviceKey, requestedBranch, clean(current.channel_code));
+          const known=serviceFromKnownCode(current.service_key || current.department_code)
+            || serviceFromKnownCode(current.lead_service_key || current.lead_department_code);
+          const options: InferredService[] = known ? [known] : ['cash','finance'];
+          const branch=clean(current.branch_code || current.lead_branch_code);
+          const requestedBranch=['online','website'].includes(branch)?'':branch;
+          for(const serviceKey of options) {
+            const selected=await chooseAssignment(serviceKey,requestedBranch,clean(current.channel_code));
             if (selected.assignedTo) {
-              rep = selected;
-              routeSource = serviceKey;
-              break;
+              rep={assignedTo:selected.assignedTo,assignedName:selected.assignedName,
+                branchCode:selected.branchCode,ruleId:selected.ruleId};
+              routeSource=serviceKey;break;
             }
           }
         }
-        if (!rep.assignedTo) {
-          skipped += 1;
-          // The job retries on later ticks if rule membership changes.
+        if (!rep || !routeSource) {
+          skipped+=1;
+          const reason=rep?'ambiguous_rep_department':'no_eligible_active_assignment_rule';
           const [alreadyReported] = await sql<any[]>`
             select 1 from crm.inbox_agent_logs
             where conversation_id=${current.id}::uuid and action='auto_assignment_unavailable'
-              and created_at > now()-interval '15 minutes' limit 1
+              and created_at>now()-interval '15 minutes' limit 1
           `;
           if (!alreadyReported) {
-            const unassignedPhone = normalizePhone(settings.unassigned_alert_phone);
-            let alertSent = false;
-            if (unassignedPhone) {
+            const unassignedPhone=normalizePhone(settings.unassigned_alert_phone);
+            let alertSent=false;
+            // Only an actually UNASSIGNED conversation may use the dedicated
+            // one-number escalation. Ambiguous classification with an existing
+            // rep stays under the normal four-number escalation policy.
+            if (!rep && unassignedPhone) {
               try {
-                await sendAlert({ settings,row: current,phone: unassignedPhone,
-                  stageLabel: 'غير موزع — مطلوب متابعة',
-                  idempotencyKey: `inbox-auto-unassigned:${current.id}:${new Date(reopened ? candidate.last_customer_message_at : (candidate.service_selection_sent_at || candidate.created_at)).toISOString()}`,
-                  reason: 'unclassified_auto_assignment_unavailable' });
-                alertSent = true;
-              } catch (error) {
-                console.error('Unassigned inbox alert failed',current.id,error instanceof Error ? error.message : error);
+                await sendAlert({settings,row:current,phone:unassignedPhone,
+                  stageLabel:'غير موزع — مطلوب متابعة',
+                  idempotencyKey:`inbox-auto-unassigned:${current.id}:${new Date(candidate.created_at).toISOString()}`,
+                  reason:'unclassified_auto_assignment_unavailable'});
+                alertSent=true;
+              } catch(error) {
+                console.error('Unassigned inbox alert failed',current.id,error instanceof Error?error.message:error);
               }
             }
-            await addLog({ conversationId: current.id,leadId: current.lead_id,
-              customerName: current.customer_name,branchCode: current.branch_code,
-              action: 'auto_assignment_unavailable',reason: 'no_eligible_active_assignment_rule',
-              metadata: { channel: current.channel_code,alertSent,hasDedicatedNumber: Boolean(unassignedPhone) } });
+            await addLog({conversationId:current.id,leadId:current.lead_id,
+              customerName:current.customer_name,branchCode:current.branch_code,
+              action:'auto_assignment_unavailable',reason,
+              metadata:{channel:current.channel_code,alertSent,hasDedicatedNumber:Boolean(unassignedPhone)}});
           }
-          return;
+          return null;
         }
-
-        const [updated] = await sql<any[]>`
-          update crm.conversations set assigned_to=${rep.assignedTo}::uuid,
-            branch_code=coalesce(nullif(branch_code,''),${rep.branchCode || null}),
-            status=case when classification_state='closed' then 'open' else status end,
-            classification_state=case when classification_state='closed' then 'new' else classification_state end,
-            closed_at=case when classification_state='closed' then null else closed_at end,
-            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('unclassifiedAutoAssignedAt',now(),'unclassifiedAutoAssignSource',${routeSource}::text),
-            updated_at=now()
-          where id=${current.id}::uuid and assigned_to is null and service_request_id is null
-            and (classification_state in ('new','awaiting_service')
-              or (classification_state='closed' and last_customer_message_at>coalesce(closed_at,'epoch'::timestamptz)))
-            and (coalesce(status,'open') <> 'closed'
-              or (classification_state='closed' and last_customer_message_at>coalesce(closed_at,'epoch'::timestamptz)))
-          returning id::text
-        `;
-        if (!updated) { skipped += 1; return; }
-        assigned += 1;
-        await addLog({ conversationId: current.id,leadId: current.lead_id,
-          customerName: current.customer_name,branchCode: rep.branchCode || current.branch_code,
-          assignedName: rep.assignedName,action: 'unclassified_auto_assigned',
-          reason: 'unclassified_after_two_minutes',
-          metadata: { assigneeId: rep.assignedTo,ruleId: rep.ruleId || null,source: routeSource,channel: current.channel_code } });
+        return {rep,serviceKey:routeSource,channel:clean(current.channel_code),
+          ruleId:rep.ruleId||null,routeSource,customerName:current.customer_name,
+          branchCode:rep.branchCode||current.branch_code};
       });
-      if (!lock.acquired) {
-        // A manual classification or another cron already owns this contact.
-        // Do not wait: keep the message eligible for the next tick.
-        skipped += 1;
-        continue;
-      }
-      handled += 1;
-    } catch (error) {
-      // Count failed attempts toward the batch limit as well. Otherwise a
-      // database outage can turn one tick into 100 retries and hit 120s.
-      handled += 1;
-      failed += 1;
-      console.error('Unclassified inbox auto assignment failed', candidate.id, error instanceof Error ? error.message : error);
+      if(!selection.acquired){skipped+=1;continue;}
+      if(!selection.result) continue;
+      const chosen=selection.result;
+      // Use the canonical CRM lifecycle: it keeps existing customer status,
+      // reuses open requests and assigns the CHOSEN rep instead of rotating again.
+      const result=await classifyConversationService({
+        conversationId:candidate.id,
+        serviceKey:chosen.serviceKey,
+        sourceCode:chosen.channel,
+        classificationMethod:'unclassified_auto_assignment',
+        eventKey:`unclassified-auto:${candidate.id}`,
+        assignmentOverride:chosen.rep,
+        requestedBranchCode:chosen.rep.branchCode,
+        requirePrimaryAssignment:true,
+        skipAutomaticTemplate:true,
+      });
+      assigned+=1;
+      await addLog({conversationId:candidate.id,leadId:result?.leadId||candidate.lead_id,
+        customerName:chosen.customerName,branchCode:chosen.branchCode,
+        assignedName:chosen.rep.assignedName,action:'unclassified_auto_classified',
+        reason:'unclassified_after_two_minutes',
+        metadata:{assigneeId:chosen.rep.assignedTo,serviceKey:chosen.serviceKey,
+          ruleId:chosen.ruleId,source:chosen.routeSource,channel:chosen.channel}});
+    } catch(error) {
+      failed+=1;
+      console.error('Unclassified inbox auto assignment failed',candidate.id,error instanceof Error?error.message:error);
     }
   }
-  return { assigned, skipped, failed };
+  return {assigned,skipped,failed};
 }
 
 /**
@@ -220,6 +262,12 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_minutes integer not null default 2`;
       await sql`alter table crm.inbox_agent_settings alter column auto_assign_minutes set default 2`;
       await sql`alter table crm.inbox_agent_settings add column if not exists unassigned_alert_phone text`;
+      // Timestamp gated rollout: do not auto-classify the 23 historical messages.
+      await sql`alter table crm.inbox_agent_settings add column if not exists auto_classify_started_at timestamptz`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_lease_owner text`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_lease_expires_at timestamptz`;
+      await sql`update crm.inbox_agent_settings set auto_classify_started_at=now()
+        where id='default' and auto_classify_started_at is null`;
       await sql`alter table crm.inbox_agent_settings add column if not exists engine_v2 boolean not null default false`;
       // Per-conversation mute: an employee can stop the agent for one conversation. A newer customer message re-arms it.
       await sql`alter table crm.conversations add column if not exists agent_muted_at timestamptz`;

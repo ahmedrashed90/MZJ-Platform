@@ -7,6 +7,7 @@ import {
   MagnifyingGlass,
   Phone,
   Sparkle,
+  Trash,
   WhatsappLogo,
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate } from "../api";
@@ -30,6 +31,7 @@ export function CrmInboxPage() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [classifyingId, setClassifyingId] = useState("");
+  const [dismissingId, setDismissingId] = useState("");
   const [canClassify, setCanClassify] = useState(false);
   const [sortMode, setSortMode] = useState<"expiry" | "latest">("expiry");
   const [openConversationId, setOpenConversationId] = useState("");
@@ -70,6 +72,25 @@ export function CrmInboxPage() {
       setNotice(error instanceof Error ? error.message : "فشل تصنيف الرسالة");
     } finally {
       setClassifyingId("");
+    }
+  }
+
+
+  async function dismiss(row: InboxRow) {
+    if (dismissingId) return;
+    const name = row.lead_customer_name || row.contact_display_name || row.customer_name || "العميل";
+    if (!window.confirm(`إزالة محادثة ${name} من الرسائل غير المصنفة؟\nلن يتم حذف الرسائل أو جهة الاتصال من قاعدة البيانات. إذا أرسل العميل رسالة جديدة، ستعود المحادثة للقائمة.`)) return;
+    setDismissingId(row.id);
+    setNotice("");
+    try {
+      await crmFetch(`/api/crm/inbox?conversationId=${encodeURIComponent(row.id)}`, {method:"DELETE"});
+      if (openConversationId === row.id) setOpenConversationId("");
+      await load();
+      setNotice("تم مسح المحادثة من قائمة غير مصنفة، مع الاحتفاظ برسائل العميل وسجله.");
+    } catch(error) {
+      setNotice(error instanceof Error ? error.message : "تعذر مسح المحادثة");
+    } finally {
+      setDismissingId("");
     }
   }
 
@@ -153,12 +174,18 @@ export function CrmInboxPage() {
                 <footer><span>آخر رسالة: {formatDate(row.last_customer_message_at || row.last_message_at)}</span>{row.messaging_window ? <MessagingWindowBadge compact expiresAt={row.messaging_window.expiresAt} windowHours={row.messaging_window.windowHours} /> : null}{Number(row.unread_count || 0) ? <b>{Number(row.unread_count)} غير مقروءة</b> : <span>تمت القراءة</span>}</footer>
               </div>
               <aside className="crm-unclassified-actions">
-                <div><CheckCircle size={21} weight="duotone" /><strong>تصنيف الرسالة</strong><small>اختر الخدمة الصحيحة ليتم إنشاء العميل والطلب والتوزيع.</small></div>
+                <div><CheckCircle size={21} weight="duotone" /><strong>تصنيف الرسالة</strong><small>{row.assigned_to ? "محادثة سابقة: يمكنك تصنيفها يدويًا أو مسحها من القائمة." : "المحادثات الجديدة تُوزّع وتُصنّف تلقائيًا بعد دقيقتين. ويمكنك تصنيفها يدويًا."}</small></div>
                 {canClassify ? <div className="crm-unclassified-buttons">{serviceButtons.map((service) => <button type="button" key={service.key} disabled={classifyingId === row.id} onClick={() => void classify(row.id, service.key)}>{classifyingId === row.id ? "جاري التنفيذ..." : service.label}</button>)}</div> : <span className="crm-unclassified-manager-note">التصنيف متاح للإدارة فقط</span>}
                 <span className="crm-unclassified-manager-note">المندوب المسؤول: {row.assigned_name || "غير موزع"}</span>
                 <button className="crm-secondary-button" type="button" onClick={() => void openConversation(row.id)}>
                   <ChatCircleDots size={17} /> {openConversationId === row.id ? "إغلاق المحادثة" : "فتح المحادثة والرد"}
                 </button>
+                {canClassify ? <button className="crm-secondary-button" type="button"
+                  style={{color:"#9B3430",borderColor:"#D2A7A3"}}
+                  disabled={dismissingId === row.id || classifyingId === row.id}
+                  onClick={() => void dismiss(row)}>
+                  <Trash size={17} /> {dismissingId === row.id ? "جاري المسح..." : "مسح من غير مصنفة"}
+                </button> : null}
               </aside>
               {openConversationId === row.id ? (
                 <div className="crm-unclassified-chat" style={{ gridColumn: "1 / -1", padding: "16px", background: "var(--crm-surface, #f8f5f1)" }}>

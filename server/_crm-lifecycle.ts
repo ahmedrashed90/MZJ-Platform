@@ -229,6 +229,9 @@ export async function classifyConversationService(input: {
   financeImportRouting?: boolean;
   marketingFormImportRouting?: boolean;
   requirePrimaryAssignment?: boolean;
+  // Internal automation only: the rep was already chosen using CRM rules.
+  // Never rotate the assignment again when creating the matching request.
+  assignmentOverride?: { assignedTo: string; assignedName?: string; branchCode?: string };
 }) {
   const sql = getSql();
   const serviceKey = departmentKey(input.serviceKey);
@@ -270,11 +273,11 @@ export async function classifyConversationService(input: {
       if (needsPrimaryAssignment || needsCallCenterAssignment) {
         const requestedBranchCode = clean(input.requestedBranchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
         const assignment = needsPrimaryAssignment
-          ? (input.marketingFormImportRouting && (existingServiceKey === 'cash' || existingServiceKey === 'finance')
+          ? (input.assignmentOverride || (input.marketingFormImportRouting && (existingServiceKey === 'cash' || existingServiceKey === 'finance')
             ? await chooseSheetImportAssignment(existingServiceKey, input.sourceCode || existing.source_code || conversation.channel_code || 'website')
             : input.financeImportRouting && existingServiceKey === "finance"
               ? await chooseFinanceImportAssignment(input.sourceCode || existing.source_code || conversation.channel_code || "whatsapp")
-              : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp"))
+              : await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp")))
           : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
         if (input.marketingFormImportRouting && needsPrimaryAssignment && !assignment.assignedTo) {
           throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
@@ -321,14 +324,14 @@ export async function classifyConversationService(input: {
 
     const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
     const sourceName = await resolveSourceName(sourceCode);
-    const requestedBranchCode = clean(input.requestedBranchCode) || branchForDepartment(serviceKey);
+    const requestedBranchCode = clean(input.requestedBranchCode || input.assignmentOverride?.branchCode) || branchForDepartment(serviceKey);
     const assignment = input.assignPrimary === false
       ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
-      : (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
+      : (input.assignmentOverride || (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
         ? await chooseSheetImportAssignment(serviceKey, sourceCode)
         : input.financeImportRouting && serviceKey === "finance"
           ? await chooseFinanceImportAssignment(sourceCode)
-          : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode));
+          : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode)));
     // A newly submitted marketing form must never be saved as "غير موزع".
     // Fail the CRM sync and allow an explicit retry instead of silently creating
     // a lead with a missing owner; existing CRM customers are not redistributed.
