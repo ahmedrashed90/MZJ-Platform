@@ -1,4 +1,4 @@
-import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
+import { getSql, tryWithDatabaseAdvisoryLock } from "./_db.js";
 import { chooseAssignment, clean, normalizePhone, sourceLabel } from "./_crm-utils.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 
@@ -45,12 +45,17 @@ export async function runAutoAssign(): Promise<{ assigned: number; skipped: numb
   let assigned = 0;
   let skipped = 0;
   let failed = 0;
+  let handled = 0;
+  const startedAt = Date.now();
+  // Bounded batch: crons fire every minute and must stay well under 120s.
+  // Unhandled conversations are retried next minute, oldest first.
   for (const candidate of candidates) {
+    if (handled >= 20 || Date.now() - startedAt > 50_000) break;
     try {
       // Classification uses this contact lock too. This protects the existing
       // owner and prevents parallel cron executions from assigning twice.
       const lockKey = `mzj:crm:service-classification:${candidate.contact_id || candidate.id}`;
-      await withDatabaseAdvisoryLock(lockKey, async () => {
+      const lock = await tryWithDatabaseAdvisoryLock(lockKey, async () => {
         const [current] = await sql<any[]>`
           select c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
             c.assigned_to::text,c.classification_state,c.service_key,c.department_code,
@@ -165,7 +170,17 @@ export async function runAutoAssign(): Promise<{ assigned: number; skipped: numb
           reason: 'unclassified_after_two_minutes',
           metadata: { assigneeId: rep.assignedTo,ruleId: rep.ruleId || null,source: routeSource,channel: current.channel_code } });
       });
+      if (!lock.acquired) {
+        // A manual classification or another cron already owns this contact.
+        // Do not wait: keep the message eligible for the next tick.
+        skipped += 1;
+        continue;
+      }
+      handled += 1;
     } catch (error) {
+      // Count failed attempts toward the batch limit as well. Otherwise a
+      // database outage can turn one tick into 100 retries and hit 120s.
+      handled += 1;
       failed += 1;
       console.error('Unclassified inbox auto assignment failed', candidate.id, error instanceof Error ? error.message : error);
     }

@@ -45,6 +45,7 @@ import internalAttendanceTickHandler from "../server/internal/attendance-tick.js
 import internalMetaEngagementSyncHandler from "../server/internal/meta-engagement-sync.js";
 import internalMarketingPublishTickHandler from "../server/internal/marketing-publish-tick.js";
 import internalInboxAgentTickHandler from "../server/internal/inbox-agent-tick.js";
+import internalInboxAutoAssignTickHandler from "../server/internal/inbox-auto-assign-tick.js";
 import internalCrmWindowReminderTickHandler from "../server/internal/crm-window-reminder-tick.js";
 import attendanceHandler from "../server/attendance.js";
 import deviceAgentHandler from "../server/device-agent.js";
@@ -137,6 +138,7 @@ const routes = new Map<string, ApiHandler>([
   ["internal/marketing-publish-tick", internalMarketingPublishTickHandler],
   ["internal/crm-window-reminder-tick", internalCrmWindowReminderTickHandler],
   ["internal/inbox-agent-tick", internalInboxAgentTickHandler],
+  ["internal/inbox-auto-assign-tick", internalInboxAutoAssignTickHandler],
   ["attendance", attendanceHandler],
   ["device-agent", deviceAgentHandler],
   ["tracking/orders", trackingOrdersHandler],

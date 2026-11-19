@@ -46,6 +46,10 @@
     {
       "path": "/api/internal/inbox-agent-tick",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/inbox-auto-assign-tick",
+      "schedule": "* * * * *"
     }
   ]
 }

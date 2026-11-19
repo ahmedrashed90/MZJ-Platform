@@ -12,6 +12,7 @@ const uiSource = read('src/crm/pages/CrmInboxAgentPage.tsx');
 const inboxSource = read('server/crm/inbox.ts');
 const inboxUi = read('src/crm/pages/CrmInboxPage.tsx');
 const cronSource = read('server/internal/inbox-agent-tick.ts');
+const dedicatedCronSource = read('server/internal/inbox-auto-assign-tick.ts');
 const roles = read('server/_access-control-schema.ts');
 
 function compile(source, name) {
@@ -24,10 +25,10 @@ function compile(source, name) {
 }
 for (const file of [
   'server/_crm-inbox-agent-engine.ts','server/crm/inbox-agent.ts',
-  'server/internal/inbox-agent-tick.ts','server/crm/inbox.ts',
+  'server/internal/inbox-agent-tick.ts','server/internal/inbox-auto-assign-tick.ts','server/crm/inbox.ts',
   'src/crm/pages/CrmInboxAgentPage.tsx','src/crm/pages/CrmInboxPage.tsx',
 ]) compile(read(file), file);
-console.log('PASS: all six changed TypeScript/TSX modules parse');
+console.log('PASS: TypeScript/TSX modules parse');
 assert.match(settingsSource,/unassigned_alert_phone=\$\{unassignedAlertPhone\|\|null\}/);
 assert.match(settingsSource,/if \(unassignedAlertRaw && !unassignedAlertPhone\)/);
 assert.match(settingsSource,/auto_assign_minutes=\$\{minutes\(body\.autoAssignMinutes, 2, 2, 60\)\}/);
@@ -36,14 +37,17 @@ assert.match(uiSource,/رقم واتساب تنبيهات/);
 assert.match(uiSource,/autoAssignMinutes: 2/);
 assert.match(engineSource,/if \(unassigned\) recipient = \{ name: "مسؤول تنبيهات غير الموزعين"/g);
 assert.match(engineSource,/unassigned_alert_phone_missing/);
-assert.match(cronSource,/const assignResult = await runAutoAssign\(\);\s*const tickResult = await runInboxAgentTick\(\);/);
+assert.match(cronSource,/const result = await runInboxAgentTick\(\);/);
+assert.doesNotMatch(cronSource,/runAutoAssign/);
+assert.match(dedicatedCronSource,/tryWithDatabaseAdvisoryLock/);
+assert.match(dedicatedCronSource,/runAutoAssign\(\)/);
 assert.match(inboxSource,/\$\{scope\.includeAssigned\}::boolean and \(c\.assigned_to=\$\{user\.id\}/);
 assert.match(inboxUi,/فتح المحادثة والرد/);
 assert.match(inboxUi,/crmFetch\("\/api\/crm\/conversations", \{ method: "POST"/);
 assert.match(roles,/crm\.inbox\.view','crm\.inbox_agent\.view','crm\.manual_lead\.request/);
 console.log('PASS: scoped unassigned notification, 2-minute config, cron ordering, rep inbox and reply UI');
 
-function createTestbed({member = 'cash',alreadyAssigned = false,dedicatedPhone = '966512345678'} = {}) {
+function createTestbed({member = 'cash',alreadyAssigned = false,dedicatedPhone = '966512345678',busyContact=false} = {}) {
   const id='11111111-1111-4111-8111-111111111111';
   const contact='22222222-2222-4222-8222-222222222222';
   const user='33333333-3333-4333-8333-333333333333';
@@ -69,7 +73,7 @@ function createTestbed({member = 'cash',alreadyAssigned = false,dedicatedPhone =
   };
   sql.json=(obj)=>obj;
   const imports={
-    './_db.js': {getSql:()=>sql,withDatabaseAdvisoryLock:async(_key,cb)=>cb()},
+    './_db.js': {getSql:()=>sql,tryWithDatabaseAdvisoryLock:async(_key,cb)=>busyContact?{acquired:false}:{acquired:true,result:await cb()}},
     './_crm-utils.js': {
       clean:(x)=>String(x??'').trim(),sourceLabel:(x)=>x,
       normalizePhone:(x)=>/^\d{10,15}$/.test(String(x||''))?String(x):'',
@@ -141,5 +145,13 @@ function createTestbed({member = 'cash',alreadyAssigned = false,dedicatedPhone =
   assert.equal(result.assigned,0);
   assert.equal(t.send.length,0);
   console.log('PASS: missing dedicated phone does not leak unassigned alerts to normal recipients');
+}
+{
+  const t=createTestbed({busyContact:true});
+  const result=await t.engine.runAutoAssign();
+  assert.equal(result.assigned,0);
+  assert.equal(result.skipped,1);
+  assert.equal(t.select.length,0);
+  console.log('PASS: busy contact lock is skipped immediately without reassignment');
 }
 console.log('All CRM unclassified-routing tests passed.');

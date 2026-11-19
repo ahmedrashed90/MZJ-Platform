@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
+const ts=require('typescript');
+const read=(f)=>fs.readFileSync(new URL(`../${f}`,import.meta.url),'utf8');
+const cron=JSON.parse(read('vercel.json'));
+assert.equal(cron.crons.filter(x=>x.path==='/api/internal/inbox-auto-assign-tick').length,1);
+assert.equal(cron.crons.find(x=>x.path==='/api/internal/inbox-auto-assign-tick').schedule,'* * * * *');
+assert.ok(cron.crons.some(x=>x.path==='/api/internal/inbox-agent-tick'));
+const api=read('api/index.ts');
+assert.match(api,/\["internal\/inbox-auto-assign-tick", internalInboxAutoAssignTickHandler\]/);
+const auto=read('server/internal/inbox-auto-assign-tick.ts');
+const old=read('server/internal/inbox-agent-tick.ts');
+const engine=read('server/_crm-inbox-agent-engine.ts');
+assert.match(auto,/safeSecretEquals/);
+assert.match(auto,/tryWithDatabaseAdvisoryLock/);
+assert.match(auto,/previous_tick_running/);
+assert.doesNotMatch(old,/runAutoAssign/);
+assert.match(old,/runInboxAgentTick/);
+assert.match(engine,/handled >= 20 \|\| Date\.now\(\) - startedAt > 50_000/);
+assert.match(engine,/const lock = await tryWithDatabaseAdvisoryLock\(lockKey/);
+assert.match(engine,/jsonb_build_object\('unclassifiedAutoAssignedAt',now\(\),'unclassifiedAutoAssignSource',\$\{routeSource\}::text\)/);
+const transpile=(src,name)=>{
+  const o=ts.transpileModule(src,{fileName:name,reportDiagnostics:true,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}});
+  assert.equal((o.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error).length,0);
+  return o.outputText;
+};
+for(const p of ['server/internal/inbox-agent-tick.ts','server/internal/inbox-auto-assign-tick.ts','server/_crm-inbox-agent-engine.ts','api/index.ts'])transpile(read(p),p);
+async function simulatedTick({allowed=true,acquired=true,throws=false}={}){
+ const calls=[];
+ const runAutoAssign=async()=>{calls.push('run');if(throws)throw Error('db unavailable');return {assigned:2,skipped:0,failed:0}};
+ const tryLock=async(key,work)=>{calls.push('lock');return acquired?{acquired:true,result:await work()}:{acquired:false}};
+ const imports={'../_auth.js':{safeSecretEquals:(a,b)=>a===b},'../_db.js':{tryWithDatabaseAdvisoryLock:tryLock},'../_crm-inbox-agent-engine.js':{runAutoAssign}};
+ const mod={exports:{}};
+ vm.runInNewContext(transpile(auto,'server/internal/inbox-auto-assign-tick.ts'),{module:mod,exports:mod.exports,require:x=>{assert.ok(x in imports,x);return imports[x]},process:{env:{CRON_SECRET:'test-secret'}},console:{info(){},error(){}},String,Error});
+ const res={statusCode:200,headers:{},payload:null,setHeader(k,v){this.headers[k]=v},status(code){this.statusCode=code;return this},json(x){this.payload=x;return this}};
+ await mod.exports.default({method:'GET',headers:{authorization:allowed?'Bearer test-secret':'Bearer wrong'}},res);
+ return {res,calls};
+}
+let {res,calls}=await simulatedTick();assert.equal(res.statusCode,200);assert.equal(res.payload.assigned,2);assert.deepEqual(calls,['lock','run']);
+({res,calls}=await simulatedTick({acquired:false}));assert.equal(res.statusCode,200);assert.equal(res.payload.skipped,'previous_tick_running');assert.deepEqual(calls,['lock']);
+({res,calls}=await simulatedTick({allowed:false}));assert.equal(res.statusCode,401);assert.deepEqual(calls,[]);
+({res,calls}=await simulatedTick({throws:true}));assert.equal(res.statusCode,500);
+console.log('PASS: isolated cron schedule, routing, auth, no-wait lock, and failure reporting');
