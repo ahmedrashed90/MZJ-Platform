@@ -7,7 +7,7 @@ const defaults = {
   idleMinutes: 60,
   windowHours: 23,
   stepMinutes: 10,
-  autoAssignMinutes: 1,
+  autoAssignMinutes: 2,
   escalateToBranchManager: true,
   escalateToSalesManager: true,
   escalateToSystemManager: true,
@@ -16,6 +16,7 @@ const defaults = {
   systemManagerName: "",
   systemManagerPhone: "",
   fallbackPhone: "",
+  unassignedAlertPhone: "",
   businessHoursOnly: false,
   businessStart: "09:00",
   businessEnd: "22:00",
@@ -58,7 +59,7 @@ function fromApi(raw: any) {
     idleMinutes: raw.idle_minutes ?? 60,
     windowHours: raw.window_hours ?? 23,
     stepMinutes: raw.step_minutes ?? 10,
-    autoAssignMinutes: raw.auto_assign_minutes ?? 1,
+    autoAssignMinutes: Math.max(2, Number(raw.auto_assign_minutes) || 2),
     escalateToBranchManager: raw.escalate_to_branch_manager !== false,
     escalateToSalesManager: raw.escalate_to_sales_manager !== false,
     escalateToSystemManager: raw.escalate_to_system_manager !== false,
@@ -67,6 +68,7 @@ function fromApi(raw: any) {
     systemManagerName: raw.system_manager_name || "",
     systemManagerPhone: raw.system_manager_phone || "",
     fallbackPhone: raw.fallback_phone || "",
+    unassignedAlertPhone: raw.unassigned_alert_phone || "",
     businessHoursOnly: Boolean(raw.business_hours_only),
     businessStart: String(raw.business_start || "09:00").slice(0, 5),
     businessEnd: String(raw.business_end || "22:00").slice(0, 5),
@@ -327,7 +329,7 @@ export function CrmInboxAgentPage() {
           <div className="ia-card">
             <div className="ia-card-title">التوقيت</div>
             <div className="ia-fields">
-              <label className="ia-field"><span>تعيين تلقائي للمحادثات الجديدة بعد (دقيقة)</span><input type="number" min={1} max={60} value={settings.autoAssignMinutes} onChange={(e) => set("autoAssignMinutes", Number(e.target.value))} /></label>
+              <label className="ia-field"><span>توزيع الرسائل غير المصنفة بعد (دقيقة)</span><input type="number" min={2} max={60} value={settings.autoAssignMinutes} onChange={(e) => set("autoAssignMinutes", Math.max(2, Number(e.target.value) || 2))} /></label>
               <label className="ia-field"><span>بدون تواصل (دقيقة)</span><input type="number" min={1} value={settings.idleMinutes} onChange={(e) => set("idleMinutes", Number(e.target.value))} /></label>
               <label className="ia-field"><span>نافذة العميل (ساعة)</span><input type="number" min={2} max={23} value={settings.windowHours} onChange={(e) => set("windowHours", Number(e.target.value))} /></label>
               <label className="ia-field"><span>الفاصل بين التصعيدات (دقيقة)</span><input type="number" min={1} value={settings.stepMinutes} onChange={(e) => set("stepMinutes", Number(e.target.value))} /></label>
@@ -391,6 +393,16 @@ export function CrmInboxAgentPage() {
               <label className="ia-field"><span>الاسم</span><input value={settings.systemManagerName} onChange={(e) => set("systemManagerName", e.target.value)} /></label>
               <label className="ia-field"><span>رقم الواتساب</span><input value={settings.systemManagerPhone} onChange={(e) => set("systemManagerPhone", e.target.value)} /></label>
             </div>
+          </div>
+
+          {/* Unassigned-only escalation; normal branch/sales/system recipients are untouched. */}
+          <div className="ia-card ia-card-wide">
+            <div className="ia-card-title">تنبيهات المحادثات غير الموزعة فقط</div>
+            <label className="ia-field ia-field-wide">
+              <span>رقم واتساب تنبيهات «المندوب المسؤول: غير موزع»</span>
+              <input type="tel" dir="ltr" placeholder="05xxxxxxxx أو 9665xxxxxxxx" value={settings.unassignedAlertPhone} onChange={(e) => set("unassignedAlertPhone", e.target.value)} />
+            </label>
+            <p className="ia-hint">التنبيهات العادية تظل كما هي للأرقام الأربعة ومراحل التصعيد الحالية. فقط تنبيهات «غير موزع» تُرسل إلى هذا الرقم وحده؛ إذا تركته فارغًا فلن يُرسل التنبيه إلى الأرقام الأربعة بدلًا منه.</p>
           </div>
 
           {/* المنصات */}

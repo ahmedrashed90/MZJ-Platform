@@ -32,6 +32,10 @@ export function CrmInboxPage() {
   const [classifyingId, setClassifyingId] = useState("");
   const [canClassify, setCanClassify] = useState(false);
   const [sortMode, setSortMode] = useState<"expiry" | "latest">("expiry");
+  const [openConversationId, setOpenConversationId] = useState("");
+  const [conversationMessages, setConversationMessages] = useState<any[]>([]);
+  const [draftReply, setDraftReply] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -66,6 +70,38 @@ export function CrmInboxPage() {
       setNotice(error instanceof Error ? error.message : "فشل تصنيف الرسالة");
     } finally {
       setClassifyingId("");
+    }
+  }
+
+
+  async function openConversation(id: string) {
+    if (openConversationId === id) { setOpenConversationId(""); return; }
+    setNotice("");
+    try {
+      const result = await crmFetch<{ ok: boolean; messages: any[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=100`);
+      setConversationMessages(result.messages || []);
+      setOpenConversationId(id);
+      setDraftReply("");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر فتح المحادثة");
+    }
+  }
+
+  async function sendReply(id: string) {
+    const message = draftReply.trim();
+    if (!message || sendingReply) return;
+    setSendingReply(true);
+    setNotice("");
+    try {
+      await crmFetch("/api/crm/conversations", { method: "POST", body: JSON.stringify({ conversationId: id, text: message }) });
+      setDraftReply("");
+      const result = await crmFetch<{ ok: boolean; messages: any[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=100`);
+      setConversationMessages(result.messages || []);
+      setNotice("تم إرسال الرد للعميل.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر إرسال الرد");
+    } finally {
+      setSendingReply(false);
     }
   }
 
@@ -119,7 +155,30 @@ export function CrmInboxPage() {
               <aside className="crm-unclassified-actions">
                 <div><CheckCircle size={21} weight="duotone" /><strong>تصنيف الرسالة</strong><small>اختر الخدمة الصحيحة ليتم إنشاء العميل والطلب والتوزيع.</small></div>
                 {canClassify ? <div className="crm-unclassified-buttons">{serviceButtons.map((service) => <button type="button" key={service.key} disabled={classifyingId === row.id} onClick={() => void classify(row.id, service.key)}>{classifyingId === row.id ? "جاري التنفيذ..." : service.label}</button>)}</div> : <span className="crm-unclassified-manager-note">التصنيف متاح للإدارة فقط</span>}
+                <span className="crm-unclassified-manager-note">المندوب المسؤول: {row.assigned_name || "غير موزع"}</span>
+                <button className="crm-secondary-button" type="button" onClick={() => void openConversation(row.id)}>
+                  <ChatCircleDots size={17} /> {openConversationId === row.id ? "إغلاق المحادثة" : "فتح المحادثة والرد"}
+                </button>
               </aside>
+              {openConversationId === row.id ? (
+                <div className="crm-unclassified-chat" style={{ gridColumn: "1 / -1", padding: "16px", background: "var(--crm-surface, #f8f5f1)" }}>
+                  <div style={{ display: "grid", gap: 8, maxHeight: 300, overflowY: "auto", marginBottom: 12 }}>
+                    {conversationMessages.map((message) => (
+                      <div key={message.id} style={{ padding: "8px 12px", borderRadius: 10, background: "#fff", textAlign: "right" }}>
+                        <strong>{message.direction === "in" ? "العميل" : "المعرض"}</strong>
+                        <p style={{ whiteSpace: "pre-wrap", margin: "4px 0" }}>{message.body || "مرفق أو رسالة بدون نص"}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <label className="ia-field" style={{ display: "grid", gap: 8 }}>
+                    <span>الرد على العميل</span>
+                    <textarea className="ia-textarea" rows={3} value={draftReply} onChange={(e) => setDraftReply(e.target.value)} placeholder="اكتب ردك هنا..." />
+                  </label>
+                  <button className="crm-primary-button" type="button" disabled={sendingReply || !draftReply.trim()} onClick={() => void sendReply(row.id)}>
+                    {sendingReply ? "جاري الإرسال..." : "إرسال الرد"}
+                  </button>
+                </div>
+              ) : null}
             </article>
           );
         })}

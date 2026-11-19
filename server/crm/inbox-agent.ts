@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, isCrmManager, parseBody, positiveInt, requireCrmUser } from "../_crm-utils.js";
+import { clean, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { ensureInboxAgentEngineSchema, DEFAULT_CUSTOMER_MESSAGE } from "../_crm-inbox-agent-engine.js";
 
@@ -101,18 +101,22 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const minutes = (value: unknown, fallback: number, min: number, max: number) => { const n = Math.floor(Number(value)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
     const templateId = clean(body.escalationTemplateId);
     const statusTemplateId = clean(body.statusEscalationTemplateId);
+    const unassignedAlertRaw = clean(body.unassignedAlertPhone);
+    const unassignedAlertPhone = normalizePhone(unassignedAlertRaw);
+    if (unassignedAlertRaw && !unassignedAlertPhone) return response.status(400).json({ ok: false, error: "رقم تنبيهات غير الموزعين غير صالح" });
     const [row] = await sql<any[]>`
       update crm.inbox_agent_settings set
         escalation_started_at=case when ${Boolean(body.enabled)} and (enabled=false or escalation_started_at is null) then now() else escalation_started_at end,
         enabled=${Boolean(body.enabled)},
         idle_minutes=${minutes(body.idleMinutes, 60, 1, 1380)},window_hours=${minutes(body.windowHours, 23, 2, 23)},step_minutes=${minutes(body.stepMinutes, 10, 1, 120)},
-        auto_assign_minutes=${minutes(body.autoAssignMinutes, 1, 1, 60)},
+        auto_assign_minutes=${minutes(body.autoAssignMinutes, 2, 2, 60)},
         customer_message=${clean(body.customerMessage) || null},
         disable_customer_message=${Boolean(body.disableCustomerMessage)},
         excluded_statuses=${excludedStatuses}::text[],
         escalate_to_branch_manager=${body.escalateToBranchManager!==false},escalate_to_sales_manager=${body.escalateToSalesManager!==false},escalate_to_system_manager=${body.escalateToSystemManager!==false},
         sales_manager_name=${clean(body.salesManagerName)||null},sales_manager_phone=${clean(body.salesManagerPhone)||null},
         system_manager_name=${clean(body.systemManagerName)||null},system_manager_phone=${clean(body.systemManagerPhone)||null},fallback_phone=${clean(body.fallbackPhone)||null},
+        unassigned_alert_phone=${unassignedAlertPhone||null},
         escalation_template_id=${templateId || null}::uuid,
         status_escalation_template_id=${statusTemplateId || null}::uuid,
         business_hours_only=${Boolean(body.businessHoursOnly)},business_start=${clean(body.businessStart)||"09:00"}::time,business_end=${clean(body.businessEnd)||"22:00"}::time,

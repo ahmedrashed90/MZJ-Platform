@@ -506,7 +506,7 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.co
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.contacts.view','crm.conversation.download','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_assigned','crm.customer.create','crm.customer.history.view','crm.customer.note.add','crm.customer.status.update','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox_agent.view','crm.manual_lead.request','crm.manual_lead.view_own','crm.manual_leads.view','system.crm.access') where r.code='sales_user'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.contacts.view','crm.conversation.download','crm.conversation.mark_read','crm.conversation.mark_unread','crm.conversation.send_media','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_assigned','crm.customer.create','crm.customer.history.view','crm.customer.note.add','crm.customer.status.update','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.finance_history.view','crm.inbox.view','crm.inbox_agent.view','crm.manual_lead.request','crm.manual_lead.view_own','crm.manual_leads.view','system.crm.access') where r.code='sales_user'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
@@ -514,7 +514,7 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.co
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.contacts.view','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_assigned','crm.customer.note.add','crm.customer.status.update','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.inbox_agent.view','system.crm.access') where r.code='customer_service_agent'
+select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.contacts.view','crm.conversation.send_template','crm.conversation.send_text','crm.conversation.view','crm.conversation.view_assigned','crm.customer.note.add','crm.customer.status.update','crm.customer.update','crm.customer.view','crm.dashboard.view','crm.database.view','crm.inbox.view','crm.inbox_agent.view','system.crm.access') where r.code='customer_service_agent'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)

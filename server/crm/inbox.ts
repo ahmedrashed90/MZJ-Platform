@@ -39,9 +39,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (
           ${scope.all}::boolean
           or (${manager}::boolean and not ${scope.branchRestricted}::boolean)
-          or (${scope.branchRestricted}::boolean and
+          or (${manager}::boolean and ${scope.branchRestricted}::boolean and
               ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[]))))
-          or (not ${scope.branchRestricted}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
+          or (${scope.includeAssigned}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
         )
       order by coalesce(c.last_customer_message_at,c.last_message_at,c.updated_at) desc nulls last
       limit 300
@@ -63,8 +63,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (
           ${scope.all}::boolean
           or (${manager}::boolean and not ${scope.branchRestricted}::boolean)
-          or (${scope.branchRestricted}::boolean and ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[]))))
-          or (not ${scope.branchRestricted}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
+          or (${manager}::boolean and ${scope.branchRestricted}::boolean and ((l.id is not null and ${leadScope}) or (l.id is null and c.branch_code=any(${scope.branchCodes}::text[]))))
+          or (${scope.includeAssigned}::boolean and (c.assigned_to=${user.id}::uuid or c.call_center_assigned_to=${user.id}::uuid))
         )
     `;
 

@@ -1,93 +1,176 @@
-import { getSql } from "./_db.js";
-import { clean, normalizePhone, sourceLabel } from "./_crm-utils.js";
+import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
+import { chooseAssignment, clean, normalizePhone, sourceLabel } from "./_crm-utils.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 
 // ---------------------------------------------------------------------------
-// Auto-assign: round-robin across ALL active assignment-rule members (all
-// branches), applied to unassigned conversations after `auto_assign_minutes`.
+// Unclassified inbox: assign a responsible rep after two minutes, without
+// inventing a customer service selection or creating a service request.
+// Routing uses the SAME configured CRM assignment rules as normal leads.
 // ---------------------------------------------------------------------------
-export async function runAutoAssign(): Promise<{ assigned: number; skipped: number }> {
+export async function runAutoAssign(): Promise<{ assigned: number; skipped: number; failed: number }> {
+  await ensureInboxAgentEngineSchema();
   const sql = getSql();
+  const [settings] = await sql<any[]>`
+    select * from crm.inbox_agent_settings where id='default'
+  `;
+  if (!settings?.enabled) return { assigned: 0, skipped: 0, failed: 0 };
+  const delayMinutes = Math.max(2, Number(settings.auto_assign_minutes) || 2);
 
-  // Load settings
-  const [settings] = await sql<any[]>`select auto_assign_minutes,is_active,social_platforms from crm.inbox_agent_settings where id='default'`;
-  if (!settings?.is_active) return { assigned: 0, skipped: 0 };
-  const delayMinutes = Math.max(1, Number(settings.auto_assign_minutes || 1));
-
-  const platforms: string[] = (Array.isArray(settings.social_platforms) ? settings.social_platforms : []).map(clean).filter(Boolean);
-  const channels = Array.from(new Set(platforms.flatMap((p) => p === "whatsapp" ? ["whatsapp", "mersal"] : [p])));
-  if (!channels.length) return { assigned: 0, skipped: 0 };
-
-  // Find unassigned conversations that have been waiting >= delay_minutes
-  const conversations = await sql<any[]>`
-    select c.id::text, c.lead_id::text, c.channel_code, c.service_key, c.branch_code, c.department_code,
-           c.last_customer_message_at
+  // Only the actual unclassified queue; do not redistribute classified leads,
+  // closed conversations or conversations that already have a responsible rep.
+  // created_at is the queue-entry anchor for new conversations (not the latest
+  // message, which can change while a customer is still writing).
+  const candidates = await sql<any[]>`
+    select c.id::text,c.contact_id::text,c.lead_id::text,c.channel_code,c.service_key,
+      c.department_code,c.branch_code,c.customer_name,c.last_customer_message_at,
+      c.service_selection_sent_at,c.created_at,c.closed_at,c.classification_state
     from crm.conversations c
-    where c.assigned_to is null
+    where c.service_request_id is null
+      and c.assigned_to is null
+      and (
+        c.classification_state in ('new','awaiting_service')
+        or (c.classification_state='closed' and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz))
+      )
+      and (coalesce(c.status,'open') <> 'closed'
+        or (c.classification_state='closed' and c.last_customer_message_at>coalesce(c.closed_at,'epoch'::timestamptz)))
       and c.last_customer_message_at is not null
-      and c.last_customer_message_at <= now() - (${delayMinutes}||' minutes')::interval
-      and c.last_customer_message_at >= now() - interval '50 hours'
-      and c.channel_code = any(${channels}::text[])
-      and coalesce(c.status,'open') <> 'closed'
-      and c.classification_state <> 'closed'
-    order by c.last_customer_message_at asc
+      and (case when c.classification_state='closed' then c.last_customer_message_at
+        else greatest(c.created_at,coalesce(c.service_selection_sent_at,c.created_at)) end)
+        <= now() - (${delayMinutes}||' minutes')::interval
+    order by (case when c.classification_state='closed' then c.last_customer_message_at
+      else greatest(c.created_at,coalesce(c.service_selection_sent_at,c.created_at)) end) asc
     limit 100
   `;
 
-  if (!conversations.length) return { assigned: 0, skipped: 0 };
-
-  // Load all active members across all assignment rules, ordered by branch then
-  // last_assigned_at asc (least-recently assigned first) for round-robin.
-  const members = await sql<any[]>`
-    select m.rule_id::text, m.user_id::text, u.full_name, ar.branch_code, ar.department_code,
-           m.assignment_count, m.last_assigned_at
-    from crm.assignment_rule_members m
-    join crm.assignment_rules ar on ar.id = m.rule_id and ar.is_active = true
-    join core.users u on u.id = m.user_id and u.is_active = true
-    where m.is_active = true
-    order by ar.branch_code nulls last, m.last_assigned_at asc nulls first, m.assignment_count asc
-  `;
-
-  if (!members.length) return { assigned: 0, skipped: conversations.length };
-
-  let memberIdx = 0;
   let assigned = 0;
   let skipped = 0;
+  let failed = 0;
+  for (const candidate of candidates) {
+    try {
+      // Classification uses this contact lock too. This protects the existing
+      // owner and prevents parallel cron executions from assigning twice.
+      const lockKey = `mzj:crm:service-classification:${candidate.contact_id || candidate.id}`;
+      await withDatabaseAdvisoryLock(lockKey, async () => {
+        const [current] = await sql<any[]>`
+          select c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
+            c.assigned_to::text,c.classification_state,c.service_key,c.department_code,
+            c.channel_code,c.customer_name,c.branch_code,c.status,c.closed_at,c.last_customer_message_at,
+            l.assigned_to::text as lead_assigned_to,
+            l.branch_code as lead_branch_code,
+            l.service_key as lead_service_key,
+            l.department_code as lead_department_code
+          from crm.conversations c
+          left join crm.leads l on l.id=c.lead_id and l.is_deleted=false
+          where c.id=${candidate.id}::uuid limit 1
+        `;
+        const reopened = current?.classification_state === 'closed'
+          && current.last_customer_message_at
+          && new Date(current.last_customer_message_at).getTime() > new Date(current.closed_at || 0).getTime();
+        if (!current || current.assigned_to || current.service_request_id ||
+            (!['new','awaiting_service'].includes(clean(current.classification_state)) && !reopened) ||
+            (clean(current.status) === 'closed' && !reopened)) {
+          skipped += 1;
+          return;
+        }
 
-  for (const conv of conversations) {
-    // Check if already assigned (race guard)
-    const [check] = await sql<any[]>`select assigned_to from crm.conversations where id=${conv.id}::uuid`;
-    if (check?.assigned_to) { skipped++; continue; }
+        // Never take a returning customer's request from an existing owner.
+        const [openRequest] = await sql<any[]>`
+          select assigned_to::text,branch_code,service_key,department_code
+          from crm.service_requests
+          where contact_id=${current.contact_id || null}::uuid
+            and request_state='open' and assigned_to is not null
+          order by opened_at desc limit 1
+        `;
+        const existingOwner = clean(openRequest?.assigned_to || current.lead_assigned_to);
+        let rep: { assignedTo: string | null; assignedName?: string; branchCode?: string; ruleId?: string | null };
+        let routeSource = 'existing_owner';
+        if (existingOwner) {
+          const [user] = await sql<any[]>`
+            select id::text,full_name from core.users where id=${existingOwner}::uuid limit 1
+          `;
+          if (!user) { skipped += 1; return; }
+          rep = { assignedTo: existingOwner, assignedName: user.full_name,
+            branchCode: openRequest?.branch_code || current.lead_branch_code || current.branch_code };
+        } else {
+          const service = clean(current.service_key || current.department_code || current.lead_service_key || current.lead_department_code).toLowerCase();
+          const selectedServices = service.includes('finance') || service.includes('تمويل')
+            ? ['finance']
+            : service.includes('customer_service') || service.includes('service') || service.includes('خدم')
+              ? ['service']
+              : service.includes('cash') || service.includes('كاش')
+                ? ['cash']
+                : ['cash','finance']; // unclassified: sales pool, not a service classification
+          const branch = clean(current.branch_code || current.lead_branch_code);
+          const requestedBranch = ['online','website'].includes(branch) ? '' : branch;
+          rep = { assignedTo: null };
+          for (const serviceKey of selectedServices) {
+            const selected = await chooseAssignment(serviceKey, requestedBranch, clean(current.channel_code));
+            if (selected.assignedTo) {
+              rep = selected;
+              routeSource = serviceKey;
+              break;
+            }
+          }
+        }
+        if (!rep.assignedTo) {
+          skipped += 1;
+          // The job retries on later ticks if rule membership changes.
+          const [alreadyReported] = await sql<any[]>`
+            select 1 from crm.inbox_agent_logs
+            where conversation_id=${current.id}::uuid and action='auto_assignment_unavailable'
+              and created_at > now()-interval '15 minutes' limit 1
+          `;
+          if (!alreadyReported) {
+            const unassignedPhone = normalizePhone(settings.unassigned_alert_phone);
+            let alertSent = false;
+            if (unassignedPhone) {
+              try {
+                await sendAlert({ settings,row: current,phone: unassignedPhone,
+                  stageLabel: 'غير موزع — مطلوب متابعة',
+                  idempotencyKey: `inbox-auto-unassigned:${current.id}:${new Date(reopened ? candidate.last_customer_message_at : (candidate.service_selection_sent_at || candidate.created_at)).toISOString()}`,
+                  reason: 'unclassified_auto_assignment_unavailable' });
+                alertSent = true;
+              } catch (error) {
+                console.error('Unassigned inbox alert failed',current.id,error instanceof Error ? error.message : error);
+              }
+            }
+            await addLog({ conversationId: current.id,leadId: current.lead_id,
+              customerName: current.customer_name,branchCode: current.branch_code,
+              action: 'auto_assignment_unavailable',reason: 'no_eligible_active_assignment_rule',
+              metadata: { channel: current.channel_code,alertSent,hasDedicatedNumber: Boolean(unassignedPhone) } });
+          }
+          return;
+        }
 
-    const member = members[memberIdx % members.length];
-    memberIdx++;
-
-    await sql`
-      update crm.conversations
-      set assigned_to = ${member.user_id}::uuid, updated_at = now()
-      where id = ${conv.id}::uuid and assigned_to is null
-    `;
-
-    // Update assignment count on the rule member for round-robin tracking
-    await sql`
-      update crm.assignment_rule_members
-      set assignment_count = assignment_count + 1, last_assigned_at = now(), updated_at = now()
-      where rule_id = ${member.rule_id}::uuid and user_id = ${member.user_id}::uuid
-    `;
-
-    // Log the assignment
-    await sql`
-      insert into crm.assignment_logs(rule_id, lead_id, department_code, branch_code, source_code,
-        assigned_to, assigned_name, assignment_mode, action)
-      values (${member.rule_id}::uuid, ${conv.lead_id || null}::uuid,
-        ${member.department_code}, ${member.branch_code || null}, 'inbox_agent_auto_assign',
-        ${member.user_id}::uuid, ${member.full_name}, 'round_robin', 'inbox_agent_auto_assign')
-    `.catch(() => undefined);
-
-    assigned++;
+        const [updated] = await sql<any[]>`
+          update crm.conversations set assigned_to=${rep.assignedTo}::uuid,
+            branch_code=coalesce(nullif(branch_code,''),${rep.branchCode || null}),
+            status=case when classification_state='closed' then 'open' else status end,
+            classification_state=case when classification_state='closed' then 'new' else classification_state end,
+            closed_at=case when classification_state='closed' then null else closed_at end,
+            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('unclassifiedAutoAssignedAt',now(),'unclassifiedAutoAssignSource',${routeSource}),
+            updated_at=now()
+          where id=${current.id}::uuid and assigned_to is null and service_request_id is null
+            and (classification_state in ('new','awaiting_service')
+              or (classification_state='closed' and last_customer_message_at>coalesce(closed_at,'epoch'::timestamptz)))
+            and (coalesce(status,'open') <> 'closed'
+              or (classification_state='closed' and last_customer_message_at>coalesce(closed_at,'epoch'::timestamptz)))
+          returning id::text
+        `;
+        if (!updated) { skipped += 1; return; }
+        assigned += 1;
+        await addLog({ conversationId: current.id,leadId: current.lead_id,
+          customerName: current.customer_name,branchCode: rep.branchCode || current.branch_code,
+          assignedName: rep.assignedName,action: 'unclassified_auto_assigned',
+          reason: 'unclassified_after_two_minutes',
+          metadata: { assigneeId: rep.assignedTo,ruleId: rep.ruleId || null,source: routeSource,channel: current.channel_code } });
+      });
+    } catch (error) {
+      failed += 1;
+      console.error('Unclassified inbox auto assignment failed', candidate.id, error instanceof Error ? error.message : error);
+    }
   }
-
-  return { assigned, skipped };
+  return { assigned, skipped, failed };
 }
 
 /**
@@ -119,7 +202,9 @@ export async function ensureInboxAgentEngineSchema() {
       await sql`alter table crm.inbox_agent_settings add column if not exists status_escalation_template_id uuid`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalate_to_system_manager boolean not null default true`;
       await sql`alter table crm.inbox_agent_settings add column if not exists escalation_started_at timestamptz`;
-      await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_minutes integer not null default 1`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists auto_assign_minutes integer not null default 2`;
+      await sql`alter table crm.inbox_agent_settings alter column auto_assign_minutes set default 2`;
+      await sql`alter table crm.inbox_agent_settings add column if not exists unassigned_alert_phone text`;
       await sql`alter table crm.inbox_agent_settings add column if not exists engine_v2 boolean not null default false`;
       // Per-conversation mute: an employee can stop the agent for one conversation. A newer customer message re-arms it.
       await sql`alter table crm.conversations add column if not exists agent_muted_at timestamptz`;
@@ -297,7 +382,7 @@ export async function runInboxAgentTick() {
 
   const candidates = await sql<any[]>`
     select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.preview_text,c.last_customer_message_at,c.branch_code,c.department_code,c.service_key,
-      c.phone_requested_at,
+      c.phone_requested_at,c.assigned_to::text as assigned_to_id,
       l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
       u.full_name as assigned_name,r.branch_code as request_branch_code,r.department_code as request_department_code
     from crm.conversations c
@@ -373,18 +458,20 @@ export async function runInboxAgentTick() {
         }
       }
 
+      const unassigned = !clean(row.assigned_to_id);
       const enabledFlag = nextStage.key === "branch_manager" ? settings.escalate_to_branch_manager !== false
         : nextStage.key === "sales_manager" ? settings.escalate_to_sales_manager !== false
         : settings.escalate_to_system_manager !== false;
-      if (!enabledFlag) continue;
+      if (!unassigned && !enabledFlag) continue;
 
       let recipient: { name: string; phone: string } | null = null;
-      if (nextStage.key === "branch_manager") recipient = await branchManagerFor(row, settings);
+      if (unassigned) recipient = { name: "مسؤول تنبيهات غير الموزعين", phone: normalizePhone(settings.unassigned_alert_phone) };
+      else if (nextStage.key === "branch_manager") recipient = await branchManagerFor(row, settings);
       else if (nextStage.key === "sales_manager") recipient = { name: clean(settings.sales_manager_name) || "مدير المبيعات", phone: normalizePhone(settings.sales_manager_phone) };
       else recipient = { name: clean(settings.system_manager_name) || "مدير النظام", phone: normalizePhone(settings.system_manager_phone) };
 
       if (!recipient?.phone) {
-        await addLog({ ...common, action: "escalation_skipped", reason: `${nextStage.key}_phone_missing` });
+        await addLog({ ...common, action: "escalation_skipped", reason: unassigned ? "unassigned_alert_phone_missing" : `${nextStage.key}_phone_missing` });
         continue;
       }
       try {
@@ -419,7 +506,7 @@ export async function runInboxAgentTick() {
     // Find all open conversations whose status_changed_at is set and status matches a rule
     const statusCandidates = await sql<any[]>`
       select c.id::text,c.lead_id::text,c.channel_code,c.customer_name,c.branch_code,c.department_code,c.service_key,
-        c.status_changed_at,c.status_changed_label,
+        c.status_changed_at,c.status_changed_label,c.assigned_to::text as assigned_to_id,
         l.customer_name as lead_customer_name,l.phone,l.phone_normalized,l.status_label,
         u.full_name as assigned_name,r2.branch_code as request_branch_code,r2.department_code as request_department_code
       from crm.conversations c
@@ -490,15 +577,17 @@ export async function runInboxAgentTick() {
       const targetKey = clean(nextStageData.target);
       const targetLabel = targetKey === "branch_manager" ? "مدير الفرع" : targetKey === "sales_manager" ? "مدير المبيعات" : "مدير النظام";
 
+      const unassigned = !clean(conv.assigned_to_id);
       let recipient: { name: string; phone: string } | null = null;
-      if (targetKey === "branch_manager") recipient = await branchManagerFor(conv, settings);
+      if (unassigned) recipient = { name: "مسؤول تنبيهات غير الموزعين", phone: normalizePhone(settings.unassigned_alert_phone) };
+      else if (targetKey === "branch_manager") recipient = await branchManagerFor(conv, settings);
       else if (targetKey === "sales_manager") recipient = { name: clean(settings.sales_manager_name) || "مدير المبيعات", phone: normalizePhone(settings.sales_manager_phone) };
       else recipient = { name: clean(settings.system_manager_name) || "مدير النظام", phone: normalizePhone(settings.system_manager_phone) };
 
       const common = { conversationId: conv.id, leadId: conv.lead_id, customerName: row_name(conv), customerPhone: conv.phone || conv.phone_normalized || "", branchCode: conv.request_branch_code || conv.branch_code || "", assignedName: conv.assigned_name || "", metadata: { cycle: cycleName, statusLabel: rule.status_label, stage: nextStageData.stage, target: targetKey, anchor: anchor.toISOString() } };
 
       if (!recipient?.phone) {
-        await addLog({ ...common, action: "escalation_skipped", reason: `status_rule_stage${nextStageData.stage}_${targetKey}_phone_missing` });
+        await addLog({ ...common, action: "escalation_skipped", reason: unassigned ? "unassigned_alert_phone_missing" : `status_rule_stage${nextStageData.stage}_${targetKey}_phone_missing` });
         continue;
       }
       try {

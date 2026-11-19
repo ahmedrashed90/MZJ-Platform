@@ -11,10 +11,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!secret) return response.status(503).json({ ok: false, error: "CRON_SECRET is required" });
   if (!token || !safeSecretEquals(token, secret)) return response.status(401).json({ ok: false, error: "Unauthorized" });
   try {
-    const [tickResult, assignResult] = await Promise.all([
-      runInboxAgentTick(),
-      runAutoAssign(),
-    ]);
+    const assignResult = await runAutoAssign();
+    const tickResult = await runInboxAgentTick();
     const result = { ...tickResult, autoAssign: assignResult };
     console.info("Inbox agent tick", JSON.stringify(result));
     return response.status(200).json(result);
