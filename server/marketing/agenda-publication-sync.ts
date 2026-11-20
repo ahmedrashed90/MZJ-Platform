@@ -56,7 +56,7 @@ export async function buildAgendaPublicationSnapshot(sql: Sql, planId: string) {
   const lines = await sql<Row[]>`
     select l.id::text as line_id,l.product_id::text as product_id,l.post_type_id::text as post_type_id,
       l.scheduled_on::text as scheduled_on,l.caption,l.hashtags,
-      i.task_id::text as task_id,i.client_key::text as client_key,i.idea_name,i.media_kind,i.sort_order,
+      i.task_id::text as task_id,i.client_key::text as client_key,i.idea_name,i.idea as product_idea,i.media_kind,i.sort_order,
       t.task_no,t.name as task_name,pt.name as post_type_name,pt.width as post_width,pt.height as post_height,
       pf.id::text as platform_id,pf.name as platform_name,pf.code as platform_code,
       requirement.requirement_number
@@ -154,7 +154,7 @@ export async function buildAgendaPublicationSnapshot(sql: Sql, planId: string) {
         lineId: str(line.line_id), productId: str(line.product_id), taskId: str(line.task_id),
         taskNo: str(line.task_no), taskName: str(line.task_name), requestNo,
         requirementNumber: Number(line.requirement_number) || null,
-        ideaName: str(line.idea_name), ideaCode: ideaCodes.get(str(line.product_id)) || '',
+        ideaName: str(line.idea_name), productIdea: str(line.product_idea), ideaCode: ideaCodes.get(str(line.product_id)) || '',
         mediaKind: str(line.media_kind), scheduledOn: dateText(line.scheduled_on),
         platform: postTypeId && target.platform_id ? { id: str(target.platform_id), code: str(target.platform_code), name: str(target.platform_name) } : null,
         postType: postTypeId ? { id: postTypeId, name: str(target.post_type_name), width, height } : null,

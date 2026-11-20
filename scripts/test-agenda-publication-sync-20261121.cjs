@@ -26,11 +26,11 @@ const sql = async (parts, ...args) => {
   }];
   if (q.includes('from marketing.work_plan_items l join marketing.work_items i')) return [
     {line_id:lineA,product_id:productA,post_type_id:postReel,task_id:taskA,client_key:id(200),
-      task_no:'TSK-000224',task_name:'فيديو',requirement_number:1,idea_name:'فيديو سيارة',media_kind:'video',
+      task_no:'TSK-000224',task_name:'فيديو',requirement_number:1,idea_name:'فيديو سيارة',product_idea:'عملية التمويل: حاسبة التقسيط',media_kind:'video',
       post_type_name:'Reels',post_width:1080,post_height:1920,platform_id:id(101),platform_name:'Instagram',platform_code:'instagram',
       scheduled_on:'2026-12-01',caption:'كابشن الأجندة',hashtags:'#MZJ'},
     {line_id:lineB,product_id:productB,post_type_id:postPhoto,task_id:taskB,client_key:id(201),
-      task_no:'TSK-000225',task_name:'صورة',requirement_number:2,idea_name:'صورة سيارة',media_kind:'image',
+      task_no:'TSK-000225',task_name:'صورة',requirement_number:2,idea_name:'صورة سيارة',product_idea:'إبراز قصة البراند: التاريخ والأقدمية',media_kind:'image',
       post_type_name:'Post',post_width:1080,post_height:1350,platform_id:id(102),platform_name:'Instagram',platform_code:'instagram',
       scheduled_on:'2026-12-02',caption:'صورة جديدة',hashtags:'#عرض'},
     {line_id:lineC,product_id:productC,post_type_id:null,task_id:taskB,client_key:id(202),
@@ -74,6 +74,11 @@ const sql = async (parts, ...args) => {
   assert.equal(first.totals.waiting,1,'missing file does not block agenda sync');
   assert.equal(first.totals.incomplete,1,'missing post type is not guessed');
   assert.equal(first.entries[0].ideaCode,'V01','strategy idea code comes from immutable assignment marker');
+  assert.equal(first.entries[0].ideaName,'فيديو سيارة','the existing generic title is unchanged');
+  assert.equal(first.entries[0].productIdea,'عملية التمويل: حاسبة التقسيط','exact Marketing product_idea sent');
+  assert.equal(first.entries[1].productIdea,'عملية التمويل: حاسبة التقسيط','all platform slots for the product share its exact idea');
+  assert.equal(first.entries[2].productIdea,'إبراز قصة البراند: التاريخ والأقدمية');
+  assert(calls.some(call=>call.q.includes('i.idea as product_idea')),'read the existing idea text, not a new business source');
   assert.equal(first.entries[0].requestNo,'TSK-000224-01');
   assert.equal(first.entries[0].caption,'الكابشن من تجهيز النشر','prepared post copy overrides draft');
   assert.equal(first.entries[1].platform.code,'tiktok');
@@ -96,6 +101,7 @@ const sql = async (parts, ...args) => {
       assert.equal(options.headers.Authorization,`Bearer ${process.env.MZJ_STRATEGY_PUBLISH_SYNC_KEY}`);
       const payload = JSON.parse(options.body);
       assert.equal(payload.entries.length,4);
+      assert.equal(payload.entries[0].productIdea,'عملية التمويل: حاسبة التقسيط');
       return Response.json({ok:true,agendaId:planId,received:4});
     };
     const result = await lib.sendAgendaPublicationSnapshot(sql,planId);
