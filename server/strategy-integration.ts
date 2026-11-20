@@ -7,6 +7,7 @@ import { supportsWorkMedia } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
 import { createStrategyWorkflowTask, listStrategyApprovedProducts, createStrategyWorkflowAgenda, type StrategyWorkflowTaskInput, type StrategyAgendaInput } from './marketing/workflow.js';
 import { applyStrategyPlacements, deleteStrategyDraftFromIntegration, listOpenStrategyDrafts, validateStrategyPlacements, type StrategyPlacement } from './marketing/strategy-drafts.js';
+import { buildAgendaPublicationSnapshot, streamApprovedAgendaMedia, validAgendaUuid } from './marketing/agenda-publication-sync.js';
 
 // Dedicated, server-to-server API. Never proxy the ordinary Marketing API.
 // READ can only SELECT approved fields. ASSIGN can only create a workflow task.
@@ -160,17 +161,34 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
   response.setHeader('Cache-Control', 'no-store, max-age=0');
   response.setHeader('X-Content-Type-Options', 'nosniff');
   const method = String(request.method || 'GET').toUpperCase();
+  const isPublicationRead = method === 'GET' && ['publication-agenda', 'publication-file'].includes(resource);
   const isRead = method === 'GET' && ['stock', 'executors', 'catalog', 'assignments', 'idea-assignments', 'agenda-products', 'plan-drafts'].includes(resource);
   const isAssignment = method === 'POST' && resource === 'assignments';
   const isAgenda = method === 'POST' && resource === 'agenda';
   const isDraftDelete = method === 'POST' && resource === 'plan-drafts';
-  if (!isRead && !isAssignment && !isAgenda && !isDraftDelete) {
+  if (!isPublicationRead && !isRead && !isAssignment && !isAgenda && !isDraftDelete) {
     response.setHeader('Allow', ['assignments','agenda','plan-drafts'].includes(resource) ? 'GET, POST' : 'GET');
     return response.status(405).json({ ok: false, error: 'Only designated read endpoints and assignment creation are allowed' });
   }
-  if (!verifyScope(request, isRead ? 'read' : 'assign')) return response.status(401).json({ ok: false, error: 'Unauthorized integration request' });
+  const publicationKey = String(process.env.MZJ_STRATEGY_PUBLISH_SYNC_KEY || '').trim();
+  const publicationAuthorized = publicationKey.length >= 32 && publicationKey.length <= 512 &&
+    publicationKey !== String(process.env.MZJ_STRATEGY_READ_KEY || '').trim() &&
+    publicationKey !== String(process.env.MZJ_STRATEGY_ASSIGN_KEY || '').trim() &&
+    sameToken(readBearer(request), publicationKey);
+  if (isPublicationRead ? !publicationAuthorized : !verifyScope(request, isRead ? 'read' : 'assign'))
+    return response.status(401).json({ ok: false, error: 'Unauthorized integration request' });
   try {
     const sql = getSql();
+    if (isPublicationRead) {
+      const planId = typeof request.query.planId === 'string' ? request.query.planId : '';
+      if (!validAgendaUuid(planId)) return response.status(400).json({ok:false,error:'Invalid agenda identifier'});
+      if (resource === 'publication-file') {
+        const fileId = typeof request.query.fileId === 'string' ? request.query.fileId : '';
+        if (!validAgendaUuid(fileId)) return response.status(400).json({ok:false,error:'Invalid file identifier'});
+        return streamApprovedAgendaMedia(sql,planId,fileId,response);
+      }
+      return response.status(200).json(await buildAgendaPublicationSnapshot(sql,planId));
+    }
     if (isRead && resource === 'agenda-products') {
       const actorId=String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID||'').trim();
       if(!isUuid(actorId))return response.status(503).json({ok:false,error:'Integration user is not configured'});

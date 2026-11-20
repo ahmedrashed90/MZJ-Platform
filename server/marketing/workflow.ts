@@ -20,6 +20,7 @@ import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingPro
   saveStrategyDraftEntry, saveStrategyDraftEntryDates, saveStrategyDraftSettings, deleteStrategyDraft, submitStrategyDraft, linkStrategyCampaign, type StrategyDraftDeps } from './strategy-drafts.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
+import { sendAgendaPublicationSnapshot } from './agenda-publication-sync.js';
 
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
@@ -3270,6 +3271,13 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_delete_campaign' || action === 'work_delete_plan') result = await deleteWorkflowPlan(sql, user, id(body.id));
     else if (action === 'work_delete_task') result = await deleteWorkflowTask(sql, user, id(body.id));
     else if (action === 'work_save_product_draft') result = await saveProductDraft(sql, user, body);
+    else if (action === 'work_sync_agenda_strategy') {
+      if (!hasPermission(user,'marketing.publish_prep.manage') && !(await canReviewPlan(sql,user))) throw new Error(W.denied);
+      const agendaId = id(body.planId);
+      const visible = await planLines(sql,user,agendaId);
+      if (!visible.length || visible[0].kind !== 'agenda') throw new Error(W.notFound);
+      result = await sendAgendaPublicationSnapshot(sql,agendaId);
+    }
     else if (action === 'work_save_prep') result = await savePreparation(sql, user, body, services);
     else if (action === 'work_reset_publication') result = await resetPublicationAfterCheck(sql, user, body);
     else if (action === 'work_publish') result = await publishTarget(sql, user, body, services);

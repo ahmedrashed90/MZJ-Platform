@@ -7,6 +7,7 @@ import { showDate, showRange, useWorkQuery, workPost } from '../workflow/api';
 import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
+import { AgendaSyncButton } from '../workflow/AgendaSyncButton';
 import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState, planStateLabels } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
@@ -286,6 +287,7 @@ export function MarketingDashboardPage() {
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
       {!!chooserSourceLines.length && <div className="mkw-campaign-chooser-toolbar">
         <strong>{chooserIsCampaign ? 'ملخص الحملة وجدول تجهيز المنشورات' : 'ملخص الأجندة وجدول تجهيز المنشورات'}</strong>
+        {!chooserIsCampaign && <AgendaSyncButton planId={selectPlan} canSync={Boolean(query.data?.capabilities.prepare || query.data?.canReviewPlans)}/>} 
         <button type="button" className="secondary mkw-campaign-export-pdf" title="اختر حفظ كـ PDF من نافذة الطباعة" disabled={chooserProducts.loading && !chooserProducts.data} onClick={() => {
           const first = chooserSourceLines[0];
           if (!first) return;
