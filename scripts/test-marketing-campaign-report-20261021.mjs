@@ -103,6 +103,6 @@ for (const file of ['src/marketing/components/CampaignReportPage.tsx','src/marke
 }
 const page=fs.readFileSync('src/marketing/pages/EngagementPage.tsx','utf8');
 const endpoints=fs.readFileSync('server/marketing/index.ts','utf8');
-check(page.includes('view === "report" ? <CampaignReportPage refreshToken={campaignRefreshToken} onLoadingChange={setCampaignReportLoading} />') && endpoints.includes("if(resource==='campaign_report')"),'Campaign report has standalone tab and permission-protected API');
+check(page.includes('<CampaignReportPage refreshToken={campaignRefreshToken} onLoadingChange={setCampaignReportLoading} />') && page.includes('view === "report" ? <>') && page.includes('<TikTokAdsPanel initialConnectOpen />') && endpoints.includes("if(resource==='campaign_report')"),'Campaign report has standalone tab and permission-protected API');
 check(!fs.readFileSync('server/_marketing-campaign-report.ts','utf8').slice(0,fs.readFileSync('server/_marketing-campaign-report.ts','utf8').indexOf('export async function saveCampaignReportManager')).includes('insert into marketing'),'Campaign reading does not mutate data; local manager annotation has its own permissioned route');
 console.log(`\n${passed}/${passed} unified campaign reporting contract checks passed`);

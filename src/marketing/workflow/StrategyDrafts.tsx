@@ -379,19 +379,50 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
   const platformCodes = Array.from(new Set(lines.map(adapterFor).filter(Boolean)));
   const singlePlatform = platformCodes.length === 1 ? platformCodes[0] : '';
   const platformLabel = singlePlatform ? (lines[0]?.platform_name || '') : '';
+  // Keep a complete, de-duplicated catalog across loaded periods. Adapters such as
+  // Snapchat/Windsor are date-scoped; never silently hide historical campaigns.
   const [report, setReport] = useState<CampaignReportPayload | null>(null);
+  const [oldestDate, setOldestDate] = useState(from);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const [search, setSearch] = useState(''), [selectedKey, setSelectedKey] = useState('');
   const [lineIds, setLineIds] = useState<string[]>(() => lines.filter(line => !line.strategy_campaign_link).map(line => line.id));
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    setLoading(true); setError(''); setReport(null); setOldestDate(from);
     marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom: from, dateTo: today })}`)
       .then(result => { if (active) setReport(result); })
       .catch(failure => { if (active) setError(failure instanceof Error ? failure.message : 'تعذر قراءة تقارير الحملات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [from, today]);
+  async function loadOlderCampaigns() {
+    if (historyLoading || loading) return;
+    // Request the immediately preceding calendar period without overlap or a
+    // range longer than the report API's 366-day hard limit.
+    const priorEnd = new Date(`${oldestDate}T00:00:00Z`);
+    priorEnd.setUTCDate(priorEnd.getUTCDate() - 1);
+    const priorStart = new Date(priorEnd);
+    priorStart.setUTCDate(priorStart.getUTCDate() - 365);
+    const dateFrom = priorStart.toISOString().slice(0, 10);
+    const dateTo = priorEnd.toISOString().slice(0, 10);
+    setHistoryLoading(true); setError('');
+    try {
+      const older = await marketingFetch<CampaignReportPayload>(`/api/marketing${marketingQuery({ resource: 'campaign_report', dateFrom, dateTo })}`);
+      setReport(current => current ? {
+        ...current,
+        rows: [...new Map([...older.rows, ...current.rows].map(row => [row.key, row])).values()],
+        providers: current.providers.map(provider => {
+          const previous = older.providers.find(item => item.platform === provider.platform);
+          return previous ? { ...provider, incomplete: provider.incomplete || previous.incomplete,
+            warnings: [...new Set([...provider.warnings, ...previous.warnings])],
+            status: provider.status === 'ready' || previous.status === 'ready' ? 'ready' : provider.status } : provider;
+        }),
+      } : older);
+      setOldestDate(dateFrom);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر قراءة الحملات الأقدم'); }
+    finally { setHistoryLoading(false); }
+  }
   const term = search.trim().toLocaleLowerCase();
   const rows: CampaignReportRow[] = (report?.rows || []).filter(row =>
     (!singlePlatform || String(row.platform || '').toLowerCase() === singlePlatform) &&
@@ -423,6 +454,9 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
         </tr>)}</tbody>
       </table></div>
       <label className="mkw-search"><input placeholder="ابحث باسم الحملة أو الحساب" value={search} onChange={event => setSearch(event.target.value)}/></label>
+      <p className="mkw-muted">يعرض {rows.length} حملة مطابقة من بيانات المنصات للفترة من {showDate(oldestDate)} إلى {showDate(today)}. الحملات الأقدم متاحة بالتحميل الإضافي؛ بعض المنصات لا تُرجع حملات بلا نشاط خلال الفترة.</p>
+      {report?.providers.some(provider => (!singlePlatform || provider.platform === singlePlatform) && (provider.incomplete || provider.status !== 'ready')) &&
+        <WorkAlert>بعض نتائج المنصة غير مكتملة أو الربط غير متاح. القائمة تعرض الحملات التي أعادتها المنصة فقط؛ راجع تقرير الحملات وحالة الربط.</WorkAlert>}
       {loading ? <Empty>جاري قراءة الحملات من المنصات الإعلانية…</Empty> : <div className="mkw-strategy-link-list" role="radiogroup" aria-label="حملات تقارير الحملات">
         {rows.map(row => <label key={row.key} className={row.key === selectedKey ? 'is-checked' : ''}>
           <input type="radio" name="strategy-campaign" checked={row.key === selectedKey} onChange={() => setSelectedKey(row.key)}/>
@@ -430,7 +464,10 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
         </label>)}
         {!rows.length && <Empty>{singlePlatform ? `لا توجد حملات لمنصة ${platformLabel} في تقارير الحملات.` : 'لا توجد حملات في تقارير الحملات.'}</Empty>}
       </div>}
-      <div className="mkw-actions"><button type="button" className="primary" disabled={busy || !selected || !lineIds.length} onClick={() => void save()}><LinkSimple size={17}/>ربط {lineIds.length} منشور بالحملة المختارة</button></div>
+      <div className="mkw-actions">
+        <button type="button" className="secondary" disabled={historyLoading || loading} onClick={() => void loadOlderCampaigns()}>{historyLoading ? 'جاري تحميل الحملات الأقدم…' : 'تحميل حملات أقدم'}</button>
+        <button type="button" className="primary" disabled={busy || !selected || !lineIds.length} onClick={() => void save()}><LinkSimple size={17}/>ربط {lineIds.length} منشور بالحملة المختارة</button>
+      </div>
     </div>
   </Modal>;
 }
