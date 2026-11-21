@@ -6827,3 +6827,7 @@
 .marketing-platform-config-card {min-width:0}
 .mkw-dimension-options {display:flex;flex-wrap:wrap;gap:.65rem;align-items:center}
 .mkw-dimension-options .mkw-format-chip {min-width:115px;justify-content:center}
+
+/* TikTok Ads OAuth file import is accessible from Engagement > Campaign Report. */
+.marketing-engagement-tiktok-import-action { display: flex; justify-content: flex-start; margin: 12px 0 18px; }
+.marketing-engagement-tiktok-import-action .secondary-button { display: inline-flex; align-items: center; gap: 8px; }

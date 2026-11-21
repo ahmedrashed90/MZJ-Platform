@@ -25,6 +25,7 @@ import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { CampaignReportPage } from "../components/CampaignReportPage";
+import { TikTokAdsPanel } from "../components/TikTokAdsPanel";
 import "../reporting/report.css";
 import { ConnectedAccountsOverview } from "../components/ConnectedAccountsOverview";
 import { CompactFollowerChart, TopEngagedSocialPost } from "../components/CompactFollowerChart";
@@ -234,6 +235,7 @@ export function EngagementPage() {
   const [organicRefresh, setOrganicRefresh] = useState(0);
   const [campaignRefreshToken, setCampaignRefreshToken] = useState(0);
   const [campaignReportLoading, setCampaignReportLoading] = useState(false);
+  const [tiktokAdsImportOpen, setTiktokAdsImportOpen] = useState(false);
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
@@ -610,7 +612,17 @@ export function EngagementPage() {
         <button type="button" className={view === "report" ? "active" : ""} onClick={() => changeView("report")}>تقرير الحملات</button>
       </div>
 
-      {view === "report" ? <CampaignReportPage refreshToken={campaignRefreshToken} onLoadingChange={setCampaignReportLoading} /> : view === "engagement" ? <>
+      {view === "report" ? <>
+        {hasPermission(user, 'marketing.campaign.edit') && <div className="marketing-engagement-tiktok-import-action">
+          <button type="button" className="secondary-button" aria-expanded={tiktokAdsImportOpen} onClick={() => setTiktokAdsImportOpen(open => !open)}>
+            <TiktokLogo size={18} weight="fill"/>
+            {tiktokAdsImportOpen ? 'الرجوع إلى تقرير الحملات' : 'استيراد / تجديد توكن TikTok Ads'}
+          </button>
+        </div>}
+        {tiktokAdsImportOpen && hasPermission(user, 'marketing.campaign.edit')
+          ? <TikTokAdsPanel initialConnectOpen />
+          : <CampaignReportPage refreshToken={campaignRefreshToken} onLoadingChange={setCampaignReportLoading} />}
+      </> : view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{data ? count(summary.posts) : "—"}</strong><small>من السيستم وMeta بدون تكرار</small></article>
           <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{data ? count(summary.likes) : "—"}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>

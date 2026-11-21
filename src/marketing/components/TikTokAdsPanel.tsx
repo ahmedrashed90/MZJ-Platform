@@ -60,7 +60,7 @@ function uploadTokenObject(input: unknown): Record<string, unknown> {
   return nested;
 }
 
-export function TikTokAdsPanel() {
+export function TikTokAdsPanel({ initialConnectOpen = false }: { initialConnectOpen?: boolean } = {}) {
   const { user } = useAuth();
   const canManage = hasPermission(user, 'marketing.campaign.edit');
   const canCreate = hasPermission(user, 'marketing.campaign.create');
@@ -76,7 +76,7 @@ export function TikTokAdsPanel() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [showConnect, setShowConnect] = useState(false);
+  const [showConnect, setShowConnect] = useState(initialConnectOpen);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState({ name: '', objective: 'LEAD_GENERATION', budgetMode: 'BUDGET_MODE_DAY', budget: '100' });
   const [buildStage, setBuildStage] = useState<'campaign' | 'adgroup' | 'ad'>('campaign');
