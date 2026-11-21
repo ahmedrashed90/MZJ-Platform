@@ -20,7 +20,8 @@ for(let i=0;i<20;i++) {
   const platform_name = ['انستجرام','تيك توك','سناب شات'][group];
   const platform_code = ['instagram','tiktok','snapchat'][group];
   const type = i<12 ? 'صورة تعريفي - البراند' : 'فيديو تعريفي - البراند';
-  fixture.push({id: `line-${i}`, product_id: `product-${i%6}`, idea_name: type,
+  const media_kind = i<12 ? 'image' : 'video';
+  fixture.push({id: `line-${i}`, product_id: `product-${i%6}`, idea_name: type, media_kind,
     product_idea: i<12 ? 'إبراز التاريخ - الأقدمية' : 'إبراز صفة البراند - المصداقية',
     platform_name,platform_code,post_type_name:'بوست',budget_amount: i%5===0?188:i%5===1?125:0,
     scheduled_on:'2026-11-06',published_ready:i===0,caption:'لا يظهر في ملف الملخص',hashtags:'test-hashtag'});
@@ -45,11 +46,12 @@ check('Different ideas remain distinct even when requirement title is the same',
 const plan={planName:'حملة البراند',planNo:'CMP-000012',creatorName:'منشئ الحملة',createdAt:'2026-11-01',
   fundingFrom:'2026-11-06',fundingTo:null,lines:fixture};
 const html=campaignPdfSummaryHtml(plan);
-check('Print export includes only campaign overview and one copy of each required name', () => {
+check('Print export shows media type and idea rather than the original requirement name', () => {
   assert.match(html,/المطلوبات المختلفة \(2\)/);
   assert.match(html,/الأفكار المختلفة \(2\)/);
-  assert.equal((html.match(/صورة تعريفي - البراند/g)||[]).length,1);
-  assert.equal((html.match(/فيديو تعريفي - البراند/g)||[]).length,1);
+  assert.doesNotMatch(html,/صورة تعريفي - البراند|فيديو تعريفي - البراند/);
+  assert.match(html, /<td class="schedule-product" rowspan="1">صورة<\/td>/);
+  assert.match(html, /<td class="schedule-product" rowspan="1">فيديو<\/td>/);
   assert.match(html,/تاريخ التمويل من/);assert.match(html,/تاريخ التمويل إلى/);
   assert.match(html,/ميزانية كل منصة/);assert.match(html,/إجمالي ميزانية الحملة/);
   assert.match(html,/منشئ الحملة/);assert.match(html,/CMP-000012/);

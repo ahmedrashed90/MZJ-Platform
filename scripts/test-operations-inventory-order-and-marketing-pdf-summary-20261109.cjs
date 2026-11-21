@@ -15,10 +15,10 @@ const report = fs.readFileSync('src/marketing/workflow/PlanReport.tsx','utf8');
 let count = 0;
 function check(label, task) { task(); console.log('PASS:',label); count++; }
 const sample = [
-  { id:'1', product_id:'p1', idea_name:'  إعلان تمويل — سوناتا  ', product_idea:'فكرة تمويل السيارة', platform_code:'instagram', platform_name:'انستجرام', assignee_name:'محمود', scheduled_on:'2026-11-08', budget_amount:100 },
-  { id:'2', product_id:'p1', idea_name:'إعلان تمويل - سوناتا', product_idea:'  فكرة  تمويل السيارة  ', platform_code:'tiktok', platform_name:'تيك توك', assignee_name:'بلال', scheduled_on:'2026-11-09', budget_amount:50 },
-  { id:'3', product_id:'p1', idea_name:'إعلان تمويل - سوناتا', product_idea:'فكرة تمويل السيارة', platform_code:'instagram', platform_name:'انستجرام', assignee_name:'محمود', scheduled_on:'2026-11-08', budget_amount:75 },
-  { id:'4', product_id:'p2', idea_name:'إعلان تمويل - سوناتا', product_idea:'فكرة ثانية', platform_code:'snapchat', platform_name:'سناب شات', assignee_name:'عبدالله', scheduled_on:'2026-11-10', budget_amount:20 },
+  { id:'1', product_id:'p1', media_kind:'image', idea_name:'  إعلان تمويل — سوناتا  ', product_idea:'فكرة تمويل السيارة', platform_code:'instagram', platform_name:'انستجرام', assignee_name:'محمود', scheduled_on:'2026-11-08', budget_amount:100 },
+  { id:'2', product_id:'p1', media_kind:'image', idea_name:'إعلان تمويل - سوناتا', product_idea:'  فكرة  تمويل السيارة  ', platform_code:'tiktok', platform_name:'تيك توك', assignee_name:'بلال', scheduled_on:'2026-11-09', budget_amount:50 },
+  { id:'3', product_id:'p1', media_kind:'image', idea_name:'إعلان تمويل - سوناتا', product_idea:'فكرة تمويل السيارة', platform_code:'instagram', platform_name:'انستجرام', assignee_name:'محمود', scheduled_on:'2026-11-08', budget_amount:75 },
+  { id:'4', product_id:'p2', media_kind:'image', idea_name:'إعلان تمويل - سوناتا', product_idea:'فكرة ثانية', platform_code:'snapchat', platform_name:'سناب شات', assignee_name:'عبدالله', scheduled_on:'2026-11-10', budget_amount:20 },
 ];
 check('Inventory prioritizes tajyeer=no only for active stock, not archived/all records', () => {
   assert.match(server, /const prioritizeUntajyeer = activeOnly && boolValue\(request\.query\.inventory\);/);
@@ -74,7 +74,7 @@ check('Missing or impossible scheduled dates show no invented date', () => {
 });
 check('PDF columns match request in exact RTL order, with a compact unique schedule', () => {
   const html=planPdfSummaryHtml({kind:'agenda',planName:'جدول نوفمبر',planNo:'AGD-1',lines:sample,agendaFrom:'2026-11-08',agendaTo:'2026-11-10'});
-  assert.match(html,/<th>التاريخ<\/th><th>رقم الطلب<\/th><th>المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
+  assert.match(html,/<th>التاريخ<\/th><th>رقم الطلب<\/th><th>نوع المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
   const section=html.split('<section class="schedule-section">')[1].split('</section>')[0];
   assert.equal((section.match(/<td class="schedule-dates" rowspan="/g)||[]).length,3); // three chronological days
   assert.equal((section.match(/<td class="schedule-product" rowspan="/g)||[]).length,2); // two DIFFERENT ideas
@@ -91,7 +91,7 @@ check('PDF HTML escapes user-origin product, executor and idea names', () => {
     ...sample[0],idea_name:'<script>alert(1)</script>', product_idea:'<img onerror=1>',assignee_name:'<b>محمود</b>'
   }]});
   assert.doesNotMatch(html,/<script>alert\(1\)<\/script>|<img onerror=1>|<b>محمود<\/b>/);
-  assert.match(html,/&lt;script&gt;/);assert.match(html,/&lt;img/);assert.match(html,/&lt;b&gt;/);
+  assert.doesNotMatch(html,/&lt;script&gt;/);assert.match(html,/&lt;img/);assert.match(html,/&lt;b&gt;/);
 });
 check('Both PDF exports include the exact same unique schedule, with unchanged campaign budget totals', () => {
   const agenda=planPdfSummaryHtml({kind:'agenda',planName:'أجندة',planNo:'AGD-1',lines:sample});

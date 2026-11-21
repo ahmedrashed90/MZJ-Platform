@@ -76,9 +76,28 @@ function tile(label: string, value: unknown): string {
   return `<div class="tile"><span>${htmlText(label)}</span><strong>${htmlText(value)}</strong></div>`;
 }
 
+/** Extract ONLY the idea title from strategy briefs in the compact PDF.
+ * Brief instructions, execution style and approved vehicle descriptions stay
+ * in the source record and in full-detail views; they are not printed here.
+ * Multiple embedded briefs remain separate titles, without their metadata.
+ */
+export function compactPublishingIdeaTitle(value: unknown): string {
+  const raw = String(value ?? '').replace(/\r\n?/g, '\n').trim();
+  if (!raw) return '—';
+  const briefParts = raw.split(/بريف\s+إبداعي\s*[:：]/gu);
+  const candidates = briefParts.length > 1 ? briefParts.slice(1) : [raw];
+  const titles = candidates.map(part => {
+    const details = /(?:^|\s)(?:أسلوب\s+التنفيذ|السيارات\s+المعتمدة|التصور\s+البصري|التصميم\s+صورة\s+بصورة|تعليمات\s+التنفيذ|الهوك|النص\s*\/\s*الفويس\s*أوفر|الفويس\s*أوفر|السيناريو\s+التفصيلي|الجمهور\s+المستهدف|الكابشن|الهاشتاج|الهاشتاق)\s*[:：]/u.exec(part);
+    const heading = (details ? part.slice(0, details.index) : part).replace(/\s+/g, ' ').trim();
+    return heading.replace(/^(?:اسم\s+الفكرة|الفكرة)\s*[:：]\s*/u, '').trim();
+  }).filter(Boolean);
+  return [...new Set(titles)].join('\n') || '—';
+}
+
 export type PlanPdfScheduleRow = {
   product: string;
   idea: string;
+  mediaKind: WorkPlanLine['media_kind'] | null;
   /** Date, executor, platform and request must remain paired for each scheduled entry. */
   publications: Array<{ platform: string; date: string | null; executor: string; requestNo: string; productId: string }>;
 };
@@ -92,11 +111,12 @@ export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdf
   const grouped = new Map<string, Group>();
   for (const line of lines) {
     const product = String(line.idea_name || '').trim() || 'مطلوب بدون اسم';
-    const idea = String(line.product_idea || '').trim() || '—';
-    const key = `${campaignSummaryNameKey(product)}\u0000${campaignSummaryNameKey(idea)}`;
+    const idea = compactPublishingIdeaTitle(line.product_idea);
+    const mediaKind = line.media_kind === 'image' || line.media_kind === 'video' ? line.media_kind : null;
+    const key = `${campaignSummaryNameKey(product)}\u0000${campaignSummaryNameKey(idea)}\u0000${mediaKind || ''}`;
     let group = grouped.get(key);
     if (!group) {
-      group = { product, idea, publications: [], publicationKeys: new Set() };
+      group = { product, idea, mediaKind, publications: [], publicationKeys: new Set() };
       grouped.set(key, group);
     }
     const platform = String(line.platform_name || '').trim() || 'منصة غير محددة';
@@ -114,7 +134,7 @@ export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdf
     }
   }
   return [...grouped.values()].map(group => ({
-    product: group.product, idea: group.idea,
+    product: group.product, idea: group.idea, mediaKind: group.mediaKind,
     publications: group.publications.sort((a, b) =>
       (a.date || '9999-12-31').localeCompare(b.date || '9999-12-31') ||
       a.platform.localeCompare(b.platform, 'ar') || a.executor.localeCompare(b.executor, 'ar')),
@@ -133,6 +153,7 @@ export type PlanPdfChronologicalRow = {
   date: string | null;
   product: string;
   idea: string;
+  mediaKind: WorkPlanLine['media_kind'] | null;
   executors: string[];
   platforms: string[];
   /** Unique products of this row: رقم الطلب + its product for readiness. */
@@ -152,7 +173,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
       let row = dayRows.get(dayKey);
       if (!row) {
         row = {
-          date: item.date, product: group.product, idea: group.idea,
+          date: item.date, product: group.product, idea: group.idea, mediaKind: group.mediaKind,
           executors: [], platforms: [], requests: [], executorKeys: new Set(), platformKeys: new Set(), requestKeys: new Set(),
         };
         dayRows.set(dayKey, row);
@@ -175,7 +196,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
     }
     for (const day of dayRows.values()) {
       chronological.push({
-        date: day.date, product: day.product, idea: day.idea,
+        date: day.date, product: day.product, idea: day.idea, mediaKind: day.mediaKind,
         executors: day.executors, platforms: day.platforms, requests: day.requests,
       });
     }
@@ -225,7 +246,7 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
     ? row.requests.map(request => `<div class="schedule-meta-value">${htmlText(readinessOf(request.productId))}</div>`).join('') : '—'}</td>`;
   const sameContent = (a: PlanPdfChronologicalRow, b: PlanPdfChronologicalRow) =>
     campaignSummaryNameKey(a.product) === campaignSummaryNameKey(b.product) &&
-    campaignSummaryNameKey(a.idea) === campaignSummaryNameKey(b.idea);
+    campaignSummaryNameKey(a.idea) === campaignSummaryNameKey(b.idea) && a.mediaKind === b.mediaKind;
   const scheduleTableRows = `<tbody class="schedule-chronological">${chronologicalRows.map((row, index) => {
     const previous = chronologicalRows[index - 1];
     const dayStarts = !previous || row.date !== previous.date;
@@ -239,8 +260,11 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
       ? `<td class="schedule-dates" rowspan="${spanUntil(next => next.date === row.date)}">${htmlText(row.date ? summaryDate(row.date) : 'غير محدد')}</td>`
       : '';
     const contentSpan = contentStarts ? spanUntil(next => sameContent(row, next)) : 0;
+    const ideaTitles = row.idea.split('\n').map(htmlText);
+    const displayIdea = ideaTitles.length === 1 ? ideaTitles[0] : ideaTitles.map(title => `<div class="schedule-idea-title">${title}</div>`).join('');
+    const mediaLabel = row.mediaKind === 'video' ? 'فيديو' : row.mediaKind === 'image' ? 'صورة' : '—';
     const contentCells = contentStarts
-      ? `<td class="schedule-product" rowspan="${contentSpan}">${htmlText(row.product)}</td><td class="schedule-idea" rowspan="${contentSpan}">${htmlText(row.idea)}</td>`
+      ? `<td class="schedule-product" rowspan="${contentSpan}">${mediaLabel}</td><td class="schedule-idea" rowspan="${contentSpan}">${displayIdea}</td>`
       : '';
     return `<tr>${dateCell}${requestCell(row)}${contentCells}<td class="schedule-executors">${uniqueNames(row.executors)}</td>${readinessCell(row)}<td class="schedule-platforms">${uniqueNames(row.platforms)}</td></tr>`;
   }).join('')}</tbody>`;
@@ -289,6 +313,7 @@ th{background:#f3e8dc}tr{break-inside:avoid}.money{font-weight:800;white-space:n
 .schedule-section td.schedule-requests{font-size:8pt;font-variant-numeric:tabular-nums;overflow-wrap:normal;white-space:nowrap}
 .schedule-section td.schedule-readiness{text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
 .schedule-unique-name,.schedule-meta-value{line-height:1.5;padding:2px 0}
+.schedule-idea-title+.schedule-idea-title{margin-top:4px;padding-top:4px;border-top:1px dotted #e9ddd5}
 .schedule-unique-name+.schedule-unique-name,.schedule-meta-value+.schedule-meta-value{border-top:1px dotted #e9ddd5}
 .schedule-note{margin:0 0 6px;color:#80665c;font-size:8pt}
 ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1px solid #eee3da;overflow-wrap:anywhere;break-inside:avoid}
@@ -302,7 +327,7 @@ ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1p
 ${campaign ? `<section><h2>الهدف من الحملة حسب المنصة</h2><table><thead><tr><th>المنصة</th><th>الأهداف</th></tr></thead><tbody>${goalTableRows || '<tr><td colspan="2">لا توجد منصات</td></tr>'}</tbody></table></section>` : ''}
 <section class="schedule-section"><h2>جدول النشر المختصر (${scheduleRows.length})</h2>
 <p class="schedule-note">المطلوبات المختلفة (${requirements.length}) · الأفكار المختلفة (${summary.ideas.length}) — مرتب زمنيًا حسب السنة والشهر واليوم؛ لا يتكرر التاريخ داخل اليوم، ولا المنفذ أو المنصة داخل المنتج والفكرة في اليوم نفسه.</p>
-<table><thead><tr><th>التاريخ</th><th>رقم الطلب</th><th>المنتج</th><th>الفكرة</th><th>المنفذ</th><th>الجاهزية</th><th>المنصة</th></tr></thead>
+<table><thead><tr><th>التاريخ</th><th>رقم الطلب</th><th>نوع المنتج</th><th>الفكرة</th><th>المنفذ</th><th>الجاهزية</th><th>المنصة</th></tr></thead>
 ${chronologicalRows.length ? scheduleTableRows : '<tbody><tr><td colspan="7">لا توجد منشورات</td></tr></tbody>'}</table></section>
 
 </main></body></html>`;

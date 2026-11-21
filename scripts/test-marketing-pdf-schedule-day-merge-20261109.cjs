@@ -8,7 +8,7 @@ const load = createLoader(process.cwd(), {
 const { planPdfScheduleRows, planPdfSummaryHtml } = load('src/marketing/workflow/campaignPdfExport.ts');
 const entry = (date, platform, executor, idea = 'إبراز المزايا', product = 'سوناتا 2026') => ({
   id:`${date}-${platform}-${executor}`, scheduled_on:date, platform_name:platform,
-  platform_code:platform, assignee_name:executor, product_idea:idea, idea_name:product,
+  platform_code:platform, assignee_name:executor, product_idea:idea, idea_name:product, media_kind:'image',
 });
 let passed = 0;
 function test(name, fn){ fn(); console.log('PASS:',name); passed++; }
@@ -48,7 +48,7 @@ test('The same executor and platform can appear once again on a DIFFERENT day',(
   assert.equal(count(html,/class="schedule-dates"/g),2);
   assert.equal(count(html,/>محمود<\/div>/g),2);
   assert.equal(count(html,/>انستجرام<\/div>/g),2);
-  assert.match(html,/<td class="schedule-product" rowspan="2">سوناتا 2026<\/td>/);
+  assert.match(html,/<td class="schedule-product" rowspan="2">صورة<\/td>/);
 });
 
 test('The same date in distinct product/idea groups merges date only, keeping the products separate',()=>{

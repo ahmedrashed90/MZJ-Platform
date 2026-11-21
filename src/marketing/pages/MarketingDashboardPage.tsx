@@ -14,6 +14,7 @@ import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
+import { publishingDashboardEntries } from '../workflow/publishingPriority';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
@@ -103,6 +104,7 @@ export function MarketingDashboardPage() {
     }
     return grouped;
   }, [lines]);
+  const publishingEntries = useMemo(() => publishingDashboardEntries(groups, drafts), [groups, drafts]);
 
   function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = [], capture = false) {
     setCaptureOnly(capture);
@@ -185,8 +187,9 @@ export function MarketingDashboardPage() {
           <span className="mkw-column-count">{groups.size + drafts.length}</span>
         </button></header>
         {publishingOpen && <div id="mkw-publishing-body" className="mkw-column-body mkw-publish-column-body">{!groups.size && !drafts.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
-          {drafts.map(draft => <StrategyDraftCard key={draft.id} draft={draft} onOpen={() => setDraftOpenId(draft.id)} onReport={() => setDraftReportId(draft.id)}/>)}
-          {[...groups.entries()].map(([id, group]) => {
+          {publishingEntries.map(entry => {
+            if (entry.source === 'draft') return <StrategyDraftCard key={entry.id} draft={entry.draft} onOpen={() => setDraftOpenId(entry.id)} onReport={() => setDraftReportId(entry.id)}/>;
+            const { id, group } = entry;
             const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
             const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
             const activated = !!group[0].activated_at;

@@ -9,7 +9,7 @@ const { planPdfScheduleRows, planPdfChronologicalRows, planPdfSummaryHtml } = lo
 let passed=0;
 function test(name,fn){fn();console.log('PASS:',name);passed++}
 const entry=(date, product, idea, platform='انستجرام', executor='محمود')=>({
-  id: `${date}-${product}-${platform}`, scheduled_on:date, idea_name:product, product_idea:idea,
+  id: `${date}-${product}-${platform}`, scheduled_on:date, idea_name:product, product_idea:idea, media_kind:'image',
   platform_name:platform, platform_code:platform, assignee_name:executor, budget_amount:10,
 });
 const sample=[
@@ -60,7 +60,7 @@ test('Same product/idea on consecutive dates merges adjacent content cells',()=>
   const html=section([
     entry('2026-11-08','سوناتا','فكرة A'), entry('2026-11-09','سوناتا','فكرة A'),
   ]);
-  assert.match(html,/<td class="schedule-product" rowspan="2">سوناتا<\/td><td class="schedule-idea" rowspan="2">فكرة A<\/td>/);
+  assert.match(html,/<td class="schedule-product" rowspan="2">صورة<\/td><td class="schedule-idea" rowspan="2">فكرة A<\/td>/);
   assert.deepEqual(dates(html),['2026-11-08','2026-11-09']);
 });
 test('Nonadjacent content groups remain identified and chronological (no misleading spanning)',()=>{
@@ -69,7 +69,7 @@ test('Nonadjacent content groups remain identified and chronological (no mislead
     entry('2026-11-07','أكسنت','فكرة B'),
   ]);
   assert.deepEqual(dates(html),['2026-11-05','2026-11-07','2026-12-05']);
-  assert.equal(count(html,/<td class="schedule-product" rowspan="1">سوناتا<\/td>/g),2);
+  assert.equal(count(html,/<td class="schedule-idea" rowspan="1">فكرة A<\/td>/g),2);
 });
 test('Repeated platforms and executors in a day remain unique within each product/idea',()=>{
   const html=section([
