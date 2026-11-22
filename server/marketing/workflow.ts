@@ -21,6 +21,7 @@ import { decorateStrategyPlanLines, decorateStrategyProducts, strategyPendingPro
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
 import { strategyCodeMap, calculateIdeaTracking, type StrategyAssignedItem, type StrategyMarker } from '../../shared/marketing-idea-identity.js';
 import { sendAgendaPublicationSnapshot } from './agenda-publication-sync.js';
+import { getAgendaIdeaSchedule, saveAgendaIdeaSchedule } from './agenda-idea-schedule.js';
 
 type Sql = ReturnType<typeof getSql>;
 type Row = Record<string, any>;
@@ -2387,6 +2388,8 @@ async function planDetails(sql: Sql, user: SessionUser, planId: string) {
     // without changing their publication rows or approval history.
     canEditFunding: plan.kind === 'campaign' && plan.created_by === user.id,
     canEditAgendaWindow: plan.kind === 'agenda' && plan.created_by === user.id,
+    canRescheduleIdeas: plan.kind === 'agenda' && ['publishing','published'].includes(plan.review_status) &&
+      hasPermission(user, 'marketing.agenda.edit') && (plan.created_by === user.id || await canReviewPlan(sql,user)),
     funding_from: plan.funding_from || (plan.kind === 'campaign' ? lines.map(l => workDate(l.scheduled_on)).sort()[0] : null),
     funding_to: plan.funding_to || null,
     canEdit:plan.created_by === user.id && ['in_progress','revision','submitted'].includes(plan.review_status) && !plan.activated_at,
@@ -3164,6 +3167,8 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       result = await strategyDraftsForDashboard(sql, user);
     } else if (resource === 'work_strategy_draft') {
       result = await strategyDraftDetail(sql, user, id(request.query.id));
+    } else if (resource === 'work_agenda_idea_dates') {
+      result = await getAgendaIdeaSchedule(sql, user, id(request.query.planId), await canReviewPlan(sql,user));
     } else if (resource === 'work_plan_products') {
       result = await planProductRows(sql, user, id(request.query.planId));
     } else if (resource === 'work_strategy_report') {
@@ -3258,6 +3263,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_update_plan') result = await updatePlanRows(sql, user, body);
     else if (action === 'work_update_plan_funding') result = await updatePlanFunding(sql, user, body);
     else if (action === 'work_update_plan_agenda_window') result = await updatePlanAgendaWindow(sql, user, body);
+    else if (action === 'work_reschedule_agenda_ideas') result = await saveAgendaIdeaSchedule(sql, user, id(body.planId), await canReviewPlan(sql,user), body.changes);
     else if (action === 'work_save_plan_post_url') result = await savePlanPostUrl(sql, user, body);
     else if (action === 'work_save_prep_campaign_link') result = await savePrepCampaignLink(sql, user, body);
     else if (action === 'work_restore_plan_post_url') result = await restorePlanPostUrl(sql, user, body);

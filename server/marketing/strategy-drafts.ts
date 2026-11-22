@@ -355,32 +355,76 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
     from marketing.strategy_plan_draft_entries e join marketing.strategy_plan_drafts d on d.id=e.draft_id
     left join marketing.work_plans p on p.id=d.work_plan_id
     where e.item_id=any(${itemIds}::uuid[]) order by e.added_at` : [];
-  const byItem = new Map<string, any>();
-  for (const row of placements) if (!row.plan_deleted || !byItem.has(row.item_id)) byItem.set(row.item_id, row);
+  // A product can belong to an agenda AND a campaign: never let the last
+  // placement erase the agenda order number or the independent funding date.
+  // Also read submitted plan lines as a grounded fallback for older products.
+  const linked = ready && itemIds.length ? await sql<any[]>`select l.product_id::text as item_id,
+      p.kind,p.name as draft_name,p.plan_no,p.review_status as plan_status,
+      case when p.kind='agenda' then l.scheduled_on::text else null end as agenda_publish_on,
+      case when p.kind='campaign' then meta.funding_on::text else null end as campaign_funding_on
+    from marketing.work_plan_items l join marketing.work_plans p on p.id=l.plan_id
+    left join marketing.strategy_plan_line_meta meta on meta.line_id=l.id
+    where l.product_id=any(${itemIds}::uuid[]) and l.is_deleted=false and p.is_deleted=false
+      and p.kind in ('agenda','campaign') order by p.created_at desc,l.id` : [];
+  const placementsByItem = new Map<string, any[]>();
+  for (const placement of placements) {
+    if (placement.plan_deleted || placement.draft_status === 'archived') continue;
+    const found = placementsByItem.get(placement.item_id) || [];
+    found.push(placement);
+    placementsByItem.set(placement.item_id, found);
+  }
+  const linkedByItem = new Map<string, any[]>();
+  for (const line of linked) {
+    const found = linkedByItem.get(line.item_id) || [];
+    found.push(line);
+    linkedByItem.set(line.item_id, found);
+  }
   // «الجاهزية» per idea of the assignment, same formula as the task readiness.
   const readiness = new Map<string, number>();
   if (loadItems) for (const taskId of [...new Set(rows.map(row => String(row.task_id)))]) {
     for (const item of await loadItems(sql, taskId)) readiness.set(String(item.id), workItemReadiness(item));
   }
   return { ok: true, ready, rows: rows.map((row, index) => {
-    const placement = byItem.get(row.item_id);
+    const itemPlacements = placementsByItem.get(row.item_id) || [];
+    const itemLinks = linkedByItem.get(row.item_id) || [];
     const marker = row.marker || {};
     const keys = list(marker.clientKeys), codes = list(marker.itemIdeaCodes);
     const position = keys.indexOf(row.client_key);
     const ideaCode = position >= 0 ? String(codes[position] || '') : '';
     const reqNo = Number(row.requirement_number || 0);
-    const kind = placement?.kind || '';
+    const orderRefs = new Map<string, { number: string; name: string; kind: string; status: string }>();
+    for (const record of [...itemPlacements, ...itemLinks]) {
+      const number = String(record.plan_no || '').trim();
+      if (!number) continue;
+      const kind = String(record.kind || '');
+      const key = `${kind}:${number}`;
+      if (!orderRefs.has(key)) orderRefs.set(key, { number, kind,
+        name: String(record.draft_name || ''),
+        status: String(record.draft_status === 'draft' ? 'draft' : record.plan_status || '') });
+    }
+    const orders = [...orderRefs.values()].sort((a,b) => (a.kind === 'agenda' ? 0 : 1) - (b.kind === 'agenda' ? 0 : 1));
+    // The approved plan line is authoritative for publication date, the
+    // independent strategy campaign entry/line-meta for financing date.
+    const publishDatesFromLines = itemLinks.filter(link => link.kind === 'agenda').map(link => day(link.agenda_publish_on)).filter(Boolean);
+    const publishDates = [...new Set((publishDatesFromLines.length ? publishDatesFromLines :
+      itemPlacements.filter(link => link.kind === 'agenda').map(link => day(link.scheduled_on) || day(link.target_on))).filter(Boolean))].sort();
+    const fundingDates = [...new Set([
+      ...itemPlacements.filter(link => link.kind === 'campaign').map(link => day(link.target_on)),
+      ...itemLinks.filter(link => link.kind === 'campaign').map(link => day(link.campaign_funding_on)),
+    ].filter(Boolean))].sort();
+    const mainOrder = orders[0];
+    const firstPlacement = itemPlacements.find(link => link.marketing_category) || null;
     return {
       serial: index + 1, itemId: row.item_id, taskId: row.task_id, ideaCode,
-      createdAt: row.task_created_at, category: placement?.marketing_category || '',
+      createdAt: row.task_created_at, category: firstPlacement?.marketing_category || '',
       taskName: row.task_name, mediaKind: row.media_kind, itemStatus: row.item_status,
       assignmentNo: row.task_no && reqNo ? `${row.task_no}-${String(reqNo).padStart(2, '0')}` : row.task_no,
-      taskNo: row.task_no, orderNo: placement?.plan_no || '', orderName: placement?.draft_name || '', orderKind: kind,
-      orderStatus: placement ? (placement.draft_status === 'draft' || placement.draft_status === 'archived' ? placement.draft_status : placement.plan_status || 'submitted') : '',
+      taskNo: row.task_no, orderNo: mainOrder?.number || '', orderName: mainOrder?.name || '', orderKind: mainOrder?.kind || '',
+      orderStatus: mainOrder?.status || '', orderRefs: orders,
       assigneeName: row.assignee_name, ideaName: row.idea_name, readiness: readiness.get(String(row.item_id)) ?? (row.item_status === 'approved' ? 100 : 0),
       dueOn: day(row.due_on), approvedOn: row.approved_at ? saudiCalendarDay(new Date(row.approved_at)) : null,
-      publishOn: placement ? (day(placement.scheduled_on) || (kind === 'agenda' ? day(placement.target_on) : null)) : null,
-      fundingOn: kind === 'campaign' ? day(placement?.target_on) : null,
+      publishOn: publishDates[0] || null, publishDates,
+      fundingOn: fundingDates[0] || null, fundingDates,
     };
   }) };
 }

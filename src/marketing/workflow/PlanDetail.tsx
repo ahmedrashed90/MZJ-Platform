@@ -6,6 +6,7 @@ import { showDate, useWorkQuery, workPost, type WorkMeta } from './api';
 import { availablePlanPostTypes } from './planComposer';
 import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import { CampaignOverview } from './campaignOverview';
+import { AgendaIdeaDateEditor } from './AgendaIdeaDateEditor';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
@@ -18,7 +19,7 @@ type PlanState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'publ
 type Plan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign'; created_by: string; creator_name?: string; created_at: string;
   review_status: PlanState; review_note: string; review_note_category_id?: string | null; review_revision: number; status: PlanState;
-  readiness: number; canReview: boolean; canEditGoals?: boolean; platform_goals?: CampaignPlatformGoals[] | null; canEdit: boolean; canEditFunding?: boolean; canEditAgendaWindow?: boolean; canSaveLinks: boolean; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null; activated_at?: string | null;
+  readiness: number; canReview: boolean; canEditGoals?: boolean; platform_goals?: CampaignPlatformGoals[] | null; canEdit: boolean; canEditFunding?: boolean; canEditAgendaWindow?: boolean; canSaveLinks: boolean; canRescheduleIdeas?: boolean; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null; activated_at?: string | null;
 };
 type PlanData = { plan: Plan; lines: WorkPlanLine[]; history: Array<{ action: string; note: string; actor_name: string; created_at: string; category_name: string }> };
 type EditableLine = { id: string; date: string; productId: string; postTypeId: string; budget: string };
@@ -160,6 +161,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
           </div>}
         </section>}
       </>}
+      {plan!.kind === 'agenda' && plan!.canRescheduleIdeas && <AgendaIdeaDateEditor planId={id} onChanged={() => { void query.reload(); onChanged?.(); }}/>}
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>

@@ -12,7 +12,6 @@ import './strategyDrafts.css';
 /** Strategy flow (second flow). Native agenda/campaign screens are unchanged;
  * these components only render drafts created from «إنشاء التكليفات». */
 import { StrategyProductsTable, type StrategyDraft, type StrategyDraftIdea, type StrategyDraftPlatform } from './StrategyProductsTable';
-import { groupStrategyDraftIdeas } from './strategyDraftGrouping';
 export { PlanProductsSection, PlanProductsTable, StrategyProductsTable } from './StrategyProductsTable';
 export type { StrategyDraft, StrategyDraftIdea, StrategyDraftPlatform } from './StrategyProductsTable';
 
@@ -109,8 +108,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !platformsWithoutGoal.length);
   const term = search.trim().toLocaleLowerCase('ar');
   const visibleIdeas = ideas.filter(idea => (filter === 'all' || (filter === 'ready' ? idea.ready : !idea.ready)) &&
-    (!term || [idea.ideaName, idea.ideaCode, idea.assignmentNo, idea.taskNo, idea.category].some(value => String(value || '').toLocaleLowerCase('ar').includes(term))));
-  const groupedIdeas = groupStrategyDraftIdeas(visibleIdeas);
+    (!term || [idea.ideaName, idea.ideaCode, idea.assignmentNo, idea.taskNo].some(value => String(value || '').toLocaleLowerCase('ar').includes(term))));
   const selectedIndex = ideas.findIndex(idea => idea.id === selectedId);
   const producedIds = new Set(selected?.formats.map(format => format.id) || []);
   const rows = selected ? catalog.map(platform => ({ ...platform, postTypes: platform.postTypes.filter(type => type.mediaKinds.includes(selected.mediaKind)) })) : [];
@@ -255,18 +253,19 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
               {([['all', `الكل (${ideas.length})`], ['incomplete', `غير مكتمل (${ideas.filter(idea => !idea.ready).length})`], ['ready', `مكتمل (${draft.readyCount})`]] as const).map(([key, label]) =>
                 <button key={key} type="button" role="tab" aria-selected={filter === key} onClick={() => setFilter(key)}>{label}</button>)}
             </div>
-            {groupedIdeas.map(group => <section className="mkw-sd-idea-category" key={group.category} aria-label={`تصنيف ${group.category}`}>
-              <h3 className="mkw-sd-idea-category-title">{group.category} <span>({group.entries.length})</span></h3>
-              <div className="mkw-sd-idea-category-list">{group.entries.map(idea => <button type="button" key={idea.id}
-                className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
-                title={`${idea.ideaName} — ${idea.ready ? 'جاهزة' : 'غير مكتملة'}`}
-                aria-label={`${idea.ideaName}، ${idea.ready ? 'جاهزة' : 'غير مكتملة'}`}
-                onClick={() => selectIdea(idea.id)}>
-                <span className="mkw-sd-idea-index">{ideas.indexOf(idea) + 1}</span>
-                <span className="mkw-sd-idea-body"><strong>{idea.ideaName}</strong></span>
-                {idea.ready ? <CheckCircle size={18} weight="fill" className="mkw-sd-ok"/> : <WarningCircle size={18} weight="fill" className="mkw-sd-warn"/>}
-              </button>)}</div>
-            </section>)}
+            {visibleIdeas.map(idea => <button type="button" key={idea.id} className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
+              onClick={() => selectIdea(idea.id)}>
+              <span className="mkw-sd-idea-index">{ideas.indexOf(idea) + 1}</span>
+              <span className="mkw-sd-idea-body">
+                <strong>{idea.ideaName}</strong>
+                <small>{mediaName(idea.mediaKind)} · <span dir="ltr">{idea.assignmentNo}</span></small>
+                <span className="mkw-sd-idea-flags">
+                  <span className={idea.configured ? 'is-ok' : 'is-wait'}>{idea.configured ? `${idea.platforms.length} منصة` : 'الإعداد ناقص'}</span>
+                  <span className={idea.executed ? 'is-ok' : 'is-info'}>{idea.executed ? 'منفذة' : 'لم تُنفذ بعد'}</span>
+                </span>
+              </span>
+              {idea.ready ? <CheckCircle size={18} weight="fill" className="mkw-sd-ok"/> : <WarningCircle size={18} weight="fill" className="mkw-sd-warn"/>}
+            </button>)}
             {!visibleIdeas.length && <Empty>لا توجد أفكار في هذا الفلتر</Empty>}
           </aside>
           <section className="mkw-strategy-draft-panel">
@@ -477,15 +476,17 @@ type StrategyProductRow = {
   serial: number; itemId: string; ideaCode: string; createdAt: string; category: string; taskName: string; mediaKind: 'image' | 'video';
   itemStatus: string; assignmentNo: string; taskNo: string; orderNo: string; orderName: string; orderKind: string; orderStatus: string;
   assigneeName: string; ideaName: string; readiness: number; dueOn: string | null; approvedOn: string | null; publishOn: string | null; fundingOn: string | null;
+  publishDates?: string[]; fundingDates?: string[];
+  orderRefs?: Array<{ number: string; name: string; kind: string; status: string }>;
 };
 /** Products tab «منتجات الاستراتيجية» with the requested tracking columns. */
 export function StrategyProductsTab({ search }: { search: string }) {
   const query = useWorkQuery<{ ready: boolean; rows: StrategyProductRow[] }>('strategy_products');
   const term = search.trim().toLocaleLowerCase();
-  const rows = (query.data?.rows || []).filter(row => !term || `${row.ideaName} ${row.ideaCode} ${row.taskNo} ${row.orderNo} ${row.orderName} ${row.assigneeName} ${row.category}`.toLocaleLowerCase().includes(term));
+  const rows = (query.data?.rows || []).filter(row => !term || `${row.ideaName} ${row.ideaCode} ${row.taskNo} ${row.orderNo} ${(row.orderRefs || []).map(order=>order.number).join(" ")} ${row.orderName} ${row.assigneeName} ${row.category}`.toLocaleLowerCase().includes(term));
   return <>
     <WorkAlert>{query.error}</WorkAlert>
-    <div className="mkw-table-wrap mkw-strategy-products-table"><table>
+    <div className="mkw-table-wrap mkw-strategy-products-table mkw-strategy-products-tracking-table"><table>
       <thead>
         <tr><th rowSpan={2}>م</th><th rowSpan={2}>تاريخ الإنشاء</th><th colSpan={7}>البيان</th><th colSpan={4}>التراكينج</th></tr>
         <tr><th>التصنيف</th><th>المطلوب</th><th>رقم التكليف</th><th>رقم التاسك</th><th>رقم الطلب</th><th>اسم المنفذ</th><th>اسم الفكرة</th><th>الجاهزية</th><th>تاريخ التنفيذ</th><th>تاريخ النشر</th><th>تاريخ التمويل</th></tr>
@@ -497,13 +498,15 @@ export function StrategyProductsTab({ search }: { search: string }) {
         <td>{mediaName(row.mediaKind)}</td>
         <td dir="ltr">{row.assignmentNo || '—'}</td>
         <td dir="ltr">{row.taskNo || '—'}</td>
-        <td>{row.orderNo ? <><span dir="ltr">{row.orderNo}</span><small className="mkw-muted" style={{ display: 'block' }}>{row.orderKind === 'campaign' ? W.campaign : W.agenda}: {row.orderName}{row.orderStatus === 'draft' ? ' (مسودة)' : row.orderStatus === 'archived' ? ' (مؤرشفة)' : ''}</small></> : '—'}</td>
+        <td>{(row.orderRefs || []).length ? row.orderRefs!.map(order => <div key={`${order.kind}:${order.number}`} className="mkw-sp-order-ref">
+          <span dir="ltr">{order.number}</span><small className="mkw-muted">{order.kind === 'campaign' ? W.campaign : W.agenda}: {order.name}</small>
+        </div>) : row.orderNo || '—'}</td>
         <td>{row.assigneeName || '—'}</td>
         <td>{row.ideaName}{row.ideaCode && <small className="mkw-muted" style={{ display: 'block' }}>كود الفكرة: <span dir="ltr">{row.ideaCode}</span></small>}</td>
         <td className="mkw-sp-readiness"><span><b style={{ width: `${Math.max(0, Math.min(100, row.readiness || 0))}%` }}/></span><small>{Math.round(row.readiness || 0)}%</small></td>
         <td>{row.approvedOn ? showDate(row.approvedOn) : <span className="mkw-muted">لم يُنفذ (التسليم {showDate(row.dueOn)})</span>}</td>
-        <td>{showDate(row.publishOn)}</td>
-        <td>{showDate(row.fundingOn)}</td>
+        <td>{(row.publishDates?.length ? row.publishDates : row.publishOn ? [row.publishOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.publishDates?.length && !row.publishOn && '—'}</td>
+        <td>{(row.fundingDates?.length ? row.fundingDates : row.fundingOn ? [row.fundingOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.fundingDates?.length && !row.fundingOn && '—'}</td>
       </tr>)}</tbody>
     </table>{!rows.length && <Empty>{query.loading ? W.loading : query.data && !query.data.ready ? 'حدّث قاعدة بيانات التسويق لعرض ربط الأجندة والحملة.' : W.noData}</Empty>}</div>
   </>;

@@ -14,12 +14,12 @@ import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
-import { executionDashboardTasks, publishingDashboardEntries } from '../workflow/publishingPriority';
+import { publishingDashboardEntries } from '../workflow/publishingPriority';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
 import { StrategyCampaignLinkModal, StrategyLineCopyModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
-import { planProductCategories, planProductReadiness, type PlanProductsData } from '../workflow/StrategyProductsTable';
+import { planProductReadiness, type PlanProductsData } from '../workflow/StrategyProductsTable';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
@@ -104,7 +104,6 @@ export function MarketingDashboardPage() {
     }
     return grouped;
   }, [lines]);
-  const executionEntries = useMemo(() => executionDashboardTasks(tasks), [tasks]);
   const publishingEntries = useMemo(() => publishingDashboardEntries(groups, drafts), [groups, drafts]);
 
   function openTask(id: string, filter: '' | 'on_time' | 'late' = '', assigneeNames: string[] = [], capture = false) {
@@ -165,7 +164,7 @@ export function MarketingDashboardPage() {
     <div className="mkw-board mkw-dashboard-board">
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
         <div className="mkw-column-body">{!tasks.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
-          {executionEntries.map(task => <article className="mkw-dashboard-task" key={task.id}>
+          {tasks.map(task => <article className="mkw-dashboard-task" key={task.id}>
             <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3 title={task.name}>{executionCardName(task.name)}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20}/></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()}/></div></div>
             <div className="mkw-dashboard-stats"><div><small>{W.createdAt}</small><strong>{showDate(task.created_at)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
             <Readiness value={task.readiness}/>
@@ -303,8 +302,7 @@ export function MarketingDashboardPage() {
               approvedByName: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_by_name : null,
               approvedAt: ['publishing', 'published'].includes(first.review_status || '') ? first.approved_at : null,
               publishState: planStateLabels[planDisplayState(first.review_status || 'in_progress', chooserSourceLines.filter(line => line.published_ready).length, chooserSourceLines.length)],
-              lines: chooserSourceLines, readinessByProduct: planProductReadiness(chooserProducts.data?.rows),
-              categoryByProduct: planProductCategories(chooserProducts.data?.rows) };
+              lines: chooserSourceLines, readinessByProduct: planProductReadiness(chooserProducts.data?.rows) };
             if (chooserIsCampaign) exportCampaignSummaryPdf(options);
             else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: first.agenda_from, agendaTo: first.agenda_to });
           } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }

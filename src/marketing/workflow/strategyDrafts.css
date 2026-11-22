@@ -63,12 +63,6 @@
 .mkw-sd-filter { display:flex; gap:3px; flex:0 0 auto; padding:4px; border-radius:11px; background:#fffaf6; border:1px solid #ead8cd; }
 .mkw-sd-filter button { flex:1; padding:7px 3px; border:0; border-radius:8px; font:inherit; font-size:.76rem; color:#765950; cursor:pointer; background:transparent; white-space:nowrap; }
 .mkw-sd-filter button[aria-selected="true"] { background:#4a211c; color:#fff; }
-.mkw-sd-idea-category { display:grid; gap:7px; flex:0 0 auto; min-width:0; }
-.mkw-sd-idea-category-title { display:flex; align-items:center; justify-content:space-between; gap:9px; margin:7px 0 1px; padding:9px 11px; border-radius:10px; border:1px solid #e2cab9; background:#ecded1; color:#4a211c; font-size:.86rem; line-height:1.5; font-weight:800; }
-.mkw-sd-idea-category-title span { flex:0 0 auto; color:#795c50; font-size:.74rem; }
-.mkw-sd-idea-category-list { display:grid; gap:7px; min-width:0; }
-.mkw-sd-idea-category-list .mkw-strategy-draft-idea { width:100%; min-width:0; }
-.mkw-sd-idea-category-list .mkw-sd-idea-body strong { white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
 .mkw-strategy-draft-idea { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; flex:0 0 auto; padding:11px 9px; border:1px solid #e8d6c9; border-radius:12px; text-align:start; background:#fffaf6; cursor:pointer; color:#4a211c; transition:background .15s,border-color .15s,transform .15s; }
 .mkw-strategy-draft-idea:hover { border-color:#b98673; transform:translateY(-1px); }
 .mkw-strategy-draft-idea.is-active { border-color:#a46b58; box-shadow:inset 0 0 0 1px #a46b58,0 5px 14px rgba(74,33,28,.07); background:#fff1e8; }
@@ -154,3 +148,39 @@
   .mkw-sd-setup-top > .mkw-sd-date-field { flex-basis:100%; }
   .mkw-sd-summary { margin-inline-start:0; }
 }
+
+/* Approved agenda: edit one idea day across all of its publication lines. */
+.mkw-agenda-idea-dates { border:1px solid var(--line-strong); border-radius:14px; padding:14px; background:var(--surface); margin:14px 0; }
+.mkw-agenda-idea-editor { display:grid; gap:12px; padding-top:11px; }
+.mkw-agenda-idea-summary { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.mkw-agenda-idea-summary > span { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); background:var(--surface-soft); border-radius:99px; padding:6px 11px; font-size:12px; }
+.mkw-agenda-idea-search { display:flex; align-items:center; gap:9px; background:var(--surface); border:1px solid var(--line-strong); border-radius:11px; padding:7px 12px; }
+.mkw-agenda-idea-search input { width:100%; min-width:0; border:0!important; box-shadow:none!important; background:transparent!important; }
+.mkw-agenda-idea-list { display:grid; gap:8px; max-height:min(55vh,600px); overflow:auto; padding:3px; }
+.mkw-agenda-idea-row { border:1px solid var(--line); border-radius:11px; background:var(--surface); overflow:hidden; }
+.mkw-agenda-idea-row[open] { border-color:var(--brand); }
+.mkw-agenda-idea-row > summary { cursor:pointer; padding:13px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+.mkw-agenda-idea-row-title { display:grid; gap:3px; min-width:0; flex:1; }
+.mkw-agenda-idea-row-title strong { overflow-wrap:anywhere; color:var(--ink); }
+.mkw-agenda-idea-row-title small { color:var(--muted); font-size:11px; }
+.mkw-agenda-idea-row-meta { color:var(--brand); font-size:12px; }
+.mkw-agenda-idea-fields { border-top:1px solid var(--line); padding:13px; background:var(--surface-soft); display:grid; grid-template-columns:minmax(200px,1fr) minmax(195px,260px); align-items:center; gap:15px; }
+.mkw-agenda-idea-fields > div { display:grid; gap:5px; }
+.mkw-agenda-idea-fields small { color:var(--muted); }
+.mkw-agenda-idea-fields label { display:grid; gap:6px; font-weight:700; font-size:12px; }
+.mkw-agenda-idea-fields input { width:100%; direction:ltr; }
+.mkw-agenda-idea-warning { grid-column:1/-1; display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#9a3e2e; }
+.mkw-agenda-idea-save { border-top:1px solid var(--line); padding-top:12px; display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.mkw-agenda-idea-save span { font-weight:700; color:var(--brand); }
+@media(max-width:650px) { .mkw-agenda-idea-fields { grid-template-columns:1fr; } }
+
+/* Product tracking: both heading bands stay visible while vertical and
+ * horizontal scrolling continue within the same scroll container. */
+.mkw-strategy-products-tracking-table { max-height: min(75dvh, 780px); overflow:auto; scrollbar-gutter:stable; }
+.mkw-strategy-products-tracking-table table { border-collapse:separate; border-spacing:0; }
+.mkw-strategy-products-tracking-table thead tr:first-child th { position:sticky; top:0; z-index:3; height:45px; box-sizing:border-box; background:var(--surface-soft); box-shadow:0 1px 0 var(--line); }
+.mkw-strategy-products-tracking-table thead tr:nth-child(2) th { position:sticky; top:45px; z-index:2; height:44px; box-sizing:border-box; background:var(--surface-soft); box-shadow:0 1px 0 var(--line-strong); }
+.mkw-strategy-products-tracking-table thead tr:first-child th[rowspan="2"] { z-index:4; vertical-align:middle; }
+.mkw-sp-order-ref { display:grid; gap:2px; padding:4px 0; }
+.mkw-sp-order-ref + .mkw-sp-order-ref { border-top:1px dotted var(--line-strong); }
+.mkw-sp-order-ref small { line-height:1.45; }

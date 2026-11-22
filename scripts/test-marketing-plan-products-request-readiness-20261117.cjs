@@ -128,7 +128,7 @@ const serverStubs = {
   const section = html.split('<section class="schedule-section">')[1].split('</section>')[0];
 
   await check('PDF compact schedule: رقم الطلب after التاريخ, الجاهزية after المنفذ', () => {
-    assert.match(html, /<th>التاريخ<\/th><th>رقم الطلب<\/th><th>نوع المنتج<\/th><th>التصنيف<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
+    assert.match(html, /<th>التاريخ<\/th><th>رقم الطلب<\/th><th>نوع المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
   });
   await check('PDF rows carry the request number and readiness in column order', () => {
     assert.match(section, /<td class="schedule-dates" rowspan="1">2026-11-18<\/td><td class="schedule-requests"><div class="schedule-meta-value" dir="ltr">TSK-000212-01<\/div><\/td><td class="schedule-product"/);
@@ -144,7 +144,7 @@ const serverStubs = {
     assert.equal(planLineRequestNo({ task_no: 'TSK-000001' }), 'TSK-000001');
   });
   await check('Empty schedule spans all seven columns', () => {
-    assert.match(planPdfSummaryHtml({ kind: 'agenda', planName: 'أ', planNo: 'AGD-1', lines: [] }), /<td colspan="8">لا توجد منشورات<\/td>/);
+    assert.match(planPdfSummaryHtml({ kind: 'agenda', planName: 'أ', planNo: 'AGD-1', lines: [] }), /<td colspan="7">لا توجد منشورات<\/td>/);
   });
 
   // ---------------------------------------------------------------- wiring
