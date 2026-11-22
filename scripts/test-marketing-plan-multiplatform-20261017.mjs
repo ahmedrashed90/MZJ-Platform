@@ -188,7 +188,7 @@ const front = readFileSync('src/marketing/workflow/CreatePage.tsx', 'utf8');
 const css = readFileSync('src/marketing/workflow/workflow.css', 'utf8');
 check(front.includes('availablePlanProducts(products, entries, entry.key)') && front.includes('selectableGroups'), 'Product dropdown is filtered in both campaign and agenda composers');
 check(front.includes('type="checkbox" checked={selected.has(platform.id)}') && front.includes('togglePlatform(entry.key, platform.id)'), 'Platform selection has multi-select controls per product');
-check(front.includes('availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId)'), 'Post types are filtered by chosen platform AND image/video media');
+check(front.includes('availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId, entry.date)'), 'Post types are filtered by chosen platform AND image/video media');
 check(front.includes('planEntriesPayload(entries, kind)') && front.includes('previewRows.map('), 'Save and preview use exactly the same grouped platform selection');
 check(css.includes('.mkw-plan-platform-options') && css.includes('.mkw-plan-per-platform') && !css.includes('.mkw-plan-table { min-width:1220px; }'), 'Source styles are consolidated without adding a duplicate override');
 console.log(`${checks}/${checks} multi-platform marketing plan checks passed`);
