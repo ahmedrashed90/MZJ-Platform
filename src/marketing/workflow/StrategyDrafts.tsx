@@ -12,6 +12,7 @@ import './strategyDrafts.css';
 /** Strategy flow (second flow). Native agenda/campaign screens are unchanged;
  * these components only render drafts created from «إنشاء التكليفات». */
 import { StrategyProductsTable, type StrategyDraft, type StrategyDraftIdea, type StrategyDraftPlatform } from './StrategyProductsTable';
+import { groupStrategyDraftIdeas } from './strategyDraftGrouping';
 export { PlanProductsSection, PlanProductsTable, StrategyProductsTable } from './StrategyProductsTable';
 export type { StrategyDraft, StrategyDraftIdea, StrategyDraftPlatform } from './StrategyProductsTable';
 
@@ -108,7 +109,8 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !platformsWithoutGoal.length);
   const term = search.trim().toLocaleLowerCase('ar');
   const visibleIdeas = ideas.filter(idea => (filter === 'all' || (filter === 'ready' ? idea.ready : !idea.ready)) &&
-    (!term || [idea.ideaName, idea.ideaCode, idea.assignmentNo, idea.taskNo].some(value => String(value || '').toLocaleLowerCase('ar').includes(term))));
+    (!term || [idea.ideaName, idea.ideaCode, idea.assignmentNo, idea.taskNo, idea.category].some(value => String(value || '').toLocaleLowerCase('ar').includes(term))));
+  const groupedIdeas = groupStrategyDraftIdeas(visibleIdeas);
   const selectedIndex = ideas.findIndex(idea => idea.id === selectedId);
   const producedIds = new Set(selected?.formats.map(format => format.id) || []);
   const rows = selected ? catalog.map(platform => ({ ...platform, postTypes: platform.postTypes.filter(type => type.mediaKinds.includes(selected.mediaKind)) })) : [];
@@ -253,19 +255,18 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
               {([['all', `الكل (${ideas.length})`], ['incomplete', `غير مكتمل (${ideas.filter(idea => !idea.ready).length})`], ['ready', `مكتمل (${draft.readyCount})`]] as const).map(([key, label]) =>
                 <button key={key} type="button" role="tab" aria-selected={filter === key} onClick={() => setFilter(key)}>{label}</button>)}
             </div>
-            {visibleIdeas.map(idea => <button type="button" key={idea.id} className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
-              onClick={() => selectIdea(idea.id)}>
-              <span className="mkw-sd-idea-index">{ideas.indexOf(idea) + 1}</span>
-              <span className="mkw-sd-idea-body">
-                <strong>{idea.ideaName}</strong>
-                <small>{mediaName(idea.mediaKind)} · <span dir="ltr">{idea.assignmentNo}</span></small>
-                <span className="mkw-sd-idea-flags">
-                  <span className={idea.configured ? 'is-ok' : 'is-wait'}>{idea.configured ? `${idea.platforms.length} منصة` : 'الإعداد ناقص'}</span>
-                  <span className={idea.executed ? 'is-ok' : 'is-info'}>{idea.executed ? 'منفذة' : 'لم تُنفذ بعد'}</span>
-                </span>
-              </span>
-              {idea.ready ? <CheckCircle size={18} weight="fill" className="mkw-sd-ok"/> : <WarningCircle size={18} weight="fill" className="mkw-sd-warn"/>}
-            </button>)}
+            {groupedIdeas.map(group => <section className="mkw-sd-idea-category" key={group.category} aria-label={`تصنيف ${group.category}`}>
+              <h3 className="mkw-sd-idea-category-title">{group.category} <span>({group.entries.length})</span></h3>
+              <div className="mkw-sd-idea-category-list">{group.entries.map(idea => <button type="button" key={idea.id}
+                className={`mkw-strategy-draft-idea ${idea.id === selectedId ? 'is-active' : ''} ${idea.ready ? 'is-ready' : 'is-incomplete'}`}
+                title={`${idea.ideaName} — ${idea.ready ? 'جاهزة' : 'غير مكتملة'}`}
+                aria-label={`${idea.ideaName}، ${idea.ready ? 'جاهزة' : 'غير مكتملة'}`}
+                onClick={() => selectIdea(idea.id)}>
+                <span className="mkw-sd-idea-index">{ideas.indexOf(idea) + 1}</span>
+                <span className="mkw-sd-idea-body"><strong>{idea.ideaName}</strong></span>
+                {idea.ready ? <CheckCircle size={18} weight="fill" className="mkw-sd-ok"/> : <WarningCircle size={18} weight="fill" className="mkw-sd-warn"/>}
+              </button>)}</div>
+            </section>)}
             {!visibleIdeas.length && <Empty>لا توجد أفكار في هذا الفلتر</Empty>}
           </aside>
           <section className="mkw-strategy-draft-panel">

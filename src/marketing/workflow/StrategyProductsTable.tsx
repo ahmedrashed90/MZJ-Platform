@@ -53,6 +53,14 @@ function Readiness({ value }: { value: number | null }) {
   return <div className="mkw-product-readiness" title={`${percent}%`}><span><b style={{ width: `${percent}%` }}/></span><small>{percent}%</small></div>;
 }
 
+/** Product categories are already available in the plan-products report API.
+ * Reuse them in PDF without mutating plans or adding duplicate database fields. */
+export function planProductCategories(rows: ReadonlyArray<PlanProductRow> | null | undefined): Record<string, string> {
+  const categories: Record<string, string> = {};
+  for (const row of rows || []) if (row.productId && row.category?.trim()) categories[row.productId] = row.category.trim();
+  return categories;
+}
+
 /** «بيانات المنتجات»: رقم التاسك ← رقم الطلب ← رقم الحملة/الأجندة ← باقي البيانات ← الجاهزية. */
 export function PlanProductsTable({ rows, kind }: { rows: ReadonlyArray<PlanProductRow>; kind: 'agenda' | 'campaign' }) {
   return <div className="mkw-table-wrap mkw-strategy-products-table"><table>

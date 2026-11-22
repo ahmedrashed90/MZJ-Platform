@@ -24,7 +24,7 @@ const draft = (id, options = {}) => ({
   ...options,
 });
 
-test('Untouched agenda/campaign cards are above ongoing and finished cards, including strategy drafts', () => {
+test('Publishing cards rank visible readiness first, independent of review/preparation status', () => {
   const groups = new Map([
     ['finished', [planLine('finished', { review_status: 'published', published_ready: true, prepared_count: 1 })]],
     ['started', [planLine('started', { prepared_count: 1 })]],
@@ -35,13 +35,13 @@ test('Untouched agenda/campaign cards are above ongoing and finished cards, incl
     draft('draft-sent', { status: 'submitted' })];
   const sorted = publishingDashboardEntries(groups, drafts);
   assert.deepEqual(sorted.map(item => item.id), [
-    'new-latest', 'draft-new', 'new-older', 'draft-working', 'started', 'draft-sent', 'finished',
+    'new-latest', 'draft-new', 'draft-sent', 'draft-working', 'started', 'new-older', 'finished',
   ]);
   assert.deepEqual([...groups.keys()], ['finished', 'started', 'new-older', 'new-latest'], 'do not mutate backend order');
   assert.equal(drafts[0].id, 'draft-working', 'do not mutate draft array');
 });
 
-test('Any review decision, attempted preparation or activation counts as action', () => {
+test('Zero-percent publication stays first even after review, preparation or activation', () => {
   const groups = new Map([
     ['failed-prep', [planLine('failed-prep', { failed_count: 1 })]],
     ['under-review', [planLine('under-review', { review_status: 'submitted' })]],
@@ -49,8 +49,8 @@ test('Any review decision, attempted preparation or activation counts as action'
     ['unstarted', [planLine('unstarted')]],
   ]);
   const sorted = publishingDashboardEntries(groups, []);
-  assert.equal(sorted[0].id, 'unstarted');
-  assert(sorted.slice(1).every(row => row.priority === 1));
+  assert.equal(sorted.length, 4);
+  assert(sorted.every(row => row.progress === 0 && row.priority === 0));
 });
 
 const first = 'بريف إبداعي: سنة جديدة وسيارة جديدة — عروض بداية العام من MZJ السيارات المعتمدة: لا توجد سيارات محددة للفكرة';
@@ -83,7 +83,7 @@ test('Both agenda and campaign PDFs show content kind, not legacy product name o
   for (const kind of ['agenda', 'campaign']) {
     const pdf = planPdfSummaryHtml({ kind, planName: 'ملخص تجربة', planNo: 'TEST', lines });
     const schedule = pdf.split('<section class="schedule-section">')[1].split('</section>')[0];
-    assert.match(schedule, /<th>نوع المنتج<\/th><th>الفكرة<\/th>/);
+    assert.match(schedule, /<th>نوع المنتج<\/th><th>التصنيف<\/th><th>الفكرة<\/th>/);
     assert.match(schedule, /<td class="schedule-product" rowspan="1">صورة<\/td>/);
     assert.match(schedule, /<td class="schedule-product" rowspan="1">فيديو<\/td>/);
     for (const title of ['سنة جديدة وسيارة جديدة — عروض بداية العام من MZJ', 'حاسبة القسط — جرّبها قبل تتواصل', 'للشركة أكثر من سيارة؟ ابدأ باحتياجكم.']) assert(schedule.includes(title));

@@ -60,7 +60,7 @@ test('Same product/idea on consecutive dates merges adjacent content cells',()=>
   const html=section([
     entry('2026-11-08','سوناتا','فكرة A'), entry('2026-11-09','سوناتا','فكرة A'),
   ]);
-  assert.match(html,/<td class="schedule-product" rowspan="2">صورة<\/td><td class="schedule-idea" rowspan="2">فكرة A<\/td>/);
+  assert.match(html,/<td class="schedule-product" rowspan="2">صورة<\/td><td class="schedule-category" rowspan="2">—<\/td><td class="schedule-idea" rowspan="2">فكرة A<\/td>/);
   assert.deepEqual(dates(html),['2026-11-08','2026-11-09']);
 });
 test('Nonadjacent content groups remain identified and chronological (no misleading spanning)',()=>{

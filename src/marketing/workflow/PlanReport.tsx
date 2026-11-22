@@ -9,7 +9,7 @@ import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
-import { PlanProductsSection, planProductReadiness, type PlanProductsData } from './StrategyProductsTable';
+import { PlanProductsSection, planProductCategories, planProductReadiness, type PlanProductsData } from './StrategyProductsTable';
 import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
@@ -57,7 +57,8 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
                 const options = { planName: plan.name, planNo: plan.plan_no, creatorName: plan.creator_name,
                   createdAt: plan.created_at, fundingFrom: plan.funding_from, fundingTo: plan.funding_to,
                   lines, platformGoals:plan.platform_goals, publishState, approvedByName: approval?.actor_name, approvedAt: approval?.created_at,
-                  readinessByProduct: planProductReadiness(products.data?.rows) };
+                  readinessByProduct: planProductReadiness(products.data?.rows),
+                  categoryByProduct: planProductCategories(products.data?.rows) };
                 if (isCampaign) exportCampaignSummaryPdf(options);
                 else exportPlanSummaryPdf({ ...options, kind: 'agenda', agendaFrom: plan.agenda_from,
                   agendaTo: plan.agenda_to, platforms: query.data?.platforms || [] });

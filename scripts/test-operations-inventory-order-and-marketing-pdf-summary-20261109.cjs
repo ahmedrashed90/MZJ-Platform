@@ -74,7 +74,7 @@ check('Missing or impossible scheduled dates show no invented date', () => {
 });
 check('PDF columns match request in exact RTL order, with a compact unique schedule', () => {
   const html=planPdfSummaryHtml({kind:'agenda',planName:'جدول نوفمبر',planNo:'AGD-1',lines:sample,agendaFrom:'2026-11-08',agendaTo:'2026-11-10'});
-  assert.match(html,/<th>التاريخ<\/th><th>رقم الطلب<\/th><th>نوع المنتج<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
+  assert.match(html,/<th>التاريخ<\/th><th>رقم الطلب<\/th><th>نوع المنتج<\/th><th>التصنيف<\/th><th>الفكرة<\/th><th>المنفذ<\/th><th>الجاهزية<\/th><th>المنصة<\/th>/);
   const section=html.split('<section class="schedule-section">')[1].split('</section>')[0];
   assert.equal((section.match(/<td class="schedule-dates" rowspan="/g)||[]).length,3); // three chronological days
   assert.equal((section.match(/<td class="schedule-product" rowspan="/g)||[]).length,2); // two DIFFERENT ideas

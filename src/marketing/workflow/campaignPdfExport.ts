@@ -19,6 +19,8 @@ export type CampaignPdfExportInput = {
   publishState?: string;
   /** productId → requirement readiness (execution section). Missing → «—». */
   readinessByProduct?: Record<string, number>;
+  /** productId -> the real category returned by plan_products (strategy / task type). */
+  categoryByProduct?: Record<string, string>;
 };
 
 /** رقم الطلب of a plan line: its task number + requirement order (TSK-000212-01).
@@ -96,6 +98,7 @@ export function compactPublishingIdeaTitle(value: unknown): string {
 
 export type PlanPdfScheduleRow = {
   product: string;
+  category: string;
   idea: string;
   mediaKind: WorkPlanLine['media_kind'] | null;
   /** Date, executor, platform and request must remain paired for each scheduled entry. */
@@ -106,17 +109,18 @@ export type PlanPdfScheduleRow = {
  * scheduled date, platform and executor, preserving the association between
  * all three instead of hiding a date or assigning it to the wrong platform.
  * This is display-only: publication records, budgets and post counts stay put. */
-export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdfScheduleRow[] {
+export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>, categoryByProduct: Readonly<Record<string, string>> = {}): PlanPdfScheduleRow[] {
   type Group = PlanPdfScheduleRow & { publicationKeys: Set<string> };
   const grouped = new Map<string, Group>();
   for (const line of lines) {
     const product = String(line.idea_name || '').trim() || 'مطلوب بدون اسم';
+    const category = String(categoryByProduct[line.product_id] || '').trim() || '—';
     const idea = compactPublishingIdeaTitle(line.product_idea);
     const mediaKind = line.media_kind === 'image' || line.media_kind === 'video' ? line.media_kind : null;
-    const key = `${campaignSummaryNameKey(product)}\u0000${campaignSummaryNameKey(idea)}\u0000${mediaKind || ''}`;
+    const key = `${campaignSummaryNameKey(product)}\u0000${campaignSummaryNameKey(idea)}\u0000${mediaKind || ''}\u0000${campaignSummaryNameKey(category)}`;
     let group = grouped.get(key);
     if (!group) {
-      group = { product, idea, mediaKind, publications: [], publicationKeys: new Set() };
+      group = { product, category, idea, mediaKind, publications: [], publicationKeys: new Set() };
       grouped.set(key, group);
     }
     const platform = String(line.platform_name || '').trim() || 'منصة غير محددة';
@@ -134,7 +138,7 @@ export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdf
     }
   }
   return [...grouped.values()].map(group => ({
-    product: group.product, idea: group.idea, mediaKind: group.mediaKind,
+    product: group.product, category: group.category, idea: group.idea, mediaKind: group.mediaKind,
     publications: group.publications.sort((a, b) =>
       (a.date || '9999-12-31').localeCompare(b.date || '9999-12-31') ||
       a.platform.localeCompare(b.platform, 'ar') || a.executor.localeCompare(b.executor, 'ar')),
@@ -152,6 +156,7 @@ export function planPdfScheduleRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdf
 export type PlanPdfChronologicalRow = {
   date: string | null;
   product: string;
+  category: string;
   idea: string;
   mediaKind: WorkPlanLine['media_kind'] | null;
   executors: string[];
@@ -160,9 +165,9 @@ export type PlanPdfChronologicalRow = {
   requests: Array<{ requestNo: string; productId: string }>;
 };
 
-export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): PlanPdfChronologicalRow[] {
+export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>, categoryByProduct: Readonly<Record<string, string>> = {}): PlanPdfChronologicalRow[] {
   const chronological: PlanPdfChronologicalRow[] = [];
-  for (const group of planPdfScheduleRows(lines)) {
+  for (const group of planPdfScheduleRows(lines, categoryByProduct)) {
     const dayRows = new Map<string, PlanPdfChronologicalRow & {
       executorKeys: Set<string>;
       platformKeys: Set<string>;
@@ -173,7 +178,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
       let row = dayRows.get(dayKey);
       if (!row) {
         row = {
-          date: item.date, product: group.product, idea: group.idea, mediaKind: group.mediaKind,
+          date: item.date, product: group.product, category: group.category, idea: group.idea, mediaKind: group.mediaKind,
           executors: [], platforms: [], requests: [], executorKeys: new Set(), platformKeys: new Set(), requestKeys: new Set(),
         };
         dayRows.set(dayKey, row);
@@ -196,7 +201,7 @@ export function planPdfChronologicalRows(lines: ReadonlyArray<WorkPlanLine>): Pl
     }
     for (const day of dayRows.values()) {
       chronological.push({
-        date: day.date, product: day.product, idea: day.idea, mediaKind: day.mediaKind,
+        date: day.date, product: day.product, category: day.category, idea: day.idea, mediaKind: day.mediaKind,
         executors: day.executors, platforms: day.platforms, requests: day.requests,
       });
     }
@@ -229,11 +234,11 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
   const goalRows = campaign ? campaignPlatformGoalRows(input.lines,input.platformGoals) : [];
   const goalTableRows = goalRows.map(row=>`<tr><td>${htmlText(row.platformName)}</td><td>${row.goals.length ? row.goals.map(goal=>htmlText(goal.name)).join('، ') : 'لم تُحدَّد أهداف بعد'}</td></tr>`).join('');
   const requirements = campaign ? summary.products.map(product => product.name) : agendaSummary?.requirements || [];
-  const scheduleRows = planPdfScheduleRows(input.lines);
+  const scheduleRows = planPdfScheduleRows(input.lines, input.categoryByProduct);
   // Flatten product/idea groups BEFORE printing so every day in November is
   // before every day in December. Merge repeated calendar days, and merge
   // adjacent identical products/ideas only when that does not break date order.
-  const chronologicalRows = planPdfChronologicalRows(input.lines);
+  const chronologicalRows = planPdfChronologicalRows(input.lines, input.categoryByProduct);
   const uniqueNames = (values: string[]) => values.map(value => `<div class="schedule-unique-name">${htmlText(value)}</div>`).join('');
   // رقم الطلب and الجاهزية are listed in the same order, one entry per product.
   const readinessOf = (productId: string) => {
@@ -246,7 +251,8 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
     ? row.requests.map(request => `<div class="schedule-meta-value">${htmlText(readinessOf(request.productId))}</div>`).join('') : '—'}</td>`;
   const sameContent = (a: PlanPdfChronologicalRow, b: PlanPdfChronologicalRow) =>
     campaignSummaryNameKey(a.product) === campaignSummaryNameKey(b.product) &&
-    campaignSummaryNameKey(a.idea) === campaignSummaryNameKey(b.idea) && a.mediaKind === b.mediaKind;
+    campaignSummaryNameKey(a.idea) === campaignSummaryNameKey(b.idea) &&
+    campaignSummaryNameKey(a.category) === campaignSummaryNameKey(b.category) && a.mediaKind === b.mediaKind;
   const scheduleTableRows = `<tbody class="schedule-chronological">${chronologicalRows.map((row, index) => {
     const previous = chronologicalRows[index - 1];
     const dayStarts = !previous || row.date !== previous.date;
@@ -264,7 +270,7 @@ export function planPdfSummaryHtml(input: PlanPdfExportInput): string {
     const displayIdea = ideaTitles.length === 1 ? ideaTitles[0] : ideaTitles.map(title => `<div class="schedule-idea-title">${title}</div>`).join('');
     const mediaLabel = row.mediaKind === 'video' ? 'فيديو' : row.mediaKind === 'image' ? 'صورة' : '—';
     const contentCells = contentStarts
-      ? `<td class="schedule-product" rowspan="${contentSpan}">${mediaLabel}</td><td class="schedule-idea" rowspan="${contentSpan}">${displayIdea}</td>`
+      ? `<td class="schedule-product" rowspan="${contentSpan}">${mediaLabel}</td><td class="schedule-category" rowspan="${contentSpan}">${htmlText(row.category)}</td><td class="schedule-idea" rowspan="${contentSpan}">${displayIdea}</td>`
       : '';
     return `<tr>${dateCell}${requestCell(row)}${contentCells}<td class="schedule-executors">${uniqueNames(row.executors)}</td>${readinessCell(row)}<td class="schedule-platforms">${uniqueNames(row.platforms)}</td></tr>`;
   }).join('')}</tbody>`;
@@ -303,12 +309,12 @@ th{background:#f3e8dc}tr{break-inside:avoid}.money{font-weight:800;white-space:n
 .schedule-section{break-inside:auto}.schedule-section thead{display:table-header-group}
 .schedule-section .schedule-chronological tr{break-inside:avoid;page-break-inside:avoid}
 .schedule-section th{font-size:9pt}.schedule-section td{vertical-align:middle;overflow-wrap:anywhere;font-size:9pt}
-.schedule-section th:nth-child(1){width:12%}.schedule-section th:nth-child(2){width:14%}
-.schedule-section th:nth-child(3){width:17%}.schedule-section th:nth-child(4){width:21%}
-.schedule-section th:nth-child(5){width:12%}.schedule-section th:nth-child(6){width:9%}
-.schedule-section th:nth-child(7){width:15%}
+.schedule-section th:nth-child(1){width:11%}.schedule-section th:nth-child(2){width:15%}
+.schedule-section th:nth-child(3){width:9%}.schedule-section th:nth-child(4){width:13%}
+.schedule-section th:nth-child(5){width:21%}.schedule-section th:nth-child(6){width:11%}
+.schedule-section th:nth-child(7){width:9%}.schedule-section th:nth-child(8){width:11%}
 .schedule-section td.schedule-dates{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
-.schedule-section td.schedule-product,.schedule-section td.schedule-idea{vertical-align:top}
+.schedule-section td.schedule-product,.schedule-section td.schedule-category,.schedule-section td.schedule-idea{vertical-align:top}
 .schedule-section td.schedule-executors,.schedule-section td.schedule-platforms,.schedule-section td.schedule-requests,.schedule-section td.schedule-readiness{padding-top:5px;padding-bottom:5px}
 .schedule-section td.schedule-requests{font-size:8pt;font-variant-numeric:tabular-nums;overflow-wrap:normal;white-space:nowrap}
 .schedule-section td.schedule-readiness{text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
@@ -327,8 +333,8 @@ ul{margin:0;padding:0 20px 0 0;list-style:disc}li{padding:3px 0;border-bottom:1p
 ${campaign ? `<section><h2>الهدف من الحملة حسب المنصة</h2><table><thead><tr><th>المنصة</th><th>الأهداف</th></tr></thead><tbody>${goalTableRows || '<tr><td colspan="2">لا توجد منصات</td></tr>'}</tbody></table></section>` : ''}
 <section class="schedule-section"><h2>جدول النشر المختصر (${scheduleRows.length})</h2>
 <p class="schedule-note">المطلوبات المختلفة (${requirements.length}) · الأفكار المختلفة (${summary.ideas.length}) — مرتب زمنيًا حسب السنة والشهر واليوم؛ لا يتكرر التاريخ داخل اليوم، ولا المنفذ أو المنصة داخل المنتج والفكرة في اليوم نفسه.</p>
-<table><thead><tr><th>التاريخ</th><th>رقم الطلب</th><th>نوع المنتج</th><th>الفكرة</th><th>المنفذ</th><th>الجاهزية</th><th>المنصة</th></tr></thead>
-${chronologicalRows.length ? scheduleTableRows : '<tbody><tr><td colspan="7">لا توجد منشورات</td></tr></tbody>'}</table></section>
+<table><thead><tr><th>التاريخ</th><th>رقم الطلب</th><th>نوع المنتج</th><th>التصنيف</th><th>الفكرة</th><th>المنفذ</th><th>الجاهزية</th><th>المنصة</th></tr></thead>
+${chronologicalRows.length ? scheduleTableRows : '<tbody><tr><td colspan="8">لا توجد منشورات</td></tr></tbody>'}</table></section>
 
 </main></body></html>`;
 }

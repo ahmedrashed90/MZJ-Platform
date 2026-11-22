@@ -1,44 +1,37 @@
-/** Display-only ordering for publishing cards in the Marketing dashboard.
- * Neither the source queries nor stored agenda/campaign status are changed.
- * Unstarted items are first, work in progress next, completed items last.
- */
-import type { WorkPlanLine } from '../../../shared/marketing-workflow';
+/** Dashboard-only readiness ordering. Never mutate fetched task, draft or plan data. */
+import type { WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 import type { StrategyDraft } from './StrategyProductsTable';
 
 export type PublishingDashboardEntry =
   | { source: 'draft'; id: string; draft: StrategyDraft; priority: number; progress: number; createdAt: string }
   | { source: 'plan'; id: string; group: WorkPlanLine[]; priority: number; progress: number; createdAt: string };
 
-/** A review/approval, preparation, activation or publication is an action. */
+const safeReadiness = (value: number): number =>
+  Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+
+/** The execution cards display task.readiness, so sort using that same number. */
+export function executionDashboardTasks(tasks: ReadonlyArray<WorkTask>): WorkTask[] {
+  return [...tasks].sort((a, b) =>
+    safeReadiness(a.readiness) - safeReadiness(b.readiness) ||
+    String(b.created_at || '').localeCompare(String(a.created_at || '')) ||
+    a.id.localeCompare(b.id));
+}
+
+/** The publishing cards display published-ready lines / all lines. */
 function planEntry(id: string, group: WorkPlanLine[]): PublishingDashboardEntry {
-  const total = group.length;
-  const prepared = group.filter(line => Number(line.prepared_count || 0) > 0 || Number(line.failed_count || 0) > 0).length;
-  const published = group.filter(line => line.published_ready || Number(line.published_count || 0) > 0).length;
-  const status = group[0]?.review_status || 'in_progress';
-  const activated = group.some(line => Boolean(line.activated_at));
-  const finished = status === 'published' || (total > 0 && group.every(line => Boolean(line.published_ready)));
-  const untouched = status === 'in_progress' && prepared === 0 && published === 0 && !activated;
-  return {
-    source: 'plan', id, group,
-    priority: finished ? 2 : untouched ? 0 : 1,
-    progress: total ? (prepared + published) / (total * 2) : 0,
-    createdAt: String(group[0]?.plan_created_at || ''),
-  };
+  const progress = group.length ? group.filter(line => Boolean(line.published_ready)).length / group.length : 0;
+  return { source: 'plan', id, group, priority: progress === 0 ? 0 : progress === 1 ? 2 : 1,
+    progress, createdAt: String(group[0]?.plan_created_at || '') };
 }
 
+/** A draft's displayed readiness is readyCount / productCount, NOT configuredCount. */
 function draftEntry(draft: StrategyDraft): PublishingDashboardEntry {
-  const total = draft.productCount || 0;
-  const worked = Math.max(draft.configuredCount || 0, draft.executedCount || 0, draft.readyCount || 0);
-  const untouched = draft.status === 'draft' && worked === 0;
-  return {
-    source: 'draft', id: draft.id, draft,
-    priority: draft.status === 'submitted' ? 2 : untouched ? 0 : 1,
-    progress: total ? worked / total : 0,
-    createdAt: String(draft.createdAt || ''),
-  };
+  const progress = draft.productCount ? Math.min(1, Math.max(0, draft.readyCount / draft.productCount)) : 0;
+  return { source: 'draft', id: draft.id, draft, priority: progress === 0 ? 0 : progress === 1 ? 2 : 1,
+    progress, createdAt: String(draft.createdAt || '') };
 }
 
-/** Both strategy drafts and saved plans participate in the SAME priority order. */
+/** In BOTH types of publishing cards: 0% first, increasing readiness, 100% last. */
 export function publishingDashboardEntries(
   groups: ReadonlyMap<string, WorkPlanLine[]>, drafts: ReadonlyArray<StrategyDraft>,
 ): PublishingDashboardEntry[] {
@@ -46,6 +39,6 @@ export function publishingDashboardEntries(
     ...drafts.map(draftEntry),
     ...[...groups.entries()].filter(([, group]) => group.length > 0).map(([id, group]) => planEntry(id, group)),
   ].sort((a, b) =>
-    a.priority - b.priority || a.progress - b.progress ||
+    a.progress - b.progress ||
     b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
