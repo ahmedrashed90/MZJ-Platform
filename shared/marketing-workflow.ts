@@ -92,6 +92,21 @@ export function supportsWorkMedia(kind: WorkMediaKind, postTypeName: string): bo
   return true; // A generic Story/Post supports either medium; settings remain the source.
 }
 
+/** First publishing day governed by the stricter media-kind rules below.
+ * Anything dated before it (the November agendas/campaigns) keeps the legacy rule. */
+export const WORK_MEDIA_RULES_FROM = '2026-12-01';
+const SPOTLIGHT_TYPE = /spotlight|\u0633\u0628\u0648\u062a\s*\u0644\u0627\u064a\u062a/i;
+
+/** Date-aware variant of supportsWorkMedia.
+ *  - date before 2026-12-01 (legacy plans): identical to supportsWorkMedia.
+ *  - date on/after 2026-12-01, or no date yet (new selections): Spotlight is video only. */
+export function supportsWorkMediaOn(kind: WorkMediaKind, postTypeName: string, date?: string | null): boolean {
+  const day = String(date || '').slice(0, 10);
+  const legacy = /^\d{4}-\d{2}-\d{2}$/.test(day) && day < WORK_MEDIA_RULES_FROM;
+  if (!legacy && SPOTLIGHT_TYPE.test(String(postTypeName || ''))) return kind === 'video';
+  return supportsWorkMedia(kind, postTypeName);
+}
+
 export function finalCoverage(item: Pick<WorkItem, 'formats' | 'files'> & Partial<Pick<WorkItem, 'media_kind'>>): boolean {
   return item.formats.length > 0 && item.formats.every(format => {
     const files = item.files.filter(file => file.category === 'final' && file.format_id === format.id && file.status === 'ready');

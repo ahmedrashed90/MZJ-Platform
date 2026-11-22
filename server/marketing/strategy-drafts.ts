@@ -11,7 +11,7 @@
 import type { SessionUser } from '../_auth.js';
 import { hasPermission } from '../../shared/system-access.js';
 import { getSystemAccess } from '../_access-control.js';
-import { finalCoverage, isWorkDate, supportsWorkMedia, workItemReadiness, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
+import { finalCoverage, isWorkDate, supportsWorkMediaOn, workItemReadiness, type WorkItem, type WorkFormat } from '../../shared/marketing-workflow.js';
 import { W } from '../../shared/marketing-workflow-labels.js';
 import { classifyWorkPublicationTiming, saudiCalendarDay } from '../../shared/marketing-publication-timing.js';
 import { marketingStrategyDraftsReady } from '../_marketing-workflow-schema.js';
@@ -178,7 +178,7 @@ function catalogPlatforms(catalog: CatalogType[]) {
   for (const type of catalog) {
     const row = map.get(type.platformId) || { platformId: type.platformId, platformName: type.platformName, platformCode: type.platformCode, postTypes: [] };
     row.postTypes.push({ id: type.id, name: type.name, width: type.width, height: type.height,
-      mediaKinds: (['image', 'video'] as const).filter(kind => supportsWorkMedia(kind, type.name)) });
+      mediaKinds: (['image', 'video'] as const).filter(kind => supportsWorkMediaOn(kind, type.name)) });
     map.set(type.platformId, row);
   }
   return [...map.values()];
@@ -219,9 +219,10 @@ async function draftEntries(sql: Sql, draftIds: string[]) {
 function entryState(kind: string, entry: Row, catalog: Map<string, CatalogType>) {
   const platforms = list(entry.platforms);
   const formats = list(entry.formats) as WorkFormat[];
+  const entryDay = day(entry.scheduled_on) || day(entry.target_on);
   const allowed = (platformId: string, postTypeId: string) => {
     const type = catalog.get(postTypeId);
-    return Boolean(type && type.platformId === platformId && supportsWorkMedia(entry.media_kind, type.name));
+    return Boolean(type && type.platformId === platformId && supportsWorkMediaOn(entry.media_kind, type.name, entryDay));
   };
   const configured = Boolean(kind === 'agenda' ? entry.scheduled_on : entry.target_on) && platforms.length > 0 && platforms.every(platform =>
     list(platform.postTypes).length > 0 && list(platform.postTypes).every((type: any) => allowed(String(platform.platformId), String(type.postTypeId)) &&
@@ -428,7 +429,7 @@ export async function saveStrategyDraftEntry(sql: Sql, user: SessionUser, body: 
         seenTypes.add(postTypeId);
         const known = byId.get(postTypeId);
         if (!known || known.platformId !== platformId) throw new Error('نوع النشر غير متاح لهذه المنصة. حدّث الصفحة.');
-        if (!supportsWorkMedia(entry.media_kind, known.name)) throw new Error(`نوع النشر «${known.name}» لا يناسب ${entry.media_kind === 'video' ? 'الفيديو' : 'الصورة'}`);
+        if (!supportsWorkMediaOn(entry.media_kind, known.name, draft.kind === 'agenda' ? scheduledOn : targetOn)) throw new Error(`نوع النشر «${known.name}» لا يناسب ${entry.media_kind === 'video' ? 'الفيديو' : 'الصورة'}`);
         if (draft.kind !== 'campaign') return { postTypeId, budget: 0 };
         if (type.budget === '' || type.budget == null) throw new Error('أدخل ميزانية مستقلة لكل نوع نشر داخل المنصة.');
         const budget = Number(type.budget);

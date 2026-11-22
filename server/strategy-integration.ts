@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { getSql } from './_db.js';
 import { loadUserProfile } from './_auth.js';
 import { hasPermission, canAccessSystem } from '../shared/system-access.js';
-import { supportsWorkMedia } from '../shared/marketing-workflow.js';
+import { supportsWorkMediaOn } from '../shared/marketing-workflow.js';
 import { assertMarketingWorkflowReady } from './_marketing-workflow-schema.js';
 import { createStrategyWorkflowTask, listStrategyApprovedProducts, createStrategyWorkflowAgenda, type StrategyWorkflowTaskInput, type StrategyAgendaInput } from './marketing/workflow.js';
 import { applyStrategyPlacements, deleteStrategyDraftFromIntegration, listOpenStrategyDrafts, validateStrategyPlacements, type StrategyPlacement } from './marketing/strategy-drafts.js';
@@ -280,7 +280,7 @@ export default async function strategyIntegrationHandler(request: VercelRequest,
               where pt.is_active=true and p.is_active=true order by p.name,pt.name`,
           ]);
           return { ok: true, taskTypes: types, formats: formats.map(format => ({ ...format,
-            mediaKinds: (['image','video'] as const).filter(kind => supportsWorkMedia(kind,format.name)) })) };
+            mediaKinds: (['image','video'] as const).filter(kind => supportsWorkMediaOn(kind,format.name)) })) };
         }
         const actorId = String(process.env.MZJ_STRATEGY_INTEGRATION_USER_ID || '').trim();
         const taskId = typeof request.query.taskId === 'string' ? request.query.taskId : '';

@@ -1,4 +1,4 @@
-import { isWorkDate, supportsWorkMedia, type WorkMediaKind } from '../../../shared/marketing-workflow';
+import { isWorkDate, supportsWorkMediaOn, type WorkMediaKind } from '../../../shared/marketing-workflow';
 import type { PlatformPostType } from '../types';
 
 /** Every selected post type has an independent budget. `budget` is retained
@@ -16,12 +16,12 @@ export function availablePlanProducts<T extends { id: string }>(products: T[], e
   return products.filter(product => !usedElsewhere.has(product.id));
 }
 
-export function availablePlanPostTypes(postTypes: PlatformPostType[], mediaKind: WorkMediaKind | undefined, platformId: string): PlatformPostType[] {
-  return mediaKind ? postTypes.filter(type => type.platform_id === platformId && supportsWorkMedia(mediaKind, type.name)) : [];
+export function availablePlanPostTypes(postTypes: PlatformPostType[], mediaKind: WorkMediaKind | undefined, platformId: string, date?: string): PlatformPostType[] {
+  return mediaKind ? postTypes.filter(type => type.platform_id === platformId && supportsWorkMediaOn(mediaKind, type.name, date)) : [];
 }
 
-export function addPlanPlatform(platformId: string, postTypes: PlatformPostType[], mediaKind: WorkMediaKind): PlanPlatformDraft {
-  const compatible = availablePlanPostTypes(postTypes, mediaKind, platformId);
+export function addPlanPlatform(platformId: string, postTypes: PlatformPostType[], mediaKind: WorkMediaKind, date?: string): PlanPlatformDraft {
+  const compatible = availablePlanPostTypes(postTypes, mediaKind, platformId, date);
   const singleId = compatible.length === 1 ? compatible[0].id : '';
   return { platformId, postTypeId: singleId, postTypeIds: singleId ? [singleId] : [], budget: '',
     postTypeBudgets: singleId ? { [singleId]: '' } : {} };
@@ -53,7 +53,7 @@ export function planEntryValid(entry: PlanEntryDraft, products: PlanProductMedia
     if (!platform.platformId || seen.has(platform.platformId)) return false;
     seen.add(platform.platformId);
     const selected = selectedPlanPostTypeIds(platform);
-    const available = new Set(availablePlanPostTypes(postTypes, product.media_kind, platform.platformId).map(type => type.id));
+    const available = new Set(availablePlanPostTypes(postTypes, product.media_kind, platform.platformId, entry.date).map(type => type.id));
     if (!selected.length || new Set(selected).size !== selected.length || selected.some(id => !available.has(id))) return false;
     if (kind === 'campaign' && selected.some((id, index) => !budgetValid(planPostTypeBudget(platform, id, index)))) return false;
   }

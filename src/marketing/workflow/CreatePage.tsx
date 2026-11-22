@@ -229,8 +229,8 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
       if (entry.platforms.some(platform => platform.platformId === platformId)) {
         return { ...entry, platforms: entry.platforms.filter(platform => platform.platformId !== platformId) };
       }
-      if (!availablePlanPostTypes(meta.postTypes, product.media_kind, platformId).length) return entry;
-      return { ...entry, platforms: [...entry.platforms, addPlanPlatform(platformId, meta.postTypes, product.media_kind)] };
+      if (!availablePlanPostTypes(meta.postTypes, product.media_kind, platformId, entry.date).length) return entry;
+      return { ...entry, platforms: [...entry.platforms, addPlanPlatform(platformId, meta.postTypes, product.media_kind, entry.date)] };
     }));
   }
   async function save(event: FormEvent) {
@@ -288,7 +288,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
             const product = products.find(item => item.id === entry.productId);
             const availableIds = new Set(availablePlanProducts(products, entries, entry.key).map(item => item.id));
             const selectableGroups = productGroups.map(group => ({ ...group, rows: group.rows.filter(item => availableIds.has(item.id)) })).filter(group => group.rows.length);
-            const platforms = product ? activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id).length) : [];
+            const platforms = product ? activePlatforms.filter(platform => availablePlanPostTypes(meta.postTypes, product.media_kind, platform.id, entry.date).length) : [];
             const selected = new Map(entry.platforms.map(platform => [platform.platformId, platform]));
             return <div className="mkw-plan-table-row" key={entry.key}>
               <label className="mkw-plan-date-cell"><small>{dateLabel}</small><input aria-label={dateLabel} type="date" required min={kind === 'agenda' ? agendaFrom || undefined : undefined} max={kind === 'agenda' ? agendaTo || undefined : undefined} value={entry.date} disabled={busy} onChange={event => updateEntry(entry.key, { date: event.target.value })}/></label>
@@ -318,7 +318,7 @@ function PlanComposer({ kind, initialProduct, meta }: { kind: 'agenda' | 'campai
               </div>
               <div className="mkw-plan-per-platform mkw-plan-post-type-cell"><strong className="mkw-campaign-field-heading">نوع النشر لكل منصة</strong>
                 {!entry.platforms.length ? <small className="mkw-muted">حدد منصة أو أكثر</small> : entry.platforms.map(platform => {
-                  const formats = availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId);
+                  const formats = availablePlanPostTypes(meta.postTypes, product?.media_kind, platform.platformId, entry.date);
                   return <label className="mkw-plan-platform-field" key={platform.platformId}>
                     <small>{meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}</small>
                     <div className="mkw-post-type-multi" role="group" aria-label={`أنواع النشر — ${meta.platforms.find(item => item.id === platform.platformId)?.name || 'المنصة'}`}>
