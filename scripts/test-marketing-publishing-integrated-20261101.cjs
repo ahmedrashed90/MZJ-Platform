@@ -106,7 +106,7 @@ const blank={id:uid(20),plan_id:uid(21),product_id:uid(22),scheduled_on:'2026-10
   const product={id:productId,idea_name:'Test',media_kind:'image',status:'approved',formats:[{id:postTypeId,name:'Photo'}],files:[{category:'final',status:'ready',format_id:postTypeId,name:'photo.png',mime_type:'image/png'}]};
   const sql=fakeSql(q=>{
     if(q.includes('select * from marketing.work_plans'))return [{id:planId,created_by:user.id,kind:'agenda',review_status:'revision',activated_at:null,review_note:'ملاحظة قديمة'}];
-    if(q.includes('select id::text from marketing.work_plan_items'))return [{id:lineId}];
+    if(q.includes('select id::text,product_id::text,post_type_id::text,scheduled_on::text'))return [{id:lineId,product_id:productId,post_type_id:postTypeId,scheduled_on:'2026-10-31',manual_post_url:'',manual_published_on:null}];
     if(q.includes('select i.*,i.due_on::text,t.name as task_name'))return [product];
     if(q.includes('select i.*,i.due_on::text,coalesce(d.name'))return [product];
     if(q.includes('select pt.id::text,pt.platform_id::text'))return [{id:postTypeId,name:'Photo'}];

@@ -7,6 +7,7 @@ const compiled=ts.transpileModule(fs.readFileSync('src/marketing/workflow/PlanDe
 assert.equal(compiled.diagnostics?.length||0,0);
 const jsx=(type,props)=>({type,props:props||{}});
 const GoalPicker=()=>null;
+const AgendaIdeaDateEditor=()=>null;
 function walk(node,fn){if(Array.isArray(node))return node.forEach(n=>walk(n,fn));if(!node||typeof node!=='object')return;fn(node);walk(node.props?.children,fn);}
 function find(node,test){const hits=[];walk(node,n=>{if(test(n))hits.push(n);});return hits;}
 function hooks(){const values=[],deps=[];let pos=0,eff=0;const queued=[];
@@ -18,7 +19,7 @@ async function scenario(kind,role){
   const state=hooks(),calls=[];
   const isReviewer=role==='reviewer'||role==='goalsReviewer',goalReviewer=role==='goalsReviewer',plan={id:'id',plan_no:'CMP-0001',name:'Example',kind,created_by:'creator',creator_name:'Creator',created_at:'2026-11-02',
     review_status:isReviewer?'in_progress':'revision',review_note:isReviewer?'':'Please update funding dates',review_revision:isReviewer?0:1,
-    status:isReviewer?'in_progress':'revision',readiness:0,canReview:isReviewer,canEditGoals:goalReviewer,canEdit:!isReviewer,canEditFunding:!isReviewer&&kind==='campaign',canEditAgendaWindow:!isReviewer&&kind==='agenda',
+    status:isReviewer?'in_progress':'revision',readiness:0,canReview:isReviewer,canEditGoals:goalReviewer,canEdit:!isReviewer,canEditFunding:!isReviewer&&kind==='campaign',canEditAgendaWindow:!isReviewer&&kind==='agenda',canRescheduleIdeas:role==='agendaDateEditor',
     funding_from:'2026-11-02',funding_to:null,agenda_from:'2026-11-02',agenda_to:'2026-11-09',canSaveLinks:false};
   const data={plan,lines:goalReviewer?[{platform_id:'platform-ig',platform_name:'Instagram'},{platform_id:'platform-sn',platform_name:'Snapchat'},{platform_id:'platform-ig',platform_name:'Instagram'}]:[],history:[]},query={data,error:'',loading:false,reload:async()=>data};
   const mods={react:state,'react/jsx-runtime':{jsx,jsxs:jsx,Fragment:'Fragment'},
@@ -26,13 +27,16 @@ async function scenario(kind,role){
     '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
     './api':{showDate:String,useWorkQuery:resource=>resource==='plan'?query:{data:resource==='campaign_goal_settings'?{goals:[{id:'goal-one',name:'زيادة المبيعات'},{id:'goal-two',name:'طلبات التمويل'}],migrationRequired:false}:{categories:[],rows:[],postTypes:[],platforms:[]},reload:async()=>{}},workPost:async(action,payload)=>{calls.push({action,payload});return{ok:true};}},
     './planComposer':{availablePlanPostTypes:()=>[]},'./PlanStatus':{PlanStatusBadges:()=>{},planStateLabels:{in_progress:'Draft'}},'./campaignOverview':{CampaignOverview:()=>{}},
-    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./ProductReference':{ProductReference:()=>null},
+    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./AgendaIdeaDateEditor':{AgendaIdeaDateEditor},'./ProductReference':{ProductReference:()=>null},
     './productChoice':{productChoiceGroups:()=>[],productChoiceLabel:()=>''},'../../../shared/marketing-campaign-goals':{campaignPlatformGoalRows:lines=>[...new Map(lines.map(row=>[row.platform_id,{platformId:row.platform_id,platformName:row.platform_name,goals:[]}])).values()]},
     '../../../shared/marketing-workflow':{isWorkDate:date=>/^\d{4}-\d{2}-\d{2}$/.test(date)}};
   const out={exports:{}};new Function('require','module','exports',compiled.outputText)(n=>{if(n in mods)return mods[n];throw Error('Missing mock '+n);},out,out.exports);
   function render(){state.render();const v=out.exports.PlanDetail({id:'id',onClose:()=>{},onChanged:()=>{}});state.commit();return v;}
   render();let view=render();
-  if(goalReviewer){
+  if(role==='agendaDateEditor'){
+    assert.equal(find(view,n=>n.type===AgendaIdeaDateEditor).length,1,'Authorized agenda renders its idea-date editor');
+    assert.equal(calls.length,0,'Rendering the editor does not update data');
+  }else if(goalReviewer){
     const edit=find(view,n=>n.type==='button'&&n.props.children==='اختيار المنصات والأهداف')[0];
     assert(edit,'Campaign reviewer must see goal editor');edit.props.onClick();
     view=render();
@@ -88,5 +92,6 @@ async function scenario(kind,role){
   await scenario('agenda','reviewer');console.log('PASS: agenda reviewer sends note without funding controls');
   await scenario('campaign','creator');console.log('PASS: creator changes funding dates for revised campaign');
   await scenario('agenda','creator');console.log('PASS: agenda creator edits agenda publication dates without campaign funding controls');
-  console.log('5/5 plan-review separation and historical campaign goal checks passed');
+  await scenario('agenda','agendaDateEditor');console.log('PASS: approved agenda idea-date editor is available only when authorized');
+  console.log('6/6 plan-review separation and historical campaign goal checks passed');
 })().catch(err=>{console.error(err);process.exitCode=1;});
