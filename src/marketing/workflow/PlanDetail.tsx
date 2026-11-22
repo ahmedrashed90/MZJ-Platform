@@ -6,7 +6,6 @@ import { showDate, useWorkQuery, workPost, type WorkMeta } from './api';
 import { availablePlanPostTypes } from './planComposer';
 import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import { CampaignOverview } from './campaignOverview';
-import { AgendaIdeaDateEditor } from './AgendaIdeaDateEditor';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
@@ -161,7 +160,6 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
           </div>}
         </section>}
       </>}
-      {plan!.kind === 'agenda' && plan!.canRescheduleIdeas && <AgendaIdeaDateEditor planId={id} onChanged={() => { void query.reload(); onChanged?.(); }}/>}
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>

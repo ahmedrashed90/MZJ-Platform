@@ -9,22 +9,23 @@ import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform
 import { agendaPublicationRange, exportCampaignSummaryPdf, exportPlanSummaryPdf, inclusivePlanDays, planApprovalLabel } from './campaignPdfExport';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
+import { AgendaIdeaDateEditor } from './AgendaIdeaDateEditor';
 import { PlanProductsSection, planProductReadiness, type PlanProductsData } from './StrategyProductsTable';
 import type { CampaignPlatformGoals } from '../../../shared/marketing-campaign-goals';
 
 type ReportPlan = {
   id: string; plan_no: string; name: string; kind: 'agenda' | 'campaign';
   created_at: string; creator_name?: string; review_status: string; status: string; review_note?: string;
-  readiness: number; platform_goals?: CampaignPlatformGoals[] | null; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
+  readiness: number; canRescheduleIdeas?: boolean; platform_goals?: CampaignPlatformGoals[] | null; funding_from?: string | null; funding_to?: string | null; agenda_from?: string | null; agenda_to?: string | null;
 };
 type ReportHistory = {
   action: string; note: string; actor_name: string; created_at: string; category_name: string;
 };
 type ReportData = { plan: ReportPlan; lines: WorkPlanLine[]; history: ReportHistory[]; platforms?: Array<{ name: string; code?: string }> };
 
-/** The dashboard report is read-only. Editing and approval remain in PlanDetail
- * (database management); post copy and URLs are entered in PreparationModal. */
-export function PlanReport({ id, onClose }: { id: string; onClose: () => void }) {
+/** Publication report for an approved agenda or campaign. The plan report is
+ * read-only except for the separately permission-gated agenda idea-date editor. */
+export function PlanReport({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged?: () => void }) {
   const query = useWorkQuery<ReportData>('plan', { id });
   // «بيانات المنتجات» for every agenda/campaign, strategy or marketing.
   const products = useWorkQuery<PlanProductsData>('plan_products', { planId: id });
@@ -63,8 +64,20 @@ export function PlanReport({ id, onClose }: { id: string; onClose: () => void })
                   agendaTo: plan.agenda_to, platforms: query.data?.platforms || [] });
               } catch (error) { setPdfError(error instanceof Error ? error.message : 'تعذر تجهيز ملف PDF'); }
             }}>{isCampaign ? 'تصدير PDF — ملخص الحملة' : 'تصدير PDF — ملخص الأجندة'}</button>
-            <span className="mkw-plan-report-readonly">للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
+            <span className="mkw-plan-report-readonly">تفاصيل المنشورات للعرض فقط</span><PlanStatusBadges kind={plan.kind} reviewStatus={plan.review_status} publishedCount={published} totalCount={lines.length}/></div>
         </div>
+        {!isCampaign && ['publishing', 'published'].includes(plan.review_status) && (
+          plan.canRescheduleIdeas
+            ? <AgendaIdeaDateEditor planId={id} onChanged={() => {
+                void query.reload();
+                void products.reload();
+                onChanged?.();
+              }}/>
+            : <button type="button" className="secondary" disabled
+                title="تعديل المواعيد متاح لمنشئ الأجندة أو المراجع المصرح له بصلاحية تعديل الأجندة">
+                تعديل مواعيد نشر أفكار الأجندة — لا توجد صلاحية
+              </button>
+        )}
         <div className="mkw-summary mkw-plan-report-summary">
           <div><small>منشئ {isCampaign ? 'الحملة' : 'الأجندة'}</small><strong>{plan.creator_name?.trim() || '—'}</strong></div>
           <div><small>تاريخ إنشاء الأجندة أو الحملة</small><strong>{showDate(plan.created_at)}</strong></div>

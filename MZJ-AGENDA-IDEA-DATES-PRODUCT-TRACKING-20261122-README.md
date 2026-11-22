@@ -5,7 +5,11 @@ This ZIP contains the complete original application with integrated source edits
 
 ## Approved agenda: adjust one date per idea
 
-Open Marketing > Dashboard > Publishing > approved agenda details > Edit idea publication dates.
+Open Marketing > Dashboard > Publishing > approved agenda > Report OR Prepare Publishing.
+Both screens now expose **Edit agenda idea publication dates** at the top for users who
+are authorized to edit this approved agenda. The former Review/PlanDetail screen
+is not used to edit approved-agenda publication dates. The report and preparation
+must refresh their displayed dates after a successful save.
 Idea rows are keyed by the saved strategy idea code, not by text or platform.
 Expand any idea and enter a new planned date. Stage multiple edits and save once.
 The server atomically updates all matching plan items and eligible waiting/failed schedules, draft agenda dates, creative plan days, and the agenda date window. Approval status and actual publication history are preserved. Already published/external scheduled posts block changes for their entire idea; unmapped posts are warned and never guessed.

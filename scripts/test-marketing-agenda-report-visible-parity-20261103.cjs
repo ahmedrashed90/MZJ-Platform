@@ -8,7 +8,7 @@ const jsx = (type, props) => ({ type, props: props || {} });
 const data = {
   plan: { id: 'agenda-1', kind: 'agenda', name: 'أجندة نوفمبر', plan_no: 'AGD-001',
     creator_name: 'منشئ الأجندة التجريبي', created_at: '2026-11-02T08:00:00Z',
-    review_status: 'publishing', status: 'publishing', readiness: 25,
+    review_status: 'publishing', status: 'publishing', readiness: 25, canRescheduleIdeas: true,
     agenda_from: '2026-11-02', agenda_to: '2026-11-05' },
   platforms: [
     { name: 'انستجرام', code: 'instagram' }, { name: 'تيك توك', code: 'tiktok' },
@@ -33,6 +33,7 @@ const stubs = {
   './components': {Empty:'Empty', WorkAlert:'WorkAlert'},
   './PlanStatus': {PlanStatusBadges:'PlanStatusBadges', planDisplayState: (_status, published, total) => published === total ? 'published' : 'publishing'},
   './PlanDetail': {PublicationTiming:'PublicationTiming', planStatusName: name => ({publishing:'جاري النشر',published:'تم النشر'})[name] || name},
+  './AgendaIdeaDateEditor': {AgendaIdeaDateEditor: 'AgendaIdeaDateEditor'},
   './api': {showDate: value => value ? String(value).slice(0, 10) : '—', useWorkQuery: () => ({data,loading:false,error:''})},
 };
 const load = createLoader(process.cwd(), stubs);
@@ -56,6 +57,18 @@ const pdf=planPdfSummaryHtml({kind:'agenda', planName:data.plan.name,planNo:data
   lines:data.lines,platforms:data.platforms,creatorName:data.plan.creator_name,createdAt:data.plan.created_at,
   agendaFrom:data.plan.agenda_from,agendaTo:data.plan.agenda_to,
   publishState:'جاري النشر',approvedByName:data.history[0].actor_name,approvedAt:data.history[0].created_at});
+check('Approved agenda report includes the authorized idea-date editor above its summary',()=>{
+  const nodes=[]; traverse(view,node=>{ if(node?.type==='AgendaIdeaDateEditor') nodes.push(node); });
+  assert.equal(nodes.length,1);
+  assert.equal(nodes[0].props.planId,'agenda-1');
+  const original=data.plan.canRescheduleIdeas;
+  try {
+    data.plan.canRescheduleIdeas=false;
+    const denied=PlanReport({id:'agenda-no-permission',onClose:()=>{}});
+    const unauthorized=[];traverse(denied,node=>{ if(node?.type==='AgendaIdeaDateEditor') unauthorized.push(node); });
+    assert.equal(unauthorized.length,0,'Unauthorized users cannot load the editor');
+  } finally {data.plan.canRescheduleIdeas=original;}
+});
 check('Report preserves existing creator, created date, post count, and publication labels',()=>{
   for(const label of ['منشئ الأجندة','تاريخ إنشاء الأجندة أو الحملة','عدد المنشورات','حالة النشر','المنشورات المنشورة'])
     assert(text.includes(label),label);

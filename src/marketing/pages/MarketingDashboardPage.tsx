@@ -8,6 +8,7 @@ import { TaskDetail } from '../workflow/TaskDetail';
 import { DeleteTaskButton } from '../workflow/DeleteTaskButton';
 import { PreparationModal } from '../workflow/PublishPage';
 import { AgendaSyncButton } from '../workflow/AgendaSyncButton';
+import { AgendaIdeaDateEditor } from '../workflow/AgendaIdeaDateEditor';
 import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState, planStateLabels } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
@@ -138,6 +139,11 @@ export function MarketingDashboardPage() {
   const chooserProducts = useWorkQuery<PlanProductsData>('plan_products', { planId: selectPlan }, Boolean(selectPlan));
   const chooserLines = preparationLinesByDate(chooserSourceLines);
   const chooserIsCampaign = chooserLines[0]?.kind === 'campaign';
+  // Read the same server-derived edit permission as the plan report. Never infer
+  // it from general publication-preparation access or agenda ownership alone.
+  const chooserAgendaPlan = useWorkQuery<{ plan: { canRescheduleIdeas?: boolean } }>(
+    'plan', { id: selectPlan }, Boolean(selectPlan && chooserSourceLines[0]?.kind === 'agenda')
+  );
 
   return <div className="mkw mkw-dashboard"><WorkHeader title={W.dashboard} onRefresh={() => { void query.reload(); void strategyDrafts.reload(); }} loading={query.loading}>{query.data?.capabilities.createTask && <Link className="mkw-link-button" to="/marketing/create"><Plus size={17}/>{W.createTask}</Link>}</WorkHeader><WorkAlert>{query.error || activationError || schemaError}</WorkAlert><WorkAlert success>{activationMessage}</WorkAlert>
     {schema.data && !schema.data.ready && <div className="mkw-schema-upgrade" role="alert">
@@ -286,7 +292,7 @@ export function MarketingDashboardPage() {
     {taskId && <TaskDetail id={taskId} deliveryFilter={deliveryFilter} captureOnly={captureOnly} searchAssigneeNames={searchTaskAssignees}
       onClose={() => { setParams({}); setDeliveryFilter(''); setCaptureOnly(false); setSearchTaskAssignees([]); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
-    {tableId && <PlanReport id={tableId} onClose={() => setTableId('')}/>}    
+    {tableId && <PlanReport id={tableId} onClose={() => setTableId('')} onChanged={() => void query.reload()}/>}    
     {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
       {!!chooserSourceLines.length && <div className="mkw-campaign-chooser-toolbar">
         <strong>{chooserIsCampaign ? 'ملخص الحملة وجدول تجهيز المنشورات' : 'ملخص الأجندة وجدول تجهيز المنشورات'}</strong>
@@ -312,6 +318,19 @@ export function MarketingDashboardPage() {
           onClick={() => setLinkPlanId(chooserSourceLines[0].plan_id)}>ربط الحملة بتقارير الحملات (تفاعل النشر)</button>}
       </div>}
       <WorkAlert>{pdfError}</WorkAlert>
+      {!chooserIsCampaign && !!chooserSourceLines.length &&
+        ['publishing','published'].includes(chooserSourceLines[0]?.review_status || '') && (
+          chooserAgendaPlan.data?.plan?.canRescheduleIdeas
+            ? <AgendaIdeaDateEditor planId={selectPlan} onChanged={() => {
+                void query.reload();
+                void chooserAgendaPlan.reload();
+                void chooserProducts.reload();
+              }}/>
+            : chooserAgendaPlan.data && <button type="button" className="secondary" disabled
+                title="تعديل المواعيد متاح لمنشئ الأجندة أو المراجع المصرح له بصلاحية تعديل الأجندة">
+                تعديل مواعيد نشر أفكار الأجندة — لا توجد صلاحية
+              </button>
+        )}
       {chooserIsCampaign && <CampaignOverview lines={chooserSourceLines} fundingFrom={chooserSourceLines[0]?.funding_from} fundingTo={chooserSourceLines[0]?.funding_to} platformGoals={chooserSourceLines[0]?.campaign_platform_goals}/>}
       {!chooserIsCampaign && !!chooserSourceLines.length && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
         <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(chooserSourceLines[0]?.agenda_from)}</strong></div>

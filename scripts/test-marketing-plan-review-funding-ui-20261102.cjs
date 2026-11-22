@@ -34,7 +34,7 @@ async function scenario(kind,role){
   function render(){state.render();const v=out.exports.PlanDetail({id:'id',onClose:()=>{},onChanged:()=>{}});state.commit();return v;}
   render();let view=render();
   if(role==='agendaDateEditor'){
-    assert.equal(find(view,n=>n.type===AgendaIdeaDateEditor).length,1,'Authorized agenda renders its idea-date editor');
+    assert.equal(find(view,n=>n.type===AgendaIdeaDateEditor).length,0,'Idea-date editing belongs in the approved agenda report/preparation, not review');
     assert.equal(calls.length,0,'Rendering the editor does not update data');
   }else if(goalReviewer){
     const edit=find(view,n=>n.type==='button'&&n.props.children==='اختيار المنصات والأهداف')[0];
@@ -92,6 +92,6 @@ async function scenario(kind,role){
   await scenario('agenda','reviewer');console.log('PASS: agenda reviewer sends note without funding controls');
   await scenario('campaign','creator');console.log('PASS: creator changes funding dates for revised campaign');
   await scenario('agenda','creator');console.log('PASS: agenda creator edits agenda publication dates without campaign funding controls');
-  await scenario('agenda','agendaDateEditor');console.log('PASS: approved agenda idea-date editor is available only when authorized');
+  await scenario('agenda','agendaDateEditor');console.log('PASS: idea-date editor is not misplaced in agenda review');
   console.log('6/6 plan-review separation and historical campaign goal checks passed');
 })().catch(err=>{console.error(err);process.exitCode=1;});
