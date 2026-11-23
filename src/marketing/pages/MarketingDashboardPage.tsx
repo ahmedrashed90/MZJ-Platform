@@ -15,7 +15,7 @@ import { PlanReport } from '../workflow/PlanReport';
 import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
-import { publishingDashboardEntries } from '../workflow/publishingPriority';
+import { executionDashboardTasks, publishingDashboardEntries } from '../workflow/publishingPriority';
 import { searchMarketingDashboard } from '../workflow/dashboardSearch';
 import { taskCategoryLabel } from '../workflow/taskPresentation';
 import { DashboardSearchResults } from '../components/DashboardSearchResults';
@@ -94,6 +94,7 @@ export function MarketingDashboardPage() {
   // Keep the normal execution/publishing cards unchanged. Search renders a
   // separate, keyword-matched result list with exact publication dates.
   const tasks = query.data?.tasks || [];
+  const executionTasks = useMemo(() => executionDashboardTasks(tasks), [tasks]);
   const lines = query.data?.lines || [];
   const searchResults = useMemo(() => searchMarketingDashboard(tasks, lines, search), [tasks, lines, search]);
   const groups = useMemo(() => {
@@ -170,7 +171,7 @@ export function MarketingDashboardPage() {
     <div className="mkw-board mkw-dashboard-board">
       <section className="mkw-column"><header><div className="mkw-column-title"><ClipboardText size={21}/><h2>{W.execution}</h2></div><span>{tasks.length}</span></header>
         <div className="mkw-column-body">{!tasks.length && <Empty>{query.loading ? W.loading : W.noData}</Empty>}
-          {tasks.map(task => <article className="mkw-dashboard-task" key={task.id}>
+          {executionTasks.map(task => <article className="mkw-dashboard-task" key={task.id}>
             <div className="mkw-dashboard-task-heading"><div><span className="mkw-code">{task.task_no}</span><h3 title={task.name}>{executionCardName(task.name)}</h3></div><div className="mkw-dashboard-task-buttons"><button type="button" className="mkw-dashboard-view" aria-label={`${W.open} ${task.name}`} onClick={() => openTask(task.id)}><Eye size={20}/></button><DeleteTaskButton compact id={task.id} name={task.name} code={task.task_no} onDeleted={() => query.reload()}/></div></div>
             <div className="mkw-dashboard-stats"><div><small>{W.createdAt}</small><strong>{showDate(task.created_at)}</strong></div><div><small>{W.dueOn}</small><strong>{showRange(task.due_from, task.due_to)}</strong></div><div><small>{W.productCount}</small><strong>{task.product_count}</strong></div></div>
             <Readiness value={task.readiness}/>

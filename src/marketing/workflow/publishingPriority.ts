@@ -1,51 +1,65 @@
-/** Display-only ordering for publishing cards in the Marketing dashboard.
- * Neither the source queries nor stored agenda/campaign status are changed.
- * Unstarted items are first, work in progress next, completed items last.
+/** Dashboard-only ordering by the SAME readiness percentages rendered on the cards.
+ * No persisted task, agenda, campaign or draft data is modified.
  */
-import type { WorkPlanLine } from '../../../shared/marketing-workflow';
+import type { WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 import type { StrategyDraft } from './StrategyProductsTable';
 
 export type PublishingDashboardEntry =
-  | { source: 'draft'; id: string; draft: StrategyDraft; priority: number; progress: number; createdAt: string }
-  | { source: 'plan'; id: string; group: WorkPlanLine[]; priority: number; progress: number; createdAt: string };
+  | { source: 'draft'; id: string; draft: StrategyDraft; readiness: number; createdAt: string }
+  | { source: 'plan'; id: string; group: WorkPlanLine[]; readiness: number; createdAt: string };
 
-/** A review/approval, preparation, activation or publication is an action. */
+/** Match the Readiness component's numeric normalization (including decimals). */
+function normalizedReadiness(value: unknown): number {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+/** Numeric ascending readiness, then newest creation timestamp first. */
+function byReadinessAndCreation(
+  a: { id: string; readiness: number; createdAt: string },
+  b: { id: string; readiness: number; createdAt: string },
+): number {
+  return a.readiness - b.readiness ||
+    b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+}
+
+/** The execution cards display task.readiness directly, including fractions. */
+export function executionDashboardTasks(tasks: ReadonlyArray<WorkTask>): WorkTask[] {
+  return [...tasks].sort((a, b) => byReadinessAndCreation(
+    { id: a.id, readiness: normalizedReadiness(a.readiness), createdAt: String(a.created_at || '') },
+    { id: b.id, readiness: normalizedReadiness(b.readiness), createdAt: String(b.created_at || '') },
+  ));
+}
+
+/** The plan card displays Math.round(publishedReady / allLines * 100). */
 function planEntry(id: string, group: WorkPlanLine[]): PublishingDashboardEntry {
-  const total = group.length;
-  const prepared = group.filter(line => Number(line.prepared_count || 0) > 0 || Number(line.failed_count || 0) > 0).length;
-  const published = group.filter(line => line.published_ready || Number(line.published_count || 0) > 0).length;
-  const status = group[0]?.review_status || 'in_progress';
-  const activated = group.some(line => Boolean(line.activated_at));
-  const finished = status === 'published' || (total > 0 && group.every(line => Boolean(line.published_ready)));
-  const untouched = status === 'in_progress' && prepared === 0 && published === 0 && !activated;
+  const readiness = group.length
+    ? Math.round(group.filter(line => Boolean(line.published_ready)).length * 100 / group.length)
+    : 0;
   return {
     source: 'plan', id, group,
-    priority: finished ? 2 : untouched ? 0 : 1,
-    progress: total ? (prepared + published) / (total * 2) : 0,
+    readiness: normalizedReadiness(readiness),
     createdAt: String(group[0]?.plan_created_at || ''),
   };
 }
 
+/** StrategyDraftCard shows readyCount / productCount, not configuredCount. */
 function draftEntry(draft: StrategyDraft): PublishingDashboardEntry {
-  const total = draft.productCount || 0;
-  const worked = Math.max(draft.configuredCount || 0, draft.executedCount || 0, draft.readyCount || 0);
-  const untouched = draft.status === 'draft' && worked === 0;
+  const readiness = draft.productCount
+    ? Math.round(draft.readyCount * 100 / draft.productCount)
+    : 0;
   return {
     source: 'draft', id: draft.id, draft,
-    priority: draft.status === 'submitted' ? 2 : untouched ? 0 : 1,
-    progress: total ? worked / total : 0,
+    readiness: normalizedReadiness(readiness),
     createdAt: String(draft.createdAt || ''),
   };
 }
 
-/** Both strategy drafts and saved plans participate in the SAME priority order. */
+/** Drafts, agendas and campaigns share one ascending readiness order. */
 export function publishingDashboardEntries(
   groups: ReadonlyMap<string, WorkPlanLine[]>, drafts: ReadonlyArray<StrategyDraft>,
 ): PublishingDashboardEntry[] {
   return [
     ...drafts.map(draftEntry),
     ...[...groups.entries()].filter(([, group]) => group.length > 0).map(([id, group]) => planEntry(id, group)),
-  ].sort((a, b) =>
-    a.priority - b.priority || a.progress - b.progress ||
-    b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  ].sort(byReadinessAndCreation);
 }

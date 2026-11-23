@@ -7,7 +7,7 @@ const load = createLoader(process.cwd(), {
   'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
   './api': { showDate: date => String(date || '—').slice(0, 10) },
 });
-const { publishingDashboardEntries } = load('src/marketing/workflow/publishingPriority.ts');
+const { executionDashboardTasks, publishingDashboardEntries } = load('src/marketing/workflow/publishingPriority.ts');
 const { compactPublishingIdeaTitle, planPdfSummaryHtml, planPdfScheduleRows } = load('src/marketing/workflow/campaignPdfExport.ts');
 let count = 0;
 function test(name, fn) { fn(); count++; console.log('PASS:', name); }
@@ -24,33 +24,89 @@ const draft = (id, options = {}) => ({
   ...options,
 });
 
-test('Untouched agenda/campaign cards are above ongoing and finished cards, including strategy drafts', () => {
-  const groups = new Map([
-    ['finished', [planLine('finished', { review_status: 'published', published_ready: true, prepared_count: 1 })]],
-    ['started', [planLine('started', { prepared_count: 1 })]],
-    ['new-older', [planLine('new-older', { kind: 'campaign', plan_created_at: '2026-11-19T12:00:00Z' })]],
-    ['new-latest', [planLine('new-latest', { plan_created_at: '2026-11-22T12:00:00Z' })]],
+// Numeric readiness is the ONLY primary ordering rule, regardless of workflow status.
+test('Execution cards sort by visible numeric readiness: 0%, 16.7%, 83.3%, 100%', () => {
+  const input = [
+    { id: 'finished', readiness: 100, created_at: '2026-11-22T12:00:00Z' },
+    { id: 'partial-high', readiness: 83.3, created_at: '2026-11-20T12:00:00Z' },
+    { id: 'partial-low', readiness: 16.7, created_at: '2026-11-21T12:00:00Z' },
+    { id: 'untouched', readiness: 0, created_at: '2026-11-19T12:00:00Z' },
+    { id: 'also-finished', readiness: 100, created_at: '2026-11-23T12:00:00Z' },
+  ];
+  assert.deepEqual(executionDashboardTasks(input).map(item => item.id), [
+    'untouched', 'partial-low', 'partial-high', 'also-finished', 'finished',
   ]);
-  const drafts = [draft('draft-working', { configuredCount: 1 }), draft('draft-new', { createdAt: '2026-11-21T12:00:00Z' }),
-    draft('draft-sent', { status: 'submitted' })];
-  const sorted = publishingDashboardEntries(groups, drafts);
-  assert.deepEqual(sorted.map(item => item.id), [
-    'new-latest', 'draft-new', 'new-older', 'draft-working', 'started', 'draft-sent', 'finished',
-  ]);
-  assert.deepEqual([...groups.keys()], ['finished', 'started', 'new-older', 'new-latest'], 'do not mutate backend order');
-  assert.equal(drafts[0].id, 'draft-working', 'do not mutate draft array');
+  assert.deepEqual(input.map(item => item.id), ['finished', 'partial-high', 'partial-low', 'untouched', 'also-finished']);
 });
 
-test('Any review decision, attempted preparation or activation counts as action', () => {
-  const groups = new Map([
-    ['failed-prep', [planLine('failed-prep', { failed_count: 1 })]],
-    ['under-review', [planLine('under-review', { review_status: 'submitted' })]],
-    ['activated', [planLine('activated', { activated_at: '2026-11-20T13:00:00Z' })]],
-    ['unstarted', [planLine('unstarted')]],
+test('Execution readiness equalities use newest timestamp, with deterministic tie and safe numeric normalization', () => {
+  const input = [
+    { id: 'b', readiness: '0', created_at: '2026-11-21T12:00:00Z' },
+    { id: 'z', readiness: 0, created_at: '2026-11-22T12:00:00Z' },
+    { id: 'a', readiness: 0, created_at: '2026-11-21T12:00:00Z' },
+    { id: 'negative', readiness: -50, created_at: '2026-11-20T12:00:00Z' },
+    { id: 'missing', readiness: undefined, created_at: '2026-11-23T12:00:00Z' },
+  ];
+  assert.deepEqual(executionDashboardTasks(input).map(item => item.id), [
+    'missing', 'z', 'a', 'b', 'negative',
   ]);
-  const sorted = publishingDashboardEntries(groups, []);
-  assert.equal(sorted[0].id, 'unstarted');
-  assert(sorted.slice(1).every(row => row.priority === 1));
+});
+
+test('Plans and drafts sort by the EXACT readiness displayed, not action/status/preparation', () => {
+  const oneOfSix = Array.from({ length: 6 }, (_, index) => planLine('one-of-six', {
+    id: `one-of-six-${index}`, published_ready: index === 0,
+    prepared_count: 1, review_status: 'publishing',
+    plan_created_at: '2026-11-19T12:00:00Z',
+  }));
+  const fiveOfSix = Array.from({ length: 6 }, (_, index) => planLine('five-of-six', {
+    id: `five-of-six-${index}`, published_ready: index < 5,
+    plan_created_at: '2026-11-19T12:00:00Z',
+  }));
+  const groups = new Map([
+    ['complete', [planLine('complete', { review_status: 'published', published_ready: true, prepared_count: 1 })]],
+    ['one-of-six', oneOfSix],
+    ['five-of-six', fiveOfSix],
+    ['approved-zero', [planLine('approved-zero', { review_status: 'publishing', prepared_count: 1, activated_at: '2026-11-20T13:00:00Z', plan_created_at: '2026-11-21T12:00:00Z' })]],
+    ['zero-newer', [planLine('zero-newer', { kind: 'campaign', plan_created_at: '2026-11-22T12:00:00Z' })]],
+  ]);
+  const drafts = [
+    draft('draft-half', { readyCount: 2, configuredCount: 4, createdAt: '2026-11-23T12:00:00Z' }),
+    draft('draft-zero', { configuredCount: 4, readyCount: 0, createdAt: '2026-11-20T12:00:00Z' }),
+    draft('draft-full', { readyCount: 4, createdAt: '2026-11-21T12:00:00Z' }),
+  ];
+  const sorted = publishingDashboardEntries(groups, drafts);
+  assert.deepEqual(sorted.map(item => item.id), [
+    'zero-newer', 'approved-zero', 'draft-zero', 'one-of-six', 'draft-half', 'five-of-six', 'draft-full', 'complete',
+  ]);
+  assert.deepEqual(sorted.map(item => item.readiness), [0, 0, 0, 17, 50, 83, 100, 100]);
+  assert.deepEqual([...groups.keys()], ['complete', 'one-of-six', 'five-of-six', 'approved-zero', 'zero-newer']);
+  assert.deepEqual(drafts.map(item => item.id), ['draft-half', 'draft-zero', 'draft-full']);
+});
+
+test('Zero readiness stays first even when plan is submitted, prepared, activated or published', () => {
+  const groups = new Map([
+    ['half', [planLine('half', { published_ready: true }), planLine('half', { id: 'half-2' })]],
+    ['activated', [planLine('activated', { review_status: 'publishing', activated_at: '2026-11-22', prepared_count: 1 })]],
+    ['submitted', [planLine('submitted', { review_status: 'submitted', prepared_count: 1 })]],
+    ['failed-preparation', [planLine('failed-preparation', { failed_count: 1 })]],
+  ]);
+  assert.deepEqual(publishingDashboardEntries(groups, []).map(item => item.readiness), [0, 0, 0, 50]);
+});
+
+test('Refreshing readiness reorders cards without touching the underlying data', () => {
+  const first = [ { id: 'A', readiness: 0, created_at: '2026-11-21' }, { id: 'B', readiness: 75, created_at: '2026-11-22' } ];
+  assert.deepEqual(executionDashboardTasks(first).map(task => task.id), ['A', 'B']);
+  const next = first.map(task => ({...task, readiness: task.id === 'A' ? 100 : 50 }));
+  assert.deepEqual(executionDashboardTasks(next).map(task => task.id), ['B', 'A']);
+  assert.equal(first[0].readiness, 0);
+});
+
+test('Dashboard renders execution sorted cards and the publish readiness calculation is consistent', () => {
+  const source = fs.readFileSync('src/marketing/pages/MarketingDashboardPage.tsx', 'utf8');
+  assert.match(source, /executionDashboardTasks\(tasks\)/);
+  assert.match(source, /executionTasks\.map\(task/);
+  assert.match(source, /Math\.round\(readyLines \* 100 \/ group\.length\)/);
+  assert.match(source, /<Readiness value=\{readiness\} label="جاهزية النشر"\s*\/>/);
 });
 
 const first = 'بريف إبداعي: سنة جديدة وسيارة جديدة — عروض بداية العام من MZJ السيارات المعتمدة: لا توجد سيارات محددة للفكرة';
