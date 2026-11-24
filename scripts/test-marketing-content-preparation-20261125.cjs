@@ -47,14 +47,35 @@ test('Deleting any one saved requirement reduces the prepared count on the next 
 });
 const server = fs.readFileSync('server/marketing/workflow.ts', 'utf8');
 const dashboard = fs.readFileSync('src/marketing/pages/MarketingDashboardPage.tsx', 'utf8');
-test('Server checks real ready FINAL files tied to the product and publishing type', () => {
+test('Server checks real ready FINAL files tied to the source product without false post-type mismatches', () => {
   const query = server.slice(server.indexOf('async function planLines('), server.indexOf('/** Attach the campaign-report link'));
-  assert.match(query, /exists\(select 1 from marketing\.work_item_files final_attachment/);
-  assert.match(query, /final_attachment\.item_id=l\.product_id/);
-  assert.match(query, /final_attachment\.category='final' and media\.status='ready'/);
-  assert.match(query, /final_attachment\.format_id=l\.post_type_id::text/);
-  assert.match(query, /source_format\.width=pt\.width and source_format\.height=pt\.height/);
+  const start = query.indexOf('exists(select 1 from marketing.work_item_files final_attachment');
+  const end = query.indexOf(') as final_file_ready', start);
+  assert.ok(start >= 0 && end > start, 'missing SQL FINAL file readiness check');
+  const check = query.slice(start, end);
+  assert.match(check, /final_attachment\.item_id=l\.product_id/);
+  assert.match(check, /final_attachment\.category='final' and media\.status='ready'/);
+  assert.doesNotMatch(check, /final_attachment\.format_id|source_format|pt\.width|pt\.height|l\.post_type_id/);
   assert.match(query, /\) as final_file_ready/);
+});
+test('One product with four approved final sizes is not falsely missing across seven agenda posts', () => {
+  const sevenPosts = Array.from({ length: 7 }, (_, i) => ({
+    ...good,
+    product_id: 'TSK-000224-03',
+    post_type_id: `platform-output-${i}`,
+    source_final_sizes: 4,
+  }));
+  assert.equal(sevenPosts.filter(isPublishContentPrepared).length, 7);
+  sevenPosts[4] = { ...sevenPosts[4], hashtags: ' ' };
+  assert.equal(sevenPosts.filter(isPublishContentPrepared).length, 6);
+  sevenPosts[4] = { ...sevenPosts[4], hashtags: '#عرض', final_file_ready: false };
+  assert.equal(sevenPosts.filter(isPublishContentPrepared).length, 6);
+});
+test('Actual publishing still enforces output format compatibility', () => {
+  const media = fs.readFileSync('shared/marketing-workflow.ts', 'utf8');
+  assert.match(media, /function matchingWorkflowPublishFiles\(/);
+  assert.match(media, /const exact = matchingFiles\(target\.id\)/);
+  assert.match(media, /Number\(source\.width\) === Number\(target\.width\)/);
 });
 test('Dashboard counts by the shared checklist and leaves real published readiness intact', () => {
   assert.match(dashboard, /const preparedLines = group\.filter\(isPublishContentPrepared\)\.length/);

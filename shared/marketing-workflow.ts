@@ -68,7 +68,7 @@ export type WorkPlanLine = {
   product_id: string; idea_name: string; product_idea?: string; task_no: string; task_name: string;
   requirement_number?: number; assignee_name?: string; media_kind: WorkMediaKind;
   prepared_count: number; published_count: number; scheduled_count?: number; failed_count: number; status: string; files?: WorkFile[];
-  /** A ready FINAL file matching this line's platform/type (or exact output dimensions). */
+  /** Whether the source product has at least one persisted ready FINAL file; format compatibility is checked when publishing. */
   final_file_ready?: boolean;
   /** Strategy flow only: the draft this plan came from, the per-idea funding
    * date, and the «تقارير الحملات» campaign that marks the line as published. */
