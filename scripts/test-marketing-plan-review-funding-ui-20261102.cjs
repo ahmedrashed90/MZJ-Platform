@@ -8,6 +8,7 @@ assert.equal(compiled.diagnostics?.length||0,0);
 const jsx=(type,props)=>({type,props:props||{}});
 const GoalPicker=()=>null;
 const AgendaIdeaDateEditor=()=>null;
+const PlanExecutorDates=()=>null;
 function walk(node,fn){if(Array.isArray(node))return node.forEach(n=>walk(n,fn));if(!node||typeof node!=='object')return;fn(node);walk(node.props?.children,fn);}
 function find(node,test){const hits=[];walk(node,n=>{if(test(n))hits.push(n);});return hits;}
 function hooks(){const values=[],deps=[];let pos=0,eff=0;const queued=[];
@@ -27,7 +28,7 @@ async function scenario(kind,role){
     '../../../shared/marketing-review-note-format':{parseReviewNote:()=>[]},
     './api':{showDate:String,useWorkQuery:resource=>resource==='plan'?query:{data:resource==='campaign_goal_settings'?{goals:[{id:'goal-one',name:'زيادة المبيعات'},{id:'goal-two',name:'طلبات التمويل'}],migrationRequired:false}:{categories:[],rows:[],postTypes:[],platforms:[]},reload:async()=>{}},workPost:async(action,payload)=>{calls.push({action,payload});return{ok:true};}},
     './planComposer':{availablePlanPostTypes:()=>[]},'./PlanStatus':{PlanStatusBadges:()=>{},planStateLabels:{in_progress:'Draft'}},'./campaignOverview':{CampaignOverview:()=>{}},
-    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./AgendaIdeaDateEditor':{AgendaIdeaDateEditor},'./ProductReference':{ProductReference:()=>null},
+    './CampaignGoals':{CampaignGoalPicker:GoalPicker},'./AgendaIdeaDateEditor':{AgendaIdeaDateEditor},'./PlanExecutorDates':{PlanExecutorDates},'./ProductReference':{ProductReference:()=>null},
     './productChoice':{productChoiceGroups:()=>[],productChoiceLabel:()=>''},'../../../shared/marketing-campaign-goals':{campaignPlatformGoalRows:lines=>[...new Map(lines.map(row=>[row.platform_id,{platformId:row.platform_id,platformName:row.platform_name,goals:[]}])).values()]},
     '../../../shared/marketing-workflow':{isWorkDate:date=>/^\d{4}-\d{2}-\d{2}$/.test(date)}};
   const out={exports:{}};new Function('require','module','exports',compiled.outputText)(n=>{if(n in mods)return mods[n];throw Error('Missing mock '+n);},out,out.exports);

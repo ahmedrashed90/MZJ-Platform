@@ -1352,3 +1352,35 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-product-readiness span { display:block; height:7px; border-radius:99px; background:var(--surface-soft); border:1px solid var(--line); overflow:hidden; }
 .mkw-product-readiness b { display:block; height:100%; background:var(--brand); }
 .mkw-product-readiness small { color:var(--muted); font-size:.75rem; font-variant-numeric:tabular-nums; }
+
+/* Per-executor delivery dates inside any agenda/campaign (draft or reviewed).
+   Independent from task execution deadlines and publication dates. */
+.mkw-plan-executor-dates { margin:14px 0; border:1px solid var(--line-strong); border-radius:15px; background:var(--surface); overflow:hidden; }
+.mkw-plan-executor-dates > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:14px 17px; cursor:pointer; background:var(--surface-soft); }
+.mkw-plan-executor-summary { display:grid; gap:4px; }
+.mkw-plan-executor-summary strong { font-size:14px; color:var(--ink); }
+.mkw-plan-executor-summary small { font-size:12px; color:var(--muted); line-height:1.6; }
+.mkw-plan-executor-count { border-radius:99px; border:1px solid var(--line-strong); padding:5px 10px; font-size:12px; color:var(--brand); }
+.mkw-plan-executor-body { padding:14px; display:grid; gap:12px; }
+.mkw-plan-executor-error,.mkw-plan-executor-migration { margin:0; border:1px solid #dc9d91; padding:10px 12px; border-radius:9px; color:#963c30; background:#fff3ef; }
+.mkw-plan-executor-success { margin:0; border:1px solid #94bda5; padding:10px 12px; border-radius:9px; color:#256c46; background:#eef7f0; }
+.mkw-plan-executor-search { display:grid; gap:5px; font-size:12px; font-weight:700; }
+.mkw-plan-executor-search input { width:100%; min-height:37px; }
+.mkw-plan-executor-list { display:flex; flex-direction:column; gap:8px; max-height:min(55dvh,580px); overflow-y:auto; padding:3px; }
+.mkw-plan-executor-idea { flex:0 0 auto; border:1px solid var(--line); border-radius:11px; background:var(--surface); }
+.mkw-plan-executor-idea[open] { border-color:var(--brand); }
+.mkw-plan-executor-idea > summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; cursor:pointer; padding:12px; }
+.mkw-plan-executor-idea > summary strong { min-width:180px; flex:1 1 260px; font-size:13px; overflow-wrap:anywhere; }
+.mkw-plan-executor-idea > summary small { color:var(--muted); font-size:11px; }
+.mkw-plan-executor-idea > summary span { border:1px solid var(--line); border-radius:99px; padding:3px 9px; font-size:11px; color:var(--brand); }
+.mkw-plan-executor-people { padding:12px; display:grid; gap:9px; border-top:1px solid var(--line); background:var(--surface-soft); }
+.mkw-plan-executor-person { display:grid; grid-template-columns:minmax(170px,1fr) minmax(190px,270px) auto; align-items:center; gap:12px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:11px; }
+.mkw-plan-executor-person > label { display:grid; gap:6px; font-size:12px; font-weight:700; }
+.mkw-plan-executor-person input[type="date"] { width:100%; direction:ltr; min-height:38px; }
+.mkw-plan-executor-name { display:grid; gap:5px; }
+.mkw-plan-executor-name > strong { font-size:13px; }
+.mkw-plan-executor-name > small { font-size:11px; color:var(--muted); }
+.mkw-plan-executor-buttons { display:flex; flex-wrap:wrap; gap:6px; }
+.mkw-plan-executor-buttons button,.mkw-plan-executor-footer button { display:inline-flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap; }
+.mkw-plan-executor-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; padding-top:12px; border-top:1px solid var(--line); font-size:12px; }
+@media(max-width:800px) { .mkw-plan-executor-person { grid-template-columns:1fr; } .mkw-plan-executor-buttons { justify-content:flex-start; } }

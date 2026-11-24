@@ -6,6 +6,7 @@ import { showDate, useWorkQuery, workPost, type WorkMeta } from './api';
 import { availablePlanPostTypes } from './planComposer';
 import { PlanStatusBadges, planStateLabels } from './PlanStatus';
 import { CampaignOverview } from './campaignOverview';
+import { PlanExecutorDates } from './PlanExecutorDates';
 import { isWorkDate } from '../../../shared/marketing-workflow';
 import type { WorkPlanLine, WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from './ProductReference';
@@ -162,6 +163,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
       </>}
       <div className="mkw-plan-progress"><span>جاهزية النشر: {plan!.readiness}% · {query.data.lines.filter(line => line.published_ready).length} من {query.data.lines.length} روابط نشر</span><progress max={100} value={plan!.readiness}/></div>
       {plan!.review_status === 'revision' && <section className="mkw-plan-review-note"><strong>مطلوب تعديل</strong><p>{plan!.review_note}</p></section>}
+      <PlanExecutorDates planId={id} defaultOpen={plan!.review_status === 'revision'} onChanged={onChanged}/>
       {plan!.canReview && ['in_progress', 'submitted'].includes(plan!.review_status) && <section className="mkw-plan-review-actions"><label>نوع الملاحظة (اختياري)<input type="text" list="mkw-plan-note-types" maxLength={100} value={noteType} onChange={e => setNoteType(e.target.value)} placeholder="عام — أو اكتب نوع الملاحظة بحرية"/><datalist id="mkw-plan-note-types">{(settings.data?.categories || []).filter(category => category.is_active).map(category => <option key={category.id} value={category.name}/>)}</datalist></label>
         <label>ملاحظة التعديل<div className="mkw-actions"><button type="button" className="secondary" onClick={() => setNote(old => `${old}**نص مهم**`)}>غامق</button><button type="button" className="secondary" onClick={() => setNote(old => `${old}\n• نقطة تعديل`)}>نقطة</button></div><textarea value={note} maxLength={10000} onChange={e => setNote(e.target.value)} placeholder="اكتب المطلوب تعديله في المنتجات أو الجدول أو فترة التمويل" /></label>
         <div className="mkw-actions">

@@ -137,7 +137,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
             : script.includes("values('schema-17')") ? 'schema-17'
             : script.includes("values('schema-18')") ? 'schema-18'
             : script.includes("values('schema-19')") ? 'schema-19'
-            : script.includes("values('schema-20')") ? 'schema-20' : 'unexpected';
+            : script.includes("values('schema-20')") ? 'schema-20'
+            : script.includes("values('schema-21')") ? 'schema-21' : 'unexpected';
           assert.notEqual(code,'unexpected','Only additive workflow migrations are needed');
           executed.push(code); appliedCodes.add(code);
           if(code==='schema-8') reviewingReady=true;
@@ -157,8 +158,8 @@ const schema = load('server/_marketing-workflow-schema.ts');
     await loaded.ensureMarketingWorkflowSchema();
     return executed;
   }
-  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17','schema-18','schema-19','schema-20']);
-  console.log('PASS: schema-7 to schema-20 safely upgrades once without touching old records');
-  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17','schema-18','schema-19','schema-20']);
+  assert.deepEqual(await reviewUpgradeFixture(false), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17','schema-18','schema-19','schema-20','schema-21']);
+  console.log('PASS: schema-7 to schema-21 safely upgrades once without touching old records');
+  assert.deepEqual(await reviewUpgradeFixture(true), ['schema-8','schema-9','schema-10','schema-11','schema-12','schema-13','schema-14','schema-15','schema-16','schema-17','schema-18','schema-19','schema-20','schema-21']);
   console.log('PASS: present migration markers with missing review structures are repaired');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,3 +1,4 @@
+import { getPlanExecutorDates, savePlanExecutorDates } from './plan-executor-dates.js';
 import { bulkPublishConfigured, riyadhPublishIso, bulkPublishTikTokStatus, rescheduleBulkPublishTikTok } from '../_marketing-bulkpublish.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
@@ -3170,6 +3171,11 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
       result = await strategyDraftsForDashboard(sql, user);
     } else if (resource === 'work_strategy_draft') {
       result = await strategyDraftDetail(sql, user, id(request.query.id));
+    } else if (resource === 'work_plan_executor_dates') {
+      result = await getPlanExecutorDates(sql, user, request.query as Row, {
+        canReviewPlan: () => canReviewPlan(sql, user),
+        canViewPlan: async planId => (await planLines(sql, user, planId)).length > 0,
+      });
     } else if (resource === 'work_agenda_idea_dates') {
       result = await getAgendaIdeaSchedule(sql, user, id(request.query.planId), await canReviewPlan(sql,user));
     } else if (resource === 'work_plan_products') {
@@ -3251,6 +3257,10 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_create_manual_keywords_product') result = await createManualKeywordsProduct(sql, user);
     else if (action === 'work_create_plan') result = await createPlan(sql, body, user);
     else if (action === 'work_strategy_save_entry') result = await saveStrategyDraftEntry(sql, user, body);
+    else if (action === 'work_save_plan_executor_dates') result = await savePlanExecutorDates(sql, user, body, {
+      canReviewPlan: () => canReviewPlan(sql, user),
+      canViewPlan: async planId => (await planLines(sql, user, planId)).length > 0,
+    });
     else if (action === 'work_strategy_save_entry_dates') result = await saveStrategyDraftEntryDates(sql, user, body);
     else if (action === 'work_strategy_save_line_copy') result = await saveStrategyLineCopy(sql, user, body, planLines);
     else if (action === 'work_strategy_save_draft') result = await saveStrategyDraftSettings(sql, user, body);

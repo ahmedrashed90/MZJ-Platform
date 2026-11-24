@@ -3,6 +3,7 @@ import { Modal } from '../../components/Modal';
 import { Empty, WorkAlert } from './components';
 import { showDate, useWorkQuery } from './api';
 import { PublicationTiming, planStatusName } from './PlanDetail';
+import { PlanExecutorDates } from './PlanExecutorDates';
 import { PlanStatusBadges, planDisplayState } from './PlanStatus';
 import { parseReviewNote } from '../../../shared/marketing-review-note-format';
 import { CampaignOverview, agendaPublicationSummary, agendaReportLinesByPlatform, campaignLinesByPlatform } from './campaignOverview';
@@ -126,6 +127,7 @@ export function PlanReport({ id, onClose, onChanged }: { id: string; onClose: ()
             {entry.note && <div className="mkw-review-document">{parseReviewNote(entry.note).map((block, i) => <p key={i}>{block.text}</p>)}</div>}
           </article>)}
         </details>}
+        <PlanExecutorDates planId={id} defaultOpen={plan.review_status === 'revision'} onChanged={onChanged}/>
         <PlanProductsSection data={products.data} loading={products.loading} error={products.error}/>
         <section className="mkw-plan-report-list" aria-label="تفاصيل المنشورات">
           <h3>تفاصيل النشر حسب المنصة ونوع المنشور ({lines.length})</h3>

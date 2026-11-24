@@ -293,7 +293,9 @@ async function draftRows(sql: Sql, user: SessionUser, where: 'open' | { id: stri
       ideaCount: new Set(ideas.map(idea => idea.ideaCode || idea.itemId)).size, productCount: ideas.length,
       readyCount: ideas.filter(idea => idea.ready).length, executedCount: ideas.filter(idea => idea.executed).length,
       configuredCount: ideas.filter(idea => idea.configured).length,
-      periodFrom: dates[0] || null, periodTo: dates.at(-1) || null,
+      periodFrom: dates[0] || null,
+      periodTo: row.kind === 'campaign' ? (day(row.campaign_end_on) || dates.at(-1) || null) : (dates.at(-1) || null),
+      campaignEndOn: row.kind === 'campaign' ? day(row.campaign_end_on) : null,
       platforms: [...platformIds.entries()].map(([platformId, name]) => ({ platformId, name })),
       canEdit: row.status === 'draft' && canUseKind(user, row.kind),
     };
@@ -531,7 +533,25 @@ export async function saveStrategyDraftSettings(sql: Sql, user: SessionUser, bod
       goals = list(body.platformGoals).map((row: any) => ({ platformId: id(row.platformId),
         goalIds: [...new Set(list(row.goalIds).map(id))].slice(0, 30) }));
     }
-    await tx`update marketing.strategy_plan_drafts set name=${name},name_key=${nameKey},platform_goals=${tx.json(goals)},
+    // End of campaign is stored once on its draft, independently of every
+    // idea's funding date. Do not alter the date when saving platform goals.
+    const [dateSchema] = await tx<any[]>`select exists(select 1 from information_schema.columns
+      where table_schema='marketing' and table_name='strategy_plan_drafts' and column_name='campaign_end_on') as ready`;
+    if (!dateSchema?.ready && body.campaignEndOn !== undefined)
+      throw new Error('يلزم تحديث قاعدة بيانات التسويق من الداش بورد قبل حفظ تاريخ نهاية الحملة.');
+    const [storedEnd] = dateSchema?.ready ? await tx<any[]>`select campaign_end_on::text from marketing.strategy_plan_drafts where id=${draftId}::uuid` : [];
+    let campaignEndOn = day(storedEnd?.campaign_end_on);
+    if (draft.kind === 'campaign' && body.campaignEndOn !== undefined) {
+      campaignEndOn = body.campaignEndOn === '' || body.campaignEndOn === null ? null : text(body.campaignEndOn, 10);
+      if (campaignEndOn && !isWorkDate(campaignEndOn)) throw new Error('تاريخ نهاية الحملة غير صحيح');
+      const [limits] = await tx<any[]>`select max(target_on)::text as latest from marketing.strategy_plan_draft_entries where draft_id=${draftId}::uuid`;
+      if (campaignEndOn && limits?.latest && campaignEndOn < day(limits.latest)!)
+        throw new Error('تاريخ نهاية الحملة لا يمكن أن يسبق تواريخ التمويل المحددة للأفكار.');
+    }
+    if (dateSchema?.ready) await tx`update marketing.strategy_plan_drafts set name=${name},name_key=${nameKey},platform_goals=${tx.json(goals)},
+      campaign_end_on=${draft.kind === 'campaign' ? campaignEndOn : null}::date,
+      version=version+1,updated_at=now() where id=${draftId}::uuid`;
+    else await tx`update marketing.strategy_plan_drafts set name=${name},name_key=${nameKey},platform_goals=${tx.json(goals)},
       version=version+1,updated_at=now() where id=${draftId}::uuid`;
     return { ok: true, id: draftId, message: W.saved };
   });
@@ -580,7 +600,11 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
     entries: current.ideas.map(idea => ({ productId: idea.itemId,
       date: current.kind === 'campaign' ? idea.fundingOn : idea.scheduledOn, platforms: idea.platforms })) };
   if (current.kind === 'agenda') Object.assign(payload, { agendaFrom: publishDates[0], agendaTo: publishDates.at(-1) });
-  else Object.assign(payload, { fundingFrom: funding[0], fundingTo: funding.at(-1), platformGoals: goals });
+  else {
+    if (current.campaignEndOn && funding.at(-1) && current.campaignEndOn < funding.at(-1)!)
+      throw new Error('تاريخ نهاية الحملة يسبق تاريخ تمويل أحد الأفكار. حدّث نهاية الحملة قبل الإرسال للمراجعة.');
+    Object.assign(payload, { fundingFrom: funding[0], fundingTo: current.campaignEndOn || funding.at(-1), platformGoals: goals });
+  }
   // The AGD/CMP code is reserved only now (idempotent on retry).
   const code = await sql.begin(async tx => {
     const [row] = await tx<any[]>`select plan_number::text,plan_no from marketing.strategy_plan_drafts where id=${draftId}::uuid for update`;
@@ -602,6 +626,12 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
           values(${line.id}::uuid,${draftId}::uuid,${idea.id}::uuid,${idea.fundingOn}::date) on conflict(line_id) do nothing`;
       }
     }
+    // A draft-specific delivery override follows its own work item into the
+    // created plan. Plan approval/publication remains governed by native flow.
+    const [dueSchema] = await tx<any[]>`select to_regclass('marketing.work_plan_executor_dates') is not null as ready`;
+    if (dueSchema?.ready) await tx`update marketing.work_plan_executor_dates
+      set plan_id=${planId}::uuid,draft_id=null,updated_at=now()
+      where draft_id=${draftId}::uuid`;
     await tx`update marketing.strategy_plan_drafts set status='submitted',work_plan_id=${planId}::uuid,submitted_by=${user.id}::uuid,
       submitted_at=coalesce(submitted_at,now()),updated_at=now() where id=${draftId}::uuid`;
   });

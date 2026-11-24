@@ -34,6 +34,7 @@ const stubs = {
   './PlanStatus': {PlanStatusBadges:'PlanStatusBadges', planDisplayState: (_status, published, total) => published === total ? 'published' : 'publishing'},
   './PlanDetail': {PublicationTiming:'PublicationTiming', planStatusName: name => ({publishing:'جاري النشر',published:'تم النشر'})[name] || name},
   './AgendaIdeaDateEditor': {AgendaIdeaDateEditor: 'AgendaIdeaDateEditor'},
+  './PlanExecutorDates': {PlanExecutorDates: 'PlanExecutorDates'},
   './api': {showDate: value => value ? String(value).slice(0, 10) : '—', useWorkQuery: () => ({data,loading:false,error:''})},
 };
 const load = createLoader(process.cwd(), stubs);
