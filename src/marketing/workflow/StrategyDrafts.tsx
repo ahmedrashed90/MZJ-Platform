@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { sortStrategyProductsByExecutionDate } from './strategyProductOrder';
 import { CalendarBlank, CaretLeft, CaretRight, CheckCircle, FolderOpen, LinkSimple, MagnifyingGlass, PaperPlaneTilt, Trash, WarningCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
 import { Empty, Readiness, W, WorkAlert } from './components';
@@ -483,7 +484,7 @@ type StrategyProductRow = {
 export function StrategyProductsTab({ search }: { search: string }) {
   const query = useWorkQuery<{ ready: boolean; rows: StrategyProductRow[] }>('strategy_products');
   const term = search.trim().toLocaleLowerCase();
-  const rows = (query.data?.rows || []).filter(row => !term || `${row.ideaName} ${row.ideaCode} ${row.taskNo} ${row.orderNo} ${(row.orderRefs || []).map(order=>order.number).join(" ")} ${row.orderName} ${row.assigneeName} ${row.category}`.toLocaleLowerCase().includes(term));
+  const rows = sortStrategyProductsByExecutionDate((query.data?.rows || []).filter(row => !term || `${row.ideaName} ${row.ideaCode} ${row.taskNo} ${row.orderNo} ${(row.orderRefs || []).map(order=>order.number).join(" ")} ${row.orderName} ${row.assigneeName} ${row.category}`.toLocaleLowerCase().includes(term)));
   return <>
     <WorkAlert>{query.error}</WorkAlert>
     <div className="mkw-table-wrap mkw-strategy-products-table mkw-strategy-products-tracking-table"><table>

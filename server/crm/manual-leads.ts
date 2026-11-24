@@ -24,6 +24,17 @@ function paymentTypeForService(serviceKey: string) {
   return "كاش";
 }
 
+// Manual entry is an explicit customer classification, not an assignment rule.
+// Only the two sales services may be selected on the Add Customer form.
+function selectedSalesServiceKey(value: unknown): "cash" | "finance" | null {
+  const key = clean(value);
+  return key === "cash" || key === "finance" ? key : null;
+}
+
+function salesDepartmentCode(serviceKey: "cash" | "finance") {
+  return serviceKey === "finance" ? "finance_sales" : "cash_sales";
+}
+
 async function manualLeadOwnerContext(sql: ReturnType<typeof getSql>, userId: string) {
   const [row] = await sql<any[]>`
     select department.code as department_code, branch.code as branch_code
@@ -52,12 +63,7 @@ async function manualLeadOwnerContext(sql: ReturnType<typeof getSql>, userId: st
   const serviceKey = serviceKeyForDepartment(departmentCode);
   const branchCode = clean(row?.branch_code) || branchForDepartment(serviceKey);
   if (!branchCode) return null;
-  return {
-    serviceKey,
-    departmentCode,
-    branchCode,
-    paymentType: paymentTypeForService(serviceKey),
-  };
+  return { branchCode };
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -119,7 +125,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(400).json({ ok: false, error: "يجب ربط المستخدم بقسم مبيعات وفرع أساسي قبل إضافة عميل جديد" });
     }
 
-    const { serviceKey, departmentCode, branchCode, paymentType } = owner;
+    const serviceKey = selectedSalesServiceKey(body.serviceKey);
+    if (!serviceKey) return response.status(400).json({ ok: false, error: "اختر القسم: مبيعات الكاش أو مبيعات التمويل" });
+    const departmentCode = salesDepartmentCode(serviceKey);
+    const paymentType = paymentTypeForService(serviceKey);
+    const { branchCode } = owner; // Keep the logged-in salesperson's branch and ownership unchanged.
     const [duplicate] = await sql<any[]>`select id::text,customer_name from crm.leads where phone_normalized=${phoneNormalized} and is_deleted=false limit 1`;
     const approvalStatus = duplicate ? "pending" : "approved";
     const sourceCode = MANUAL_LEAD_SOURCE_CODE;
@@ -175,10 +185,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const phoneNormalized = normalizePhone(phone);
       if (!customerName || !phoneNormalized) return response.status(400).json({ ok: false, error: "اسم العميل ورقم الجوال الصحيح مطلوبان" });
 
-      const serviceKey = clean(row.service_key) || "cash";
-      const departmentCode = clean(row.department_code) || (serviceKey === "finance" ? "finance_sales" : serviceKey === "service" ? "customer_service" : "cash_sales");
-      const branchCode = clean(row.branch_code) || branchForDepartment(serviceKey);
-      const paymentType = clean(row.payment_type) || paymentTypeForService(serviceKey);
+      // Previously registered customer-service requests remain editable without silently changing their section.
+      const serviceKey = clean(row.service_key) === "service" && clean(body.serviceKey) === "service"
+        ? "service"
+        : selectedSalesServiceKey(body.serviceKey);
+      if (!serviceKey) return response.status(400).json({ ok: false, error: "اختر القسم: مبيعات الكاش أو مبيعات التمويل" });
+      const departmentCode = serviceKey === "service" ? "customer_service" : salesDepartmentCode(serviceKey);
+      const branchCode = clean(row.branch_code) || branchForDepartment(clean(row.service_key) || serviceKey);
+      const paymentType = paymentTypeForService(serviceKey);
       const assignedTo = clean(row.requested_assigned_to) || clean(row.requested_by);
       const callCenterTo = null;
       const sourceCode = MANUAL_LEAD_SOURCE_CODE;
@@ -195,14 +209,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       await sql.begin(async (tx) => {
         await tx`
-          update crm.manual_lead_requests set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},requested_call_center_to=null,car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},duplicate_lead_id=${duplicate?.id || null}::uuid,approval_status=${duplicate ? "pending" : "approved"},updated_at=now()
+          update crm.manual_lead_requests set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},service_key=${serviceKey},department_code=${departmentCode},payment_type=${paymentType},requested_call_center_to=null,car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},duplicate_lead_id=${duplicate?.id || null}::uuid,approval_status=${duplicate ? "pending" : "approved"},updated_at=now()
           where id=${id}::uuid
         `;
         if (row.created_lead_id) {
           const customerFields = await getCustomerFieldDefinitions();
           const completionPercent = calculateLeadCompletion({ customerName, phone, sourceCode, statusLabel: "عميل جديد", serviceKey, location: clean(body.location), carName: clean(body.carName), carCategory: clean(body.carCategory), carModel: clean(body.carModel), color: clean(body.color), financeType: clean(body.financeType) }, customerFields);
           await tx`
-            update crm.leads set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},source_name=${sourceName},car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},call_center_assigned_to=null,call_center_name_snapshot=null,completion_percent=${completionPercent},updated_by=${user.id}::uuid,updated_at=now()
+            update crm.leads set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},source_name=${sourceName},service_key=${serviceKey},department_code=${departmentCode},payment_type=${paymentType},car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},call_center_assigned_to=null,call_center_name_snapshot=null,completion_percent=${completionPercent},updated_by=${user.id}::uuid,updated_at=now()
             where id=${row.created_lead_id}::uuid
           `;
         }
@@ -214,6 +228,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const tf = (field: string, label: string, o: unknown, n: unknown) => { const ov = clean(o); const nv = clean(n); if (ov !== nv) fieldChanges.push({ field, label, oldValue: ov, newValue: nv }); };
         tf("customer_name", "اسم العميل", oldLead.customer_name, customerName);
         tf("phone", "رقم الجوال", oldLead.phone, phone);
+        tf("department_code", "القسم", oldLead.department_code, departmentCode);
+        tf("payment_type", "طريقة البيع", oldLead.payment_type, paymentType);
         tf("notes", "ملاحظات", oldLead.notes, clean(body.notes));
         tf("car_name", "نوع السيارة", oldLead.car_name, clean(body.carName));
         tf("car_category", "الفئة", oldLead.car_category, clean(body.carCategory));

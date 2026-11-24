@@ -25,12 +25,16 @@ const components = {
   Empty() {}, MediaLabel() {}, ProductViewButton() {}, Search() {}, WorkAlert() {}, WorkHeader() {},
 };
 let currentSearch = '';
+let currentTab = 'approved';
+let stateIndex = 0;
 let currentRows = [];
 let requestedResource = null;
 const requireMock = id => {
-  if (id === 'react') return { useState: () => [currentSearch, () => {}] };
+  if (id === 'react') return { useState: value => { const index = stateIndex++; return [index === 0 ? currentSearch : index === 4 ? currentTab : value, () => {}]; } };
   if (id === 'react/jsx-runtime') return { jsx: element, jsxs: element };
   if (id === '../workflow/components') return components;
+  if (id === '../workflow/ProductReference') return { ProductReference() {} };
+  if (id === '../workflow/StrategyDrafts') return { StrategyProductsTab() {} };
   if (id === '../workflow/api') return { useWorkQuery: resource => {
     requestedResource = resource;
     return { data: { rows: currentRows }, loading: false, error: null, reload: async () => {} };
@@ -64,6 +68,7 @@ const rows = [
   mockProduct('third', { assignee_name: '', approved_at: null, released_at: null }),
 ];
 currentRows = rows;
+stateIndex = 0;
 const page = ProductsPage();
 assert.equal(requestedResource, 'products');
 const headers = find(page, 'th').map(text);
@@ -73,15 +78,15 @@ assert.equal(bodyRows.length, 3);
 assert.deepEqual(bodyRows.map(r => find(r, 'td').length), [6,6,6]);
 assert.deepEqual(bodyRows.map(r => text(find(r,'td')[0])), ['1','2','3']);
 const first = find(bodyRows[0], 'td');
-assert.equal(text(first[4]), 'سمر');
-const expectedRiyadh = '27/10/2026';
+assert.equal(text(first[4]), 'محمود', 'Earlier execution date must be first');
+const expectedRiyadh = '24/10/2026';
 assert.equal(text(first[1]), expectedRiyadh, 'Approval date must respect MZJ Riyadh timezone');
-assert.equal(find(first[1], 'time')[0].props.dateTime, rows[0].approved_at);
+assert.equal(find(first[1], 'time')[0].props.dateTime, rows[1].approved_at);
 assert.equal(find(first[1], 'time')[0].props.dir, 'ltr', 'Approval date must render left-to-right');
 assert.equal(find(first[1], 'time')[0].props.style.direction, 'ltr');
 assert.equal(find(first[1], 'time')[0].props.style.unicodeBidi, 'isolate');
 assert.equal(find(first[1], 'time')[0].props.style.whiteSpace, 'nowrap');
-assert.equal(text(find(bodyRows[1], 'td')[1]), '24/10/2026', 'Approval date must use DD/MM/YYYY');
+assert.equal(text(find(bodyRows[1], 'td')[1]), '27/10/2026', 'Approval date must use DD/MM/YYYY');
 assert.match(text(first[1]), /^\d{2}\/\d{2}\/\d{4}$/, 'Date must not contain right-to-left formatting marks');
 assert.equal(text(find(bodyRows[2], 'td')[1]), '—', 'Missing approval timestamp must not be invented');
 assert.equal(text(find(bodyRows[2], 'td')[4]), '—', 'Missing assignee must be explicit');
@@ -89,6 +94,7 @@ assert.equal(find(page,'time').length, 3);
 assert.equal(find(page,components.ProductViewButton).length, 3, 'Existing view actions remain');
 
 currentSearch = 'second';
+stateIndex = 0;
 const filtered = ProductsPage();
 const filteredRows = find(filtered,'tbody').flatMap(node => find(node,'tr'));
 assert.equal(filteredRows.length, 1);
@@ -101,4 +107,4 @@ assert.match(serverSource, /i\.status='approved'/);
 assert.match(serverSource, /order by i\.approved_at desc/);
 assert.match(typesSource, /approved_at\?: string \| null/);
 assert.match(typesSource, /export type WorkProduct = WorkItem & \{ task_no: string; task_name: string; released_at: string/);
-console.log('PASS - marketing products table: six columns, per-row numbering, approval date, executor, filtering, product view, existing API');
+console.log('PASS - marketing approved products table: six columns, ascending execution date, per-row numbering, executor, filtering, product view, existing API');

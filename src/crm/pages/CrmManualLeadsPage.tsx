@@ -65,8 +65,8 @@ export function CrmManualLeadsPage() {
   }
 
   const canImportSheetLeads = hasPermission(user, "platform.superadmin");
-  const currentUserService = user?.departmentCodes.includes("finance_sales") ? "finance" : user?.departmentCodes.includes("customer_service") ? "service" : user?.departmentCodes.includes("cash_sales") ? "cash" : "";
-  const activeServiceKey = editingId ? form.serviceKey : currentUserService;
+  const activeServiceKey = form.serviceKey;
+  const isDepartmentChosen = form.serviceKey === "cash" || form.serviceKey === "finance" || (Boolean(editingId) && form.serviceKey === "service");
   const approvalAgents = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
 
   function set(key: string, next: string) {
@@ -169,6 +169,12 @@ export function CrmManualLeadsPage() {
             <label><span>اسم العميل</span><input value={form.customerName} onChange={(event) => set("customerName", event.target.value)} /></label>
             <label><span>رقم الجوال</span><input value={form.phone} onChange={(event) => set("phone", event.target.value)} placeholder="05xxxxxxxx" /></label>
             <label><span>المصدر</span><select value="branch" disabled><option value="branch">{sourceLabel("branch")}</option></select></label>
+            <label><span>القسم</span><select value={form.serviceKey} onChange={(event) => setForm((current) => ({ ...current, serviceKey: event.target.value, financeType: event.target.value === "finance" ? current.financeType : "" }))} required>
+              <option value="">اختر القسم</option>
+              {editingId && form.serviceKey === "service" ? <option value="service">خدمة العملاء (القسم السابق)</option> : null}
+              <option value="cash">مبيعات الكاش</option>
+              <option value="finance">مبيعات التمويل</option>
+            </select></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(event) => set("carName", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الفئة</span><input value={form.carCategory} onChange={(event) => set("carCategory", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الموديل</span><input value={form.carModel} onChange={(event) => set("carModel", event.target.value)} placeholder="اختياري" /></label>
@@ -179,7 +185,7 @@ export function CrmManualLeadsPage() {
           </div>
           <div className="crm-form-actions">
             <button className="crm-secondary-button" onClick={resetForm}>جديد</button>
-            <button className="crm-primary-button" disabled={saving || !form.customerName || !form.phone} onClick={() => void save()}>{saving ? "جاري الحفظ..." : editingId ? "حفظ التعديلات" : "حفظ العميل"}</button>
+            <button className="crm-primary-button" disabled={saving || !form.customerName.trim() || !form.phone.trim() || !isDepartmentChosen} onClick={() => void save()}>{saving ? "جاري الحفظ..." : editingId ? "حفظ التعديلات" : "حفظ العميل"}</button>
           </div>
         </section>
       ) : null}

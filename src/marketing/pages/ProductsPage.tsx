@@ -34,7 +34,15 @@ export function ProductsPage() {
     finally { setBusy(false); }
   }
   const rows = (query.data?.rows || []).filter(product =>
-    `${product.statement} ${product.idea_name} ${product.task_no} ${product.idea_code||''}`.toLocaleLowerCase().includes(term));
+    `${product.statement} ${product.idea_name} ${product.task_no} ${product.idea_code||''}`.toLocaleLowerCase().includes(term))
+    .sort((a, b) => {
+      // The approved-products view is ordered by its own execution/approval date.
+      const first = a.approved_at || a.released_at || '';
+      const second = b.approved_at || b.released_at || '';
+      if (!first) return second ? 1 : 0;
+      if (!second) return -1;
+      return first.localeCompare(second) || a.id.localeCompare(b.id);
+    });
 
   return <div className="mkw">
     <WorkHeader title={W.products} onRefresh={() => void query.reload()} loading={query.loading}>
