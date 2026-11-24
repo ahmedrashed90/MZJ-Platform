@@ -2263,6 +2263,20 @@ async function planLines(sql: Sql, user: SessionUser, planId = '') {
     coalesce(nullif(ag.payload->>'agendaFrom',''),ag.publish_start::text) as agenda_from,
     coalesce(nullif(ag.payload->>'agendaTo',''),ag.publish_end::text) as agenda_to,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status<>'cancelled') as prepared_count,
+    -- Content checklist independent of scheduling records. Count the post once
+    -- when its source product has a ready final media file compatible with
+    -- this line's specific output type (the same exact-size reuse rule used by
+    -- the actual publisher). Do not count draft uploads or files for another
+    -- incompatible platform/size.
+    exists(select 1 from marketing.work_item_files final_attachment
+      join marketing.files media on media.id=final_attachment.file_id
+      left join marketing.platform_post_types source_format on source_format.id::text=final_attachment.format_id
+      where final_attachment.item_id=l.product_id and final_attachment.category='final' and media.status='ready'
+        and (l.post_type_id is null or final_attachment.format_id=l.post_type_id::text or
+          (source_format.width is not null and source_format.height is not null and
+           pt.width is not null and pt.height is not null and
+           source_format.width=pt.width and source_format.height=pt.height))
+    ) as final_file_ready,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='published') as published_count,
     (select count(*)::int from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id where target.line_id=l.id and s.status='scheduled') as scheduled_count,
     (select s.publish_result->>'url' from marketing.work_publish_targets target join marketing.publish_schedule s on s.id=target.schedule_id

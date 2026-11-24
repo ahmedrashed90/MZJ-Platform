@@ -22,6 +22,7 @@ import { DashboardSearchResults } from '../components/DashboardSearchResults';
 import { StrategyCampaignLinkModal, StrategyLineCopyModal, StrategyDraftCard, StrategyDraftEditor, StrategyDraftReport, type StrategyDraft } from '../workflow/StrategyDrafts';
 import { planProductReadiness, type PlanProductsData } from '../workflow/StrategyProductsTable';
 import { workPlatformSupportsAutoPublish } from '../../../shared/marketing-workflow';
+import { isPublishContentPrepared, publishContentMissingLabel } from '../../../shared/marketing-publish-preparation';
 import type { WorkCapabilities, WorkPlanLine, WorkTask } from '../../../shared/marketing-workflow';
 
 type ReviewState = 'in_progress' | 'revision' | 'submitted' | 'publishing' | 'published';
@@ -204,13 +205,17 @@ export function MarketingDashboardPage() {
             if (entry.source === 'draft') return <StrategyDraftCard key={entry.id} draft={entry.draft} onOpen={() => setDraftOpenId(entry.id)} onReport={() => setDraftReportId(entry.id)}/>;
             const { id, group } = entry;
             const supported = group.every(line => workPlatformSupportsAutoPublish(line.platform_code));
-            const prepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
+            // "تم التجهيز" is a content checklist, not a publish_schedule count.
+            const contentPrepared = group.every(isPublishContentPrepared);
+            // Keep the separate automatic-scheduling gate unchanged: merely
+            // having copy and a final file does not create provider schedules.
+            const activationPrepared = group.every(line => line.prepared_count === 1 && !line.failed_count);
             const activated = !!group[0].activated_at;
             const reviewStatus = (group[0].review_status || 'in_progress') as ReviewState;
             const readyLines = group.filter(line => line.published_ready).length;
             const visualStatus = planDisplayState(reviewStatus, readyLines, group.length);
             const readiness = Math.round(readyLines * 100 / group.length);
-            const preparedLines = group.filter(line => line.prepared_count === 1 && !line.failed_count).length;
+            const preparedLines = group.filter(isPublishContentPrepared).length;
             const platforms = uniqueValues(group.map(line => line.platform_name));
             const kinds = uniqueValues(group.map(line => line.post_type_name));
             const distinctProducts = new Set(group.map(line => line.product_id)).size;
@@ -280,7 +285,7 @@ export function MarketingDashboardPage() {
               </div>
 
               <div className="mkw-dashboard-publish-tags">
-                {prepared && <span className="mkw-dashboard-note-tag is-ready">تم تجهيز جميع المطلوبات</span>}
+                {contentPrepared && <span className="mkw-dashboard-note-tag is-ready">تم تجهيز جميع المطلوبات</span>}
                 {activated && <span className="mkw-dashboard-note-tag is-active"><CheckCircle size={14}/>تم تفعيل النشر</span>}
                 {reviewStatus === 'revision' && <span className="mkw-dashboard-note-tag is-danger">يوجد طلب تعديل</span>}
               </div>
@@ -289,7 +294,7 @@ export function MarketingDashboardPage() {
                 <button type="button" className="secondary" onClick={() => setTableId(id)}><CalendarBlank size={17}/>التقرير</button>
                 {!['publishing', 'published'].includes(reviewStatus) && ((query.data?.canReviewPlans && (['in_progress','submitted'].includes(reviewStatus) || group[0].kind === 'campaign')) || (group[0].created_by === query.data?.userId && ['in_progress','revision','submitted'].includes(reviewStatus))) && <button type="button" className="secondary" onClick={() => setParams({ plan: id })}><Eye size={17}/>{reviewStatus === 'revision' ? '\u0639\u0631\u0636 \u0637\u0644\u0628 \u0627\u0644\u062a\u0639\u062f\u064a\u0644' : query.data?.canReviewPlans ? '\u0645\u0631\u0627\u062c\u0639\u0629 \u0648\u0627\u0639\u062a\u0645\u0627\u062f' : '\u062a\u0641\u0627\u0635\u064a\u0644 \u0627\u0644\u062d\u0645\u0644\u0629 \u0623\u0648 \u0627\u0644\u0623\u062c\u0646\u062f\u0629'}</button>}
                 <button type="button" className="secondary" disabled={!query.data?.capabilities.prepare && !query.data?.canReviewPlans} onClick={() => openPreparation(group)}><Gear size={17}/>{W.prepare}</button>
-                {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !prepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !prepared ? 'أكمل تجهيز النشر لكل منتج أولًا' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
+                {publishSettings.data?.enabled && <button type="button" className="primary" disabled={!query.data?.capabilities.publish || !activationPrepared || !supported || activated || Boolean(activationBusy) || reviewStatus !== 'publishing'} title={!supported ? 'المنصة لا تدعم النشر عبر الربط الحالي' : !activationPrepared ? 'أكمل حفظ إعدادات الجدولة لكل منشور قبل تفعيل النشر الآلي' : ''} onClick={() => void activatePlan(group)}><PaperPlaneTilt size={17}/>النشر</button>}
               </div>
             </article>;
           })}
@@ -352,11 +357,11 @@ export function MarketingDashboardPage() {
           onClick={() => setLinkPlatformLines(platformLines)}><LinkSimple size={15}/>{linkedCount === platformLines.length && platformLines.length ? 'تغيير الحملة المرتبطة' : linkedCount ? `اختيار الحملة (${linkedCount}/${platformLines.length} مرتبط)` : 'اختيار الحملة'}</button>;
       })()}</div></th></tr>}
       <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td>{line.strategy_draft_id
-        ? <button type="button" className={`mkw-publish-draft-state mkw-copy-state-button ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}
+        ? <button type="button" className={`mkw-publish-draft-state mkw-copy-state-button ${isPublishContentPrepared(line) ? 'is-ready' : ''}`}
             title="كتابة الكابشن والهاشتاج ورابط المنشور"
             onClick={() => { setSelectPlan(''); if (line.strategy_product_pending) setCopyLine(line); else setPrepareId(line.id); }}>
-            {line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : String(line.caption || '').trim() ? 'تم حفظ الكابشن — تعديل' : 'كتابة الكابشن والهاشتاج'}</button>
-        : <span className={`mkw-publish-draft-state ${line.prepared_count === 1 && !line.failed_count ? 'is-ready' : ''}`}>{line.prepared_count === 1 && !line.failed_count ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : 'يحتاج كتابة وحفظ'}</span>}</td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
+            {isPublishContentPrepared(line) ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : publishContentMissingLabel(line)}</button>
+        : <span className={`mkw-publish-draft-state ${isPublishContentPrepared(line) ? 'is-ready' : ''}`}>{isPublishContentPrepared(line) ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : publishContentMissingLabel(line)}</span>}</td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
     {draftOpenId && <StrategyDraftEditor id={draftOpenId} onClose={() => setDraftOpenId('')} onChanged={() => { void strategyDrafts.reload(); void query.reload(); }}/>}
     {draftReportId && <StrategyDraftReport draftId={draftReportId} onClose={() => setDraftReportId('')}/>}
     {copyLine && <StrategyLineCopyModal line={copyLine} onClose={() => setCopyLine(null)} onChanged={() => void query.reload()}/>}
