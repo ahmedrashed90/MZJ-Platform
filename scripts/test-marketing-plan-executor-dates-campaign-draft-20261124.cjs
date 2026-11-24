@@ -44,6 +44,7 @@ function test(label,fn){fn();checks++;console.log('PASS:',label)}
     assert.equal(res.ideas[0].executors[1].dueOn,'2027-01-05');
   });
   test('Editing approved/revision plans remains permitted to original creator',()=>assert.equal(res.canEdit,true));
+  test('Plan creator cannot execute database migrations without platform superadmin permission',()=>assert.equal(res.canUpgrade,false));
   test('Only real related executors match a strategy idea code',()=>{
     assert(service.executorIdeaMatches(bases[0],siblings[2],'IDEA1'));
     assert.equal(service.executorIdeaMatches(bases[0],{...siblings[2],id:'other'},'DIFFERENT'),false);

@@ -10,7 +10,7 @@ type ExecutorDateIdea = { key: string; ideaName: string; ideaCode: string;
   taskNo: string; category: string; executors: ExecutorDateItem[] };
 
 type Response = {
-  ok: boolean; ready: boolean; canEdit: boolean; ideas: ExecutorDateIdea[];
+  ok: boolean; ready: boolean; canEdit: boolean; canUpgrade: boolean; ideas: ExecutorDateIdea[];
 };
 type Edit = { itemId: string; dueOn: string | null; reset?: boolean };
 
@@ -49,6 +49,19 @@ export function PlanExecutorDates({ planId, draftId, defaultOpen = false, onChan
       return next;
     });
   }
+  async function upgradeSchema() {
+    if (!data?.canUpgrade || data.ready || busy) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      // The existing superadmin-only upgrade endpoint owns all DDL.
+      await workPost('upgrade_schema', {});
+      const refreshed = await query.reload();
+      if (!refreshed?.ready) throw new Error('لم يكتمل تحديث بيانات تواريخ المنفذين. راجع حالة قاعدة البيانات.');
+      setMessage('تم تحديث قاعدة بيانات التسويق، وأصبح تعديل تواريخ المنفذين متاحًا.');
+      onChanged?.();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر تحديث قاعدة البيانات.'); }
+    finally { setBusy(false); }
+  }
   async function save() {
     if (!data?.canEdit || !data.ready || !changed || busy) return;
     setBusy(true); setError(''); setMessage('');
@@ -68,7 +81,15 @@ export function PlanExecutorDates({ planId, draftId, defaultOpen = false, onChan
     <div className="mkw-plan-executor-body">
       {!!(query.error || error) && <p className="mkw-plan-executor-error" role="alert">{query.error || error}</p>}
       {!!message && <p className="mkw-plan-executor-success" role="status">{message}</p>}
-      {!data?.ready && <p className="mkw-plan-executor-migration">{query.loading ? 'جاري تحميل المنفذين...' : 'يلزم تحديث قاعدة بيانات التسويق من لوحة الإدارة أولًا لتفعيل حفظ التواريخ.'}</p>}
+      {!data?.ready && (query.loading ? <p className="mkw-plan-executor-migration">جاري تحميل المنفذين...</p> :
+        <div className="mkw-plan-executor-migration" role="alert">
+          <span>يلزم تحديث قاعدة بيانات التسويق لتفعيل حفظ تواريخ المنفذين.</span>
+          {data?.canUpgrade
+            ? <button type="button" className="secondary" disabled={busy} onClick={() => void upgradeSchema()}>
+                {busy ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق الآن'}
+              </button>
+            : <span>التحديث متاح للمسؤول العام فقط. افتح الداش بورد بحسابه لتنفيذه.</span>}
+        </div>)}
       <label className="mkw-plan-executor-search">بحث باسم الفكرة أو المنفذ
         <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="ابحث في أفكار الحملة أو الأجندة"/>
       </label>

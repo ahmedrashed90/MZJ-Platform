@@ -13,7 +13,7 @@ const load=createLoader(process.cwd(),{
 },{'server/marketing/workflow.ts':'\nexport {handleMarketingWorkflow};'});
 const {handleMarketingWorkflow}=load('server/marketing/workflow.ts');
 const user={id:'00000000-0000-4000-8000-000000000001',fullName:'Admin',permissions:['platform.superadmin'],systemAccess:{marketing:{dataScope:'all'}}};
-async function probe(newSchemaReady){
+async function probe(newSchemaReady, executorReady = newSchemaReady){
   structureReady=newSchemaReady;
   let sent;
   const response={status(code){assert.equal(code,200);return this;},json(data){sent=data;return this;}};
@@ -37,6 +37,8 @@ async function probe(newSchemaReady){
       return [{ready:true}];
     }
     if(query.includes("where code='schema-11'")) return [{ready:true}];
+    if(query.includes("to_regclass('marketing.work_plan_executor_dates')"))
+      return [{ready:executorReady}];
     if(query.includes("to_regclass('marketing.work_publish_controls')")) return [{ready:true}];
     if(query.includes("to_regclass('marketing.work_plan_reviewers')")) return [{present:true}];
     if(query.includes("to_regclass('marketing.work_campaign_goals')")) return [{ready:true}];
@@ -44,16 +46,23 @@ async function probe(newSchemaReady){
     throw new Error('Unexpected SQL: '+query);
   };
   assert.equal(await handleMarketingWorkflow(request,response,sql,user,{}),true);
-  assert.equal(queries,newSchemaReady ? 9 : 8);
+  assert.equal(queries,newSchemaReady ? 10 : 9);
   return sent;
 }
 (async()=>{
   const old=await probe(false);
   assert.equal(old.baseReady,true);assert.equal(old.ready,false);assert.equal(old.canUpgrade,true);
+  assert.equal(old.executorDatesReady,false);
   console.log('PASS: existing installation with old review schema shows upgrade control');
   const upgraded=await probe(true);
   assert.equal(upgraded.ready,true);assert.equal(upgraded.canUpgrade,true);
+  assert.equal(upgraded.executorDatesReady,true);
   console.log('PASS: fully upgraded review schema reports ready');
+  const pendingExecutorDates=await probe(true,false);
+  assert.equal(pendingExecutorDates.ready,true);
+  assert.equal(pendingExecutorDates.executorDatesReady,false);
+  assert.equal(pendingExecutorDates.canUpgrade,true);
+  console.log('PASS: schema-21 upgrade remains visible when earlier workflow tables are already ready');
   const dashboard=require('node:fs').readFileSync('src/marketing/pages/MarketingDashboardPage.tsx','utf8');
   assert(dashboard.includes('if (schemaUpgrading || !schema.data?.canUpgrade) return;'));
   assert(dashboard.includes('{schema.data.canUpgrade && <button'));

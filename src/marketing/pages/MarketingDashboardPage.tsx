@@ -62,7 +62,7 @@ export function MarketingDashboardPage() {
   }
   const [activationBusy, setActivationBusy] = useState(''), [activationError, setActivationError] = useState(''), [activationMessage, setActivationMessage] = useState('');
   const query = useWorkQuery<{ tasks: WorkTask[]; lines: WorkPlanLine[]; capabilities: WorkCapabilities; canReviewPlans: boolean; userId: string }>('dashboard');
-  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; campaignGoalsReady?: boolean; strategyDraftsReady?: boolean; canUpgrade: boolean }>('schema_status');
+  const schema = useWorkQuery<{ ready: boolean; baseReady: boolean; performanceReady: boolean; publishSettingsReady?: boolean; planReviewersReady?: boolean; campaignGoalsReady?: boolean; strategyDraftsReady?: boolean; executorDatesReady?: boolean; canUpgrade: boolean }>('schema_status');
   const publishSettings = useWorkQuery<{ enabled: boolean }>('publish_button_settings');
   // Strategy flow: agenda/campaign drafts filled from «إنشاء التكليفات».
   const strategyDrafts = useWorkQuery<{ ready: boolean; drafts: StrategyDraft[] }>('strategy_drafts');
@@ -151,6 +151,12 @@ export function MarketingDashboardPage() {
       <span>{schema.data.baseReady ? 'تحتاج قاعدة بيانات التسويق إلى تحديث الجداول حتى تظهر بيانات التنفيذ والنشر الحالية.' : 'قاعدة بيانات التسويق تحتاج إلى التهيئة الأساسية.'}</span>
       {schema.data.canUpgrade && <button type="button" className="primary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث قاعدة بيانات التسويق'}</button>}
       {!schema.data.canUpgrade && <span>يرجى التواصل مع مدير النظام لتنفيذ التحديث.</span>}
+    </div>}
+    {schema.data?.ready && schema.data.executorDatesReady === false && <div className="mkw-schema-upgrade" role="alert">
+      <span>تحديث تواريخ تسليم المنفذين وتاريخ نهاية الحملات لم يُفعّل بعد في قاعدة بيانات التسويق.</span>
+      {schema.data.canUpgrade
+        ? <button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>{schemaUpgrading ? 'جارٍ تحديث قاعدة البيانات...' : 'تحديث تواريخ المنفذين والحملات'}</button>
+        : <span>يلزم الدخول بحساب المسؤول العام لتنفيذ التحديث.</span>}
     </div>}
     {schema.data?.ready && schema.data.campaignGoalsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يوجد تحديث جديد لإعدادات «الهدف من الحملة» دون حذف أي حملة سابقة.</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تحديث أهداف الحملات</button></div>}
     {schema.data?.ready && schema.data.strategyDraftsReady === false && schema.data.canUpgrade && <div className="mkw-schema-upgrade" role="status"><span>يتوفر تحديث لتفعيل مسودات الأجندة والحملة القادمة من استراتيجية المحتوى (بدون تغيير أي أجندة أو حملة حالية).</span><button type="button" className="secondary" disabled={schemaUpgrading} onClick={() => void upgradeSchema()}>تفعيل مسودات الاستراتيجية</button></div>}

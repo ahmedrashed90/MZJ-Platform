@@ -17,7 +17,7 @@ const string = (value: unknown) => String(value ?? '').trim();
 type Target = { kind: 'campaign' | 'agenda'; id: string; created_by: string; status: string; isDraft: boolean };
 type Services = { canReviewPlan: () => Promise<boolean>; canViewPlan: (planId: string) => Promise<boolean> };
 
-async function schemaReady(sql: Sql): Promise<boolean> {
+export async function planExecutorDatesSchemaReady(sql: Sql): Promise<boolean> {
   const [state] = await sql<{ ready: boolean }[]>`select
     to_regclass('marketing.work_plan_executor_dates') is not null
     and exists (select 1 from information_schema.columns where table_schema='marketing'
@@ -130,16 +130,17 @@ async function readExecutorIdeas(sql: Sql, target: Target, ready: boolean): Prom
 
 export async function getPlanExecutorDates(sql: Sql, user: SessionUser, input: Row, services: Services) {
   const { target, canEdit } = await targetOf(sql, user, input, services);
-  const ready = await schemaReady(sql);
+  const ready = await planExecutorDatesSchemaReady(sql);
   const ideas = await readExecutorIdeas(sql, target, ready);
-  return { ok: true, ready, canEdit, kind: target.kind, ideas, planId: target.isDraft ? null : target.id,
+  return { ok: true, ready, canEdit, canUpgrade: hasPermission(user, 'platform.superadmin'),
+    kind: target.kind, ideas, planId: target.isDraft ? null : target.id,
     draftId: target.isDraft ? target.id : null };
 }
 
 export async function savePlanExecutorDates(sql: Sql, user: SessionUser, body: Row, services: Services) {
   const { target, canEdit } = await targetOf(sql, user, body, services);
   if (!canEdit) throw new Error(W.denied);
-  if (!(await schemaReady(sql))) throw new Error('يلزم تحديث قاعدة بيانات التسويق من الداش بورد قبل تعديل مواعيد المنفذين.');
+  if (!(await planExecutorDatesSchemaReady(sql))) throw new Error('يلزم تحديث قاعدة بيانات التسويق من الداش بورد قبل تعديل مواعيد المنفذين.');
   const entries: Row[] = Array.isArray(body.entries) ? body.entries : [];
   if (!entries.length || entries.length > 500) throw new Error(W.invalid);
   const ids = new Set<string>();

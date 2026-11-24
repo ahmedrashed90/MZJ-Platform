@@ -1,4 +1,4 @@
-import { getPlanExecutorDates, savePlanExecutorDates } from './plan-executor-dates.js';
+import { getPlanExecutorDates, savePlanExecutorDates, planExecutorDatesSchemaReady } from './plan-executor-dates.js';
 import { bulkPublishConfigured, riyadhPublishIso, bulkPublishTikTokStatus, rescheduleBulkPublishTikTok } from '../_marketing-bulkpublish.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
@@ -3114,8 +3114,12 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     const [performance] = status.baseReady
       ? await sql<{ ready: boolean }[]>`select exists(select 1 from marketing.workflow_migrations where code='schema-11') as ready`
       : [{ ready: false }];
+    // schema-21 can be missing even when the original workflow tables are ready.
+    // Surface this separately so an authorized admin can complete the upgrade.
+    const executorDatesReady = status.baseReady ? await planExecutorDatesSchemaReady(sql) : false;
     response.status(200).json({ ok: true, ...status,
       performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready),
+      executorDatesReady,
       publicationDatesReady: Boolean(publicationDates?.ready),
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
       planReviewersReady: await planReviewerTableReady(sql),
