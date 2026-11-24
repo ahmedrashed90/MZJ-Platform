@@ -296,6 +296,7 @@ async function draftRows(sql: Sql, user: SessionUser, where: 'open' | { id: stri
       periodFrom: dates[0] || null,
       periodTo: row.kind === 'campaign' ? (day(row.campaign_end_on) || dates.at(-1) || null) : (dates.at(-1) || null),
       campaignEndOn: row.kind === 'campaign' ? day(row.campaign_end_on) : null,
+      submissionNote: String(row.submission_note || ''),
       platforms: [...platformIds.entries()].map(([platformId, name]) => ({ platformId, name })),
       canEdit: row.status === 'draft' && canUseKind(user, row.kind),
     };
@@ -548,11 +549,20 @@ export async function saveStrategyDraftSettings(sql: Sql, user: SessionUser, bod
       if (campaignEndOn && limits?.latest && campaignEndOn < day(limits.latest)!)
         throw new Error('تاريخ نهاية الحملة لا يمكن أن يسبق تواريخ التمويل المحددة للأفكار.');
     }
+    // Notes are optional and never overwrite an existing note on a settings
+    // save that only updates platforms or campaign end dates.
+    if (body.submissionNote !== undefined) {
+      const [noteSchema] = await tx<any[]>`select exists(select 1 from information_schema.columns
+        where table_schema='marketing' and table_name='strategy_plan_drafts' and column_name='submission_note') as ready`;
+      if (!noteSchema?.ready) throw new Error('يلزم تحديث قاعدة بيانات التسويق من الداش بورد قبل حفظ ملاحظة المراجعة.');
+    }
     if (dateSchema?.ready) await tx`update marketing.strategy_plan_drafts set name=${name},name_key=${nameKey},platform_goals=${tx.json(goals)},
       campaign_end_on=${draft.kind === 'campaign' ? campaignEndOn : null}::date,
       version=version+1,updated_at=now() where id=${draftId}::uuid`;
     else await tx`update marketing.strategy_plan_drafts set name=${name},name_key=${nameKey},platform_goals=${tx.json(goals)},
       version=version+1,updated_at=now() where id=${draftId}::uuid`;
+    if (body.submissionNote !== undefined) await tx`update marketing.strategy_plan_drafts
+      set submission_note=${text(body.submissionNote, 10000)} where id=${draftId}::uuid`;
     return { ok: true, id: draftId, message: W.saved };
   });
 }
@@ -583,6 +593,10 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
   if (!canUseKind(user, current.kind)) throw new Error(W.denied);
   if (current.status === 'submitted' && current.workPlanId) {
     const [plan] = await sql<any[]>`select id::text,plan_no,review_status from marketing.work_plans where id=${current.workPlanId}::uuid`;
+    // If plan creation succeeded but the last submit-review call failed,
+    // safely complete that step on retry. Never auto-resubmit a later revision.
+    if (plan?.review_status === 'in_progress')
+      await deps.changePlanReview(sql, user, { planId: current.workPlanId, decision: 'submitted', note: current.submissionNote || '' });
     return { ok: true, id: plan?.id || current.workPlanId, planNo: plan?.plan_no || current.planNo, existed: true, message: W.saved };
   }
   if (!current.ideas.length) throw new Error('المسودة لا تحتوي أفكارًا بعد');
@@ -637,7 +651,7 @@ export async function submitStrategyDraft(sql: Sql, user: SessionUser, body: Row
   });
   const [plan] = await sql<any[]>`select review_status from marketing.work_plans where id=${planId}::uuid`;
   if (plan && ['in_progress', 'revision'].includes(plan.review_status))
-    await deps.changePlanReview(sql, user, { planId, decision: 'submitted', note: '' });
+    await deps.changePlanReview(sql, user, { planId, decision: 'submitted', note: current.submissionNote || '' });
   return { ok: true, id: planId, planNo: code.planNo, existed: false, message: 'تم إرسال المسودة للمراجعة' };
 }
 

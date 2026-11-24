@@ -115,6 +115,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     });
     if (ok) { setNote(''); setNoteType(''); }
   }
+  const submissionReviewNote = query.data?.history.find(entry => entry.action === 'submitted' && String(entry.note || '').trim())?.note || '';
   const approvedProducts = productsQuery.data?.rows || [], meta = metaQuery.data;
   const approvedIds = new Set(approvedProducts.map(product => product.id));
   const products = [...approvedProducts, ...(strategyProductsQuery.data?.rows || []).filter(product => !approvedIds.has(product.id))];
@@ -126,6 +127,7 @@ export function PlanDetail({ id, onClose, onChanged }: { id: string; onClose: ()
     <WorkAlert>{query.error || error}</WorkAlert><WorkAlert success>{message}</WorkAlert>
     {!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>
       <div className="mkw-section-title"><strong>{plan!.plan_no} · {plan!.kind === 'agenda' ? 'أجندة' : 'حملة'}</strong><PlanStatusBadges kind={plan!.kind} reviewStatus={plan!.review_status} publishedCount={query.data.lines.filter(line => line.published_ready).length} totalCount={query.data.lines.length}/></div>
+      {submissionReviewNote && <section className="mkw-panel mkw-submission-review-note" aria-label="ملاحظة منشئ المسودة للمراجعة"><h3>ملاحظة منشئ المسودة للمراجعة</h3><p style={{ whiteSpace: 'pre-wrap' }}>{submissionReviewNote}</p></section>}
       <div className="mkw-summary"><div><small>منشئ {plan!.kind === 'agenda' ? 'الأجندة' : 'الحملة'}</small><strong>{plan!.creator_name?.trim() || '—'}</strong></div><div><small>تاريخ الإنشاء</small><strong>{showDate(plan!.created_at)}</strong></div><div><small>عدد المنشورات</small><strong>{query.data.lines.length}</strong></div><div><small>حالة المراجعة</small><strong>{planStatusName(plan!.review_status)}</strong></div>{plan!.kind === 'campaign' && <div><small>إجمالي الميزانية (ر.س)</small><strong>{query.data.lines.reduce((sum, line) => sum + Number(line.budget_amount || 0), 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</strong></div>}</div>
       {plan!.kind === 'campaign' && <>
         <CampaignOverview lines={query.data.lines} fundingFrom={plan!.funding_from} fundingTo={plan!.funding_to} platformGoals={plan!.platform_goals}/> 

@@ -212,7 +212,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
                   {!gradeReady && canRate && <span className="mkw-rating-gate">التقييم متاح بعد اعتماد المنتج 100% أو رفض المطلوب</span>}
                 </div>
                 <div className="mkw-requirement-item-readiness"><Readiness value={workItemReadiness(item)} /></div>
-                {opened && item.delivery_mode === 'drive_link' && <CaptureItemEditor key={`${item.id}:${item.version}`} item={item} refresh={refresh} />}
+                {opened && item.delivery_mode === 'drive_link' && <CaptureItemEditor key={`${item.id}:${item.version}`} item={item} capabilities={query.data!.capabilities} refresh={refresh} />}
                 {opened && item.delivery_mode !== 'drive_link' && <ItemEditor key={`${item.id}:${item.version}`} item={item} number={index + 1} capabilities={query.data!.capabilities}
                   formatOptions={query.data!.formatOptions || []} canRate={query.data!.canRate} settings={settings.data} refresh={refresh}
                   onBriefSaved={() => setSavedBriefItemId(item.id)} onBriefChanged={() => setSavedBriefItemId('')} />}
@@ -321,12 +321,28 @@ function CreativeBriefDownload({item}: {item: WorkItem}) {
 }
 
 /** Photography is a delivery link, not a publishable final file. */
-function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => Promise<void> }) {
+function CaptureItemEditor({ item, capabilities, refresh }: { item: WorkItem; capabilities: WorkCapabilities; refresh: () => Promise<void> }) {
   const { user } = useAuth();
   const own = user?.id === item.assigned_to;
+  const canEditIdea = item.status !== 'rejected' && (capabilities.editTask ||
+    (own && ['in_progress', 'editing', 'submitted'].includes(item.status)));
+  const [editingIdea, setEditingIdea] = useState(false);
+  const [idea, setIdea] = useState(item.idea);
+  const [explanation, setExplanation] = useState(item.explanation || '');
   const [url,setUrl] = useState('');
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
+  const ideaChanged = idea !== item.idea || explanation !== (item.explanation || '');
+  async function saveIdea() {
+    if (!canEditIdea || !editingIdea || !ideaChanged || busy) return;
+    setBusy(true); setError('');
+    try {
+      await workPost('save_item', { itemId: item.id, version: item.version, idea, explanation });
+      setEditingIdea(false);
+      await refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر حفظ تعديل الفكرة'); }
+    finally { setBusy(false); }
+  }
   const savedUrl = item.capture_url || '';
   const safeUrl = /^https:\/\/(drive|docs)\.google\.com\//i.test(savedUrl) ? savedUrl : '';
   async function submit() {
@@ -346,11 +362,33 @@ function CaptureItemEditor({ item, refresh }: { item: WorkItem; refresh: () => P
         <div className="mkw-execution-quick-row mkw-strategy-quick-row">
           <Field label={W.required}><p className="mkw-idea-text">{item.media_kind === 'video' ? 'فيديو' : 'صورة'}</p></Field>
           <div className="mkw-execution-formats"><strong>{W.sizes}</strong><Formats formats={item.formats}/></div>
-          <div className="mkw-idea-brief-field"><Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة"><StrategyIdeaBrief value={item.idea}/></Field></div>
+          <div className="mkw-idea-brief-field">
+            <Field label="الفكرة — البريف الإبداعي والسيارات المعتمدة">
+              {canEditIdea && editingIdea
+                ? <textarea aria-label="تعديل فكرة التصوير" value={idea} disabled={busy} maxLength={20000}
+                    onChange={event => setIdea(event.target.value)}/>
+                : <StrategyIdeaBrief value={item.idea}/>}
+            </Field>
+            {canEditIdea && <button type="button" className="secondary mkw-idea-edit-toggle" disabled={busy}
+              onClick={() => { if (editingIdea) { setIdea(item.idea); setExplanation(item.explanation || ''); } setEditingIdea(value => !value); }}>
+              {editingIdea ? 'إلغاء تعديل الفكرة' : 'تعديل الفكرة'}
+            </button>}
+          </div>
           <div className="mkw-explanation-brief-row">
-            <Field label="الشرح — الجمهور والهدف والرسالة"><p className="mkw-idea-text">{item.explanation || '—'}</p></Field>
+            <Field label="الشرح — الجمهور والهدف والرسالة">
+              {canEditIdea && editingIdea
+                ? <textarea aria-label="تعديل شرح فكرة التصوير" value={explanation} disabled={busy} maxLength={20000}
+                    onChange={event => setExplanation(event.target.value)}/>
+                : <p className="mkw-idea-text">{item.explanation || '—'}</p>}
+            </Field>
             <CreativeBriefDownload item={item}/>
           </div>
+          {canEditIdea && editingIdea && <div className="mkw-idea-save-actions">
+            <button type="button" className="primary" disabled={busy || !ideaChanged} onClick={() => void saveIdea()}>
+              حفظ الفكرة والشرح
+            </button>
+            <small className="mkw-muted">حفظ الفكرة لا يغيّر موعد التسليم أو رابط التصوير أو حالة اعتماد المطلوب.</small>
+          </div>}
           <div className="mkw-prominent-due"><Field label="تاريخ تسليم التصوير"><strong>{showDate(item.due_on)}</strong></Field></div>
         </div>
       </section>

@@ -3156,9 +3156,13 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     // schema-21 can be missing even when the original workflow tables are ready.
     // Surface this separately so an authorized admin can complete the upgrade.
     const executorDatesReady = status.baseReady ? await planExecutorDatesSchemaReady(sql) : false;
+    const [draftReviewNoteSchema] = status.baseReady
+      ? await sql<{ ready: boolean }[]>`select exists(select 1 from information_schema.columns
+        where table_schema='marketing' and table_name='strategy_plan_drafts' and column_name='submission_note') as ready`
+      : [{ ready: false }];
     response.status(200).json({ ok: true, ...status,
       performanceReady: Boolean(performance?.ready), planReviewReady: Boolean(planReview?.ready),
-      executorDatesReady,
+      executorDatesReady, draftReviewNotesReady: Boolean(draftReviewNoteSchema?.ready),
       publicationDatesReady: Boolean(publicationDates?.ready),
       publishSettingsReady: !(await publishControlSettings(sql)).migrationRequired,
       planReviewersReady: await planReviewerTableReady(sql),

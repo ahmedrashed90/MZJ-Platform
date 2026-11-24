@@ -102,6 +102,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   const [dateDirty, setDateDirty] = useState(false), [configurationDirty, setConfigurationDirty] = useState(false);
   const [goals, setGoals] = useState<Record<string, string[]>>({});
   const [campaignEndOn, setCampaignEndOn] = useState('');
+  const [submissionNote, setSubmissionNote] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const ideas = draft?.ideas || [];
   const selected = ideas.find(idea => idea.id === selectedId) || null;
@@ -109,6 +110,7 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
   useEffect(() => { if (selected) { setForm(formFromIdea(selected)); setDirty(false); setDateDirty(false); setConfigurationDirty(false); } }, [selected?.id]);
   useEffect(() => { if (draft) setGoals(Object.fromEntries(draft.platformGoals.map(row => [row.platformId, row.goalIds]))); }, [draft?.id, JSON.stringify(draft?.platformGoals)]);
   useEffect(() => { setCampaignEndOn(draft?.campaignEndOn || ''); }, [draft?.id, draft?.campaignEndOn]);
+  useEffect(() => { setSubmissionNote(draft?.submissionNote || ''); }, [draft?.id, draft?.submissionNote]);
   const usedPlatforms = draft?.platforms || [];
   const platformsWithoutGoal = campaign ? usedPlatforms.filter(platform => !(draft!.platformGoals.find(row => row.platformId === platform.platformId)?.goalIds.length)) : [];
   const allReady = Boolean(draft && ideas.length && ideas.every(idea => idea.ready) && !platformsWithoutGoal.length);
@@ -128,6 +130,19 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
     setBusy(true); setError(''); setMessage('');
     try { await workPost(action, body); await query.reload(); onChanged(); setMessage(done); return true; }
     catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); return false; }
+    finally { setBusy(false); }
+  }
+  async function submitForReview() {
+    if (!draft || busy || !allReady || dirty) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      // Keep a draft note even if plan creation fails, and include it in the
+      // native review history once the plan is successfully submitted.
+      if (submissionNote.trim() !== (draft.submissionNote || ''))
+        await workPost('strategy_save_draft', { draftId: draft.id, submissionNote });
+      await workPost('strategy_submit_draft', { draftId: draft.id });
+      await query.reload(); onChanged(); onClose();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
   async function saveCampaignEnd() {
@@ -256,7 +271,22 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
             <p className={allReady && !dirty ? 'mkw-sd-ready-note' : 'mkw-muted'}>{dirty ? 'احفظ تعديلات الفكرة الحالية قبل إرسال المسودة للمراجعة.'
               : allReady ? 'جميع الأفكار مكتملة وجاهزة للمراجعة.'
                 : `المسودة محفوظة · يمكنك استكمال إعداد الأفكار لاحقًا (${draft.readyCount} من ${draft.productCount} مكتمل).`}</p>
-            <button type="button" className="primary mkw-sd-submit" disabled={busy || !allReady || dirty} onClick={() => void run('strategy_submit_draft', { draftId: draft.id }, 'تم الإرسال للمراجعة').then(ok => { if (ok) onClose(); })}><PaperPlaneTilt size={18}/>إرسال للمراجعة</button>
+            <div className="mkw-sd-submit-note-group">
+              <button type="button" className="primary mkw-sd-submit" disabled={busy || !allReady || dirty}
+                onClick={() => void submitForReview()}><PaperPlaneTilt size={18}/>إرسال للمراجعة</button>
+              <label className="mkw-sd-review-note" htmlFor="mkw-sd-review-note-input">ملاحظة للمراجعة (اختياري)
+                <textarea id="mkw-sd-review-note-input" value={submissionNote} maxLength={10000} rows={3}
+                  disabled={busy} onChange={event => setSubmissionNote(event.target.value)}
+                  placeholder="اكتب ملاحظتك للمراجع قبل إرسال الحملة أو الأجندة"/>
+              </label>
+              <div className="mkw-sd-review-note-actions">
+                <small>تُحفظ الملاحظة عند الإرسال، ويمكن حفظها مع المسودة قبل ذلك.</small>
+                <button type="button" className="secondary" disabled={busy || submissionNote.trim() === (draft.submissionNote || '')}
+                  onClick={() => void run('strategy_save_draft', { draftId: draft.id, submissionNote }, 'تم حفظ ملاحظة المراجعة')}>
+                  حفظ الملاحظة
+                </button>
+              </div>
+            </div>
             <button type="button" className="secondary mkw-sd-delete" disabled={busy} onClick={() => { if (window.confirm('حذف المسودة؟ لن يتم حذف التاسكات أو المنتجات.')) void run('strategy_delete_draft', { draftId: draft.id }, 'تم حذف المسودة').then(ok => { if (ok) onClose(); }); }}><Trash size={17}/>حذف المسودة</button>
           </div>}
         </section>

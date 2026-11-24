@@ -197,3 +197,11 @@
   margin:6px 0 2px; padding:9px 10px; border:1px solid #dcc4b5; border-radius:10px;
   background:#eadacc; color:#4a211c; font-size:.81rem; font-weight:800; box-shadow:0 2px 7px rgba(74,33,28,.05); }
 .mkw-sd-category-heading span { display:inline-grid; place-items:center; min-width:24px; padding:2px 5px; border-radius:99px; background:#fffaf6; font-size:.72rem; }
+
+/* Reviewer note belongs to the submission action in BOTH campaign and agenda drafts. */
+.mkw-sd-submit-note-group { display:flex; flex:1 1 320px; flex-direction:column; gap:9px; min-width:0; }
+.mkw-sd-submit-note-group .mkw-sd-submit { align-self:flex-start; }
+.mkw-sd-review-note { display:flex; flex-direction:column; gap:6px; width:100%; font-size:.82rem; font-weight:700; }
+.mkw-sd-review-note textarea { box-sizing:border-box; width:100%; min-height:80px; resize:vertical; padding:10px 12px; border:1px solid #dcbfb2; border-radius:10px; background:#fffdfb; color:#4a211c; font:inherit; font-weight:400; line-height:1.7; }
+.mkw-sd-review-note-actions { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:9px; }
+.mkw-sd-review-note-actions small { color:#84695d; font-weight:400; }
