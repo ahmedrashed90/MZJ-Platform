@@ -192,7 +192,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.delivery_mode === 'drive_link' ? 'التصوير' : item.media_kind === 'video' ? W.video : W.image}</small><small className="mkw-requirement-due-on"><Clock size={14} aria-hidden="true" /> تاريخ تسليم المطلوب: <time dateTime={item.due_on} dir="ltr">{requirementDueLabel(item.due_on)}</time></small></span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.delivery_mode === 'drive_link' ? 'التصوير' : item.media_kind === 'video' ? W.video : W.image}</small><small className="mkw-requirement-due-on"><Clock size={14} aria-hidden="true" /> {item.due_on ? <>تاريخ تسليم المطلوب: <time dateTime={item.due_on} dir="ltr">{requirementDueLabel(item.due_on)}</time></> : <strong>بدون تاريخ تسليم</strong>}</small></span>
                   {item.delivery_mode === 'drive_link' && item.capture_submitted_at ?
                     <span className={`mkw-capture-timing ${item.delivery_status === 'late' ? 'is-late' : 'is-on-time'}`}>{item.delivery_status === 'late' ? 'تأخر في التصوير' : 'التصوير في الموعد'}</span> : <Status value={item.status}/>}
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
@@ -381,8 +381,8 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
   const canEditBrief = item.status !== 'rejected' && (editable || capabilities.editTask);
   const canUpload = !['approved','rejected','revision'].includes(item.status) && own && hasPermission(user, 'marketing.task.final_file.upload');
   const canSubmit = canUpload && ['in_progress','editing','revision','submitted'].includes(item.status);
-  const lateForSubmission = item.due_on < riyadhToday();
-  const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on);
+  const lateForSubmission = Boolean(item.due_on && item.due_on < riyadhToday());
+  const [idea, setIdea] = useState(item.idea), [ideaName, setIdeaName] = useState(item.idea_name), [explanation, setExplanation] = useState(item.explanation || ''), [dueOn, setDueOn] = useState(item.due_on || '');
   const [editingIdea, setEditingIdea] = useState(false);
   const fromStrategy = Boolean(item.creative_treatment);
   const [note, setNote] = useState(''), [noteType, setNoteType] = useState('');
@@ -450,9 +450,9 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
 
   async function persist() {
     if (!canEditBrief) return version.current;
-    if (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on) return version.current;
+    if (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === (item.due_on || '')) return version.current;
     const result = await workPost<{ version: number }>('save_item', { itemId: item.id, version: version.current, idea, ideaName, explanation,
-      ...(editable && capabilities.editTask ? { dueOn } : {}) });
+      ...(editable && capabilities.editTask ? { ...(dueOn || item.due_on ? { dueOn } : {}) } : {}) });
     version.current = result.version; return result.version;
   }
   async function run(operation: () => Promise<unknown>): Promise<boolean> {
@@ -613,7 +613,7 @@ function ItemEditor({ item, number, capabilities, formatOptions, canRate, settin
             <div className="mkw-prominent-due"><Field label={W.dueOn}><input type="date" value={dueOn} readOnly={!editable || !capabilities.editTask} disabled={busy} onChange={event => setDueOn(event.target.value)}/></Field></div>
           </div>
           {canEditBrief && <div className="mkw-idea-save-actions">
-            <button type="button" className="primary" disabled={busy || (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === item.due_on)}
+            <button type="button" className="primary" disabled={busy || (idea === item.idea && ideaName === item.idea_name && explanation === (item.explanation || '') && dueOn === (item.due_on || ''))}
               onClick={() => void run(persist).then(saved => { if (saved) { setEditingIdea(false); onBriefSaved(); } })}>حفظ الفكرة والشرح</button>
             <small className="mkw-muted">يتم حفظ النصين في التاسك مباشرة دون الحاجة لرفع ملف أو إرسال المطلوب للمراجعة.</small>
           </div>}

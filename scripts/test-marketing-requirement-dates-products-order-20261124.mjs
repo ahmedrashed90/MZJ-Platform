@@ -113,6 +113,6 @@ test('underlying per-item delivery and approval data remain independent', () => 
   const source = read('server/marketing/strategy-drafts.ts');
   assert.match(source, /i\.due_on::text,i\.approved_at/);
   assert.match(source, /dueOn: day\(row\.due_on\), approvedOn: row\.approved_at/);
-  assert.match(read('shared/marketing-workflow.ts'), /due_on: string; status: WorkItemStatus/);
+  assert.match(read('shared/marketing-workflow.ts'), /due_on: string \| null; status: WorkItemStatus/);
 });
 console.log(`${passed}/${13} work item date and product publication-order checks passed`);

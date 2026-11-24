@@ -1,6 +1,6 @@
-/** The delivery dates displayed within an agenda/campaign belong to that plan.
- * work_items.due_on remains untouched: it is a required execution deadline.
- * A stored NULL override explicitly means "no delivery date in this plan".
+/** Plan edits are staged separately from the original execution task.
+ * After review approval (or an explicit reviewer's date approval on an
+ * already-approved plan), they become the task's canonical nullable due_on.
  */
 import type { SessionUser } from '../_auth.js';
 import type { getSql } from '../_db.js';
@@ -21,7 +21,11 @@ export async function planExecutorDatesSchemaReady(sql: Sql): Promise<boolean> {
   const [state] = await sql<{ ready: boolean }[]>`select
     to_regclass('marketing.work_plan_executor_dates') is not null
     and exists (select 1 from information_schema.columns where table_schema='marketing'
-      and table_name='strategy_plan_drafts' and column_name='campaign_end_on') as ready`;
+      and table_name='strategy_plan_drafts' and column_name='campaign_end_on')
+    and exists (select 1 from information_schema.columns where table_schema='marketing'
+      and table_name='work_plan_executor_dates' and column_name='applied_at')
+    and exists (select 1 from information_schema.columns where table_schema='marketing'
+      and table_name='work_items' and column_name='due_on' and is_nullable='YES') as ready`;
   return Boolean(state?.ready);
 }
 async function targetOf(sql: Sql, user: SessionUser, input: Row, services: Services): Promise<{ target: Target; canEdit: boolean }> {
@@ -132,7 +136,12 @@ export async function getPlanExecutorDates(sql: Sql, user: SessionUser, input: R
   const { target, canEdit } = await targetOf(sql, user, input, services);
   const ready = await planExecutorDatesSchemaReady(sql);
   const ideas = await readExecutorIdeas(sql, target, ready);
-  return { ok: true, ready, canEdit, canUpgrade: hasPermission(user, 'platform.superadmin'),
+  const pending = ready && !target.isDraft
+    ? await sql<{ pending: number }[]>`select count(*)::int as pending from marketing.work_plan_executor_dates
+      where plan_id=${target.id}::uuid and applied_at is null` : [];
+  const canApproveDates = !target.isDraft && ['publishing','published'].includes(target.status)
+    && (await services.canReviewPlan());
+  return { ok: true, ready, canEdit, canApproveDates, pendingCount: Number(pending[0]?.pending || 0), canUpgrade: hasPermission(user, 'platform.superadmin'),
     kind: target.kind, ideas, planId: target.isDraft ? null : target.id,
     draftId: target.isDraft ? target.id : null };
 }
@@ -167,16 +176,16 @@ export async function savePlanExecutorDates(sql: Sql, user: SessionUser, body: R
         await tx`insert into marketing.work_plan_executor_dates(draft_id,item_id,due_on,updated_by)
           values(${target.id}::uuid,${change.itemId}::uuid,${change.dueOn}::date,${user.id}::uuid)
           on conflict(draft_id,item_id) where draft_id is not null do update
-          set due_on=excluded.due_on,updated_by=excluded.updated_by,updated_at=now()`;
+          set due_on=excluded.due_on,applied_at=null,updated_by=excluded.updated_by,updated_at=now()`;
       } else {
         await tx`insert into marketing.work_plan_executor_dates(plan_id,item_id,due_on,updated_by)
           values(${target.id}::uuid,${change.itemId}::uuid,${change.dueOn}::date,${user.id}::uuid)
           on conflict(plan_id,item_id) where plan_id is not null do update
-          set due_on=excluded.due_on,updated_by=excluded.updated_by,updated_at=now()`;
+          set due_on=excluded.due_on,applied_at=null,updated_by=excluded.updated_by,updated_at=now()`;
       }
     }
     if (target.isDraft) await tx`update marketing.strategy_plan_drafts set updated_at=now(),version=version+1 where id=${target.id}::uuid`;
     else await tx`update marketing.work_plans set updated_at=now() where id=${target.id}::uuid`;
   });
-  return { ok: true, changed: changes.length, message: 'تم حفظ تواريخ المنفذين داخل الأجندة أو الحملة، دون تغيير مواعيد التكليفات الأصلية.' };
+  return { ok: true, changed: changes.length, message: target.isDraft ? 'تم حفظ مواعيد المنفذين في المسودة، وستُرسل مع الأجندة أو الحملة للمراجعة.' : 'تم حفظ التعديلات بانتظار الاعتماد؛ لم تتغير مواعيد التكليفات الأصلية بعد.' };
 }

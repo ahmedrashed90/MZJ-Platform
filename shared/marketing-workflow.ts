@@ -15,7 +15,7 @@ export type WorkFile = { id: string; name: string; mime_type: string; file_size:
 export type WorkItem = {
   id: string; task_id: string; department_id: string; department_name: string; assigned_to: string; assignee_name: string;
   media_kind: WorkMediaKind; delivery_mode?: 'files' | 'drive_link'; capture_url?: string | null; capture_submitted_at?: string | null; creative_treatment?: string;
-  idea_name: string; idea: string; explanation?: string; caption?: string; hashtags?: string; formats: WorkFormat[]; due_on: string; status: WorkItemStatus;
+  idea_name: string; idea: string; explanation?: string; caption?: string; hashtags?: string; formats: WorkFormat[]; due_on: string | null; status: WorkItemStatus;
   files: WorkFile[]; review_note: string; review_note_type_id?: string | null; review_note_type_name?: string | null;
   review_notes?: WorkItemReviewNote[];
   latest_review_event?: { action: string; note: string; actor_name: string; created_at: string } | null;

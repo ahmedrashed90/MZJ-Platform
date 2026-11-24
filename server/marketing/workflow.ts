@@ -1,4 +1,5 @@
 import { getPlanExecutorDates, savePlanExecutorDates, planExecutorDatesSchemaReady } from './plan-executor-dates.js';
+import { applyApprovedPlanExecutorDates } from './approved-executor-dates.js';
 import { bulkPublishConfigured, riyadhPublishIso, bulkPublishTikTokStatus, rescheduleBulkPublishTikTok } from '../_marketing-bulkpublish.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomUUID } from 'node:crypto';
@@ -228,10 +229,10 @@ async function loadItems(db: any, taskId: string, onlyUser = ''): Promise<WorkIt
       and h.action in ('created','edited') and h.data ? 'explanation'
       order by h.created_at desc,h.id desc limit 1),'') as explanation,
     case when i.delivery_mode='drive_link' and i.capture_submitted_at is not null then
-      case when (i.capture_submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
+      case when i.due_on is null then null when (i.capture_submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
       when i.status='approved' and i.approved_at is not null and i.submitted_at is not null then
       case when exists(select 1 from marketing.work_item_deadline_exceptions de where de.item_id=i.id and de.status='approved') then 'exception_approved'
-        when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
+        when i.due_on is null then null when (i.submitted_at at time zone 'Asia/Riyadh')::date <= i.due_on then 'on_time' else 'late' end
       else null end as delivery_status,
     (select jsonb_build_object('id',de.id::text,'status',de.status,'request_note',de.request_note,
       'requested_at',de.requested_at,'decision_note',de.decision_note,'decided_at',de.decided_at,
@@ -592,9 +593,14 @@ async function saveItem(sql: Sql, body: Row, user: SessionUser) {
     const idea = text(body.idea ?? locked.idea, 20000), ideaName = text(body.ideaName ?? locked.idea_name, 250);
     const explanation = body.explanation === undefined ? undefined : text(body.explanation, 20000);
     if (briefOnly && ideaName !== locked.idea_name) throw new Error(W.immutable);
-    let due = workDate(locked.due_on);
+    let due: string | null = workDate(locked.due_on) || null;
     let assignedTo = locked.assigned_to, departmentId = locked.department_id;
-    if (managerEdit && body.dueOn !== undefined) { if (!isWorkDate(body.dueOn)) throw new Error(W.dateInvalid); due = body.dueOn; }
+    if (managerEdit && body.dueOn !== undefined) {
+      // A date cleared by an approved plan is preserved on unrelated text
+      // edits. Only plan approval can clear an existing non-null due date.
+      if (body.dueOn === '' && !due) { /* already cleared */ }
+      else { if (!isWorkDate(body.dueOn)) throw new Error(W.dateInvalid); due = body.dueOn; }
+    }
     if (managerEdit && body.assigneeId !== undefined) {
       assignedTo = id(body.assigneeId); departmentId = id(body.departmentId); await validateAssignee(tx, departmentId, assignedTo);
     }
@@ -1675,6 +1681,9 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
         }
       }
     } else if (plan.created_by !== user.id || !['in_progress','revision'].includes(plan.review_status)) throw new Error(W.denied);
+    // A dated revision changes the canonical executor deadlines only when
+    // the reviewer explicitly approves the plan, never on submit/revision.
+    if (action === 'approved') await applyApprovedPlanExecutorDates(tx as unknown as Sql, user, planId);
     const status = action === 'approved' ? 'publishing' : action === 'submitted' ? 'submitted' : 'revision';
     await tx`update marketing.work_plans set review_status=${status},review_note=${action === 'revision' ? auditedNote : plan.review_note},
       review_revision=review_revision+${action === 'revision' ? 1 : 0},review_note_category_id=${action === 'revision' ? categoryId : plan.review_note_category_id}::uuid,reviewed_by=${user.id}::uuid,
@@ -1686,6 +1695,25 @@ async function changePlanReview(sql: Sql, user: SessionUser, body: Row) {
   await notifyPlanDecision(sql,user,planId,action,result.creatorId,result.planName,action==='revision'?note:'').catch(error => console.error('Marketing plan notification lookup failed',error));
   return { ok:true,message:result.message };
 }
+async function approvePlanExecutorDateChanges(sql: Sql, user: SessionUser, body: Row) {
+  const planId = id(body.planId);
+  if (!(await canReviewPlan(sql, user))) throw new Error(W.denied);
+  const changed = await sql.begin(async tx => {
+    await tx`set local lock_timeout='3s'`;
+    const [plan] = await tx<any[]>`select id,review_status,is_deleted
+      from marketing.work_plans where id=${planId}::uuid for update`;
+    if (!plan || plan.is_deleted) throw new Error(W.notFound);
+    // A submitted or revision plan must go through the ordinary plan review,
+    // including its goals, permissions and revision checks.
+    if (!['publishing','published'].includes(plan.review_status))
+      throw new Error('اعتماد تواريخ المنفذين متاح هنا بعد اعتماد الأجندة أو الحملة فقط.');
+    return applyApprovedPlanExecutorDates(tx as unknown as Sql, user, planId);
+  });
+  return { ok: true, changed, message: changed
+    ? `تم اعتماد تعديل ${changed} من تواريخ المنفذين وتحديث التكليفات الأصلية.`
+    : 'لا توجد تعديلات تواريخ معلقة للاعتماد.' };
+}
+
 async function updatePlanRows(sql: Sql, user: SessionUser, body: Row) {
   const planId = id(body.planId), incoming = list(body.entries);
   if (!incoming.length || incoming.length > 500) throw new Error(W.requiredFields);
@@ -3272,6 +3300,7 @@ export async function handleMarketingWorkflow(request: VercelRequest, response: 
     else if (action === 'work_strategy_submit_draft') result = await submitStrategyDraft(sql, user, body, strategyDraftDeps);
     else if (action === 'work_strategy_link_campaign') result = await linkStrategyCampaign(sql, user, body, strategyDraftDeps);
     else if (action === 'work_save_item_copy') result = await saveItemCopy(sql, body, user);
+    else if (action === 'work_approve_plan_executor_dates') result = await approvePlanExecutorDateChanges(sql, user, body);
     else if (action === 'work_plan_review') result = await changePlanReview(sql, user, body);
     else if (action === 'work_save_plan_reviewers') result = await savePlanReviewers(sql, user, body);
     else if (action === 'work_save_campaign_goal') result = await manageCampaignGoal(sql,user,body);

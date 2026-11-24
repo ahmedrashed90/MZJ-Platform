@@ -28,6 +28,7 @@ const baseSteps = [
   {match:'from marketing.work_items i left join core.users u',rows:siblings},
   {match:'from marketing.work_history h',rows:[marker]},
   {match:'from marketing.work_plan_executor_dates where plan_id=',rows:[{item_id:A,due_on:null}]},
+  {match:'select count(*)::int as pending from marketing.work_plan_executor_dates',rows:[{pending:1}]},
 ];
 let checks=0;
 function test(label,fn){fn();checks++;console.log('PASS:',label)}
@@ -38,6 +39,8 @@ function test(label,fn){fn();checks++;console.log('PASS:',label)}
     assert.equal(res.ideas.length,1);assert.equal(res.ideas[0].executors.length,3);
     assert.deepEqual(res.ideas[0].executors.map(row=>row.assigneeName),['محمود','بلال','المصور']);
   });
+  test('A plan in revision cannot directly approve its staged dates',()=>assert.equal(res.canApproveDates,false));
+  test('Plan date changes are pending review',()=>assert.equal(res.pendingCount,1));
   test('Cleared plan date does not fall back to the non-null task date',()=>{
     const first=res.ideas[0].executors[0]; assert.equal(first.originalDueOn,'2027-01-03');
     assert.equal(first.dueOn,null);assert.equal(first.overridden,true);
@@ -50,7 +53,7 @@ function test(label,fn){fn();checks++;console.log('PASS:',label)}
     assert.equal(service.executorIdeaMatches(bases[0],{...siblings[2],id:'other'},'DIFFERENT'),false);
   });
   sql.assertDone();
-  const saveSql=scriptedSql([...baseSteps,
+  const saveSql=scriptedSql([...baseSteps.slice(0,-1),
     {match:"set local lock_timeout",rows:[]},
     {match:'select id from marketing.work_plans',rows:[{id:P}]},
     {match:'insert into marketing.work_plan_executor_dates(plan_id,item_id,due_on,updated_by)',rows:[]},
