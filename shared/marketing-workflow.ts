@@ -51,6 +51,8 @@ export type WorkTask = {
   assignee_names?: string[]; search_ideas?: string[]; search_briefs?: string[]; due_dates?: string[];
 };
 export type WorkProduct = WorkItem & { task_no: string; task_name: string; released_at: string; statement: string; idea_code?: string; manual_product?: boolean;
+  /** Earliest planned publication date in a linked active agenda (read-only). */
+  publish_on?: string | null;
   /** Strategy flow: category and draft/plan code (رقم الطلب) when the product came from a strategy draft. */
   strategy_category?: string; strategy_order_no?: string; strategy_pending?: boolean };
 export type WorkPlanLine = {

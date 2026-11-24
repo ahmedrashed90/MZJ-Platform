@@ -509,7 +509,7 @@
 .mkw-requirement-review-identify strong { overflow-wrap:anywhere; font-size:14px; }
 .mkw-requirement-review-identify small { color:var(--muted); font-size:12px; }
 .mkw-requirement-review-identify .mkw-requirement-due-on { display:inline-flex; flex-wrap:wrap; align-items:center; gap:5px; color:var(--brand); font-size:12px; font-weight:750; }
-.mkw-requirement-due-on time { direction:ltr; unicode-bidi:isolate; font-variant-numeric:tabular-nums; }
+.mkw-requirement-due-on time { display:inline-block; white-space:nowrap; direction:ltr; unicode-bidi:isolate; font-variant-numeric:tabular-nums; }
 .mkw-requirement-review-idea { color:var(--brand); font-weight:650; white-space:pre-wrap; overflow-wrap:anywhere; }
 .mkw-requirement-item-readiness { padding:0 16px 14px; }
 .mkw-requirement-item-readiness .mkw-readiness { gap:7px; }

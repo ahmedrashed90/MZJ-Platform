@@ -1,29 +1,41 @@
-/** Order the strategy products by their real execution (approval) day.
- * The delivery target is NOT an execution date: unfinished requirements stay after executed ones.
- * Sorting is performed on a copy so React query data is never mutated.
+/** Sort products by their planned publication date, not execution/approval.
+ * A product may appear in multiple agendas; its earliest scheduled day wins.
+ * Products with no publish date are shown after dated ones.
+ * Pure display ordering: never mutate the API response or stored dates.
  */
-export type ExecutionDatedProduct = {
-  itemId: string;
-  approvedOn?: string | null;
-  dueOn?: string | null;
+export type PublicationDatedProduct = {
+  itemId?: string;
+  id?: string;
+  publishOn?: string | null;
+  publishDates?: readonly string[] | null;
+  publish_on?: string | null;
   createdAt?: string | null;
+  approved_at?: string | null;
+  released_at?: string | null;
 };
 
 function calendarDay(value: string | null | undefined): string | null {
-  const text = String(value || '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+  const day = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const parsed = new Date(`${day}T12:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day ? day : null;
 }
 
-export function sortStrategyProductsByExecutionDate<T extends ExecutionDatedProduct>(rows: readonly T[]): T[] {
+export function productPublicationDay(row: PublicationDatedProduct): string | null {
+  const days = [...(row.publishDates || []), row.publishOn, row.publish_on]
+    .map(calendarDay).filter((day): day is string => Boolean(day));
+  return days.length ? days.sort()[0] : null;
+}
+
+export function sortProductsByPublishDate<T extends PublicationDatedProduct>(rows: readonly T[]): T[] {
   return [...rows].sort((a, b) => {
-    const aExecuted = calendarDay(a.approvedOn);
-    const bExecuted = calendarDay(b.approvedOn);
-    if (Boolean(aExecuted) !== Boolean(bExecuted)) return aExecuted ? -1 : 1;
-    if (aExecuted && bExecuted && aExecuted !== bExecuted) return aExecuted.localeCompare(bExecuted);
-    const aDue = calendarDay(a.dueOn) || '9999-12-31';
-    const bDue = calendarDay(b.dueOn) || '9999-12-31';
-    if (aDue !== bDue) return aDue.localeCompare(bDue);
-    const byCreation = String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-    return byCreation || a.itemId.localeCompare(b.itemId);
+    const aDay = productPublicationDay(a);
+    const bDay = productPublicationDay(b);
+    if (aDay && bDay && aDay !== bDay) return aDay.localeCompare(bDay);
+    if (Boolean(aDay) !== Boolean(bDay)) return aDay ? -1 : 1;
+    // Newest-created first only when publish dates are equal or unavailable.
+    const byCreation = String(b.createdAt || b.approved_at || b.released_at || '')
+      .localeCompare(String(a.createdAt || a.approved_at || a.released_at || ''));
+    return byCreation || String(a.itemId || a.id || '').localeCompare(String(b.itemId || b.id || ''));
   });
 }

@@ -4,6 +4,7 @@ import { useWorkQuery, workPost } from '../workflow/api';
 import type { WorkProduct } from '../../../shared/marketing-workflow';
 import { ProductReference } from '../workflow/ProductReference';
 import { StrategyProductsTab } from '../workflow/StrategyDrafts';
+import { productPublicationDay, sortProductsByPublishDate } from '../workflow/strategyProductOrder';
 
 /** Display the actual product approval timestamp in MZJ's business timezone. */
 function approvalDate(value: string | null | undefined): string {
@@ -33,16 +34,8 @@ export function ProductsPage() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'تعذر إضافة المنتج'); }
     finally { setBusy(false); }
   }
-  const rows = (query.data?.rows || []).filter(product =>
-    `${product.statement} ${product.idea_name} ${product.task_no} ${product.idea_code||''}`.toLocaleLowerCase().includes(term))
-    .sort((a, b) => {
-      // The approved-products view is ordered by its own execution/approval date.
-      const first = a.approved_at || a.released_at || '';
-      const second = b.approved_at || b.released_at || '';
-      if (!first) return second ? 1 : 0;
-      if (!second) return -1;
-      return first.localeCompare(second) || a.id.localeCompare(b.id);
-    });
+  const rows = sortProductsByPublishDate((query.data?.rows || []).filter(product =>
+    `${product.statement} ${product.idea_name} ${product.task_no} ${product.idea_code||''}`.toLocaleLowerCase().includes(term)));
 
   return <div className="mkw">
     <WorkHeader title={W.products} onRefresh={() => void query.reload()} loading={query.loading}>
@@ -70,7 +63,7 @@ export function ProductsPage() {
           const approvedAt = product.approved_at || product.released_at;
           return <tr key={product.id}>
             <td><span className="mkw-code">{index + 1}</span></td>
-            <td><time dateTime={approvedAt || undefined} dir="ltr" style={{ display: 'inline-block', direction: 'ltr', unicodeBidi: 'isolate', whiteSpace: 'nowrap' }}>{approvalDate(approvedAt)}</time></td>
+            <td><time dateTime={approvedAt || undefined} dir="ltr" style={{ display: 'inline-block', direction: 'ltr', unicodeBidi: 'isolate', whiteSpace: 'nowrap' }}>{approvalDate(approvedAt)}</time><small className="mkw-muted" style={{ display: 'block' }}>تاريخ النشر: <time dateTime={product.publish_on || undefined} dir="ltr" style={{ display: 'inline-block', direction: 'ltr', unicodeBidi: 'isolate', whiteSpace: 'nowrap' }}>{productPublicationDay(product)?.replace(/-/g, '/') || '—'}</time></small></td>
             <td className="mkw-table-title"><ProductReference title={product.task_name} details={product}/>{!product.manual_product && <MediaLabel kind={product.media_kind} />}</td>
             <td>{product.idea_name}{product.idea_code && <small className="mkw-muted" style={{display:'block'}}>كود الفكرة: <span dir="ltr">{product.idea_code}</span></small>}</td>
             <td>{product.manual_product ? '—' : product.assignee_name || '—'}</td>

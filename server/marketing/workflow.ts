@@ -1456,6 +1456,9 @@ async function products(sql: Sql, user: SessionUser) {
   if (!hasPermission(user, 'marketing.products.view') && !hasPermission(user, 'marketing.publish_prep.view')) throw new Error(W.denied);
   const scopes = departmentScope(user);
   const rows = await sql<any[]>`select i.*,i.due_on::text,t.task_no,t.name as task_name,i.approved_at as released_at,
+    (select min(l.scheduled_on)::text from marketing.work_plan_items l
+      join marketing.work_plans p on p.id=l.plan_id
+      where l.product_id=i.id and l.is_deleted=false and p.is_deleted=false and p.kind='agenda') as publish_on,
     coalesce((select h.data->>'explanation' from marketing.work_history h where h.item_id=i.id
       and h.action in ('created','edited') and h.data ? 'explanation'
       order by h.created_at desc,h.id desc limit 1),'') as explanation,

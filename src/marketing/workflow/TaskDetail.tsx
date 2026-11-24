@@ -16,6 +16,13 @@ function submittedDayInRiyadh(value: string | null | undefined) {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString('ar-SA-u-ca-gregory-nu-latn', { timeZone: 'Asia/Riyadh' }) : '—';
 }
+/** Dates from work_items.due_on are calendar days. Render as a fixed, LTR
+ * Gregorian YYYY/MM/DD string, not a locale string with RTL control marks. */
+function requirementDueLabel(value: string | null | undefined): string {
+  const day = String(value || '').slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  return match ? `${match[1]}/${match[2]}/${match[3]}` : '—';
+}
 function riyadhToday() {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const values = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
@@ -185,7 +192,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
               return <section key={item.id} className={`mkw-requirement-review-entry ${opened ? 'is-open' : ''} ${item.status === 'rejected' ? 'is-rejected' : ''}`}>
                 <button type="button" className="mkw-requirement-review-toggle" aria-expanded={opened} onClick={() => setOpenedRequirementId(opened ? '' : item.id)}>
                   <span className="mkw-item-number">{index + 1}</span>
-                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.delivery_mode === 'drive_link' ? 'التصوير' : item.media_kind === 'video' ? W.video : W.image}</small><small className="mkw-requirement-due-on"><Clock size={14} aria-hidden="true" /> تاريخ تسليم المطلوب: <time dateTime={item.due_on}>{showDate(item.due_on)}</time></small></span>
+                  <span className="mkw-requirement-review-identify"><strong>{W.required} {index + 1}: {item.idea_name} </strong><small>{W.assignee}: {item.assignee_name} · {item.delivery_mode === 'drive_link' ? 'التصوير' : item.media_kind === 'video' ? W.video : W.image}</small><small className="mkw-requirement-due-on"><Clock size={14} aria-hidden="true" /> تاريخ تسليم المطلوب: <time dateTime={item.due_on} dir="ltr">{requirementDueLabel(item.due_on)}</time></small></span>
                   {item.delivery_mode === 'drive_link' && item.capture_submitted_at ?
                     <span className={`mkw-capture-timing ${item.delivery_status === 'late' ? 'is-late' : 'is-on-time'}`}>{item.delivery_status === 'late' ? 'تأخر في التصوير' : 'التصوير في الموعد'}</span> : <Status value={item.status}/>}
                   {approved > 0 && <span className="mkw-requirement-reviewed"><CheckCircle size={18} weight="fill"/>{approved} / {item.formats.length} مقاس معتمد</span>}
