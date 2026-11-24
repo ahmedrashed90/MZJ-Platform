@@ -3,15 +3,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { execFileSync } = require('node:child_process');
 
 const root = path.join(__dirname, '..');
 const pageSource = fs.readFileSync(path.join(root, 'src/marketing/pages/ProductsPage.tsx'), 'utf8');
 const serverSource = fs.readFileSync(path.join(root, 'server/marketing/workflow.ts'), 'utf8');
 const typesSource = fs.readFileSync(path.join(root, 'shared/marketing-workflow.ts'), 'utf8');
 
-const tsc = fs.realpathSync(execFileSync('which', ['tsc'], { encoding: 'utf8' }).trim());
-const ts = require(path.dirname(path.dirname(tsc)));
+// Load the declared TypeScript devDependency through Node's module resolution.
+// Resolving the tsc executable and walking parent folders is not portable on Vercel.
+const ts = require('typescript');
 const compiled = ts.transpileModule(pageSource, {
   fileName: 'ProductsPage.tsx',
   reportDiagnostics: true,
