@@ -592,8 +592,8 @@ export default async function leadFormsHandler(req:VercelRequest,res:VercelRespo
       const [existing]=await sql<{id:string}[]>`select id::text from marketing.form_leads where id=${leadId}::uuid`;
       if (!existing) return fail(res,404,'ليد الفورم غير موجود');
       try {
-        const synced=await syncMarketingFormLeadToCrm(leadId);
-        return res.json({ok:true,crmStatus:synced.status,message:'تم التحقق من وصول الليد إلى CRM'});
+        const synced=await syncMarketingFormLeadToCrm(leadId, true);
+        return res.json({ok:true,crmStatus:synced.status,message:synced.status==='existing'?'العميل موجود في CRM؛ لم يتم تغيير قسمه أو توزيعه':'تم ربط الليد بقاعدة بيانات CRM'});
       } catch (error) {
         console.error('Manual form CRM retry failed', {leadId,error});
         return fail(res,503,'تعذر نقل الليد إلى CRM، يرجى إعادة المحاولة لاحقًا');

@@ -13,7 +13,8 @@ assert.ok(importer.indexOf('const phoneKey = data.phoneNormalized.slice(-9);') <
 
 // Repeated lead imports NEVER classify or auto-complete an existing finance
 // request's missing owner, even if the new form has a different purchase type.
-assert.match(importer, /const shouldClassifyForDistribution = !lead;/);
+assert.match(importer, /const shouldClassifyForDistribution = !lead \|\| Boolean\(recoverLeadId\);/);
+assert.match(importer, /await isRecoverableMarketingFormLead\(sql, String\(lead.id\), eventId, sourceCode\)/);
 assert.doesNotMatch(importer, /requestNeedsFinanceDistribution/);
 
 // Existing lead updates are provenance-only; operational details and primary

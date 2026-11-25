@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope, crmLeadScopeSql, currentCrmLeadBranchSql } from "../_crm-utils.js";
-import { getSql } from "../_db.js";
+import { getSql, withDatabaseAdvisoryLock } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent, syncLeadConversationContext } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
@@ -780,7 +780,20 @@ async function remove(request: VercelRequest, response: VercelResponse, user: an
   const leadScope = crmLeadScopeSql(sql, scope);
   const [before] = await sql<any[]>`select l.*, l.id::text from crm.leads l where l.id=${id}::uuid and l.is_deleted=false and ${leadScope}`;
   if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود أو غير متاح في فرعك الحالي" });
-  await sql`update crm.leads set is_deleted=true, deleted_by=${user.id}::uuid, deleted_at=now(), updated_at=now() where id=${id}::uuid`;
+  const markDeleted = () => sql.begin(async tx => {
+    const [deleted] = await tx`
+      update crm.leads set is_deleted=true, deleted_by=${user.id}::uuid, deleted_at=now(), current_request_id=null, updated_at=now()
+      where id=${id}::uuid and is_deleted=false returning id::text
+    `;
+    if (!deleted) return;
+    await tx`
+      update crm.service_requests set request_state='closed',closed_at=coalesce(closed_at,now()),
+        closed_by=${user.id}::uuid,closure_reason='إغلاق طلب عميل محذوف',updated_at=now()
+      where lead_id=${id}::uuid and request_state='open'
+    `;
+  });
+  if (before.contact_id) await withDatabaseAdvisoryLock(`mzj:crm:service-classification:${before.contact_id}`, markDeleted);
+  else await markDeleted();
   await audit(user, "lead_deleted", "lead", id, { isDeleted: true }, before);
   return response.status(200).json({ ok: true });
 }

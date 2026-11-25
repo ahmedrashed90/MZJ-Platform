@@ -21,7 +21,7 @@ assert.match(lifecycle, /customerStatusPreserved: true/);
 assert.match(lifecycle, /sql\.begin\(async \(tx\) =>/);
 assert.match(lifecycle, /withDatabaseAdvisoryLock\(`mzj:crm:service-classification:\$\{conversation\.contact_id\}`/);
 assert.match(lifecycle, /const explicitServiceChange = \["customer_service_selection", "automation_flow", "manual"\]/);
-assert.match(lifecycle, /if \(existing && existingServiceKey !== serviceKey && !explicitServiceChange\)/);
+assert.match(lifecycle, /if \(existing && \(input\.marketingFormImportRouting \|\| \(existingServiceKey !== serviceKey && !explicitServiceChange\)\)\)/);
 console.log('PASS: lifecycle preserves lead status/source and prevents implicit reclassification, with atomic request writes');
 
 // The manual transfer handler and both customer-drawer options previously

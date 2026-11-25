@@ -22,7 +22,7 @@ const uuid = {
   financeOwner: '66666666-6666-4666-8666-666666666666',
 };
 
-function harness({ initialService = 'cash', customerStatus = 'مؤهل', initialRequest = true, initialLead = true, failOnRequest = false } = {}) {
+function harness({ initialService = 'cash', customerStatus = 'مؤهل', initialRequest = true, initialLead = true, failOnRequest = false, orphanRequest = false, recovery = false, recoverable = false, noOwner = false } = {}) {
   let state = {
     lead: initialLead ? {
       id: uuid.lead, contact_id: uuid.contact, status_label: customerStatus,
@@ -40,21 +40,40 @@ function harness({ initialService = 'cash', customerStatus = 'مؤهل', initial
       branch_code: 'hall', source_code: 'other_website', request_state: 'open',
       assigned_to: initialService === 'finance' ? uuid.financeOwner : uuid.cashOwner,
       assigned_name: 'المندوب القديم', call_center_assigned_to: null }] : [],
-    events: [], ownership: [],
+    events: [], ownership: [], allocationWrites: 0,
   };
+  if (orphanRequest) state.requests.push({ id: uuid.request, lead_id: "99999999-9999-4999-8999-999999999999", contact_id: uuid.contact, request_state: "open", deletedLead: true });
+  if (recovery && state.lead) Object.assign(state.lead, {service_key:"cash",department_code:"cash_sales",payment_type:"كاش",status_label:"عميل جديد",status_code:null,assigned_to:null,current_request_id:null,source_code:"facebook",source_name:"facebook",extra_data:{contactModel:true}});
+  let txActive = false;
   let sqlWrites = 0, activeLocks = 0, maximumLocks = 0, lockedKeys = [];
   const lockQueues = new Map();
 
   async function sql(strings, ...values) {
     const q = strings.join('?').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (q === 'for update of l' || q === '') return {fragment:q};
+    if (q.includes('join integrations.inbound_events e')) {
+      assert.match(q, /l\.created_at>=e\.received_at/);
+      assert.match(q, /not exists\(select 1 from crm.service_requests r where r.lead_id=l.id\)/);
+      assert.match(q, /not exists\(select 1 from crm.ownership_events/);
+      assert.match(q, /not exists\(select 1 from crm.sales_transactions/);
+      assert.match(q, /c.metadata->>'lasteventid'=/);
+      return recoverable ? [{id:uuid.lead}] : [];
+    }
+    if (q.startsWith("update crm.service_requests r set request_state='closed'")) {
+      assert.equal(txActive,true); assert.match(q,/l.is_deleted=true/);
+      for(const row of state.requests) if(row.deletedLead && row.request_state==='open') row.request_state='closed';
+      return [];
+    }
     const val = index => values[index];
     if (q.includes('from crm.conversations c join crm.contacts ct')) return [{ ...state.conversation }];
     if (q.includes('from crm.leads') && q.includes('where contact_id=') && !q.startsWith('update')) return state.lead ? [{ ...state.lead }] : [];
     if (q.startsWith('select status_label,source_code,source_name,source_history,registered_at,created_at from crm.leads')) return state.lead ? [{ ...state.lead }] : [];
     if (q.startsWith('insert into crm.leads')) {
+      assert.equal(txActive,true,'Lead must be created inside the same transaction as its request');
       if (state.lead) throw Error('Duplicate insert of existing lead');
       state.lead = { id: uuid.lead, contact_id: uuid.contact, status_label: 'عميل جديد', status_code: null,
         source_code: val(4), source_name: val(5), platform_code: val(6), source_history: val(7),
+        service_key:val(8), department_code:val(9), payment_type:val(10),
         assigned_to: null, current_request_id: null, is_deleted: false };
       return [{ ...state.lead }];
     }
@@ -68,6 +87,7 @@ function harness({ initialService = 'cash', customerStatus = 'مؤهل', initial
     if (q.startsWith('insert into crm.service_requests')) {
       sqlWrites++;
       if (failOnRequest) throw Error('Simulated request insert failure');
+      if(state.requests.some(r=>r.request_state==='open')) throw Error('crm_service_requests_one_open_per_contact');
       const request = { id: `77777777-7777-4777-8777-${String(state.requests.length + 1).padStart(12, '0')}`,
         contact_id: uuid.contact, lead_id: uuid.lead, conversation_id: uuid.conversation,
         service_key: val(3), department_code: val(4), branch_code: val(5), status_label: 'عميل جديد', request_state: 'open',
@@ -112,14 +132,16 @@ function harness({ initialService = 'cash', customerStatus = 'مؤهل', initial
       return [];
     }
     if (q.startsWith('insert into crm.ownership_events')) { state.ownership.push(q); return []; }
-    if (q.startsWith('select') && q.includes('from crm.service_requests')) return state.requests.filter(r => r.request_state === 'open');
+    if (q.startsWith('select') && q.includes('from crm.service_requests')) return state.requests.filter(r => r.request_state === 'open' && !r.deletedLead);
     throw Error(`Unmocked SQL: ${q.slice(0, 280)}`);
   }
   sql.json = value => value;
   sql.begin = async (callback) => {
     const backup = structuredClone(state);
+    txActive=true;
     try { return await callback(sql); }
     catch (error) { state = backup; throw error; }
+    finally {txActive=false;}
   };
 
   const lock = async (key, work) => {
@@ -142,7 +164,10 @@ function harness({ initialService = 'cash', customerStatus = 'مؤهل', initial
       departmentCodeFromKey: v => v === 'finance' ? 'finance_sales' : v === 'service' ? 'customer_service' : 'cash_sales',
       branchForDepartment: () => 'hall',
       chooseAssignment: async (service) => ({ assignedTo: serviceOwner(service), assignedName: 'المندوب', branchCode: 'hall' }),
-      chooseSheetImportAssignment: async (service) => ({ assignedTo: serviceOwner(service), assignedName: 'المندوب', branchCode: 'hall' }),
+      chooseSheetImportAssignment: async (service,_source,transaction) => {
+        assert.equal(transaction,sql);assert.equal(txActive,true);state.allocationWrites++;
+        return { assignedTo:noOwner?null:serviceOwner(service), assignedName:'المندوب',branchCode:'hall' };
+      },
       chooseFinanceImportAssignment: async () => ({ assignedTo: uuid.financeOwner, assignedName: 'التمويل', branchCode: 'hall' }),
       chooseCallCenterAssignment: async () => ({ assignedTo: null, assignedName: '' }),
       resolveSourceName: async (source) => source,
@@ -250,3 +275,40 @@ assert.equal(concurrent.metrics().maximumLocks, 1);
 assert.equal(new Set(concurrent.metrics().lockedKeys).size, 1);
 assert.equal(concurrent.snapshot().requests.filter(r => r.request_state === 'open').length, 1);
 console.log('PASS: simultaneous service selections serialize per contact and keep one open request');
+
+// 8. Reproduce a soft-deleted lead leaving an open request, exactly as in 23505.
+const formInput = {...input('finance','lead_import'),marketingFormImportRouting:true, eventKey:'marketing-form:test'};
+const orphan = harness({initialRequest:false,initialLead:false,orphanRequest:true});
+await orphan.classify(formInput);
+assert.equal(orphan.snapshot().requests[0].request_state,'closed');
+assert.equal(orphan.snapshot().requests.filter(r=>r.request_state==='open').length,1);
+assert.equal(orphan.snapshot().lead.department_code,'finance_sales');
+assert.equal(orphan.snapshot().lead.payment_type,'تمويل');
+assert.equal(orphan.snapshot().lead.assigned_to,uuid.financeOwner);
+assert.equal(orphan.snapshot().allocationWrites,1);
+console.log('PASS: orphan request closed and one new assigned finance lead committed');
+// 9. If insertion or assignment fails, no placeholder or allocation is left behind.
+for(const options of [{failOnRequest:true},{noOwner:true}]) {
+  const h=harness({initialRequest:false,initialLead:false,orphanRequest:true,...options});
+  await assert.rejects(h.classify(formInput));
+  assert.equal(h.snapshot().lead,null);
+  assert.equal(h.snapshot().requests[0].request_state,'open');
+  assert.equal(h.snapshot().allocationWrites,0);
+}
+console.log('PASS: failed form request and missing owner both roll back new customer, old request closure and allocation');
+// 10. Repair only a proven partial record, never a real cash customer.
+const repair=harness({initialRequest:false,initialLead:true,orphanRequest:true,recovery:true,recoverable:true});
+await repair.classify({...formInput,recoverMarketingFormLeadId:uuid.lead});
+assert.equal(repair.snapshot().lead.id,uuid.lead);
+assert.equal(repair.snapshot().lead.department_code,'finance_sales');
+assert.equal(repair.snapshot().lead.assigned_to,uuid.financeOwner);
+assert.equal(repair.snapshot().requests.filter(r=>r.request_state==='open').length,1);
+const unsafe=harness({initialRequest:false,initialLead:true,recovery:true,recoverable:false});
+await assert.rejects(unsafe.classify({...formInput,recoverMarketingFormLeadId:uuid.lead}),/سجل العميل تغيّر/);
+assert.equal(unsafe.snapshot().lead.department_code,'cash_sales');
+assert.equal(unsafe.snapshot().allocationWrites,0);
+const realCash=harness({initialRequest:true,initialLead:true});
+assert.equal((await realCash.classify(formInput)).reused,true);
+assert.equal(realCash.snapshot().lead.department_code,'cash_sales');
+assert.equal(realCash.snapshot().allocationWrites,0);
+console.log('PASS: exact partial record repaired; unproven records and real cash requests preserved');

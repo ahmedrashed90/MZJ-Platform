@@ -177,24 +177,80 @@ export async function findOpenServiceRequest(contactId: string) {
   return row || null;
 }
 
-async function ensureLeadForContact(input: {
-  contactId: string; displayName: string; phone: string; phoneNormalized: string;
-  sourceCode: string; sourceName: string; platformCode: string;
-}) {
-  const sql = getSql();
-  const [existing] = await sql<any[]>`
-    select *,id::text,assigned_to::text,call_center_assigned_to::text from crm.leads
-    where contact_id=${input.contactId}::uuid and is_deleted=false order by created_at limit 1
+/** A legacy partial form import is not a returning customer. Require durable
+ * evidence of the exact submission and no service, ownership, sales or manual
+ * history. Never repair a genuine pre-existing customer's operational fields. */
+export async function isRecoverableMarketingFormLead(sql: any, leadId: string, eventId: string, sourceCode: string, lock = false) {
+  const [row] = await sql`
+    select l.id::text from crm.leads l
+    join integrations.inbound_events e on e.source='marketing-form' and e.event_key=${eventId}
+    where l.id=${leadId}::uuid and l.is_deleted=false
+      and e.event_type='lead_import' and e.payload->>'provider'='marketing_lead_form'
+      and e.event_key='marketing-form:'||(e.payload->'raw'->>'formLeadId')
+      and l.created_at>=e.received_at
+      and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)
+        =right(regexp_replace(coalesce(e.payload->>'phone',''),'\\D','','g'),9)
+      and l.extra_data->>'contactModel'='true'
+      and coalesce(l.extra_data->>'lastImportEventId',${eventId})=${eventId}
+      and coalesce(l.extra_data->>'lastImportRouteSource','marketing-form')='marketing-form'
+      and l.source_code=${sourceCode} and l.service_key='cash' and l.department_code='cash_sales'
+      and l.payment_type='كاش' and l.status_label='عميل جديد'
+      and coalesce(l.status_code,'')='' and l.current_request_id is null
+      and l.assigned_to is null and l.call_center_assigned_to is null
+      and coalesce(l.branch_code,'')='' and l.sold_at is null
+      and not exists(select 1 from crm.service_requests r where r.lead_id=l.id)
+      and not exists(select 1 from crm.ownership_events o where o.lead_id=l.id)
+      and not exists(select 1 from crm.sales_transactions st where st.lead_id=l.id)
+      and not exists(select 1 from crm.status_history sh where sh.lead_id=l.id)
+      and not exists(select 1 from crm.lead_events ev where ev.lead_id=l.id and not (
+        ev.event_type='lead_import_received' and coalesce(ev.details->>'eventId','')=${eventId}
+        and coalesce(ev.details->>'routeSource','')='marketing-form' and coalesce(ev.details->>'existedBefore','')='true'))
+      and exists(select 1 from crm.conversations c where c.contact_id=l.contact_id
+        and c.provider='marketing-form' and c.metadata->>'lastEventId'=${eventId}
+        and c.metadata->>'importOnly'='true' and c.last_message_at is null
+        and not exists(select 1 from crm.messages m where m.conversation_id=c.id))
+      and not exists(select 1 from crm.conversations c join crm.messages m on m.conversation_id=c.id where c.lead_id=l.id)
+    ${lock ? sql`for update of l` : sql``}
   `;
-  if (existing) return existing;
-  const [lead] = await sql<any[]>`
+  return Boolean(row);
+}
+
+/** Old soft-deletes could leave an open request behind. Only requests whose
+ * linked lead is actually deleted may be closed. Keep all history and indexes. */
+export async function closeDeletedLeadRequests(tx: any, contactId: string) {
+  await tx`
+    update crm.service_requests r set request_state='closed',closed_at=coalesce(r.closed_at,now()),
+      closure_reason='إغلاق طلب عميل محذوف',updated_at=now()
+    where r.contact_id=${contactId}::uuid and r.request_state='open'
+      and exists(select 1 from crm.leads l where l.id=r.lead_id and l.is_deleted=true)
+  `;
+}
+
+async function ensureLeadForContact(sql: any, input: {
+  contactId: string; displayName: string; phone: string; phoneNormalized: string;
+  sourceCode: string; sourceName: string; platformCode: string; serviceKey: string; departmentCode: string;
+  newMarketingForm?: boolean; recoverLeadId?: string;
+}) {
+  const [existing] = await sql`
+    select *,id::text,assigned_to::text,call_center_assigned_to::text from crm.leads
+    where contact_id=${input.contactId}::uuid and is_deleted=false order by created_at limit 1 for update
+  `;
+  if (existing) {
+    if (input.newMarketingForm && String(existing.id) !== input.recoverLeadId) {
+      throw new Error("ظهر عميل آخر أثناء استيراد الفورم؛ يرجى إعادة المحاولة دون تغيير العميل الموجود");
+    }
+    return existing;
+  }
+  if (input.recoverLeadId) throw new Error("لم يعد سجل الفورم الجزئي متاحًا للمراجعة");
+  const [lead] = await sql`
     insert into crm.leads(
-      contact_id,customer_name,phone,phone_normalized,source_code,source_name,platform_code,service_key,department_code,
-      status_label,payment_type,registered_at,source_history,extra_data,completion_percent
+      contact_id,customer_name,phone,phone_normalized,source_code,source_name,platform_code,source_history,service_key,department_code,
+      status_label,payment_type,registered_at,extra_data,completion_percent
     ) values (
       ${input.contactId}::uuid,${input.displayName||"عميل"},${input.phone||input.phoneNormalized},${input.phoneNormalized||null},
-      ${input.sourceCode},${input.sourceName},${input.platformCode},'cash','cash_sales','عميل جديد','كاش',now(),
-      ${sql.json([{ source: input.sourceCode, at: new Date().toISOString() }])},jsonb_build_object('contactModel',true),0
+      ${input.sourceCode},${input.sourceName},${input.platformCode},${sql.json([{ source: input.sourceCode, at: new Date().toISOString() }])},
+      ${input.serviceKey},${input.departmentCode},'عميل جديد',
+      ${input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش"},now(),jsonb_build_object('contactModel',true),0
     ) returning *,id::text
   `;
   return lead;
@@ -207,8 +263,7 @@ export async function recordOwnershipEvent(input: {
   previousDepartmentCode?: string | null; newDepartmentCode?: string | null;
   previousBranchCode?: string | null; newBranchCode?: string | null;
   actor?: SessionUser | null; actorType?: string; reason?: string; metadata?: Record<string,unknown>;
-}) {
-  const sql = getSql();
+}, sql: any = getSql()) {
   await sql`
     insert into crm.ownership_events(
       contact_id,service_request_id,lead_id,previous_assigned_to,previous_assigned_name,new_assigned_to,new_assigned_name,
@@ -228,6 +283,7 @@ export async function classifyConversationService(input: {
   assignPrimary?: boolean; assignCallCenter?: boolean; requestedBranchCode?: string;
   financeImportRouting?: boolean;
   marketingFormImportRouting?: boolean;
+  recoverMarketingFormLeadId?: string;
   requirePrimaryAssignment?: boolean;
   // Internal automation only: the rep was already chosen using CRM rules.
   // Never rotate the assignment again when creating the matching request.
@@ -253,7 +309,7 @@ export async function classifyConversationService(input: {
     // selecting a new department. Only an explicit user/agent/automation-flow
     // service choice can close the current request and redistribute it.
     const explicitServiceChange = ["customer_service_selection", "automation_flow", "manual"].includes(input.classificationMethod);
-    if (existing && existingServiceKey !== serviceKey && !explicitServiceChange) {
+    if (existing && (input.marketingFormImportRouting || (existingServiceKey !== serviceKey && !explicitServiceChange))) {
       await sql`
         update crm.conversations set service_request_id=${existing.id}::uuid,lead_id=${existing.lead_id||null}::uuid,
           service_key=${existing.service_key},department_code=${existing.department_code},branch_code=${existing.branch_code},
@@ -325,38 +381,47 @@ export async function classifyConversationService(input: {
     const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
     const sourceName = await resolveSourceName(sourceCode);
     const requestedBranchCode = clean(input.requestedBranchCode || input.assignmentOverride?.branchCode) || branchForDepartment(serviceKey);
-    const assignment = input.assignPrimary === false
-      ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
-      : (input.assignmentOverride || (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
-        ? await chooseSheetImportAssignment(serviceKey, sourceCode)
-        : input.financeImportRouting && serviceKey === "finance"
-          ? await chooseFinanceImportAssignment(sourceCode)
-          : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode)));
-    // A newly submitted marketing form must never be saved as "غير موزع".
-    // Fail the CRM sync and allow an explicit retry instead of silently creating
-    // a lead with a missing owner; existing CRM customers are not redistributed.
-    if (input.marketingFormImportRouting && !assignment.assignedTo) {
-      throw new Error('تعذر توزيع ليد الفورم على مندوب نشط حسب قواعد CRM');
-    }
-    if (input.requirePrimaryAssignment && !assignment.assignedTo) {
-      throw new Error('تعذر توزيع عميل واتساب على مندوب تمويل نشط حسب قواعد CRM');
-    }
-    const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
-      ? await chooseCallCenterAssignment(sourceCode, "online")
-      : { assignedTo: null, assignedName: "" };
     const departmentCode = departmentCodeFromKey(serviceKey);
-    const branchCode = assignment.branchCode || requestedBranchCode || null;
-    const lead = await ensureLeadForContact({
-      contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
-      phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
-      sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
-    });
+    const selectRouting = async (tx?: import("postgres").TransactionSql) => {
+      const assignment = input.assignPrimary === false
+        ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
+        : (input.assignmentOverride || (input.marketingFormImportRouting && (serviceKey === 'cash' || serviceKey === 'finance')
+          ? await chooseSheetImportAssignment(serviceKey, sourceCode, tx)
+          : input.financeImportRouting && serviceKey === "finance"
+            ? await chooseFinanceImportAssignment(sourceCode)
+            : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode)));
+      if (input.marketingFormImportRouting && !assignment.assignedTo) {
+        throw new Error('تعذر توزيع ليد الفورم على مندوب تمويل نشط حسب قواعد CRM');
+      }
+      if (input.marketingFormImportRouting && (!assignment.branchCode || ['online','website'].includes(assignment.branchCode))) {
+        throw new Error('تعذر تحديد فرع فعلي لمندوب تمويل ليد الفورم');
+      }
+      if (input.requirePrimaryAssignment && !assignment.assignedTo) {
+        throw new Error('تعذر توزيع عميل واتساب على مندوب تمويل نشط حسب قواعد CRM');
+      }
+      const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
+        ? await chooseCallCenterAssignment(sourceCode, "online", tx)
+        : { assignedTo: null, assignedName: "" };
+      return { assignment, callCenter, branchCode: assignment.branchCode || requestedBranchCode || null };
+    };
+    const preselected = input.marketingFormImportRouting ? null : await selectRouting();
 
-    // The customer status is independent of the service request status. A new
-    // request starts at "عميل جديد", but the existing lead must retain its
-    // previous status (and status_code) across service selections, transfers,
-    // repeat contacts and automation. Commit all core routing writes together.
-    const request = await sql.begin(async (tx) => {
+    // Create the lead, service request, ownership and conversation links atomically.
+    // Failed form classification also rolls back the allocation counters/logs.
+    const { request, lead, assignment, callCenter } = await sql.begin(async (tx) => {
+      if (input.marketingFormImportRouting && input.recoverMarketingFormLeadId) {
+        const recoverable = await isRecoverableMarketingFormLead(tx, input.recoverMarketingFormLeadId, input.eventKey || "", sourceCode, true);
+        if (!recoverable) throw new Error("سجل العميل تغيّر ولا يجوز إعادة تصنيفه تلقائيًا");
+      }
+      if (!existing && input.marketingFormImportRouting) await closeDeletedLeadRequests(tx, conversation.contact_id);
+      const { assignment, callCenter, branchCode } = preselected || await selectRouting(tx);
+      const lead = await ensureLeadForContact(tx, {
+        contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
+        phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
+        sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
+        serviceKey, departmentCode, newMarketingForm: input.marketingFormImportRouting,
+        recoverLeadId: input.recoverMarketingFormLeadId,
+      });
       const [lockedLead] = await tx<any[]>`
         select status_label,source_code,source_name,source_history,registered_at,created_at from crm.leads
         where id=${lead.id}::uuid and is_deleted=false for update
@@ -441,25 +506,25 @@ export async function classifyConversationService(input: {
         insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note,details)
         values (${lead.id}::uuid,'service_request_created',${customerStatus},${departmentCode},${branchCode},${input.actor?.id||null}::uuid,
           ${input.actor?.fullName||"Automation Engine"},${existing ? 'تم إنشاء طلب خدمة جديد بعد تغيير القسم مع الحفاظ على حالة العميل' : 'تم إنشاء طلب خدمة وتصنيف المحادثة'},
-          ${tx.json({ requestId: createdRequest.id, requestStatus: "عميل جديد", customerStatusPreserved: true, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null, previousRequestId: existing?.id || null })})
+          ${tx.json({ requestId: createdRequest.id, requestStatus: "عميل جديد", customerStatusPreserved: true, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null, previousRequestId: existing?.id || null, recoveredPartialFormLead: Boolean(input.recoverMarketingFormLeadId) })})
       `;
-      return createdRequest;
-    });
-    await recordOwnershipEvent({
-      contactId: conversation.contact_id, requestId: request.id, leadId: lead.id,
-      previousAssignedTo: existing?.assigned_to || null, previousAssignedName: existing?.assigned_name || null,
-      newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
-      previousDepartmentCode: existing?.department_code || null, newDepartmentCode: departmentCode,
-      previousBranchCode: existing?.branch_code || null, newBranchCode: branchCode,
-      actor: input.actor, actorType: input.actor ? "user" : "automation",
-      reason: existing ? "إعادة توزيع بعد اختيار قسم جديد" : "توزيع طلب خدمة جديد",
-      metadata: {
-        classificationMethod: input.classificationMethod,
-        previousRequestId: existing?.id || null,
-        previousServiceKey: existingServiceKey || null,
-        callCenterAssignedTo: callCenter.assignedTo,
-        callCenterName: callCenter.assignedName,
-      },
+      await recordOwnershipEvent({
+        contactId: conversation.contact_id, requestId: createdRequest.id, leadId: lead.id,
+        previousAssignedTo: existing?.assigned_to || null, previousAssignedName: existing?.assigned_name || null,
+        newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
+        previousDepartmentCode: existing?.department_code || null, newDepartmentCode: departmentCode,
+        previousBranchCode: existing?.branch_code || null, newBranchCode: branchCode,
+        actor: input.actor, actorType: input.actor ? "user" : "automation",
+        reason: existing ? "إعادة توزيع بعد اختيار قسم جديد" : "توزيع طلب خدمة جديد",
+        metadata: {
+          classificationMethod: input.classificationMethod,
+          previousRequestId: existing?.id || null,
+          previousServiceKey: existingServiceKey || null,
+          callCenterAssignedTo: callCenter.assignedTo,
+          callCenterName: callCenter.assignedName,
+        },
+      }, tx);
+      return { request: createdRequest, lead, assignment, callCenter };
     });
     const automaticTemplate = input.skipAutomaticTemplate
       ? { skipped: true, reason: "automation_flow_owns_customer_messages" }

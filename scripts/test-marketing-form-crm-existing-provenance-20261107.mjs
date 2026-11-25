@@ -22,7 +22,7 @@ const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const crmId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExists = false,
-  teams = ['cash_sales', 'finance_sales'], status = 'pending', race = false } = {}) {
+  teams = ['cash_sales', 'finance_sales'], status = 'pending', race = false, reviewExisting = false, repairable = false } = {}) {
   const form = {
     id, form_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Test customer',
     phone: '966505050000', source, campaign: 'Test campaign', medium: 'paid', ad_id: '1',
@@ -57,6 +57,10 @@ async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExi
   const bridge = load('../server/marketing/lead-forms-crm.ts', {
     '../_db.js': { getSql: () => sql, withDatabaseAdvisoryLock: async (_key, work) => work() },
     '../_crm-schema.js': { ensureCrmSchema: async () => {} },
+    '../_crm-lifecycle.js': { isRecoverableMarketingFormLead: async (_sql, leadId, eventId, sourceCode) => {
+      assert.equal(leadId, crmId); assert.equal(eventId, `marketing-form:${id}`);
+      assert.equal(sourceCode, 'meta_lead'); return repairable;
+    } },
     '../_phone-utils.js': { normalizePhone: number => String(number).replace(/\D/g, '') },
     '../_crm-lead-import.js': { processLeadImportEvent: async (route, event, payload) => {
       importCalls++;
@@ -64,13 +68,13 @@ async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExi
       assert.equal(event, `marketing-form:${id}`);
       importedPayload = payload;
       assert.deepEqual(payload, storedPayload);
-      return { lead: { id: crmId }, existedBefore: priorExists || race, createLead: !(priorExists || race) };
+      return { lead: { id: crmId }, existedBefore: (priorExists && !repairable) || race, createLead: !((priorExists && !repairable) || race) };
     } },
     '../_notifications.js': { createNotification: async () => { notificationCalls++; }, notificationDedupe: () => 'test' },
     './form-lead-routing.js': routing,
   });
   let result, error;
-  try { result = await bridge.syncMarketingFormLeadToCrm(form.id); } catch (e) { error = e; }
+  try { result = await bridge.syncMarketingFormLeadToCrm(form.id, reviewExisting); } catch (e) { error = e; }
   return { result, error, eligibilityChecks, importCalls, notificationCalls, persistedStatus, importedPayload };
 }
 
@@ -134,3 +138,15 @@ assert.ifError(raced.error);
 assert.equal(raced.result.status, 'existing');
 assert.equal(raced.notificationCalls, 0);
 console.log('PASS: previous customers retain provenance-only import; completed sync and race are protected');
+
+const verifiedExisting = await run({ status: 'existing', priorExists: true, reviewExisting: true });
+assert.ifError(verifiedExisting.error);
+assert.equal(verifiedExisting.result.status, 'existing');
+assert.equal(verifiedExisting.importCalls, 0);
+const recovered = await run({ status: 'existing', priorExists: true, reviewExisting: true, repairable: true });
+assert.ifError(recovered.error);
+assert.equal(recovered.result.status, 'linked');
+assert.equal(recovered.importCalls, 1);
+assert.equal(recovered.importedPayload.serviceKey, 'finance');
+assert.equal(recovered.notificationCalls, 1);
+console.log('PASS: manual review repairs only proven incomplete form links, leaving real existing links untouched');

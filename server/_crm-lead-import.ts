@@ -6,6 +6,7 @@ import {
   classifyConversationService,
   ensureContactIdentity,
   findOpenServiceRequest,
+  isRecoverableMarketingFormLead,
 } from "./_crm-lifecycle.js";
 
 function first(...values: unknown[]) {
@@ -199,8 +200,8 @@ async function processLeadImportEventForPhone(
   const sql = getSql();
   const sourceCode = sourceCodeForImport(routeSource, payload);
   const isMarketingForm = routeSource === 'marketing-form' && payload?.provider === 'marketing_lead_form';
-  const serviceKey: 'cash' | 'finance' = isMarketingForm && payload?.serviceKey === 'cash' ? 'cash' : 'finance';
-  const departmentCode = serviceKey === 'cash' ? 'cash_sales' : 'finance_sales';
+  const serviceKey = 'finance' as const;
+  const departmentCode = 'finance_sales';
   if (sourceCode === "meta_lead") {
     await sql`insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group)
       values('meta_lead','ميتا ليد',65,true,array['crm'],'whatsapp',false,'digital') on conflict(code) do nothing`;
@@ -254,7 +255,9 @@ async function processLeadImportEventForPhone(
       where l.id=${request.lead_id}::uuid and l.is_deleted=false limit 1
     `;
   }
-  const existedBefore = Boolean(lead);
+  const recoverLeadId = isMarketingForm && lead?.extra_data?.contactModel === true && !request
+    && await isRecoverableMarketingFormLead(sql, String(lead.id), eventId, sourceCode) ? String(lead.id) : undefined;
+  let existedBefore = Boolean(lead) && !recoverLeadId;
 
   let [conversation] = request?.conversation_id ? await sql<any[]>`
     select *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -297,10 +300,10 @@ async function processLeadImportEventForPhone(
   }
 
   let createdLead = false;
-  // Only classify a truly new customer. In particular, a repeated finance
-  // import must not complete an old request's missing assignment or alter its
-  // department, branch, call-center representative or status.
-  const shouldClassifyForDistribution = !lead;
+  // Only classify a truly new customer or the exact, evidence-checked partial
+  // record left by this form submission. All genuine returning customers keep
+  // their original department, branch, representative and status.
+  const shouldClassifyForDistribution = !lead || Boolean(recoverLeadId);
 
   if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
@@ -312,8 +315,10 @@ async function processLeadImportEventForPhone(
       skipAutomaticTemplate: true,
       financeImportRouting: true,
       marketingFormImportRouting: isMarketingForm,
+      recoverMarketingFormLeadId: recoverLeadId,
     });
-    createdLead = !lead && classified.reused !== true;
+    if (classified.reused) existedBefore = true;
+    createdLead = !existedBefore && classified.reused !== true;
     request = classified.request;
     [lead] = await sql<any[]>`
       select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
@@ -395,7 +400,7 @@ async function processLeadImportEventForPhone(
         service_key=${lead.service_key || serviceKey},
         department_code=${lead.department_code || departmentCode},
         branch_code=${lead.branch_code || 'online'},
-        payment_type=${serviceKey === 'cash' ? 'كاش' : 'تمويل'},
+        payment_type=${'تمويل'},
         car_name=${data.carName || null},
         car_type=${data.carName || null},
         campaign_name=${campaign.campaignName || null},

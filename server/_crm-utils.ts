@@ -1,3 +1,4 @@
+import type { TransactionSql } from "postgres";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { SessionUser } from "./_auth.js";
 import { requireUser } from "./_auth.js";
@@ -246,8 +247,8 @@ type AssignmentResult = {
   ruleName?: string;
 };
 
-async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string, requirePhysicalBranch = false): Promise<AssignmentResult | null> {
-  const sql = getSql();
+async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string, requirePhysicalBranch = false, transaction?: TransactionSql): Promise<AssignmentResult | null> {
+  const sql = transaction || getSql();
   const requested = clean(requestedBranch);
   const source = clean(sourceCode);
   const routingSource = distributionSourceCode(source);
@@ -389,7 +390,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     const branchPoolKey = `routing:branches:${departmentCode}`;
     // Lock branch-state selection for this pool so concurrent leads cannot all
     // consume the same 'next branch'. This does not mutate historical leads.
-    routingBranch = await sql.begin(async (tx: any) => {
+    const chooseBranch = async (tx: any) => {
       await tx`select pg_advisory_xact_lock(hashtext(${branchPoolKey}))`;
       const [previous] = await tx`
         select last_branch_code from crm.assignment_state where pool_key=${branchPoolKey} limit 1
@@ -402,7 +403,8 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
         on conflict(pool_key) do update set last_branch_code=excluded.last_branch_code,updated_at=now()
       `;
       return nextBranch;
-    });
+    };
+    routingBranch = transaction ? await chooseBranch(transaction) : await getSql().begin(chooseBranch);
   }
 
   const branchCandidates = eligibleCandidateRows.filter((candidate) => {
@@ -504,14 +506,14 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
 
 // Only for external finance imports: choose among the CRM's active finance rules
 // without forcing the online branch. Keep all other assignment paths unchanged.
-export async function chooseFinanceImportAssignment(sourceCode: string, requirePhysicalBranch = false) {
-  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode, requirePhysicalBranch);
+export async function chooseFinanceImportAssignment(sourceCode: string, requirePhysicalBranch = false, transaction?: TransactionSql) {
+  const configured = await chooseFromConfiguredRule("finance_sales", "", sourceCode, requirePhysicalBranch, transaction);
   if (configured?.assignedTo) return configured;
 
   // Import-only fallback. Use the actual active CRM finance representatives and
   // their CRM branches, never force an online branch or an unrelated department.
   // Other assignment pathways continue to use their existing configured rules.
-  const sql = getSql();
+  const sql = transaction || getSql();
   const candidates = await sql<any[]>`
     select u.id::text as user_id,u.full_name,
       coalesce(
@@ -586,11 +588,13 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "",
  * the representative's real CRM branch. They never use the removed online branch
  * or change another lead's existing assignment.
  */
-export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance", sourceCode = "sheet_lead"): Promise<AssignmentResult> {
+export async function chooseSheetImportAssignment(serviceKey: "cash" | "finance", sourceCode = "sheet_lead", transaction?: TransactionSql): Promise<AssignmentResult> {
   const departmentCode = serviceKey === "finance" ? "finance_sales" : "cash_sales";
   const requirePhysicalBranch = sourceCode !== 'sheet_lead';
   if (serviceKey === "finance") {
-    const result = await chooseFinanceImportAssignment(sourceCode, requirePhysicalBranch);
+    const result = transaction
+      ? await chooseFinanceImportAssignment(sourceCode, requirePhysicalBranch, transaction)
+      : await chooseFinanceImportAssignment(sourceCode, requirePhysicalBranch);
     return ["online", "website"].includes(clean(result.branchCode))
       ? { assignedTo: null, assignedName: "", branchCode: "" }
       : result;
@@ -756,7 +760,7 @@ export async function chooseCashQrAssignment(): Promise<AssignmentResult> {
   };
 }
 
-export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "") {
-  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
+export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "", transaction?: TransactionSql) {
+  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode, false, transaction);
   return configured ? { assignedTo: configured.assignedTo, assignedName: configured.assignedName } : { assignedTo: null, assignedName: "" };
 }

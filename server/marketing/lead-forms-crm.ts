@@ -7,6 +7,7 @@ import { getSql, withDatabaseAdvisoryLock } from '../_db.js';
 import { ensureCrmSchema } from '../_crm-schema.js';
 import { normalizePhone } from '../_phone-utils.js';
 import { processLeadImportEvent } from '../_crm-lead-import.js';
+import { isRecoverableMarketingFormLead } from '../_crm-lifecycle.js';
 import { createNotification, notificationDedupe } from '../_notifications.js';
 import { formPurchasePreference } from './form-lead-routing.js';
 
@@ -45,7 +46,7 @@ function findAnswer(row: FormLeadToSync, labels: string[], ids: string[]) {
  * Idempotent per submitted form lead and customer phone. Existing CRM customers
  * are linked, never re-created, reallocated, or reset to "عميل جديد".
  */
-export async function syncMarketingFormLeadToCrm(formLeadId: string) {
+export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExisting = false) {
   const sql = getSql();
   await ensureCrmSchema();
   const [initial] = await sql<FormLeadToSync[]>`
@@ -65,7 +66,9 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
     `;
     if (!row) throw new Error('ليد الفورم غير موجود');
     if (row.crm_status === 'linked' || row.crm_status === 'existing') {
-      return { status: row.crm_status, leadId: row.crm_lead_id };
+      const repairable = reviewExisting && row.crm_status === 'existing' && row.crm_lead_id
+        && await isRecoverableMarketingFormLead(sql, row.crm_lead_id, `marketing-form:${row.id}`, crmSourceForForm(row.source));
+      if (!repairable) return { status: row.crm_status, leadId: row.crm_lead_id };
     }
 
     try {
