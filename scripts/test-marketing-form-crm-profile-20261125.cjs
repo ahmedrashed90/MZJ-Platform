@@ -33,6 +33,24 @@ assert.equal(num('20.5','age'),null);
 assert.equal(num('250','age'),null);
 console.log('PASS exact Arabic/Latin numeric conversion, range preservation, safe field allowlist and automatic Arabic mapping');
 const row={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',created_at:'2026-11-25T16:27:00Z',answers:{v:'أكسنت',t:'خلال الشهر الحالي',j:'موظف حكومي',s:'٧٬٠٠٠ ريال',o:'أقل من 3,000 ريال',b:'الراجحي',m:'2026',c:'ستاندر',cl:'أبيض',city:'الرياض',age:'29',custom:'["A","B"]'},answer_labels:{v:'ما السيارة اللي ترغب فيها؟',t:'متى تتوقع تشتري السيارة؟',j:'ما نوع وظيفتك؟',s:'كم راتبك الشهري؟',o:'كم إجمالي التزاماتك الشهرية؟',b:'ما البنك اللي ينزل عليه راتبك؟',m:'الموديل',c:'الفئة',cl:'اللون',city:'المدينة',age:'العمر',custom:'خيارات أخرى'}};
+// Exercise the actual CRM edit helpers, not a copy of their logic.
+const crmEdit=load('server/crm/leads.ts',{
+ '../_crm-utils.js':{clean:x=>String(x??'').trim(),departmentKey:()=> 'finance',normalizePhone:x=>x,sourceLabel:x=>x,departmentCodeFromKey:()=> 'finance_sales',branchForDepartment:()=> ''},
+ '../../shared/lead-form-crm-fields.js':mapping,
+},'exports.leadPayload=leadPayload;exports.applyFinanceProfileEdit=applyFinanceProfileEdit;');
+const storedFinance={mzj_form_salary_range:'من 6,000 إلى أقل من 10,000 ريال',mzj_form_obligation_range:'من 3000 الى 6000 ريال',other:'keep'};
+const editable=crmEdit.leadPayload({salary:null,obligation:null,extra_data:{...storedFinance}});
+crmEdit.applyFinanceProfileEdit(editable,{customerName:'Test'});
+assert.deepEqual(editable.extraData,storedFinance);
+assert.equal(mapping.hasFinanceProfileRange(editable),true);
+crmEdit.applyFinanceProfileEdit(editable,{salary:'8500'});
+assert.equal(editable.salary,8500);assert.equal(editable.extraData.mzj_form_salary_range,undefined);assert.equal(mapping.hasFinanceProfileRange(editable),true);
+crmEdit.applyFinanceProfileEdit(editable,{obligation:'3000'});
+assert.equal(editable.obligation,3000);assert.equal(mapping.hasFinanceProfileRange(editable),false);assert.equal(editable.extraData.other,'keep');
+crmEdit.applyFinanceProfileEdit(editable,{salary:'من 6000 إلى أقل من 10000 ريال'});
+assert.equal(editable.salary,null);assert.equal(editable.extraData.mzj_form_salary_range,'من 6000 إلى أقل من 10000 ريال');
+crmEdit.applyFinanceProfileEdit(editable,{salary:''});assert.equal(editable.salary,null);assert.equal(editable.extraData.mzj_form_salary_range,undefined);
+console.log('PASS explicit CRM finance edits, preservation on unrelated saves, exact numeric replacement and clearing');
 const leadId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const fieldsKeys=['age','salary','obligation','salary_bank','location','car_type','car_name','car_model','car_category','color'];
 let db;
@@ -45,14 +63,18 @@ const sql={begin:async work=>{
  const tx=async(parts,...values)=>{
   const q=parts.join('?').replace(/\s+/g,' ').trim().toLowerCase();
   if(q.includes('from crm.leads l')&&q.includes('for update of l')){assert.equal(values[1],leadId);assert.match(q,/r\.metadata->>'eventkey'=\?/);return draft.current?[{...draft.current}]:[];}
-  if(q.startsWith('select id::text from crm.lead_events'))return draft.events.some(e=>e.formLeadId===values[1])?[{id:'1'}]:[];
+  if(q.startsWith('select id::text,details')){const event=draft.events.find(e=>e.formLeadId===values[1]);return event?[{id:'1',finance_ranges_version:event.financeRangesVersion==null?null:String(event.financeRangesVersion)}]:[];}
+  if(q.startsWith('update crm.lead_events set')){assert.equal(values[1],'1');assert.equal(values[2],leadId);Object.assign(draft.events[0],values[0]);return [];}
+  if(q.startsWith('update crm.leads set extra_data=')){assert.equal(values[4],leadId);draft.current.extra_data={...draft.current.extra_data,...values[0]};draft.current.notes=values[1];if(values[2])draft.current.credit_limit=null;if(values[3])draft.current.credit_qualified=null;return [];}
   if(q.startsWith('update crm.leads set')){
    assert.doesNotMatch(q,/\b(?:department_code|assigned_to|branch_code|payment_type|status_label|source_code)\s*=/);
    // PostgreSQL must be able to infer BOTH note placeholders independently.
    // The second placeholder is an argument to polymorphic concat_ws (42P18).
    assert.match(q,/notes=case when \?::text='' then notes else concat_ws\(.*?,nullif\(notes,''\),\?::text\) end/);
    assert.equal(values[10],values[11]);
-   assert.equal(values[12],leadId);
+   assert.equal(values[15],leadId);
+   assert.match(q,/extra_data=coalesce\(extra_data,'\{\}'::jsonb\)\|\|\?::jsonb/);
+   draft.current.extra_data={...draft.current.extra_data,...values[12]};if(values[13])draft.current.credit_limit=null;if(values[14])draft.current.credit_qualified=null;
    for(let i=0;i<fieldsKeys.length;i++)if(values[i]!==null)draft.current[fieldsKeys[i]]=values[i];
    if(values[10])draft.current.notes=[draft.current.notes,values[11]].filter(Boolean).join('\n\n');
    return [];
@@ -71,7 +93,8 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  assert.match(db.current.notes,/\[25\/11\/2026 19:27\] إجابات فورم المنصات/);
  assert.ok(db.current.notes.includes('متى تتوقع تشتري السيارة؟: خلال الشهر الحالي'));
  assert.ok(db.current.notes.includes('ما نوع وظيفتك؟: موظف حكومي'));
- assert.ok(db.current.notes.includes('أقل من 3,000 ريال'));
+ assert.equal(db.current.extra_data.mzj_form_obligation_range,'أقل من 3,000 ريال');
+ assert.ok(!db.current.notes.includes('أقل من 3,000 ريال'));
  assert.ok(db.current.notes.includes('A، B'));
  assert.ok(db.current.notes.startsWith('[قديم] ملاحظة المندوب'));
  const first=structuredClone(db);
@@ -94,18 +117,42 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  assert.equal(db.current.salary,7000);assert.equal(db.events.length,1);
  fresh();const range={...row,answers:{s:'من 7,000 إلى 10,000 ريال',o:'لا يوجد',b:'الراجحي'},answer_labels:row.answer_labels};
  await profile.saveMarketingFormProfile(leadId,range,true);
- assert.equal(db.current.salary,undefined);assert.equal(db.current.obligation,0);assert.ok(db.current.notes.includes('من 7,000 إلى 10,000 ريال'));
+ assert.equal(db.current.salary,undefined);assert.equal(db.current.obligation,0);assert.equal(db.current.extra_data.mzj_form_salary_range,'من 7,000 إلى 10,000 ريال');assert.ok(!db.current.notes.includes('من 7,000 إلى 10,000 ريال'));
  // Reproduce the reported Test123 shape: ranges and multiple selections stay
- // verbatim in notes, bank is a real text field, ownership is untouched.
+ // verbatim in their corresponding fields, bank is a real text field, ownership is untouched.
  fresh({same_submission:true,car_name:'cc',car_type:'cc'});
  const reported={...row,answers:{v:'cc',j:'قطاع خاص (يشترط راتب معتمد)',s:'من 6,000 إلى أقل من 10,000 ريال',t:'خلال شهرين',o:'أقل من 3000 ريال، من 3000 إلى 6000 ريال',b:'البلاد'}};
  assert.equal(await profile.saveMarketingFormProfile(leadId,reported,false),true);
  assert.equal(db.current.salary_bank,'البلاد');assert.equal(db.current.salary,undefined);assert.equal(db.current.obligation,undefined);
- for(const key of ['j','s','t','o'])assert.ok(db.current.notes.includes(reported.answers[key]));
+ for(const key of ['j','t'])assert.ok(db.current.notes.includes(reported.answers[key]));
+ for(const key of ['s','o'])assert.ok(!db.current.notes.includes(reported.answers[key]));
+ assert.equal(db.current.extra_data.mzj_form_salary_range,reported.answers.s);
+ assert.equal(db.current.extra_data.mzj_form_obligation_range,reported.answers.o);
+ assert.equal(mapping.financeProfileValue(null,db.current.extra_data,'salary'),reported.answers.s);
+ assert.equal(mapping.financeProfileValue(8000,db.current.extra_data,'salary'),8000);
+ assert.equal(mapping.hasFinanceProfileRange(db.current),true);
+ assert.equal(mapping.hasFinanceProfileRange({salary:7000,obligation:0}),false);
+ assert.equal(mapping.hasFinanceProfileRange({salary:7000,obligation:null,extra_data:{mzj_form_obligation_range:reported.answers.o}}),true);
  assert.equal(db.current.assigned_to,'rep');assert.equal(db.current.department_code,'finance_sales');
  const recoveredSnapshot=structuredClone(db);
  assert.equal(await profile.saveMarketingFormProfile(leadId,reported,false),true);
  assert.deepEqual(db,recoveredSnapshot);
+ // Legacy linked lead: move only the generated lines, once; preserve manual notes.
+ const oldAnswers=parse(reported.answers,reported.answer_labels).filter(a=>['salary','obligation','notes'].includes(a.field));
+ const oldNote=profile.formProfileNote(oldAnswers,reported.created_at);
+ fresh({same_submission:true,notes:'[قديم] ملاحظة المندوب\n\n'+oldNote+'\n\n[لاحق] ملاحظة أخرى',extra_data:{other:'keep'},credit_limit:1200,credit_qualified:true});
+ db.events.push({formLeadId:reported.id});
+ await profile.saveMarketingFormProfile(leadId,reported,false);
+ assert.equal(db.current.extra_data.mzj_form_salary_range,reported.answers.s);
+ assert.equal(db.current.extra_data.mzj_form_obligation_range,reported.answers.o);
+ assert.equal(db.current.extra_data.other,'keep');assert.equal(db.current.credit_limit,null);assert.equal(db.current.credit_qualified,null);
+ assert.equal(db.current.notes,'[قديم] ملاحظة المندوب\n\n'+profile.formProfileNote(oldAnswers.filter(a=>a.field==='notes'),reported.created_at)+'\n\n[لاحق] ملاحظة أخرى');
+ assert.equal(db.events.length,1);assert.equal(db.events[0].financeRangesVersion,2);
+ // A representative's later explicit change or clear must not be undone by re-sync.
+ delete db.current.extra_data.mzj_form_salary_range;db.current.salary=8500;
+ const edited=structuredClone(db);await profile.saveMarketingFormProfile(leadId,reported,false);assert.deepEqual(db,edited);
+ fresh({same_submission:true,salary:9000,notes:oldNote});db.events.push({formLeadId:reported.id});
+ await profile.saveMarketingFormProfile(leadId,reported,false);assert.equal(db.current.salary,9000);assert.ok(db.current.notes.includes(reported.answers.s));assert.ok(!db.current.notes.includes(reported.answers.o));
  const parsed=parse({x:'1000',y:'بنك الرياض',z:'4000'},{x:'سؤال مخصص',y:'اسم البنك',z:'راتبك'},{x:'salary',y:'notes',z:'salary'});
  const plan=profile.planFormProfile(parsed,{},true);
  assert.equal(plan.fields.salary,1000);assert.deepEqual(plan.notes.map(a=>a.id),['y','z']);

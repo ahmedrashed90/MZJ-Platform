@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
+import { financeProfileValue } from "../../../shared/lead-form-crm-fields";
 import { LeadDrawer } from "../components/LeadDrawer";
 import { crmFetch, departmentLabel, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
@@ -738,9 +739,9 @@ export function CrmContactsPage() {
                   {l.location ? <article><small>المكان</small><strong>{text(l.location)}</strong></article> : null}
                   {l.payment_type ? <article><small>الدفع</small><strong>{text(l.payment_type)}</strong></article> : null}
                   {l.finance_type ? <article><small>التمويل</small><strong>{text(l.finance_type)}</strong></article> : null}
-                  {l.salary ? <article><small>الراتب</small><strong>{text(l.salary)}</strong></article> : null}
+                  {financeProfileValue(l.salary,l.extra_data,"salary") ? <article><small>الراتب</small><strong>{text(financeProfileValue(l.salary,l.extra_data,"salary"))}</strong></article> : null}
                   {l.salary_bank ? <article><small>بنك الراتب</small><strong>{text(l.salary_bank)}</strong></article> : null}
-                  {l.obligation ? <article><small>الالتزام</small><strong>{text(l.obligation)}</strong></article> : null}
+                  {financeProfileValue(l.obligation,l.extra_data,"obligation") ? <article><small>الالتزام</small><strong>{text(financeProfileValue(l.obligation,l.extra_data,"obligation"))}</strong></article> : null}
                   {l.sold_at ? <article><small>تاريخ البيع</small><strong>{formatDate(l.sold_at)}</strong></article> : null}
                   <article><small>آخر تحديث</small><strong>{formatDate(l.updated_at || l.created_at)}</strong></article>
                 </div>

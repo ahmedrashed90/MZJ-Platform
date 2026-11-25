@@ -1,4 +1,5 @@
 import { getSql } from "./_db.js";
+import { financeProfileValue, financeProfileRangeKey, FINANCE_PROFILE_FIELDS } from "../shared/lead-form-crm-fields.js";
 
 export type CustomerFieldOption = { value: string; label: string };
 
@@ -97,8 +98,8 @@ export function customerFieldValue(lead: Record<string, any>, fieldKey: string) 
     department_code: lead.serviceKey ?? lead.service_key ?? lead.departmentCode ?? lead.department_code,
     follow_up_at: lead.followUpAt ?? lead.follow_up_at,
     age: lead.age,
-    salary: lead.salary,
-    obligation: lead.obligation,
+    salary: financeProfileValue(lead.salary, extraData, "salary"),
+    obligation: financeProfileValue(lead.obligation, extraData, "obligation"),
     salary_bank: lead.salaryBank ?? lead.salary_bank,
     location: lead.location,
     car_type: lead.carType ?? lead.car_type ?? lead.carName ?? lead.car_name,
@@ -135,7 +136,8 @@ export function missingRequiredCustomerFields(lead: Record<string, any>, definit
 
 export function sanitizeCustomFieldValues(value: unknown, definitions: CustomerFieldDefinition[]) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const allowed = new Set(definitions.filter((field) => !field.is_system).map((field) => field.field_key));
+  const reserved = new Set(FINANCE_PROFILE_FIELDS.map(financeProfileRangeKey));
+  const allowed = new Set(definitions.filter((field) => !field.is_system && !reserved.has(field.field_key)).map((field) => field.field_key));
   const result: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(source)) {
     if (!allowed.has(key)) continue;

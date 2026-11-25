@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { sortProductsByPublishDate } from './strategyProductOrder';
 import { CalendarBlank, CaretLeft, CaretRight, CheckCircle, FolderOpen, LinkSimple, MagnifyingGlass, PaperPlaneTilt, Trash, WarningCircle } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
-import { Empty, Readiness, W, WorkAlert } from './components';
+import { Empty, Readiness, Status, W, WorkAlert } from './components';
 import { showDate, useWorkQuery, workPost } from './api';
 import { marketingFetch, marketingQuery } from '../api';
 import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goals';
@@ -537,6 +537,7 @@ type StrategyProductRow = {
   serial: number; itemId: string; taskId: string; ideaCode: string; createdAt: string; category: string; taskName: string; mediaKind: 'image' | 'video';
   itemStatus: string; assignmentNo: string; taskNo: string; orderNo: string; orderName: string; orderKind: string; orderStatus: string;
   assigneeName: string; ideaName: string; readiness: number; dueOn: string | null; approvedOn: string | null; publishOn: string | null; fundingOn: string | null;
+  ratingPercentage?: number | null;
   publishDates?: string[]; fundingDates?: string[];
   orderRefs?: Array<{ number: string; name: string; kind: string; status: string }>;
 };
@@ -550,8 +551,8 @@ export function StrategyProductsTab({ search }: { search: string }) {
     <WorkAlert>{query.error}</WorkAlert>
     <div className="mkw-table-wrap mkw-strategy-products-table mkw-strategy-products-tracking-table"><table>
       <thead>
-        <tr><th rowSpan={2}>م</th><th rowSpan={2}>تاريخ الإنشاء</th><th colSpan={7}>البيان</th><th colSpan={4}>التراكينج</th></tr>
-        <tr><th>التصنيف</th><th>المطلوب</th><th>رقم التكليف</th><th>رقم التاسك</th><th>رقم الطلب</th><th>اسم المنفذ</th><th>اسم الفكرة</th><th>الجاهزية</th><th>تاريخ التنفيذ</th><th>تاريخ النشر</th><th>تاريخ التمويل</th></tr>
+        <tr><th rowSpan={2}>م</th><th rowSpan={2}>تاريخ الإنشاء</th><th colSpan={7}>البيان</th><th colSpan={6}>التراكينج</th></tr>
+        <tr><th>التصنيف</th><th>المطلوب</th><th>رقم التكليف</th><th>رقم التاسك</th><th>رقم الطلب</th><th>اسم المنفذ</th><th>اسم الفكرة</th><th>الحالة</th><th>الجاهزية</th><th>التقييم</th><th>تاريخ التنفيذ</th><th>تاريخ النشر</th><th>تاريخ التمويل</th></tr>
       </thead>
       <tbody>{rows.map((row, index) => <tr key={row.itemId}>
         <td><span className="mkw-code">{index + 1}</span></td>
@@ -565,7 +566,9 @@ export function StrategyProductsTab({ search }: { search: string }) {
         </div>) : row.orderNo || '—'}</td>
         <td>{row.assigneeName || '—'}</td>
         <td>{row.ideaName}{row.ideaCode && <small className="mkw-muted" style={{ display: 'block' }}>كود الفكرة: <span dir="ltr">{row.ideaCode}</span></small>}</td>
+        <td>{row.itemStatus ? <Status value={row.itemStatus}/> : <span className="mkw-muted">—</span>}</td>
         <td className="mkw-sp-readiness"><span><b style={{ width: `${Math.max(0, Math.min(100, row.readiness || 0))}%` }}/></span><small>{Math.round(row.readiness || 0)}%</small></td>
+        <td>{row.ratingPercentage == null ? <span className="mkw-muted">—</span> : <strong dir="ltr">{row.ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>}</td>
         <td>{row.approvedOn ? showDate(row.approvedOn) : <span className="mkw-muted">لم يُنفذ (التسليم {showDate(row.dueOn)})</span>}</td>
         <td>{(row.publishDates?.length ? row.publishDates : row.publishOn ? [row.publishOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.publishDates?.length && !row.publishOn && '—'}</td>
         <td>{(row.fundingDates?.length ? row.fundingDates : row.fundingOn ? [row.fundingOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.fundingDates?.length && !row.fundingOn && '—'}</td>

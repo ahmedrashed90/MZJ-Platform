@@ -88,6 +88,8 @@ const utilities = {
   positiveInt: (value, defaultValue) => defaultValue,
   resolveSourceName: async (source) => source,
 };
+const financeModule = { exports: {} };
+vm.runInNewContext(transpile('shared/lead-form-crm-fields.ts'), { module: financeModule, exports: financeModule.exports });
 const serverModule = { exports: {} };
 const deps = {
   '../_crm-utils.js': utilities,
@@ -102,6 +104,7 @@ const deps = {
   '../_access-control.js': {},
   '../_crm-sales-history.js': {},
   '../../shared/crm-follow-up.js': helperModule.exports,
+  '../../shared/lead-form-crm-fields.js': financeModule.exports,
 };
 const mockedRequire = (name) => {
   if (!(name in deps)) throw Error('Unexpected import: ' + name);

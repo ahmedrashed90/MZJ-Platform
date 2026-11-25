@@ -18,6 +18,7 @@ import {
   WhatsappLogo,
   X,
 } from "@phosphor-icons/react";
+import { financeProfileValue, splitFinanceProfileValue } from "../../../shared/lead-form-crm-fields";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
 import { MessagingWindowBadge } from "./MessagingWindowBadge";
@@ -181,8 +182,8 @@ function leadCoreValues(lead: CrmLead, serviceKey: ServiceKey) {
     customer_name: value(lead.customer_name),
     phone: value(lead.phone || lead.phone_normalized),
     age: value(lead.age),
-    salary: value(lead.salary),
-    obligation: value(lead.obligation),
+    salary: value(financeProfileValue(lead.salary, lead.extra_data, "salary")),
+    obligation: value(financeProfileValue(lead.obligation, lead.extra_data, "obligation")),
     salary_bank: value(lead.salary_bank),
     location: value(lead.location),
     car_type: value(lead.car_type || lead.car_name),
@@ -493,8 +494,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   const credit = useMemo(() => {
     if (!form || form.serviceKey !== "finance") return null;
-    const salary = Number(form.values.salary || 0);
-    const obligation = Number(form.values.obligation || 0);
+    const salaryValue = splitFinanceProfileValue(form.values.salary, "salary");
+    const obligationValue = splitFinanceProfileValue(form.values.obligation, "obligation");
+    if (salaryValue.range || obligationValue.range) return { amount: null as number | null, qualified: null as boolean | null };
+    const salary = salaryValue.numeric ?? 0;
+    const obligation = obligationValue.numeric ?? 0;
     const financeField = configuredFields.find((field) => field.field_key === "finance_type");
     const options = financeField ? normalizeOptions(financeField) : fallbackFinanceOptions;
     const selectedValue = form.values.finance_type;
@@ -917,6 +921,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       const options = normalizeOptions(field);
       return <label key={field.id}>{label}<select value={currentValue} onChange={(event) => setField(field, event.target.value)}><option value="">اختر</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
     }
+    if (field.field_key === "salary" || field.field_key === "obligation") return <label key={field.id}>{label}<input type="text" value={currentValue} onChange={(event) => setField(field, event.target.value)} /></label>;
     return <label key={field.id}>{label}<input type={field.field_type === "number" ? "number" : field.field_type === "date" ? "date" : "text"} inputMode={field.field_type === "phone" ? "tel" : undefined} value={currentValue} onChange={(event) => setField(field, event.target.value)} /></label>;
   }
 

@@ -7,6 +7,7 @@ import { emitCrmLeadNotification } from "../_notifications.js";
 import { requirePermissionForUser } from "../_access-control.js";
 import { correctLatestCanonicalSaleDate } from "../_crm-sales-history.js";
 import { postponedFollowUpError } from "../../shared/crm-follow-up.js";
+import { financeProfileValue, financeProfileRangeKey, FINANCE_PROFILE_FIELDS, splitFinanceProfileValue, hasFinanceProfileRange } from "../../shared/lead-form-crm-fields.js";
 
 
 function soldQuantity(value: unknown) {
@@ -121,8 +122,8 @@ function leadPayload(body: Record<string, any>) {
     carCategory: clean(body.carCategory ?? body.car_category ?? body.vehicleCategory ?? body.vehicle_category ?? body.carTrim ?? body.trim ?? body.variant ?? body.grade),
     location: clean(body.location ?? body.place),
     age: body.age === "" || body.age == null ? null : Number(body.age),
-    salary: body.salary === "" || body.salary == null ? null : Number(body.salary),
-    obligation: body.obligation === "" || body.obligation == null ? null : Number(body.obligation),
+    salary: splitFinanceProfileValue(body.salary, "salary").numeric,
+    obligation: splitFinanceProfileValue(body.obligation, "obligation").numeric,
     salaryBank: clean(body.salaryBank ?? body.salary_bank ?? body.bank),
     carModel: clean(body.carModel ?? body.car_model ?? body.model),
     carType: clean(body.carType ?? body.car_type),
@@ -139,6 +140,19 @@ function leadPayload(body: Record<string, any>) {
     soldAt: clean(body.soldAt ?? body.sold_at) || null,
     extraData: body.customFields ?? body.extraData ?? body.extra_data ?? {},
   };
+}
+
+/** Explicit financial-field edits replace their paired range. Unrelated saves
+ * preserve it; custom fields cannot write these internal keys. */
+function applyFinanceProfileEdit(input: ReturnType<typeof leadPayload>, body: Record<string, any>) {
+  for (const field of FINANCE_PROFILE_FIELDS) {
+    if (!hasOwnField(body, [field])) continue;
+    const { numeric, range } = splitFinanceProfileValue(body[field], field);
+    input[field] = numeric;
+    const key = financeProfileRangeKey(field);
+    if (range) input.extraData[key] = range;
+    else delete input.extraData[key];
+  }
 }
 
 async function list(request: VercelRequest, response: VercelResponse, user: any) {
@@ -233,6 +247,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const input = leadPayload(body);
   const customerFields = await getCustomerFieldDefinitions();
   input.extraData = sanitizeCustomFieldValues(input.extraData, customerFields);
+  applyFinanceProfileEdit(input, body);
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   if (input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
   if (input.statusLabel === "تم البيع") return response.status(400).json({ ok: false, error: "حالة تم البيع يتم تطبيقها تلقائيًا فقط بعد مطابقة طلب NEXT ERP برقم الجوال" });
@@ -252,7 +267,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode);
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
-  const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
+  const credit = hasFinanceProfileRange(input) ? { amount: null, qualified: null } : calculateCreditLimit(input.salary, input.obligation, input.financeType);
 
   const initialSoldAt = input.statusLabel === "تم البيع" ? (input.soldAt || new Date().toISOString()) : null;
   const row = await sql.begin(async (tx: any) => {
@@ -326,6 +341,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     ...((before.extra_data && typeof before.extra_data === "object") ? before.extra_data : {}),
     ...customFieldPatch,
   };
+  applyFinanceProfileEdit(input, body);
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   const newNote = clean(body.newNote ?? body.new_note);
   if (newNote) {
@@ -409,8 +425,8 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     changedText(body, ["carCategory", "car_category", "vehicleCategory", "vehicle_category", "carTrim", "trim", "variant", "grade"], before.car_category),
     changedText(body, ["location", "place"], before.location),
     changedNumber(body, ["age"], before.age),
-    changedNumber(body, ["salary"], before.salary),
-    changedNumber(body, ["obligation"], before.obligation),
+    changedNumber(body, ["salary"], financeProfileValue(before.salary, before.extra_data, "salary")),
+    changedNumber(body, ["obligation"], financeProfileValue(before.obligation, before.extra_data, "obligation")),
     changedText(body, ["salaryBank", "salary_bank", "bank"], before.salary_bank),
     changedText(body, ["carModel", "car_model", "model"], before.car_model),
     changedText(body, ["carType", "car_type"], before.car_type || before.car_name),
@@ -544,7 +560,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   }
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
-  const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
+  const credit = hasFinanceProfileRange(input) ? { amount: null, qualified: null } : calculateCreditLimit(input.salary, input.obligation, input.financeType);
   const statusChanged = statusLabelChanged;
   if (statusChanged && input.statusLabel === "تم البيع" && clean(before.status_label) !== "تم البيع") {
     return response.status(400).json({ ok: false, error: "حالة تم البيع يتم تطبيقها تلقائيًا فقط بعد مطابقة طلب NEXT ERP برقم الجوال" });
@@ -729,8 +745,8 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   trackField("color", "اللون", before.color, input.color);
   trackField("location", "المكان", before.location, input.location);
   trackField("age", "العمر", before.age, input.age);
-  trackField("salary", "الراتب", before.salary, input.salary);
-  trackField("obligation", "الالتزام", before.obligation, input.obligation);
+  trackField("salary", "الراتب", financeProfileValue(before.salary, before.extra_data, "salary"), financeProfileValue(input.salary, input.extraData, "salary"));
+  trackField("obligation", "الالتزام", financeProfileValue(before.obligation, before.extra_data, "obligation"), financeProfileValue(input.obligation, input.extraData, "obligation"));
   trackField("salary_bank", "بنك الراتب", before.salary_bank, input.salaryBank);
   trackField("finance_type", "نوع التمويل", before.finance_type, input.financeType);
   trackField("payment_type", "نوع الدفع", before.payment_type, input.paymentType);

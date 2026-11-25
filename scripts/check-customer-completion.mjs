@@ -11,8 +11,10 @@ const compiled = ts.transpileModule(source, {
     target: ts.ScriptTarget.ES2022,
   },
 }).outputText;
+const financeModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../shared/lead-form-crm-fields.ts', import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:financeModule,exports:financeModule.exports});
 const module = { exports: {} };
-vm.runInNewContext(compiled, { module, exports: module.exports, console, Set, Math, String, Boolean, Number, Object, Array });
+vm.runInNewContext(compiled, { module, exports: module.exports, require: id => { if(id === '../shared/lead-form-crm-fields.js') return financeModule.exports; throw Error(id); }, console, Set, Math, String, Boolean, Number, Object, Array });
 const { calculateLeadCompletion } = module.exports;
 if (typeof calculateLeadCompletion !== "function") throw new Error("Customer completion calculator was not exported");
 
@@ -34,4 +36,6 @@ const disabledCustom = [...base, field("job_title", { is_active: false })];
 if (calculateLeadCompletion(filledCustom, disabledCustom) !== 50) throw new Error("Disabling a field must remove it from the calculation");
 const financeOnly = [...base, field("finance_extra", { department_keys: ["finance"] })];
 if (calculateLeadCompletion(lead, financeOnly) !== 50) throw new Error("A finance-only field must not affect a cash customer");
+const financeFields = [field('salary'),field('obligation')];
+if (calculateLeadCompletion({salary:null,obligation:null,extra_data:{mzj_form_salary_range:'من 6000 إلى 10000 ريال',mzj_form_obligation_range:'من 3000 إلى 6000 ريال'}},financeFields)!==100) throw new Error('Finance ranges must count as populated fields');
 console.log("Dynamic customer completion calculation check passed.");

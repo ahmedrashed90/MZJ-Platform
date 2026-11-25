@@ -384,8 +384,13 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
   }
   // «الجاهزية» per idea of the assignment, same formula as the task readiness.
   const readiness = new Map<string, number>();
+  const ratings = new Map<string, number>();
   if (loadItems) for (const taskId of [...new Set(rows.map(row => String(row.task_id)))]) {
-    for (const item of await loadItems(sql, taskId)) readiness.set(String(item.id), workItemReadiness(item));
+    for (const item of await loadItems(sql, taskId)) {
+      readiness.set(String(item.id), workItemReadiness(item));
+      const percentage = item.rating?.percentage;
+      if (percentage != null && Number.isFinite(Number(percentage))) ratings.set(String(item.id), Number(percentage));
+    }
   }
   return { ok: true, ready, rows: rows.map((row, index) => {
     const itemPlacements = placementsByItem.get(row.item_id) || [];
@@ -425,6 +430,7 @@ export async function strategyProducts(sql: Sql, user: SessionUser, scope: { pro
       taskNo: row.task_no, orderNo: mainOrder?.number || '', orderName: mainOrder?.name || '', orderKind: mainOrder?.kind || '',
       orderStatus: mainOrder?.status || '', orderRefs: orders,
       assigneeName: row.assignee_name, ideaName: row.idea_name, readiness: readiness.get(String(row.item_id)) ?? (row.item_status === 'approved' ? 100 : 0),
+      ratingPercentage: ratings.get(String(row.item_id)) ?? null,
       dueOn: day(row.due_on), approvedOn: row.approved_at ? saudiCalendarDay(new Date(row.approved_at)) : null,
       publishOn: publishDates[0] || null, publishDates,
       fundingOn: fundingDates[0] || null, fundingDates,

@@ -70,7 +70,7 @@ export function resolveFormCrmField(id: unknown, label: unknown, configured?: un
 }
 
 /** Accept an exact nonnegative number, optionally with SAR and correctly grouped
- * digits. Ranges, lower/upper bounds and approximate values remain literal notes. */
+ * digits. Ranges and bounds retain their original text separately from numeric calculations. */
 export function exactFormCrmNumber(value: string, field: 'age'|'salary'|'obligation'): number | null {
   let text = value.normalize('NFKC').trim()
     .replace(/[٠-٩]/gu, c => String(c.charCodeAt(0) - 0x660))
@@ -102,9 +102,39 @@ export function formCrmAnswers(answers: Record<string,string> | null | undefined
     const label = String(labels?.[id] || id).trim();
     const field = resolveFormCrmField(id, label, mappings?.[id]);
     const {text, multiple} = readableAnswer(raw.trim());
-    const profileValue = field === 'notes' || multiple ? null :
-      field === 'age' || field === 'salary' || field === 'obligation' ? exactFormCrmNumber(text, field) : text;
+    const profileValue = field === 'salary' || field === 'obligation'
+      ? (multiple ? text : exactFormCrmNumber(text, field) ?? text)
+      : field === 'notes' || multiple ? null : field === 'age' ? exactFormCrmNumber(text, field) : text;
     entries.push({id,label,value:text,field,profileValue});
   }
   return entries;
+}
+
+/** Keep financial choices alongside the existing numeric columns, not in them.
+ * The reserved extra_data keys are internal; numeric values always take precedence. */
+export type FinanceProfileField = 'salary' | 'obligation';
+export const FINANCE_PROFILE_FIELDS = ['salary', 'obligation'] as const;
+export const financeProfileRangeKey = (field: FinanceProfileField) => `mzj_form_${field}_range`;
+export function financeProfileRange(extraData: unknown, field: FinanceProfileField): string {
+  if (!extraData || typeof extraData !== 'object' || Array.isArray(extraData)) return '';
+  const value = (extraData as Record<string, unknown>)[financeProfileRangeKey(field)];
+  return typeof value === 'string' ? value.trim() : '';
+}
+export function financeProfileValue(numeric: unknown, extraData: unknown, field: FinanceProfileField): unknown {
+  return numeric !== null && numeric !== undefined && String(numeric).trim() !== ''
+    ? numeric : financeProfileRange(extraData, field);
+}
+export function splitFinanceProfileValue(value: unknown, field: FinanceProfileField): { numeric: number | null; range: string } {
+  const text = String(value ?? '').trim();
+  if (!text) return { numeric: null, range: '' };
+  const numeric = exactFormCrmNumber(text, field);
+  return { numeric, range: numeric === null ? text : '' };
+}
+/** A range is unknown for affordability arithmetic, not zero. A blank exact
+ * obligation retains the existing default-zero calculation behavior. */
+export function hasFinanceProfileRange(lead: { salary?: unknown; obligation?: unknown; extraData?: unknown; extra_data?: unknown }): boolean {
+  return FINANCE_PROFILE_FIELDS.some(field => {
+    const value = financeProfileValue(lead[field], lead.extraData ?? lead.extra_data, field);
+    return !!String(value ?? '').trim() && splitFinanceProfileValue(value, field).numeric === null;
+  });
 }
