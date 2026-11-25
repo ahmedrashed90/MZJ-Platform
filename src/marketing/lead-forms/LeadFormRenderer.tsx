@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, CheckCircle, WarningCircle, ChatCircleDots, CarP
 import type { FormConfig, FormField, FormTemplate } from '../../../shared/lead-forms';
 import { DEFAULT_FORM_CONFIG, displayContactTitle } from '../../../shared/lead-forms';
 import { resolveFormDesign, choiceLayoutFor, type DesignBlock } from '../../../shared/lead-form-design';
-import { effectiveChoiceOptions, isVisibleField, validFormAnswers } from '../../../shared/lead-form-rules';
+import { effectiveChoiceOptions, isVisibleField, validFormAnswers, acceptsFieldAnswer } from '../../../shared/lead-form-rules';
 import { formLeadAttribution } from './pixel-tracking';
 import './lead-forms.css';
 
@@ -42,10 +42,11 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   const fields=config.fields.filter(f=>isVisibleField(f,answers));
   const count=fields.length+1;
   const current=fields[step];
+  const canAnswerCurrent=!!current && acceptsFieldAnswer(current,answers,design);
   const stageId=done?'success':current?.id||'contact';
   const blocks=design.screens[stageId] || [];
   useEffect(()=>{if(step>fields.length)setStep(fields.length);},[step,fields.length]);
-  useEffect(()=>{setAnswers(previous=>{const cleaned=validFormAnswers(config.fields,previous);return Object.keys(cleaned).length===Object.keys(previous).length?previous:cleaned;});},[config.fields]);
+  useEffect(()=>{setAnswers(previous=>{const cleaned=validFormAnswers(config.fields,previous,design);return Object.keys(cleaned).length===Object.keys(previous).length?previous:cleaned;});},[config.fields,design]);
   useEffect(()=>{
     if(preview || !form.slug)return;
     void fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'view',slug:form.slug,visitor:session.current,...tracking}),keepalive:true}).catch(()=>undefined);
@@ -55,11 +56,11 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
     void fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'step',slug:form.slug,visitor:session.current,step:current?.id || 'contact',...tracking}),keepalive:true}).catch(()=>undefined);
   },[preview,form.slug,current?.id,done,tracking]);
   const answer=(field:FormField,value:string)=>{
-    setAnswers(prev=>validFormAnswers(config.fields,{...prev,[field.id]:value}));setError('');
+    setAnswers(prev=>validFormAnswers(config.fields,{...prev,[field.id]:value},design));setError('');
     if(field.type==='choice')setStep(s=>Math.min(s+1,fields.length));
   };
   const next=()=>{
-    if(current && current.required && !String(answers[current.id]||'').trim()){setError('أجب عن السؤال قبل المتابعة');return;}
+    if(current && canAnswerCurrent && current.required && !String(answers[current.id]||'').trim()){setError('أجب عن السؤال قبل المتابعة');return;}
     setError('');setStep(s=>Math.min(s+1,fields.length));
   };
   const previous=()=>{setError('');setStep(s=>Math.max(0,s-1));};
@@ -69,7 +70,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
     if(preview){setDone(true);return;}
     setSending(true);setError('');
     try {
-      const result=await fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',slug:form.slug,visitor:session.current,submissionKey:submissionKey.current,name:askName?name.trim():'',phone,consent:false,noticeProvided:true,answers:validFormAnswers(config.fields,answers),...tracking,website:''})});
+      const result=await fetch('/api/marketing/lead-forms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'submit',slug:form.slug,visitor:session.current,submissionKey:submissionKey.current,name:askName?name.trim():'',phone,consent:false,noticeProvided:true,answers:validFormAnswers(config.fields,answers,design),...tracking,website:''})});
       const json=await result.json().catch(()=>({}));
       if(!result.ok||!json.ok)throw new Error(String(json.error||'تعذر إرسال الطلب'));
       setDone(true);
@@ -82,7 +83,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   function fieldContent(){
     if(!current)return null;
     if(current.type!=='choice')return <label className="mlf-public-input"><span>{current.label}</span><input type={current.type==='number'?'number':'text'} inputMode={current.type==='number'?'decimal':'text'} value={answers[current.id]||''} placeholder="اكتب إجابتك هنا" onChange={e=>answer(current,e.target.value)} maxLength={180}/></label>;
-    return <div className={`mlf-choice-grid mlf-choice-mode-${choiceLayoutFor(design,current.id)}`} role="group" aria-label={current.label}>{effectiveChoiceOptions(current,answers).map((option,index)=>
+    return <div className={`mlf-choice-grid mlf-choice-mode-${choiceLayoutFor(design,current.id)}`} role="group" aria-label={current.label}>{effectiveChoiceOptions(current,answers).filter(option=>option.trim()).map((option,index)=>
       <button type="button" key={`${index}-${option}`} className={`mlf-choice ${answers[current.id]===option?'selected':''}`} onClick={()=>answer(current,option)}>
         {current.optionImages?.[option]?<img className={current.optionImageModes?.[option]==='logo'?'mlf-option-image mlf-option-logo':'mlf-option-image'} src={current.optionImages[option]} alt="" loading="lazy"/>:
           <span className="mlf-choice-icon">{form.template==='visual'?<CarProfile size={25} weight="duotone"/>:String(index+1).padStart(2,'0')}</span>}
@@ -95,7 +96,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
   </div>;}
   function actionsContent(){return <footer className="mlf-public-actions">
     {step>0&&<button type="button" className="mlf-public-back" onClick={previous}><ArrowRight size={18}/> السابق</button>}
-    {current?.type==='choice'?<small>اختار إجابة للانتقال تلقائيًا</small>:<button type="button" disabled={sending} className="mlf-public-button" onClick={()=>current?next():void submit()}>{sending?'جاري إرسال الطلب...':current?'التالي':style.actionLabel}<ArrowLeft size={19}/></button>}
+    {current?.type==='choice'&&canAnswerCurrent?<small>اختار إجابة للانتقال تلقائيًا</small>:<button type="button" disabled={sending} className="mlf-public-button" onClick={()=>current?next():void submit()}>{sending?'جاري إرسال الطلب...':current?'التالي':style.actionLabel}<ArrowLeft size={19}/></button>}
   </footer>;}
   function successContent(){return <div className="mlf-done" role="status"><CheckCircle size={72} weight="duotone"/><h1>{style.successTitle}</h1><p>{style.successMessage}</p>{preview&&<button type="button" className="mlf-public-button" onClick={()=>{setStep(0);setAnswers({});setName('');setPhone('');setDone(false);}}>إعادة التجربة</button>}</div>;}
   function history():ReactNode {
@@ -114,7 +115,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
         {(current?.description||(!step?style.welcome:undefined))&&<p>{current?.description||style.welcome}</p>}
       </div>;break;
       case 'progress':content=<div className="mlf-progress" role="progressbar" aria-valuenow={step+1} aria-valuemin={1} aria-valuemax={count}><span style={{width:`${(step+1)/count*100}%`}}/></div>;break;
-      case 'question':content=<div className="mlf-question-region">{history()}{fieldContent()}</div>;break;
+      case 'question':content=canAnswerCurrent?<div className="mlf-question-region">{history()}{fieldContent()}</div>:null;break;
       case 'contact':content=contactContent();break;
       case 'actions':content=actionsContent();break;
       case 'trust':content=null;break; // Legacy decorative note: no longer shown to customers.

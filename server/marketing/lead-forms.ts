@@ -7,8 +7,8 @@ import { hasPermission, logSecurityEvent, requirePermissionForUser } from '../_a
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
-import { effectiveChoiceOptions, isVisibleField } from '../../shared/lead-form-rules.js';
-import { DESIGN_BLOCK_LABELS, REQUIRED_DESIGN_BLOCKS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
+import { effectiveChoiceOptions, isVisibleField, acceptsFieldAnswer } from '../../shared/lead-form-rules.js';
+import { DESIGN_BLOCK_LABELS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
 import { DEFAULT_LEAD_FORM_PIXELS, validateLeadFormPixels, getPublicLeadFormPixels } from '../../shared/lead-form-pixels.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
@@ -75,7 +75,7 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
       const height=Math.max(8,Math.min(280,Math.round(Number(entry.height)||24)));
       blocks.push({id,kind,text:clean(entry.text,550),imageUrl:imageUrl(entry.imageUrl),align,width,size,height});
     }
-    const mandatory:DesignBlockKind[]=screen==='contact'?['contact','actions']:screen==='success'?['success']:['question','actions'];
+    const mandatory:DesignBlockKind[]=screen==='contact'?['contact','actions']:screen==='success'?['success']:['actions'];
     for(const kind of mandatory){if(!blocks.some(b=>b.kind===kind))blocks.push({id:`required_${screen}_${kind}`,kind,align:'right',width:'full',size:'md'});}
     screens[screen]=blocks;
   }
@@ -93,14 +93,13 @@ function sanitizeConfig(input: unknown): FormConfig {
     if (!/^[a-zA-Z0-9_-]{1,45}$/.test(id) || fields.some(x=>x.id===id) || ['name','phone'].includes(id)) continue;
     const type: FormField['type'] = ['choice','text','number'].includes((f as any).type) ? (f as any).type : 'choice';
     const options = Array.isArray((f as any).options) ? [...new Set((f as any).options.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,12) as string[] : [];
-    if (type === 'choice' && options.length < 2) throw new FormInputError(`السؤال ${index+1}: أضف اختيارين على الأقل`);
     const showIfRaw = (f as any).showIf;
     const showIf = showIfRaw && typeof showIfRaw==='object' ? { fieldId: clean(showIfRaw.fieldId,45), equals: clean(showIfRaw.equals,80) } : null;
     const optionRules = type==='choice' && Array.isArray((f as any).optionRules)
       ? (f as any).optionRules.slice(0,16).map((rule:any)=>({
           conditions:Array.isArray(rule?.conditions) ? rule.conditions.slice(0,4).map((c:any)=>({fieldId:clean(c?.fieldId,45),equals:clean(c?.equals,80)})) : [],
           options:Array.isArray(rule?.options) ? [...new Set(rule.options.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,12) as string[] : [],
-        })).filter((rule:any)=>rule.conditions.length>0 && rule.options.length>=2) : [];
+        })).filter((rule:any)=>rule.conditions.length>0) : [];
     const rawImages=(f as any).optionImages && typeof (f as any).optionImages==='object' ? (f as any).optionImages as Record<string,unknown> : {};
     const rawModes=(f as any).optionImageModes && typeof (f as any).optionImageModes==='object' ? (f as any).optionImageModes as Record<string,unknown> : {};
     const optionImages:Record<string,string>={}, optionImageModes:Record<string,'logo'|'photo'>={};
@@ -112,10 +111,12 @@ function sanitizeConfig(input: unknown): FormConfig {
     fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
   }
   if (!fields.length) throw new FormInputError('أضف سؤالًا واحدًا على الأقل');
-  // Only allow conditions pointing to an earlier question and one of its options.
+  // Conditions must reference earlier choice questions; option rules require an existing option.
   fields.forEach((field,index)=>{
     const dep = fields.slice(0,index).find(item=>item.id===field.showIf?.fieldId);
-    if (!dep || dep.type!=='choice' || !dep.options.includes(field.showIf?.equals || '')) field.showIf=null;
+    // A deleted option must not turn a dependent question into an unconditional one.
+    // Retain the dormant condition while its earlier choice question still exists.
+    if (!dep || dep.type!=='choice' || !field.showIf?.equals) field.showIf=null;
     field.optionRules=(field.optionRules||[]).filter(rule=>{
       const ids=new Set<string>();
       return rule.conditions.every(condition=>{
@@ -294,7 +295,7 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
     if (row) {
       try { pixels = validateLeadFormPixels(row.config); }
       catch { /* Invalid legacy settings must fail closed, not activate tracking. */
-        pixels = {meta:{id:'',enabled:false},snapchat:{id:'',enabled:false},tiktok:{id:'',enabled:false}};
+        pixels = {meta:{id:'',enabled:false},snapchat:{id:'',enabled:false},tiktok:{id:'',enabled:false},google:{id:'',label:'',enabled:false}};
       }
     }
     return res.json({ok:true,form:publicConfig(form),pixels:getPublicLeadFormPixels(pixels)});
@@ -338,7 +339,7 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const answers: Record<string,string>={};
   const answerLabels: Record<string,string>={};
   for (const field of fields) {
-    if (!isVisibleField(field,answers)) continue;
+    if (!isVisibleField(field,answers) || !acceptsFieldAnswer(field,answers,publishedConfig.design)) continue;
     const value=clean(rawAnswers[field.id],180);
     if (field.required && !value) return fail(res,400,`يرجى الإجابة عن: ${field.label}`);
     if (field.type==='choice' && value && !effectiveChoiceOptions(field,answers).includes(value)) return fail(res,400,'إجابة اختيار غير صالحة');

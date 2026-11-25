@@ -243,6 +243,10 @@
 .mlf-dv-cover{display:block;max-width:100%;width:100%;max-height:180px;object-fit:cover;border-radius:10px}
 .mlf-dv-options{display:grid;gap:6px}.mlf-dv-options-cards,.mlf-dv-options-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
 .mlf-dv-options>div{min-height:43px;border:1px solid #d7bfae;border-radius:10px;background:#fff;display:flex;align-items:center;gap:10px;padding:8px;font-size:12px;color:#4a211c}
+.mlf-admin .mlf-dv-options .mlf-dv-choice-delete{margin-inline-start:auto;flex-shrink:0;display:grid;place-items:center;width:24px;height:24px;min-width:24px;padding:2px;border:0;border-radius:5px;background:transparent;color:#a33b36;cursor:pointer}
+.mlf-admin .mlf-dv-options .mlf-dv-choice-delete:hover{background:#f8e2df}
+.mlf-dv-options-cards .mlf-dv-choice-delete{margin-inline-start:0;align-self:flex-end}
+.mlf-dv-option-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
 .mlf-dv-options>div>span{color:#7b5c4e;background:#f3e8dc;border-radius:7px;padding:5px;font-weight:900}
 .mlf-dv-options>div>img{height:48px;max-width:65px;object-fit:cover;border-radius:6px}
 .mlf-dv-options-cards>div{flex-direction:column;text-align:center;justify-content:center;min-height:65px}
@@ -345,7 +349,8 @@
 .mlf-pixel-settings{display:grid;gap:13px}
 .mlf-pixel-platform{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,2fr) auto;gap:14px;align-items:end;padding:14px;border:1px solid #e4d3c8;border-radius:12px;background:#faf7f4}
 .mlf-pixel-platform>strong{color:#4a211c;align-self:center}
-.mlf-pixel-platform>label{display:grid;gap:6px;font-size:12px;font-weight:700;color:#4a211c}
+.mlf-pixel-platform>label,.mlf-google-pixel-fields>label{display:grid;gap:6px;font-size:12px;font-weight:700;color:#4a211c}
+.mlf-google-pixel-fields{display:grid;gap:10px;min-width:0}
 .mlf-pixel-platform input[type=text]{width:100%;box-sizing:border-box;border:1px solid #d5bdb0;border-radius:8px;padding:10px;direction:ltr;text-align:left;font:inherit;color:#4a211c;background:white}
 .mlf-pixel-toggle{display:flex!important;align-items:center;gap:7px;white-space:nowrap}
 .mlf-pixel-toggle input{accent-color:#4a211c}

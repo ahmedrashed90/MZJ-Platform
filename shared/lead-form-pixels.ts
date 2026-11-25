@@ -2,18 +2,20 @@
  * Pixel IDs are public identifiers, never API tokens or customer information.
  * Tracking starts disabled until enabled by a Marketing Lead Forms editor.
  */
-export type LeadFormPixelPlatform = 'meta' | 'snapchat' | 'tiktok';
+export type LeadFormPixelPlatform = 'meta' | 'snapchat' | 'tiktok' | 'google';
 export type LeadFormPixelEntry = { id: string; enabled: boolean };
-export type LeadFormPixelSettings = Record<LeadFormPixelPlatform, LeadFormPixelEntry>;
+export type GoogleLeadFormPixelEntry = LeadFormPixelEntry & { label: string };
+export type LeadFormPixelSettings = Record<Exclude<LeadFormPixelPlatform, 'google'>, LeadFormPixelEntry> & { google: GoogleLeadFormPixelEntry };
 
 // IDs are the separate MZJ Lead Forms pixels. Disabled by default on a new installation.
 export const DEFAULT_LEAD_FORM_PIXELS: LeadFormPixelSettings = {
   meta: { id: '1635122171397100', enabled: false },
   snapchat: { id: '0013dd43-0c92-4403-bb53-1793e1f5d077', enabled: false },
   tiktok: { id: 'DBLL5EBC77UASCMH46OG', enabled: false },
+  google: { id: '18121221194', label: '9d-MCMiErb8dEMrl78BD', enabled: false },
 };
 
-const VALID_PIXEL_ID: Record<LeadFormPixelPlatform, RegExp> = {
+const VALID_PIXEL_ID: Record<Exclude<LeadFormPixelPlatform, 'google'>, RegExp> = {
   meta: /^\d{12,20}$/,
   snapchat: /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
   tiktok: /^[A-Z0-9]{12,32}$/i,
@@ -33,6 +35,22 @@ export function validateLeadFormPixels(input: unknown): LeadFormPixelSettings {
     if (item.enabled && !id) throw new Error(`اكتب معرف ${platform} قبل التفعيل`);
     output[platform] = { id, enabled: item.enabled };
   }
+  // Existing installations have only the original three keys. Add Google
+  // disabled without resetting or rewriting any previously saved provider.
+  if (!Object.prototype.hasOwnProperty.call(source, 'google')) {
+    output.google = { ...DEFAULT_LEAD_FORM_PIXELS.google };
+  } else {
+    const raw = source.google;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('إعداد Google Ads غير صحيح');
+    const item = raw as Record<string, unknown>;
+    if (typeof item.id !== 'string' || typeof item.label !== 'string' || typeof item.enabled !== 'boolean') throw new Error('إعداد Google Ads غير صحيح');
+    const id = item.id.trim().replace(/^AW-/i, '');
+    const label = item.label.trim();
+    if (id && !/^\d{5,20}$/.test(id)) throw new Error('Conversion ID غير صالح');
+    if (label && !/^[A-Za-z0-9_-]{1,100}$/.test(label)) throw new Error('Conversion Label غير صالح');
+    if (item.enabled && (!id || !label)) throw new Error('اكتب Conversion ID و Conversion Label قبل التفعيل');
+    output.google = { id, label, enabled: item.enabled };
+  }
   return output;
 }
 
@@ -42,5 +60,7 @@ export function getPublicLeadFormPixels(settings: LeadFormPixelSettings): LeadFo
     meta: settings.meta.enabled ? { ...settings.meta } : { id: '', enabled: false },
     snapchat: settings.snapchat.enabled ? { ...settings.snapchat } : { id: '', enabled: false },
     tiktok: settings.tiktok.enabled ? { ...settings.tiktok } : { id: '', enabled: false },
+    google: settings.google?.enabled && settings.google.id && settings.google.label
+      ? { ...settings.google } : { id: '', label: '', enabled: false },
   };
 }

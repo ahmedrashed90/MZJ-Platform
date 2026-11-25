@@ -26,6 +26,8 @@ type BrowserWithPixels = Window & {
   snaptr?: PixelFunction;
   ttq?: any; // TikTok's own pixel stub adds dynamic methods at runtime.
   TiktokAnalyticsObject?: string;
+  dataLayer?: unknown[];
+  gtag?: (...args: unknown[]) => void;
 };
 
 export function readPixelConsent(): TrackingChoice {
@@ -47,13 +49,19 @@ export function detectFormAdPlatform(search: string, referrer: string): LeadForm
   if (['meta','facebook','fb','instagram','ig','facebook_ads','instagram_ads'].includes(source)) return 'meta';
   if (['snapchat','snap','snap_ads'].includes(source)) return 'snapchat';
   if (['tiktok','tik_tok','tiktok_ads'].includes(source)) return 'tiktok';
+  const googleClick = ['gclid', 'gbraid', 'wbraid'].some(key => Boolean(query.get(key)?.trim()));
+  const medium = String(query.get('utm_medium') || '').trim().toLowerCase();
+  if (['google','google_ads','googleads','adwords','youtube','youtube_ads'].includes(source)) {
+    // Do not treat explicitly organic traffic as paid unless it has a Google ad click ID.
+    return googleClick || !['organic','referral','(none)','none'].includes(medium) ? 'google' : null;
+  }
 
   // The Lead Forms campaign-link builder owns this stable key. Some link previewers
   // (including ChatGPT) replace utm_source with their own referral source while
   // preserving custom parameters. Do not lose the declared ad Pixel in that case.
   const declared = String(query.get('mzj_pixel_source') || '').trim().toLowerCase();
   const previewSource = !source || ['chatgptcom','chatgpt','openaicom'].includes(source);
-  if (previewSource && (declared === 'meta' || declared === 'snapchat' || declared === 'tiktok')) return declared;
+  if (previewSource && (declared === 'meta' || declared === 'snapchat' || declared === 'tiktok' || declared === 'google')) return declared;
 
   const keys = new Set([...query.keys()].map(k => k.toLowerCase()));
   if (previewSource) {
@@ -62,6 +70,7 @@ export function detectFormAdPlatform(search: string, referrer: string): LeadForm
     // visitors without a recognized ad or test marker to be tracked.
     if (keys.has('sctestmodeid') || keys.has('sccid') || keys.has('sc_click_id')) return 'snapchat';
     if (keys.has('tt_test_id') || keys.has('ttclid')) return 'tiktok';
+    if (googleClick) return 'google';
     if (source) {
       // Compatibility for the existing MZJ test links shared before the stable
       // marker was added. Never infer a real campaign platform from its title.
@@ -91,7 +100,7 @@ export function formLeadAttribution(search: string, referrer: string) {
   const query = new URLSearchParams(search);
   const rawSource = String(query.get('utm_source') || query.get('source') || '').trim();
   const platform = detectFormAdPlatform(search, referrer);
-  const source = platform === 'tiktok' || platform === 'snapchat'
+  const source = platform === 'tiktok' || platform === 'snapchat' || platform === 'google'
     ? platform
     : platform === 'meta' && !['meta', 'facebook', 'fb', 'instagram', 'ig', 'facebook_ads', 'instagram_ads'].includes(rawSource.toLowerCase())
       ? 'meta'
@@ -266,6 +275,31 @@ function bootTikTok(pixelId: string) {
   }
 }
 
+/** Google Ads browser tag. The native tag reads the click IDs from the landing
+ * URL and stores them in its first-party cookies only after tracking opt-in.
+ * Do not send customer fields or enable enhanced conversions in this module.
+ */
+function bootGoogle(id: string) {
+  const w = window as BrowserWithPixels;
+  const tagId = `AW-${id}`;
+  if (!w.gtag) {
+    w.dataLayer = w.dataLayer || [];
+    w.gtag = function () { w.dataLayer!.push(arguments); };
+    w.gtag('js', new Date());
+    w.gtag('consent', 'default', {
+      ad_storage: 'granted', ad_user_data: 'granted',
+      ad_personalization: 'denied', analytics_storage: 'denied',
+    });
+    appendPixelScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(tagId)}`);
+  }
+  const initKey = `google:${id}`;
+  if (!inited.has(initKey)) {
+    w.gtag('config', tagId, { send_page_view: false, allow_ad_personalization_signals: false });
+    inited.add(initKey);
+  }
+  return tagId;
+}
+
 /** Execute at most one platform's pixels; the form must have a recognized ad source. */
 export function startFormAdPixel(
   platform: LeadFormPixelPlatform | null,
@@ -277,6 +311,17 @@ export function startFormAdPixel(
   const entry = settings[platform];
   if (!entry?.enabled || !entry.id) return;
   const { id } = entry;
+  if (platform === 'google') {
+    if (!settings.google.label || readPixelConsent() === 'deny') return;
+    const key = `google:${id}:${slug}:${window.location.pathname}${window.location.search}`;
+    if (viewed.has(key)) return;
+    try {
+      const tagId = bootGoogle(id);
+      (window as BrowserWithPixels).gtag?.('event', 'page_view', { send_to: tagId });
+      viewed.add(key);
+    } catch (error) { console.warn('Google Ads page view unavailable', error); }
+    return;
+  }
   if (platform === 'snapchat') {
     trackSnapPageView(id, slug);
     return;
@@ -307,6 +352,21 @@ export function trackStoredFormLead(
   if (consent !== 'allow' || !platform || !settings || !lead.created || lead.crmStatus === 'existing') return;
   const entry = settings[platform];
   if (!entry?.enabled || !entry.id || !lead.id) return;
+  if (platform === 'google') {
+    const label = settings.google.label;
+    if (!label || readPixelConsent() === 'deny') return;
+    const key = `google:${entry.id}:${label}:${lead.id}`;
+    if (converted.has(key)) return;
+    try {
+      const tagId = bootGoogle(entry.id);
+      (window as BrowserWithPixels).gtag?.('event', 'conversion', {
+        send_to: `${tagId}/${label}`,
+        transaction_id: lead.id,
+      });
+      converted.add(key);
+    } catch (error) { console.warn('Google Ads conversion unavailable', error); }
+    return;
+  }
   if (platform === 'snapchat') {
     trackSnapConversion(entry.id, lead.id);
     return;

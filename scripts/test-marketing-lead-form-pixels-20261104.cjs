@@ -23,6 +23,21 @@ settings={...settings,meta:{...settings.meta,enabled:true},snapchat:{...settings
 assert.equal(shared.getPublicLeadFormPixels(settings).meta.id,'1635122171397100');
 assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,id:'BAD'}}));
 assert.throws(()=>shared.validateLeadFormPixels({...settings,meta:{enabled:true,id:''}}));
+// An existing production JSON row contains only three providers; preserve all of them.
+const {google:defaultGoogle,...legacySettings}=settings;
+const migrated=shared.validateLeadFormPixels(legacySettings);
+for(const platform of ['meta','snapchat','tiktok']) assert.deepEqual({...migrated[platform]},{...legacySettings[platform]});
+assert.equal(migrated.google.enabled,false);
+assert.equal(migrated.google.id,'18121221194');
+assert.equal(migrated.google.label,'9d-MCMiErb8dEMrl78BD');
+assert.equal(shared.getPublicLeadFormPixels(migrated).google.id,'');
+assert.equal(shared.getPublicLeadFormPixels(migrated).google.label,'');
+const googleEnabled=shared.validateLeadFormPixels({...migrated,google:{...migrated.google,id:' AW-18121221194 ',enabled:true}});
+assert.equal(googleEnabled.google.id,'18121221194');
+assert.equal(shared.getPublicLeadFormPixels(googleEnabled).google.label,defaultGoogle.label);
+for (const bad of [{id:'G-12345'}, {id:''}, {label:''}, {label:'bad/label'}, {label:'<script>'}]) {
+  assert.throws(()=>shared.validateLeadFormPixels({...googleEnabled,google:{...googleEnabled.google,...bad}}));
+}
 function mockedBrowser(){
   const scripts=[];const values={};
   const window={location:{pathname:'/forms/mymzj-form',search:'',reload(){},},localStorage:{getItem:k=>values[k]||null,setItem:(k,v)=>values[k]=v,removeItem:k=>delete values[k]}};
@@ -48,11 +63,11 @@ async function testPlatform(platform, expectedEvent, expectedScript){
   assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&utm_campaign=MZJ_SNAP_PIXEL_TEST_20261104',''), 'snapchat');
   assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&mzj_pixel_source=tiktok',''), 'tiktok');
   assert.equal(mod.detectFormAdPlatform('?utm_source=snapchat&mzj_pixel_source=tiktok',''), 'snapchat');
-  assert.equal(mod.detectFormAdPlatform('?utm_source=google&utm_campaign=car','https://tiktok.com/'), null);
+  assert.equal(mod.detectFormAdPlatform('?utm_source=google&utm_campaign=car','https://tiktok.com/'), 'google');
   assert.equal(mod.detectFormAdPlatform('?utm_source=chatgpt.com&utm_campaign=generic',''), null);
   assert.equal(mod.detectFormAdPlatform('?utm_source=direct',''), null);
   assert.equal(mod.detectFormAdPlatform('?fbclid=some-id',''), 'meta');
-  assert.equal(mod.detectFormAdPlatform('?utm_source=google&mzj_pixel_source=tiktok',''), null);
+  assert.equal(mod.detectFormAdPlatform('?utm_source=google&mzj_pixel_source=tiktok',''), 'google');
 
   assert.equal(mod.detectFormAdPlatform('','https://l.instagram.com/path'), 'meta');
   mod.startFormAdPixel(platform,settings,'mymzj-form',null);
@@ -96,11 +111,59 @@ async function testPlatform(platform, expectedEvent, expectedScript){
     assert.equal(queue.length,current+1,'No double conversion for same lead');
   }
 }
+function testGoogle(){
+  const {window,document,scripts}=mockedBrowser();
+  window.location.search='?gclid=test-click&utm_source=google&utm_medium=cpc';
+  const mod=transpiled('src/marketing/lead-forms/pixel-tracking.ts',{window,document});
+  for(const query of ['?gclid=test-click','?gbraid=test-click','?wbraid=test-click','?utm_source=google&utm_medium=cpc','?utm_source=youtube&utm_medium=paid_video','?utm_source=google_ads','?utm_source=chatgpt.com&mzj_pixel_source=google']) {
+    assert.equal(mod.detectFormAdPlatform(query,''),'google');
+    assert.equal(mod.formLeadAttribution(query,'').source,'google');
+  }
+  assert.equal(mod.detectFormAdPlatform('?utm_source=google&utm_medium=organic',''),null);
+  assert.equal(mod.detectFormAdPlatform('','https://www.google.com/'),null);
+  assert.equal(mod.detectFormAdPlatform('','https://www.youtube.com/'),null);
+  assert.equal(mod.detectFormAdPlatform('?gclid=',''),null);
+  assert.equal(mod.detectFormAdPlatform('?utm_source=snapchat&gclid=old',''),'snapchat');
+  assert.equal(mod.detectFormAdPlatform('?utm_source=other&gclid=old',''),null);
+  const start=(consent,config=googleEnabled,platform='google')=>mod.startFormAdPixel(platform,config,'mymzj-form',consent);
+  const lead={id:'stored-lead-id',created:true,crmStatus:'linked'};
+  const conversion=(consent,record=lead,config=googleEnabled)=>mod.trackStoredFormLead('google',config,consent,record);
+  for(const choice of [null,'deny']) {start(choice);conversion(choice);}
+  start('allow',migrated);conversion('allow',lead,migrated);
+  start('allow',googleEnabled,null);
+  assert.equal(scripts.length,0,'No tag before consent, on direct visits or when disabled');
+  mod.savePixelConsent('allow');
+  start('allow');start('allow');
+  assert.equal(scripts.length,1);
+  assert.equal(scripts[0].src,'https://www.googletagmanager.com/gtag/js?id=AW-18121221194');
+  assert.equal(window.location.search,'?gclid=test-click&utm_source=google&utm_medium=cpc','The Google tag receives the unmodified click URL');
+  const commands=()=>window.dataLayer.map(args=>Array.from(args));
+  const events=name=>commands().filter(args=>args[0]==='event'&&args[1]===name);
+  assert.equal(commands().filter(args=>args[0]==='config').length,1);
+  assert.equal(commands().find(args=>args[0]==='config')[2].send_page_view,false);
+  assert.equal(events('page_view').length,1);
+  assert.equal(events('page_view')[0][2].send_to,'AW-18121221194');
+  assert.equal(events('conversion').length,0,'Opening the form is not a lead conversion');
+  conversion('allow',{...lead,created:false});
+  conversion('allow',{...lead,crmStatus:'existing'});
+  conversion('allow',{...lead,id:''});
+  assert.equal(events('conversion').length,0);
+  conversion('allow');conversion('allow');
+  assert.equal(events('conversion').length,1);
+  assert.equal(events('conversion')[0][2].send_to,'AW-18121221194/9d-MCMiErb8dEMrl78BD');
+  assert.equal(events('conversion')[0][2].transaction_id,lead.id);
+  assert.deepEqual(Object.keys(events('conversion')[0][2]).sort(),['send_to','transaction_id']);
+  mod.savePixelConsent('deny');
+  conversion('allow',{...lead,id:'after-revocation'});
+  assert.equal(events('conversion').length,1,'Revoked consent blocks an in-flight submission callback');
+  assert.equal(window.fbq,undefined);assert.equal(window.snaptr,undefined);assert.equal(window.ttq,undefined);
+}
 async function settle(){for(let i=0;i<10;i++) await Promise.resolve();}
 async function runAsyncPixelTests(){
 await testPlatform('meta','Lead','facebook.net');
 await testPlatform('snapchat','SIGN_UP','sc-static.net');
 await testPlatform('tiktok','Lead','analytics.tiktok.com');
+testGoogle();
 // Snapchat's browser test URL must be prepared before SDK initialization and
 // the test marker must be removed when returning to a real campaign URL.
 {
@@ -147,4 +210,4 @@ for(const rel of ['src/marketing/lead-forms/LeadFormsPage.tsx','src/marketing/le
   const errs=(r.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error);
   assert.equal(errs.length,0,rel+': '+errs.map(x=>ts.flattenDiagnosticMessageText(x.messageText,' ')).join(','));
 }
-runAsyncPixelTests().then(()=>console.log('PASS lead-form browser Pixels: consent gating, SDK-ready delivery, source routing, 3 providers, conversion dedupe, typescript syntax, form-only settings')).catch(error=>{console.error(error);process.exitCode=1;});
+runAsyncPixelTests().then(()=>console.log('PASS lead-form browser Pixels: consent gating, SDK-ready delivery, source routing, 4 providers, legacy settings, Google click IDs, conversion dedupe, typescript syntax, form-only settings')).catch(error=>{console.error(error);process.exitCode=1;});

@@ -29,7 +29,7 @@ export const DESIGN_BLOCK_LABELS: Record<DesignBlockKind,string> = {
   contact:'بيانات التواصل', actions:'أزرار التنقل والإرسال', trust:'الخصوصية', success:'رسالة النجاح', text:'نص', image:'صورة',
   badge:'شارة نصية', divider:'فاصل', spacer:'مسافة فارغة',
 };
-export const REQUIRED_DESIGN_BLOCKS: DesignBlockKind[] = ['question','contact','actions','success'];
+export const REQUIRED_DESIGN_BLOCKS: DesignBlockKind[] = ['contact','actions','success'];
 export const SYSTEM_DESIGN_BLOCKS: DesignBlockKind[] = ['brand','cover','heading','progress','question','contact','actions','trust','success'];
 const block = (kind:DesignBlockKind, suffix:string):DesignBlock=>({id:`${suffix}_${kind}`,kind,width:'full',align:'right',size:'md'});
 export function createTemplateDesign(template:DesignBaseTemplate, fields:{id:string}[]):FormDesign {
