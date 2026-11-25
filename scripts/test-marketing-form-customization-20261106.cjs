@@ -64,5 +64,5 @@ assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/effectiveC
 assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/mlf-option-logo/);
 assert.match(source('src/marketing/lead-forms/LeadFormRenderer.tsx'),/consent:false,noticeProvided:true/);
 assert.match(source('src/marketing/lead-forms/lead-forms.css'),/object-fit:contain;object-position:center/);
-assert.match(source('src/marketing/lead-forms/LeadFormsPage.tsx'),/ConditionalChoicesEditor/);
+assert.match(source('src/marketing/lead-forms/FormVisualDesigner.tsx'),/ConditionalChoicesEditor/);
 console.log('PASS: packages tab, cover containment, choice logos, configurable subtitle/contact, two-condition car choices, server sanitization, legacy compatibility, standalone privacy-policy link, stale-answer pruning');

@@ -6,9 +6,9 @@ import { requireUser, requestIp } from '../_auth.js';
 import { hasPermission, logSecurityEvent, requirePermissionForUser } from '../_access-control.js';
 import { ensureMarketingLeadFormsSchema } from '../_marketing-lead-forms-schema.js';
 import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
-import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
-import { effectiveChoiceOptions, isVisibleField, acceptsFieldAnswer } from '../../shared/lead-form-rules.js';
-import { DESIGN_BLOCK_LABELS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
+import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_FIELD_TYPES, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
+import { isVisibleField, acceptsFieldAnswer, validateFormAnswer, answerLimit, multiAnswers } from '../../shared/lead-form-rules.js';
+import { DESIGN_BLOCK_LABELS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, formStepIds, fieldStepId, orderedFormFields, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
 import { DEFAULT_LEAD_FORM_PIXELS, validateLeadFormPixels, getPublicLeadFormPixels } from '../../shared/lead-form-pixels.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
@@ -39,14 +39,14 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
   if(!input || typeof input!=='object' || Array.isArray(input))return undefined;
   const raw=input as Record<string,any>;
   const defaults=createTemplateDesign('steps',fields);
-  const validScreens=new Set([...fields.map(f=>f.id),'contact','success']);
+  const validScreens=new Set([...formStepIds(fields),'contact','success']);
   const validKinds=new Set(Object.keys(DESIGN_BLOCK_LABELS));
   const animation=['slide','fade','zoom','none'].includes(raw.animation)?raw.animation:'slide';
   const choices=['list','cards','tiles','pills'].includes(raw.choices)?raw.choices:'list';
   const rawChoices=raw.choiceLayouts&&typeof raw.choiceLayouts==='object'&&!Array.isArray(raw.choiceLayouts)?raw.choiceLayouts:{};
   const choiceLayouts:NonNullable<FormDesign['choiceLayouts']>={};
   for(const field of fields){
-    if(field.type==='choice' && ['list','cards','tiles','pills'].includes(rawChoices[field.id]))choiceLayouts[field.id]=rawChoices[field.id];
+    if(['choice','multi','dropdown'].includes(field.type) && ['list','cards','tiles','pills'].includes(rawChoices[field.id]))choiceLayouts[field.id]=rawChoices[field.id];
   }
   const surface=['paper','soft','dark','borderless'].includes(raw.surface)?raw.surface:'paper';
   const buttonShape=['rounded','pill','square'].includes(raw.buttonShape)?raw.buttonShape:'rounded';
@@ -64,8 +64,12 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
       if(kind==='contact'&&screen!=='contact')continue;
       if(kind==='success'&&screen!=='success')continue;
       if(kind==='actions'&&screen==='success')continue;
-      if(SYSTEM_DESIGN_BLOCKS.includes(kind) && systemKinds.has(kind))continue;
-      systemKinds.add(kind);
+      const explicitField=kind==='question'?clean(entry.fieldId,45):'';
+      const boundField=explicitField||screen;
+      if(kind==='question'&&!fields.some(f=>f.id===boundField&&fieldStepId(f)===screen))continue;
+      const systemKey=kind==='question'?`question:${boundField}`:kind;
+      if(SYSTEM_DESIGN_BLOCKS.includes(kind) && systemKinds.has(systemKey))continue;
+      systemKinds.add(systemKey);
       const id=clean(entry.id,60) || `${screen}_${kind}_${index}`;
       if(!/^[a-zA-Z0-9_-]{1,60}$/.test(id)||seen.has(id))continue;
       seen.add(id);
@@ -73,7 +77,9 @@ function sanitizeDesign(input:unknown, fields:FormField[]):FormDesign|undefined 
       const width=['full','half'].includes(entry.width)?entry.width:'full';
       const size=['sm','md','lg'].includes(entry.size)?entry.size:'md';
       const height=Math.max(8,Math.min(280,Math.round(Number(entry.height)||24)));
-      blocks.push({id,kind,text:clean(entry.text,550),imageUrl:imageUrl(entry.imageUrl),align,width,size,height});
+      let videoUrl='';
+      if(kind==='video'){try{const u=new URL(clean(entry.videoUrl,1000));if(u.protocol==='https:'&&/\.(mp4|webm)$/i.test(u.pathname))videoUrl=u.href;}catch{/* Invalid media is omitted. */}}
+      blocks.push({id,kind,text:clean(entry.text,550),imageUrl:imageUrl(entry.imageUrl),align,width,size,height,...(explicitField?{fieldId:explicitField}:{}),...(kind==='video'?{videoUrl}:{})});
     }
     const mandatory:DesignBlockKind[]=screen==='contact'?['contact','actions']:screen==='success'?['success']:['actions'];
     for(const kind of mandatory){if(!blocks.some(b=>b.kind===kind))blocks.push({id:`required_${screen}_${kind}`,kind,align:'right',width:'full',size:'md'});}
@@ -86,16 +92,16 @@ function sanitizeConfig(input: unknown): FormConfig {
   const obj = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string,any> : {};
   const rawFields: unknown[] = Array.isArray(obj.fields) ? obj.fields : DEFAULT_FORM_CONFIG.fields;
   if (rawFields.length > 14) throw new FormInputError('الحد الأقصى 14 سؤالًا لكل فورم');
-  const fields: FormField[] = [];
+  let fields: FormField[] = [];
   for (const [index, f] of rawFields.entries()) {
     if (!f || typeof f !== 'object') continue;
     const id = clean((f as any).id, 45) || `field_${index + 1}`;
-    if (!/^[a-zA-Z0-9_-]{1,45}$/.test(id) || fields.some(x=>x.id===id) || ['name','phone'].includes(id)) continue;
-    const type: FormField['type'] = ['choice','text','number'].includes((f as any).type) ? (f as any).type : 'choice';
+    if (!/^[a-zA-Z0-9_-]{1,45}$/.test(id) || fields.some(x=>x.id===id) || ['name','phone','contact','success','__proto__','constructor','prototype'].includes(id)) continue;
+    const type: FormField['type'] = FORM_FIELD_TYPES.some(item=>item.value===(f as any).type) ? (f as any).type : 'choice';
     const options = Array.isArray((f as any).options) ? [...new Set((f as any).options.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,12) as string[] : [];
     const showIfRaw = (f as any).showIf;
     const showIf = showIfRaw && typeof showIfRaw==='object' ? { fieldId: clean(showIfRaw.fieldId,45), equals: clean(showIfRaw.equals,80) } : null;
-    const optionRules = type==='choice' && Array.isArray((f as any).optionRules)
+    const optionRules = ['choice','multi','dropdown'].includes(type) && Array.isArray((f as any).optionRules)
       ? (f as any).optionRules.slice(0,16).map((rule:any)=>({
           conditions:Array.isArray(rule?.conditions) ? rule.conditions.slice(0,4).map((c:any)=>({fieldId:clean(c?.fieldId,45),equals:clean(c?.equals,80)})) : [],
           options:Array.isArray(rule?.options) ? [...new Set(rule.options.map((v:unknown)=>clean(v,80)).filter(Boolean))].slice(0,12) as string[] : [],
@@ -108,20 +114,31 @@ function sanitizeConfig(input: unknown): FormConfig {
       const url=imageUrl(rawImages[option]);if(url)optionImages[option]=url;
       if(url && rawModes[option]==='logo')optionImageModes[option]='logo';
     }
-    fields.push({ id, label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: type==='choice'?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
+    const rawStepId=clean((f as any).stepId,45);
+    const stepId=/^[a-zA-Z0-9_-]{1,45}$/.test(rawStepId)&&!['contact','success','__proto__','constructor','prototype'].includes(rawStepId)?rawStepId:undefined;
+    fields.push({ id, ...(stepId&&stepId!==id?{stepId}:{}), ...((f as any).placeholder!==undefined?{placeholder:clean((f as any).placeholder,140)}:{}), label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: ['choice','multi','dropdown'].includes(type)?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
   }
   if (!fields.length) throw new FormInputError('أضف سؤالًا واحدًا على الأقل');
+  const design=sanitizeDesign(obj.design,fields);
+  fields=orderedFormFields(fields,design);
   // Conditions must reference earlier choice questions; option rules require an existing option.
   fields.forEach((field,index)=>{
     const dep = fields.slice(0,index).find(item=>item.id===field.showIf?.fieldId);
     // A deleted option must not turn a dependent question into an unconditional one.
     // Retain the dormant condition while its earlier choice question still exists.
-    if (!dep || dep.type!=='choice' || !field.showIf?.equals) field.showIf=null;
+    if (field.showIf && !field.showIf.equals) field.showIf=null;
+    // Keep conditions dormant when the parent was removed or changed to another type.
+    // A missing parent remains dormant. A live forward dependency is an invalid editor configuration.
+    if(field.showIf&&!dep){
+      const later=fields.find(f=>f.id===field.showIf?.fieldId);
+      const parentScreen=later&&design?.screens[fieldStepId(later)];
+      if(later&&(!parentScreen||parentScreen.some(b=>b.kind==='question'&&(b.fieldId||fieldStepId(later))===later.id)))throw new FormInputError('رتّب السؤال بعد السؤال الذي يعتمد عليه');
+    }
     field.optionRules=(field.optionRules||[]).filter(rule=>{
       const ids=new Set<string>();
       return rule.conditions.every(condition=>{
         const preceding=fields.slice(0,index).find(f=>f.id===condition.fieldId);
-        if(!preceding || preceding.type!=='choice' || !preceding.options.includes(condition.equals) || ids.has(condition.fieldId))return false;
+        if(!preceding || !['choice','dropdown'].includes(preceding.type) || !preceding.options.includes(condition.equals) || ids.has(condition.fieldId))return false;
         ids.add(condition.fieldId);
         return true;
       });
@@ -131,7 +148,7 @@ function sanitizeConfig(input: unknown): FormConfig {
   const rawContact = obj.contact && typeof obj.contact === 'object' ? obj.contact : {};
   const rawPrivacy = obj.privacy && typeof obj.privacy === 'object' ? obj.privacy : {};
   const base = DEFAULT_FORM_CONFIG.style;
-  return { fields, design:sanitizeDesign(obj.design,fields),
+  return { fields, design,
     contact:{askName:rawContact.askName !== false},
     privacy:{mode:rawPrivacy.mode==='notice'?'notice':'checkbox'},
     style: {
@@ -313,7 +330,7 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   if (action==='step') {
     const stepId = clean(params.step,45);
     const fields = sanitizeConfig(form.published_config || form.config).fields;
-    if (stepId && (fields.some(f=>f.id===stepId) || stepId==='contact')) {
+    if (stepId && (fields.some(f=>fieldStepId(f)===stepId) || stepId==='contact')) {
       await sql`insert into marketing.form_step_events(form_id,visitor_key,step_id)
         values(${form.id}::uuid,${visitorKey},${stepId}) on conflict do nothing`;
     }
@@ -340,11 +357,13 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const answerLabels: Record<string,string>={};
   for (const field of fields) {
     if (!isVisibleField(field,answers) || !acceptsFieldAnswer(field,answers,publishedConfig.design)) continue;
-    const value=clean(rawAnswers[field.id],180);
-    if (field.required && !value) return fail(res,400,`يرجى الإجابة عن: ${field.label}`);
-    if (field.type==='choice' && value && !effectiveChoiceOptions(field,answers).includes(value)) return fail(res,400,'إجابة اختيار غير صالحة');
-    if (field.type==='number' && value && !/^\d{1,12}(?:\.\d{1,2})?$/.test(value)) return fail(res,400,'قيمة رقمية غير صالحة');
-    if (value) { answers[field.id]=value; answerLabels[field.id]=field.label; }
+    const rawValue=rawAnswers[field.id];
+    if(rawValue!=null&&typeof rawValue!=='string')return fail(res,400,'إجابة غير صالحة');
+    const value=typeof rawValue==='string'?rawValue.trim():'';
+    if(value.length>answerLimit(field))return fail(res,400,`الإجابة أطول من الحد المسموح: ${field.label}`);
+    const invalid=validateFormAnswer(field,value,answers);
+    if(invalid)return fail(res,400,invalid);
+    if (value) { answers[field.id]=field.type==='multi'?JSON.stringify(multiAnswers(value)):value; answerLabels[field.id]=field.label; }
   }
   // Count submissions by IP to limit automated abuse without storing raw addresses.
   const hash=ipHash(req);

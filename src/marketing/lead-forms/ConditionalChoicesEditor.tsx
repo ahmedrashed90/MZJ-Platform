@@ -1,13 +1,13 @@
 import { Plus, Trash } from '@phosphor-icons/react';
 import type { FormField } from '../../../shared/lead-forms';
-import type { ChoiceCondition, ChoiceOptionRule } from '../../../shared/lead-form-rules';
+import { isChoiceType, isSingleChoiceType, type ChoiceCondition, type ChoiceOptionRule } from '../../../shared/lead-form-rules';
 import './lead-forms.css';
 
 /** Configure different choices for a question based on one or more earlier answers. */
 export function ConditionalChoicesEditor({field,fields,onChange}:{field:FormField;fields:FormField[];onChange:(patch:Partial<FormField>)=>void}) {
-  if(field.type!=='choice')return null;
+  if(!isChoiceType(field.type))return null;
   const index=fields.findIndex(item=>item.id===field.id);
-  const parents=fields.slice(0,index).filter(item=>item.type==='choice' && item.options.length>0);
+  const parents=fields.slice(0,index).filter(item=>isSingleChoiceType(item.type) && item.options.length>0);
   if(!parents.length)return null;
   const rules=field.optionRules || [];
   function replace(next:ChoiceOptionRule[]){onChange({optionRules:next});}
