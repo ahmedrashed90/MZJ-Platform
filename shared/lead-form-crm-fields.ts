@@ -21,6 +21,18 @@ export function sanitizeFormCrmField(value: unknown): FormCrmField | undefined {
   return FORM_CRM_FIELDS.find(field => field.value === value)?.value;
 }
 
+/** Treat persisted JSON as untrusted; emit only allowed string-valued mappings.
+ * This is also the JSON-safe representation used for inbound CRM events. */
+export function sanitizeFormCrmFields(value: unknown): Record<string, FormCrmField> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const entries: [string, FormCrmField][] = [];
+  for (const [id, raw] of Object.entries(value)) {
+    const field = sanitizeFormCrmField(raw);
+    if (field) entries.push([id, field]);
+  }
+  return Object.fromEntries(entries);
+}
+
 function normalized(value: unknown): string {
   return String(value ?? '').normalize('NFKC').toLowerCase()
     .replace(/[\u064b-\u065f\u0670\u0640]/gu, '')

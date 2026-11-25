@@ -26,7 +26,8 @@ function getVisitor(slug: string, tracking: ReturnType<typeof formLeadAttributio
 function getTracking() {
   return formLeadAttribution(window.location.search, document.referrer);
 }
-export function LeadFormRenderer({ form, preview=false, compact=false, onLeadStored }:{ form:RendererForm;preview?:boolean;compact?:boolean;onLeadStored?:(lead:StoredFormLead)=>void }) {
+type TrackingPreferencesContext = { contact: boolean; sending: boolean };
+export function LeadFormRenderer({ form, preview=false, compact=false, onLeadStored, renderTrackingPreferences }:{ form:RendererForm;preview?:boolean;compact?:boolean;onLeadStored?:(lead:StoredFormLead)=>void;renderTrackingPreferences?:(context:TrackingPreferencesContext)=>ReactNode }) {
   const config=form.config?.fields?.length?form.config:DEFAULT_FORM_CONFIG;
   const style=config.style || DEFAULT_FORM_CONFIG.style;
   const askName=config.contact?.askName!==false;
@@ -122,10 +123,12 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
     {askName&&<label>الاسم الكامل<input autoComplete="name" value={name} placeholder="اكتب اسمك" maxLength={130} onChange={e=>setName(e.target.value)}/></label>}
     <label>رقم الجوال<input type="tel" inputMode="tel" autoComplete="tel" value={phone} placeholder="05XXXXXXXX" maxLength={24} onChange={e=>setPhone(e.target.value)}/></label>
   </div>;}
-  function actionsContent(){return <footer className="mlf-public-actions">
+  function actionsContent(){return <>
+    {!preview&&!current&&renderTrackingPreferences?.({contact:true,sending})}
+    <footer className="mlf-public-actions">
     {step>0&&<button type="button" className="mlf-public-back" onClick={previous}><ArrowRight size={18}/> السابق</button>}
     {autoAdvance&&current?.required?<small>اختار إجابة للانتقال تلقائيًا</small>:<button type="button" disabled={sending} className="mlf-public-button" onClick={()=>current?next():void submit()}>{sending?'جاري إرسال الطلب...':current?'التالي':style.actionLabel}<ArrowLeft size={19}/></button>}
-  </footer>;}
+  </footer></>;}
   function successContent(){return <div className="mlf-done" role="status"><CheckCircle size={72} weight="duotone"/><h1>{style.successTitle}</h1><p>{style.successMessage}</p>{preview&&<button type="button" className="mlf-public-button" onClick={()=>{setStep(0);setAnswers({});setName('');setPhone('');setDone(false);}}>إعادة التجربة</button>}</div>;}
   function history():ReactNode {
     if(form.template!=='chat'||!current)return null;
@@ -174,6 +177,7 @@ export function LeadFormRenderer({ form, preview=false, compact=false, onLeadSto
       </div>
       {error&&<p className="mlf-public-error" role="alert"><WarningCircle size={17}/>{error}</p>}
       {!done&&<div className="mlf-privacy-link"><a href="/privacy" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a></div>}
+      {!preview&&(!!current||done)&&renderTrackingPreferences?.({contact:false,sending})}
     </div>
   </div>;
 }

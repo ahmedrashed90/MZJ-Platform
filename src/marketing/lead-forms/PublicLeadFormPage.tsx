@@ -12,7 +12,9 @@ export function PublicLeadFormPage() {
   const [pixels,setPixels] = useState<LeadFormPixelSettings|null>(null);
   const [error,setError] = useState('');
   const [consent,setConsent] = useState<TrackingChoice>(readPixelConsent);
-  const [changeConsent,setChangeConsent] = useState(false);
+  // A new opt-in on the contact step is committed only on a successful send.
+  // This lets a visitor change their mind before sending without reloading.
+  const [allowOnSubmit,setAllowOnSubmit] = useState(consent === 'allow');
   const platform = useMemo(() => detectFormAdPlatform(location.search,document.referrer),[location.search]);
   const pixelEnabled = !!(platform && pixels?.[platform]?.enabled && pixels[platform].id);
 
@@ -36,32 +38,53 @@ export function PublicLeadFormPage() {
 
   function updateConsent(choice: Exclude<TrackingChoice,null>) {
     savePixelConsent(choice);
-    setChangeConsent(false);
+    setConsent(choice);
+    setAllowOnSubmit(choice === 'allow');
     if (consent === 'allow' && choice === 'deny') {
       // Once loaded, browser pixels cannot be safely unloaded; reload to stop them.
       window.location.reload();
-      return;
     }
-    setConsent(choice);
   }
   function onStored(lead:StoredFormLead) {
-    trackStoredFormLead(platform,pixels,consent,lead);
+    if (!pixelEnabled) return;
+    const choice = allowOnSubmit ? 'allow' : 'deny';
+    // The checkbox is optional and never part of form validation or CRM data.
+    // Confirm it before the conversion, including when React has not yet rendered.
+    if (choice !== consent) {
+      savePixelConsent(choice);
+      setConsent(choice);
+    }
+    startFormAdPixel(platform,pixels,slug,choice);
+    trackStoredFormLead(platform,pixels,choice,lead);
+  }
+
+  function renderTrackingPreferences({contact,sending}:{contact:boolean;sending:boolean}) {
+    if (!pixelEnabled) return null;
+    if (contact) return <div className="mlf-tracking-inline" dir="rtl">
+      <label className="mlf-tracking-check">
+        <input type="checkbox" checked={allowOnSubmit} disabled={sending}
+          onChange={e=>{
+            const checked=e.currentTarget.checked;
+            if (!checked && consent==='allow') updateConsent('deny');
+            else setAllowOnSubmit(checked);
+          }}/>
+        <span>أوافق على استخدام ملفات تعريف الارتباط ومعرّفات الجهاز لقياس أداء الإعلانات (اختياري).</span>
+      </label>
+      <small>يمكنك إرسال الطلب دون الموافقة. لا نرسل اسمك أو جوالك أو إجاباتك ضمن أحداث القياس.</small>
+      {consent==='allow'&&<small>إلغاء موافقة سابقة يعيد تحميل النموذج.</small>}
+    </div>;
+    return <details className="mlf-tracking-settings" dir="rtl">
+      <summary>إعدادات الخصوصية</summary>
+      <p>يمكنك السماح بقياس أداء الإعلانات باستخدام ملفات تعريف الارتباط ومعرّفات الجهاز أو رفضه. اختيارك لا يؤثر على طلبك.</p>
+      <small>الحالة: {consent==='allow'?'مسموح بالقياس':consent==='deny'?'القياس متوقف':'لم يتم الاختيار — القياس متوقف'}</small>
+      {consent==='allow'&&<small>إلغاء الموافقة يعيد تحميل النموذج.</small>}
+      <div className="mlf-tracking-actions">
+        <button type="button" disabled={sending||consent==='allow'} onClick={()=>updateConsent('allow')}>السماح</button>
+        <button type="button" disabled={sending||consent==='deny'} onClick={()=>updateConsent('deny')}>عدم السماح</button>
+      </div>
+    </details>;
   }
 
   if(!form) return <div className="mlf-public mlf-public-loading" dir="rtl"><div className="mlf-public-card"><img src="/logo.png" alt="MZJ"/><h2>{error||'جاري تحميل الفورم...'}</h2>{error&&<p>يمكنك التواصل مع الشركة إذا استمرت المشكلة.</p>}</div></div>;
-  return <>
-    <LeadFormRenderer form={form} onLeadStored={onStored}/>
-    {pixelEnabled && (consent===null || changeConsent) &&
-      <aside className="mlf-pixel-consent" dir="rtl" aria-label="تفضيلات تتبع الإعلانات">
-        <strong>تفضيلات تتبع الإعلانات</strong>
-        <p>هل تسمح باستخدام Pixel لقياس زيارة الفورم وإرسال الطلب على منصة الإعلان؟ اختيارك اختياري ولا يؤثر على طلبك. لن نرسل اسمك أو جوالك أو إجاباتك ضمن أحداث التتبع، وقد تستخدم المنصة ملفات تعريف الارتباط ومعرّفات الجهاز وفق سياستها.</p>
-        <div className="mlf-pixel-consent-actions">
-          <button type="button" className="primary" onClick={()=>updateConsent('allow')}>السماح بالتتبع</button>
-          <button type="button" className="secondary" onClick={()=>updateConsent('deny')}>المتابعة بدون تتبع</button>
-          <a href="/privacy" target="_blank" rel="noopener noreferrer">سياسة الخصوصية</a>
-        </div>
-      </aside>}
-    {pixelEnabled && consent!==null && !changeConsent &&
-      <button type="button" className="mlf-pixel-privacy-control" onClick={()=>setChangeConsent(true)}>إعدادات التتبع</button>}
-  </>;
+  return <LeadFormRenderer form={form} onLeadStored={onStored} renderTrackingPreferences={renderTrackingPreferences}/>;
 }

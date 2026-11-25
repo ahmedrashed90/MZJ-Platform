@@ -10,7 +10,7 @@ import { processLeadImportEvent } from '../_crm-lead-import.js';
 import { isRecoverableMarketingFormLead } from '../_crm-lifecycle.js';
 import { createNotification, notificationDedupe } from '../_notifications.js';
 import { formPurchasePreference } from './form-lead-routing.js';
-import { formCrmAnswers } from '../../shared/lead-form-crm-fields.js';
+import { formCrmAnswers, sanitizeFormCrmFields } from '../../shared/lead-form-crm-fields.js';
 import { saveMarketingFormProfile } from './form-crm-profile.js';
 
 const trim = (value: unknown, limit = 200) => String(value ?? '').trim().slice(0, limit);
@@ -128,7 +128,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
       const raw = {
         formLeadId: row.id, formId: row.form_id, formSource: row.source,
         campaignName: row.campaign, medium: row.medium, adId: row.ad_id,
-        answers: row.answers, answerLabels: row.answer_labels, answerCrmFields: row.answer_crm_fields || {},
+        answers: row.answers, answerLabels: row.answer_labels, answerCrmFields: sanitizeFormCrmFields(row.answer_crm_fields),
         purchasePreference, intakeServiceKey: serviceKey,
       };
       const payload = {
