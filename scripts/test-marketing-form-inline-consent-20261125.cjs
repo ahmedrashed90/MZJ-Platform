@@ -82,7 +82,7 @@ function checkJsonContract(){
     'server/_crm-lead-import.ts':'export declare function processLeadImportEvent(route:string,id:string,payload:unknown):Promise<{lead?:{id:string;assigned_to?:string;call_center_assigned_to?:string;branch_code?:string;department_code?:string};existedBefore:boolean;createLead:boolean}>;',
     'server/_crm-lifecycle.ts':'export declare function isRecoverableMarketingFormLead(...args:unknown[]):Promise<boolean>;',
     'server/_notifications.ts':'export declare function createNotification(payload:unknown):Promise<void>; export declare function notificationDedupe(...args:string[]):string;',
-    'server/marketing/form-crm-profile.ts':'export declare function saveMarketingFormProfile(id:string,row:unknown,newlyCreated:boolean):Promise<void>;',
+    'server/marketing/form-crm-profile.ts':'export declare function saveMarketingFormProfile(id:string,row:unknown,newlyCreated:boolean):Promise<boolean>;',
   };
   const options={target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.NodeNext,moduleResolution:ts.ModuleResolutionKind.NodeNext,strict:true,noEmit:true,skipLibCheck:true,types:[]};
   function diagnostics(old){

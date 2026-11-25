@@ -82,7 +82,7 @@ function StrategyIdeaBrief({ value }: { value: string }) {
   </div>;
 }
 
-export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', captureOnly = false, focusItemId, openRatingOnLoad = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; captureOnly?: boolean; focusItemId?: string; openRatingOnLoad?: boolean }) {
+export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNames, deliveryFilter = '', captureOnly = false, focusItemId, openRatingOnLoad = false, popup = false }: { id: string; onClose: () => void; onChanged?: () => void; onlyItems?: string[]; searchAssigneeNames?: string[]; deliveryFilter?: '' | 'on_time' | 'late'; captureOnly?: boolean; focusItemId?: string; openRatingOnLoad?: boolean; popup?: boolean }) {
   const query = useWorkQuery<Detail>('task', { id });
   const settings = useWorkQuery<WorkEvaluationSettings>('evaluation_settings');
   const [ratingItemId, setRatingItemId] = useState('');
@@ -162,7 +162,7 @@ export function TaskDetail({ id, onClose, onChanged, onlyItems, searchAssigneeNa
     } catch (e) { setRatingError(e instanceof Error ? e.message : W.invalid); }
     finally { setRatingBusy(false); }
   }
-  return <Modal open title={task ? `${task.task_no} - ${taskCategory}` : W.task} onClose={onClose} className="mkw-fullscreen">
+  return <Modal open title={task ? `${task.task_no} - ${taskCategory}` : W.task} onClose={onClose} className={popup ? "mkw-modal" : "mkw-fullscreen"}>
     <div className="mkw mkw-detail-view">
       <WorkAlert>{query.error}</WorkAlert>
       {!task ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <>

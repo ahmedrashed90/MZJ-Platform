@@ -1386,3 +1386,7 @@ button.mkw-plan-approval-tag{cursor:pointer}button.mkw-plan-approval-tag:hover{b
 .mkw-plan-executor-buttons button,.mkw-plan-executor-footer button { display:inline-flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap; }
 .mkw-plan-executor-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; padding-top:12px; border-top:1px solid var(--line); font-size:12px; }
 @media(max-width:800px) { .mkw-plan-executor-person { grid-template-columns:1fr; } .mkw-plan-executor-buttons { justify-content:flex-start; } }
+
+/* Strategy product assignment links use the existing requirement detail modal. */
+.mkw button.mkw-assignment-open { border:0; background:transparent; color:var(--brand); text-decoration:underline; text-underline-offset:3px; font:inherit; font-weight:700; cursor:pointer; padding:4px 2px; }
+.mkw button.mkw-assignment-open:hover { text-decoration:none; }

@@ -48,6 +48,10 @@ const sql={begin:async work=>{
   if(q.startsWith('select id::text from crm.lead_events'))return draft.events.some(e=>e.formLeadId===values[1])?[{id:'1'}]:[];
   if(q.startsWith('update crm.leads set')){
    assert.doesNotMatch(q,/\b(?:department_code|assigned_to|branch_code|payment_type|status_label|source_code)\s*=/);
+   // PostgreSQL must be able to infer BOTH note placeholders independently.
+   // The second placeholder is an argument to polymorphic concat_ws (42P18).
+   assert.match(q,/notes=case when \?::text='' then notes else concat_ws\(.*?,nullif\(notes,''\),\?::text\) end/);
+   assert.equal(values[10],values[11]);
    assert.equal(values[12],leadId);
    for(let i=0;i<fieldsKeys.length;i++)if(values[i]!==null)draft.current[fieldsKeys[i]]=values[i];
    if(values[10])draft.current.notes=[draft.current.notes,values[11]].filter(Boolean).join('\n\n');
@@ -71,7 +75,7 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  assert.ok(db.current.notes.includes('A، B'));
  assert.ok(db.current.notes.startsWith('[قديم] ملاحظة المندوب'));
  const first=structuredClone(db);
- await profile.saveMarketingFormProfile(leadId,row,false);
+ assert.equal(await profile.saveMarketingFormProfile(leadId,row,false),false);
  assert.deepEqual(db,first,'Retry must not duplicate notes or change fields');
  assert.equal(db.events.length,1);
  fresh({salary:9000,salary_bank:'الأهلي',same_submission:false});
@@ -86,11 +90,22 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  const before=structuredClone(db);failEvent=true;
  await assert.rejects(()=>profile.saveMarketingFormProfile(leadId,row,true),/simulated failure/);
  assert.deepEqual(db,before,'Profile and note marker rollback together');failEvent=false;
- await profile.saveMarketingFormProfile(leadId,row,false);
+ assert.equal(await profile.saveMarketingFormProfile(leadId,row,false),true);
  assert.equal(db.current.salary,7000);assert.equal(db.events.length,1);
  fresh();const range={...row,answers:{s:'من 7,000 إلى 10,000 ريال',o:'لا يوجد',b:'الراجحي'},answer_labels:row.answer_labels};
  await profile.saveMarketingFormProfile(leadId,range,true);
  assert.equal(db.current.salary,undefined);assert.equal(db.current.obligation,0);assert.ok(db.current.notes.includes('من 7,000 إلى 10,000 ريال'));
+ // Reproduce the reported Test123 shape: ranges and multiple selections stay
+ // verbatim in notes, bank is a real text field, ownership is untouched.
+ fresh({same_submission:true,car_name:'cc',car_type:'cc'});
+ const reported={...row,answers:{v:'cc',j:'قطاع خاص (يشترط راتب معتمد)',s:'من 6,000 إلى أقل من 10,000 ريال',t:'خلال شهرين',o:'أقل من 3000 ريال، من 3000 إلى 6000 ريال',b:'البلاد'}};
+ assert.equal(await profile.saveMarketingFormProfile(leadId,reported,false),true);
+ assert.equal(db.current.salary_bank,'البلاد');assert.equal(db.current.salary,undefined);assert.equal(db.current.obligation,undefined);
+ for(const key of ['j','s','t','o'])assert.ok(db.current.notes.includes(reported.answers[key]));
+ assert.equal(db.current.assigned_to,'rep');assert.equal(db.current.department_code,'finance_sales');
+ const recoveredSnapshot=structuredClone(db);
+ assert.equal(await profile.saveMarketingFormProfile(leadId,reported,false),true);
+ assert.deepEqual(db,recoveredSnapshot);
  const parsed=parse({x:'1000',y:'بنك الرياض',z:'4000'},{x:'سؤال مخصص',y:'اسم البنك',z:'راتبك'},{x:'salary',y:'notes',z:'salary'});
  const plan=profile.planFormProfile(parsed,{},true);
  assert.equal(plan.fields.salary,1000);assert.deepEqual(plan.notes.map(a=>a.id),['y','z']);

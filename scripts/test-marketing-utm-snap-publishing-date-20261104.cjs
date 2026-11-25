@@ -111,6 +111,6 @@ const result=sorted(original);
 assert.deepEqual(Array.from(result.map(r=>r.scheduled_on)), ['2026-11-04','2026-11-04','2026-11-05','2026-11-07',null]);
 assert.equal(original.map(r=>r.id).join(','),'a,b,c,d,e','date sort must not mutate input');
 const dashboard=fs.readFileSync(path.join(root,'src/marketing/pages/MarketingDashboardPage.tsx'),'utf8');
-assert.match(dashboard,/chooserLines = preparationLinesByDate\(chooserSourceLines\)/);
+assert.match(dashboard,/chooserLines = useMemo\(\(\) => preparationLinesByMissingLink\(chooserSourceLines\)/);
 assert.match(dashboard,/platform-\$\{line\.platform_code \|\| line\.platform_name\}-\$\{index\}/);
 console.log('PASS: campaign and agenda preparation display publish dates ascending across platforms, report unchanged');

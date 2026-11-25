@@ -79,7 +79,7 @@ check('Report retains platform grouping, while preparation is sorted by publicat
   assert.match(report, /CampaignOverview lines=\{lines\}/);
   assert.match(report, /campaignLinesByPlatform\(lines\)/);
   assert.match(dashboard, /CampaignOverview lines=\{chooserSourceLines\}/);
-  assert.match(dashboard, /chooserLines = preparationLinesByDate\(chooserSourceLines\)/);
+  assert.match(dashboard, /chooserLines = useMemo\(\(\) => preparationLinesByMissingLink\(chooserSourceLines\)/);
   assert.match(dashboard, /chooserLines\.map\(\(line, index\)/);
   assert.match(dashboard, /group\[0\]\?\.kind === 'campaign' \|\| group\.length > 1/);
   const { preparationLinesByDate } = sourceModule('src/marketing/workflow/campaignOverview.tsx');

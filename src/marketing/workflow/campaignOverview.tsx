@@ -98,6 +98,31 @@ export function preparationLinesByDate<T extends WorkPlanLine>(lines: T[]): T[] 
     String(a.id).localeCompare(String(b.id)));
 }
 
+/** The dashboard preparation chooser groups missing links first, independently
+ * of the content checklist, scheduled publication, campaign linkage and PDF order. */
+export function hasPreparationPostLink(line: Pick<WorkPlanLine, 'effective_post_url' | 'manual_post_url'>): boolean {
+  return Boolean(String(line.effective_post_url || '').trim() || String(line.manual_post_url || '').trim());
+}
+export function preparationLinesByMissingLink<T extends WorkPlanLine>(lines: T[]): T[] {
+  return preparationLinesByDate(lines).sort((a, b) => Number(hasPreparationPostLink(a)) - Number(hasPreparationPostLink(b)));
+}
+
+/** Preserve the review position when the edited post moves to the completed
+ * group. Prefer the same date and group, then the next remaining row. */
+export function preparationReturnAnchor<T extends WorkPlanLine>(lines: T[], original: { id: string; day: string; linked: boolean; nearbyIds: string[] }): string {
+  const day = (line: WorkPlanLine) => String(line.scheduled_on || '').slice(0, 10);
+  const inGroup = lines.filter(line => hasPreparationPostLink(line) === original.linked);
+  const current = inGroup.find(line => line.id === original.id);
+  if (current && day(current) === original.day) return current.id;
+  const near = new Map(inGroup.map(line => [line.id, line]));
+  const sameDay = original.nearbyIds.map(id => near.get(id)).find(line => line && day(line) === original.day)
+    || inGroup.find(line => day(line) === original.day);
+  if (sameDay) return sameDay.id;
+  const neighbor = original.nearbyIds.find(id => near.has(id));
+  return neighbor || inGroup.find(line => day(line) >= original.day)?.id || inGroup.at(-1)?.id
+    || lines.find(line => line.id === original.id)?.id || lines[0]?.id || '';
+}
+
 /** Display an agenda report like the campaign report: one continuous section
  * per platform, then date and post type inside that section. Reuse the stable
  * preparation order for chronological ties and to put undated rows last; this

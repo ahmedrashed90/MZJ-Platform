@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CaretDown, CaretLeft, ClipboardText, Eye, PaperPlaneTilt, Plus, CalendarBlank, Gear, CheckCircle, MagnifyingGlass, X, LinkSimple } from '@phosphor-icons/react';
 import { Modal } from '../../components/Modal';
@@ -12,7 +12,7 @@ import { AgendaIdeaDateEditor } from '../workflow/AgendaIdeaDateEditor';
 import { PlanDetail } from '../workflow/PlanDetail';
 import { PlanStatusBadges, planDisplayState, planStateLabels } from '../workflow/PlanStatus';
 import { PlanReport } from '../workflow/PlanReport';
-import { CampaignOverview, preparationLinesByDate } from '../workflow/campaignOverview';
+import { CampaignOverview, hasPreparationPostLink, preparationLinesByMissingLink, preparationReturnAnchor } from '../workflow/campaignOverview';
 import { exportCampaignSummaryPdf, exportPlanSummaryPdf } from '../workflow/campaignPdfExport';
 import { summarizePublishingDays } from '../workflow/publishingDaySummary';
 import { executionDashboardTasks, publishingDashboardEntries } from '../workflow/publishingPriority';
@@ -51,6 +51,8 @@ export function MarketingDashboardPage() {
   const [tableId, setTableId] = useState('');
   const [pdfError, setPdfError] = useState('');
   const [selectPlan, setSelectPlan] = useState(''), [prepareId, setPrepareId] = useState('');
+  const chooserContentRef = useRef<HTMLDivElement>(null);
+  const reviewPosition = useRef<{ id: string; day: string; linked: boolean; nearbyIds: string[]; top: number; left: number; offset: number } | null>(null);
   const [publishingOpen, setPublishingOpen] = useState(true);
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
   function togglePlanProducts(id: string) {
@@ -139,8 +141,47 @@ export function MarketingDashboardPage() {
   const chooserSourceLines = groups.get(selectPlan) || [];
   // Requirement readiness per product for the printable compact schedule.
   const chooserProducts = useWorkQuery<PlanProductsData>('plan_products', { planId: selectPlan }, Boolean(selectPlan));
-  const chooserLines = preparationLinesByDate(chooserSourceLines);
+  const chooserLines = useMemo(() => preparationLinesByMissingLink(chooserSourceLines), [chooserSourceLines]);
   const chooserIsCampaign = chooserLines[0]?.kind === 'campaign';
+  const missingLinkCount = chooserLines.filter(line => !hasPreparationPostLink(line)).length;
+
+  function openChooserLine(line: WorkPlanLine, event: MouseEvent<HTMLButtonElement>) {
+    const content = chooserContentRef.current;
+    const body = content?.closest<HTMLElement>('.mzj-modal-body');
+    const row = event.currentTarget.closest('tr');
+    if (content && body && row) {
+      const index = chooserLines.findIndex(entry => entry.id === line.id);
+      const table = content.querySelector<HTMLElement>('.mkw-publishing-chooser-table');
+      reviewPosition.current = {
+        id: line.id, day: String(line.scheduled_on || '').slice(0, 10), linked: hasPreparationPostLink(line),
+        nearbyIds: [...chooserLines.slice(index + 1), ...chooserLines.slice(0, index).reverse()].map(entry => entry.id),
+        top: body.scrollTop, left: table?.scrollLeft || 0,
+        offset: row.getBoundingClientRect().top - body.getBoundingClientRect().top,
+      };
+    }
+    if (line.strategy_product_pending) setCopyLine(line);
+    else setPrepareId(line.id);
+  }
+
+  // Keep the chooser mounted behind the child editor. If saving a URL moves
+  // the row, anchor to another post from that review group/date rather than
+  // scrolling down to the newly completed post. Restore after async reloads.
+  useLayoutEffect(() => {
+    const position = reviewPosition.current;
+    if (!position || !selectPlan) return;
+    const content = chooserContentRef.current;
+    const body = content?.closest<HTMLElement>('.mzj-modal-body');
+    if (!content || !body) return;
+    const anchor = preparationReturnAnchor(chooserLines, position);
+    const row = Array.from(content.querySelectorAll<HTMLElement>('[data-preparation-line]'))
+      .find(entry => entry.dataset.preparationLine === anchor);
+    body.scrollTop = row
+      ? body.scrollTop + row.getBoundingClientRect().top - body.getBoundingClientRect().top - position.offset
+      : position.top;
+    const table = content.querySelector<HTMLElement>('.mkw-publishing-chooser-table');
+    if (table) table.scrollLeft = position.left;
+    if (!prepareId && !copyLine && !query.loading) reviewPosition.current = null;
+  }, [selectPlan, prepareId, copyLine, chooserLines, query.loading]);
   // Read the same server-derived edit permission as the plan report. Never infer
   // it from general publication-preparation access or agenda ownership alone.
   const chooserAgendaPlan = useWorkQuery<{ plan: { canRescheduleIdeas?: boolean } }>(
@@ -311,7 +352,7 @@ export function MarketingDashboardPage() {
       onClose={() => { setParams({}); setDeliveryFilter(''); setCaptureOnly(false); setSearchTaskAssignees([]); }} onChanged={() => void query.reload()}/>}
     {planId && <PlanDetail id={planId} onClose={() => setParams({})} onChanged={() => void query.reload()}/>}    
     {tableId && <PlanReport id={tableId} onClose={() => setTableId('')} onChanged={() => void query.reload()}/>}    
-    {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => setSelectPlan('')} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div className="mkw mkw-publishing-chooser-content">
+    {selectPlan && <Modal open title={`${W.prepare} — ${chooserSourceLines[0]?.name || ''}`} onClose={() => { reviewPosition.current = null; setSelectPlan(''); }} className="mkw-fullscreen mkw-publishing-chooser-fullscreen"><div ref={chooserContentRef} className="mkw mkw-publishing-chooser-content">
       {!!chooserSourceLines.length && <div className="mkw-campaign-chooser-toolbar">
         <strong>{chooserIsCampaign ? 'ملخص الحملة وجدول تجهيز المنشورات' : 'ملخص الأجندة وجدول تجهيز المنشورات'}</strong>
         {!chooserIsCampaign && <AgendaSyncButton planId={selectPlan} canSync={Boolean(query.data?.capabilities.prepare || query.data?.canReviewPlans)}/>} 
@@ -353,8 +394,8 @@ export function MarketingDashboardPage() {
       {!chooserIsCampaign && !!chooserSourceLines.length && <section className="mkw-agenda-window-overview mkw-summary" aria-label="فترة نشر الأجندة">
         <div><small>تاريخ نشر الأجندة من</small><strong>{showDate(chooserSourceLines[0]?.agenda_from)}</strong></div>
         <div><small>تاريخ نشر الأجندة إلى</small><strong>{showDate(chooserSourceLines[0]?.agenda_to)}</strong></div>
-      </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{chooserIsCampaign && (index === 0 || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
-      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={8}><div className="mkw-platform-head-row"><span>{line.platform_name || 'منصة غير محددة'}</span>{chooserIsCampaign && (() => {
+      </section>}<div className="mkw-table-wrap mkw-publishing-chooser-table"><table><thead><tr><th>{W.selectProduct}</th><th>الفكرة (فكرة المطلوب)</th><th>{chooserIsCampaign ? 'تاريخ النشر المخطط' : W.publishDate}</th><th>المنصة</th><th>نوع النشر</th>{chooserIsCampaign && <th>الميزانية (ر.س)</th>}<th>حالة الكابشن والهاشتاج</th><th>رابط المنشور</th><th>{W.prepare}</th></tr></thead><tbody>{chooserLines.map((line, index) => <Fragment key={line.id}>{(index === 0 || hasPreparationPostLink(chooserLines[index - 1]) !== hasPreparationPostLink(line)) && <tr className="mkw-platform-row-heading"><th colSpan={chooserIsCampaign ? 9 : 8}>{hasPreparationPostLink(line) ? `تم حفظ رابط المنشور (${chooserLines.length - missingLinkCount})` : `ناقص رابط المنشور (${missingLinkCount})`}</th></tr>}{chooserIsCampaign && (index === 0 || hasPreparationPostLink(chooserLines[index - 1]) !== hasPreparationPostLink(line) || chooserLines[index - 1]?.platform_name !== line.platform_name) &&
+      <tr className="mkw-platform-row-heading" key={`platform-${line.platform_code || line.platform_name}-${index}`}><th colSpan={9}><div className="mkw-platform-head-row"><span>{line.platform_name || 'منصة غير محددة'}</span>{chooserIsCampaign && (() => {
         const platformLines = chooserLines.filter(row => (row.platform_code || row.platform_name) === (line.platform_code || line.platform_name));
         const approved = ['publishing','published'].includes(chooserSourceLines[0]?.review_status || '');
         const linkedCount = platformLines.filter(row => row.strategy_campaign_link).length;
@@ -362,17 +403,17 @@ export function MarketingDashboardPage() {
           title={approved ? 'اختر الحملة الإعلانية من تقارير الحملات لهذه المنصة' : 'متاح بعد اعتماد الحملة'}
           onClick={() => setLinkPlatformLines(platformLines)}><LinkSimple size={15}/>{linkedCount === platformLines.length && platformLines.length ? 'تغيير الحملة المرتبطة' : linkedCount ? `اختيار الحملة (${linkedCount}/${platformLines.length} مرتبط)` : 'اختيار الحملة'}</button>;
       })()}</div></th></tr>}
-      <tr key={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td>{line.strategy_draft_id
+      <tr key={line.id} data-preparation-line={line.id}><td><strong>{line.idea_name}</strong><small className="mkw-muted" style={{ display: 'block' }}>{line.task_no} · {line.task_name}</small></td><td className="mkw-plan-idea-cell">{line.product_idea || '—'}</td><td>{showDate(line.scheduled_on)}{line.strategy_funding_on && <small className="mkw-muted" style={{ display: 'block' }}>تاريخ التمويل: {showDate(line.strategy_funding_on)}{line.strategy_campaign_link ? ` · مرتبطة بـ ${line.strategy_campaign_link.campaignName}` : ''}</small>}</td><td>{line.platform_name || '—'}</td><td>{line.post_type_name || '—'}</td>{chooserIsCampaign && <td className="mkw-budget-value">{Number(line.budget_amount || 0).toLocaleString('ar-SA-u-nu-latn', { minimumFractionDigits: 2 })}</td>}<td>{line.strategy_draft_id
         ? <button type="button" className={`mkw-publish-draft-state mkw-copy-state-button ${isPublishContentPrepared(line) ? 'is-ready' : ''}`}
             title="كتابة الكابشن والهاشتاج ورابط المنشور"
-            onClick={() => { setSelectPlan(''); if (line.strategy_product_pending) setCopyLine(line); else setPrepareId(line.id); }}>
+            onClick={event => openChooserLine(line, event)}>
             {isPublishContentPrepared(line) ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : publishContentMissingLabel(line)}</button>
-        : <span className={`mkw-publish-draft-state ${isPublishContentPrepared(line) ? 'is-ready' : ''}`}>{isPublishContentPrepared(line) ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : publishContentMissingLabel(line)}</span>}</td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={() => { setSelectPlan(''); setPrepareId(line.id); }}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
+        : <span className={`mkw-publish-draft-state ${isPublishContentPrepared(line) ? 'is-ready' : ''}`}>{isPublishContentPrepared(line) ? <><CheckCircle size={16} weight="fill"/>تم تجهيز المطلوب</> : publishContentMissingLabel(line)}</span>}</td><td><span className={`mkw-publish-timing ${hasPreparationPostLink(line) ? 'is-on-time' : 'is-pending'}`}>{hasPreparationPostLink(line) ? 'الرابط موجود' : 'ناقص الرابط'}</span></td><td>{line.strategy_product_pending ? <span className="mkw-publish-timing is-pending" title="يتاح التجهيز بعد تنفيذ المنتج واعتماد ملفاته النهائية">بانتظار تسليم الملفات النهائية</span> : <button type="button" className="secondary" onClick={event => openChooserLine(line, event)}>فتح</button>}</td></tr></Fragment>)}</tbody></table></div></div></Modal>}
     {draftOpenId && <StrategyDraftEditor id={draftOpenId} onClose={() => setDraftOpenId('')} onChanged={() => { void strategyDrafts.reload(); void query.reload(); }}/>}
     {draftReportId && <StrategyDraftReport draftId={draftReportId} onClose={() => setDraftReportId('')}/>}
-    {copyLine && <StrategyLineCopyModal line={copyLine} onClose={() => setCopyLine(null)} onChanged={() => void query.reload()}/>}
+    {copyLine && <StrategyLineCopyModal line={copyLine} onClose={() => setCopyLine(null)} onChanged={async () => { await query.reload(); }}/>}
     {linkPlanId && <StrategyCampaignLinkModal lines={groups.get(linkPlanId) || []} onClose={() => setLinkPlanId('')} onChanged={() => void query.reload()}/>}
     {linkPlatformLines && <StrategyCampaignLinkModal lines={linkPlatformLines} onClose={() => setLinkPlatformLines(null)} onChanged={() => { void query.reload(); }}/>}
-    {prepareId && <PreparationModal id={prepareId} onClose={() => setPrepareId('')} onChanged={() => void query.reload()}/>}  
+    {prepareId && <PreparationModal id={prepareId} level={selectPlan ? 1 : 0} onClose={() => setPrepareId('')} onChanged={async () => { await query.reload(); }}/>}  
   </div>;
 }

@@ -9,6 +9,7 @@ import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goal
 import { campaignReportPlatformCode, type CampaignReportPayload, type CampaignReportRow } from '../../../shared/campaign-report';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { PlanExecutorDates } from './PlanExecutorDates';
+import { TaskDetail } from './TaskDetail';
 import { groupDraftIdeas, ideaTaskCategory } from './strategyIdeaCategories';
 import './strategyDrafts.css';
 
@@ -400,12 +401,12 @@ export function StrategyDraftEditor({ id, onClose, onChanged }: { id: string; on
 
 /** Strategy plans: caption + hashtags before the product is delivered. The
  * post link (نشر في الموعد / تأخر) is entered from «فتح» after delivery. */
-export function StrategyLineCopyModal({ line, onClose, onChanged }: { line: WorkPlanLine; onClose: () => void; onChanged: () => void }) {
+export function StrategyLineCopyModal({ line, onClose, onChanged }: { line: WorkPlanLine; onClose: () => void; onChanged: () => void | Promise<void> }) {
   const [caption, setCaption] = useState(String(line.caption || '')), [hashtags, setHashtags] = useState(String(line.hashtags || ''));
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   async function save() {
     setBusy(true); setError(''); setMessage('');
-    try { await workPost('strategy_save_line_copy', { lineId: line.id, caption, hashtags }); setMessage('تم حفظ الكابشن والهاشتاج'); onChanged(); }
+    try { await workPost('strategy_save_line_copy', { lineId: line.id, caption, hashtags }); await onChanged(); setMessage('تم حفظ الكابشن والهاشتاج'); }
     catch (failure) { setError(failure instanceof Error ? failure.message : W.invalid); }
     finally { setBusy(false); }
   }
@@ -533,7 +534,7 @@ export function StrategyCampaignLinkModal({ lines, onClose, onChanged }: { lines
 }
 
 type StrategyProductRow = {
-  serial: number; itemId: string; ideaCode: string; createdAt: string; category: string; taskName: string; mediaKind: 'image' | 'video';
+  serial: number; itemId: string; taskId: string; ideaCode: string; createdAt: string; category: string; taskName: string; mediaKind: 'image' | 'video';
   itemStatus: string; assignmentNo: string; taskNo: string; orderNo: string; orderName: string; orderKind: string; orderStatus: string;
   assigneeName: string; ideaName: string; readiness: number; dueOn: string | null; approvedOn: string | null; publishOn: string | null; fundingOn: string | null;
   publishDates?: string[]; fundingDates?: string[];
@@ -541,6 +542,7 @@ type StrategyProductRow = {
 };
 /** Products tab «منتجات الاستراتيجية» with the requested tracking columns. */
 export function StrategyProductsTab({ search }: { search: string }) {
+  const [selectedRequirement, setSelectedRequirement] = useState<{ taskId: string; itemId: string } | null>(null);
   const query = useWorkQuery<{ ready: boolean; rows: StrategyProductRow[] }>('strategy_products');
   const term = search.trim().toLocaleLowerCase();
   const rows = sortProductsByPublishDate((query.data?.rows || []).filter(row => !term || `${row.ideaName} ${row.ideaCode} ${row.taskNo} ${row.orderNo} ${(row.orderRefs || []).map(order=>order.number).join(" ")} ${row.orderName} ${row.assigneeName} ${row.category}`.toLocaleLowerCase().includes(term)));
@@ -556,7 +558,7 @@ export function StrategyProductsTab({ search }: { search: string }) {
         <td>{showDate(row.createdAt)}</td>
         <td>{row.category || '—'}</td>
         <td>{mediaName(row.mediaKind)}</td>
-        <td dir="ltr">{row.assignmentNo || '—'}</td>
+        <td dir="ltr">{row.assignmentNo && row.taskId ? <button type="button" className="mkw-assignment-open" title="عرض المطلوب" aria-label={`عرض المطلوب ${row.assignmentNo}`} onClick={() => setSelectedRequirement({ taskId: row.taskId, itemId: row.itemId })}>{row.assignmentNo}</button> : row.assignmentNo || '—'}</td>
         <td dir="ltr">{row.taskNo || '—'}</td>
         <td>{(row.orderRefs || []).length ? row.orderRefs!.map(order => <div key={`${order.kind}:${order.number}`} className="mkw-sp-order-ref">
           <span dir="ltr">{order.number}</span><small className="mkw-muted">{order.kind === 'campaign' ? W.campaign : W.agenda}: {order.name}</small>
@@ -569,5 +571,6 @@ export function StrategyProductsTab({ search }: { search: string }) {
         <td>{(row.fundingDates?.length ? row.fundingDates : row.fundingOn ? [row.fundingOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.fundingDates?.length && !row.fundingOn && '—'}</td>
       </tr>)}</tbody>
     </table>{!rows.length && <Empty>{query.loading ? W.loading : query.data && !query.data.ready ? 'حدّث قاعدة بيانات التسويق لعرض ربط الأجندة والحملة.' : W.noData}</Empty>}</div>
+    {selectedRequirement && <TaskDetail key={selectedRequirement.itemId} id={selectedRequirement.taskId} onlyItems={[selectedRequirement.itemId]} focusItemId={selectedRequirement.itemId} popup onClose={() => setSelectedRequirement(null)} onChanged={() => void query.reload()}/>}
   </>;
 }

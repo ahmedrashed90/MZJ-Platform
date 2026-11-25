@@ -133,11 +133,11 @@ function ProductDraftEditor({ product, draft, canSave, onSaved }: {
   </form>;
 }
 
-export function PreparationModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
+export function PreparationModal({ id, onClose, onChanged, level = 0 }: { id: string; onClose: () => void; onChanged: () => void | Promise<void>; level?: number }) {
   const query = useWorkQuery<PrepData>('prep', { id });
   const [correctionNotice, setCorrectionNotice] = useState('');
-  async function refresh() { await query.reload(); onChanged(); }
-  return <Modal open title={W.prepare} onClose={onClose} className="mkw-fullscreen mkw-preparation-fullscreen"><div className="mkw mkw-preparation-full-content"><WorkAlert>{query.error}</WorkAlert><WorkAlert success>{correctionNotice}</WorkAlert>{query.data?.line.kind === 'agenda' && <AgendaSyncButton planId={query.data.line.plan_id} canSync={Boolean(query.data.capabilities.prepare)}/>}{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} onDateCorrected={() => setCorrectionNotice('تم حفظ تاريخ النشر المصحح وتسجيل السبب في سجل التدقيق.')} />}</div></Modal>;
+  async function refresh() { await query.reload(); await onChanged(); }
+  return <Modal open level={level} title={W.prepare} onClose={onClose} className="mkw-fullscreen mkw-preparation-fullscreen"><div className="mkw mkw-preparation-full-content"><WorkAlert>{query.error}</WorkAlert><WorkAlert success>{correctionNotice}</WorkAlert>{query.data?.line.kind === 'agenda' && <AgendaSyncButton planId={query.data.line.plan_id} canSync={Boolean(query.data.capabilities.prepare)}/>}{!query.data ? <Empty>{query.loading ? W.loading : W.noData}</Empty> : <PreparationEditor key={`${query.data.line.version}:${query.data.targets.map(t => t.status).join(',')}`} data={query.data} refresh={refresh} onDateCorrected={() => setCorrectionNotice('تم حفظ تاريخ النشر المصحح وتسجيل السبب في سجل التدقيق.')} />}</div></Modal>;
 }
 function PreparationEditor({ data, refresh, onDateCorrected }: { data: PrepData; refresh: () => Promise<void>; onDateCorrected: () => void }) {
   const plannedIds = data.line.post_type_id ? [data.line.post_type_id] : [];

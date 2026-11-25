@@ -148,11 +148,11 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
       const result = await processLeadImportEvent('marketing-form', eventId, payload);
       const crmLeadId = trim(result.lead?.id, 60);
       if (!crmLeadId) throw new Error('لم يتم إنشاء ليد في CRM');
-      await saveMarketingFormProfile(crmLeadId,row,!result.existedBefore);
+      const savedForOriginalSubmission = await saveMarketingFormProfile(crmLeadId,row,!result.existedBefore);
       // Another integration can register this phone after our initial lookup.
       // The import processor resolves that race under its shared phone lock:
       // report an existing link rather than claiming a new CRM customer.
-      const crmStatus = result.existedBefore ? 'existing' : 'linked';
+      const crmStatus = result.existedBefore && !savedForOriginalSubmission ? 'existing' : 'linked';
       await sql`update marketing.form_leads set crm_status=${crmStatus},crm_lead_id=${crmLeadId}::uuid,
         crm_error=null,crm_synced_at=now() where id=${row.id}::uuid`;
 

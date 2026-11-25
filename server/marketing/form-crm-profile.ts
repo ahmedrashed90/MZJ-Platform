@@ -49,10 +49,10 @@ export function formProfileNote(answers: FormCrmAnswer[], createdAt: string | Da
  * protects concurrent enrichment. There is no global customer backfill. */
 export async function saveMarketingFormProfile(leadId: string, row: FormProfileInput, newlyCreated: boolean) {
   const answers = formCrmAnswers(row.answers,row.answer_labels,row.answer_crm_fields);
-  if (!answers.length) return;
+  if (!answers.length) return false;
   const eventKey = `marketing-form:${row.id}`;
   const sql = getSql();
-  await sql.begin(async tx => {
+  return sql.begin(async tx => {
     const [current] = await tx<(ProfileRecord & { same_submission: boolean })[]>`
       select l.age,l.salary,l.obligation,l.salary_bank,l.location,l.car_name,l.car_type,l.car_model,l.car_category,l.color,l.notes,
         exists(select 1 from crm.service_requests r where r.id=l.current_request_id and r.lead_id=l.id
@@ -65,12 +65,13 @@ export async function saveMarketingFormProfile(leadId: string, row: FormProfileI
       select id::text from crm.lead_events where lead_id=${leadId}::uuid
         and event_type='marketing_form_answers_saved' and details->>'formLeadId'=${row.id} limit 1
     `;
-    if (prior) return;
-    const {fields, notes} = planFormProfile(answers,current,newlyCreated || current.same_submission);
+    const sameSubmission = newlyCreated || Boolean(current.same_submission);
+    if (prior) return sameSubmission;
+    const {fields, notes} = planFormProfile(answers,current,sameSubmission);
     const note = formProfileNote(notes,row.created_at);
     const carName = fields.car_type ?? (!isBlank(current.car_type) && isBlank(current.car_name)
       && answers.some(a => a.field==='car_type' && a.profileValue!==null && sameValue(current.car_type,a.profileValue))
-      && (newlyCreated || current.same_submission) ? String(current.car_type) : null);
+      && sameSubmission ? String(current.car_type) : null);
     // Each value in fields is populated only if the corresponding locked field
     // was blank. Do not replace a manual CRM edit or modify operational fields.
     await tx`
@@ -85,7 +86,7 @@ export async function saveMarketingFormProfile(leadId: string, row: FormProfileI
         car_model=coalesce(${fields.car_model ?? null}::text,car_model),
         car_category=coalesce(${fields.car_category ?? null}::text,car_category),
         color=coalesce(${fields.color ?? null}::text,color),
-        notes=case when ${note}::text='' then notes else concat_ws(E'\n\n',nullif(notes,''),${note}) end,
+        notes=case when ${note}::text='' then notes else concat_ws(E'\n\n',nullif(notes,''),${note}::text) end,
         updated_at=now()
       where id=${leadId}::uuid and is_deleted=false
     `;
@@ -94,5 +95,6 @@ export async function saveMarketingFormProfile(leadId: string, row: FormProfileI
       values(${leadId}::uuid,'marketing_form_answers_saved','فورم المنصات','تم حفظ إجابات الفورم في بيانات العميل',
         ${tx.json({formLeadId:row.id,eventKey,fields:Object.keys(fields),noteCount:notes.length})})
     `;
+    return sameSubmission;
   });
 }

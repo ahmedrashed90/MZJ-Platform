@@ -23,7 +23,7 @@ const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const crmId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExists = false,
-  teams = ['cash_sales', 'finance_sales'], status = 'pending', race = false, reviewExisting = false, repairable = false } = {}) {
+  teams = ['cash_sales', 'finance_sales'], status = 'pending', race = false, reviewExisting = false, repairable = false, sameSubmission = false } = {}) {
   const form = {
     id, form_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Test customer',
     phone: '966505050000', source, campaign: 'Test campaign', medium: 'paid', ad_id: '1',
@@ -76,7 +76,7 @@ async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExi
     './form-lead-routing.js': routing,
     '../../shared/lead-form-crm-fields.js': crmFields,
     './form-crm-profile.js': {saveMarketingFormProfile: async (leadId,row,created) => {
-      assert.equal(leadId,crmId); assert.equal(row.id,id); profileCalls.push(created);
+      assert.equal(leadId,crmId); assert.equal(row.id,id); profileCalls.push(created); return created || sameSubmission;
     }},
   });
   let result, error;
@@ -163,3 +163,12 @@ assert.equal(recovered.importCalls, 1);
 assert.equal(recovered.importedPayload.serviceKey, 'finance');
 assert.equal(recovered.notificationCalls, 1);
 console.log('PASS: manual review repairs only proven incomplete form links, leaving real existing links untouched');
+
+const completedPartial = await run({status:'failed',priorExists:true,reviewExisting:true,sameSubmission:true});
+assert.ifError(completedPartial.error);
+assert.equal(completedPartial.result.status,'linked');
+assert.equal(completedPartial.persistedStatus,'linked');
+assert.equal(completedPartial.eligibilityChecks,0);
+assert.equal(completedPartial.notificationCalls,0);
+assert.deepEqual(completedPartial.profileCalls,[false]);
+console.log('PASS: exact failed form submission can finish profile and become linked without redistribution');
