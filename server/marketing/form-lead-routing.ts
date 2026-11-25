@@ -31,9 +31,3 @@ export function formPurchasePreference(
   return 'undecided';
 }
 
-/** Repeatable 50/50 preference for visitors who have not chosen a payment method. */
-export function undecidedFormService(formLeadId: string): 'cash' | 'finance' {
-  const hex = formLeadId.replace(/[^0-9a-f]/gi, '');
-  const tail = Number.parseInt(hex.slice(-6) || '0', 16);
-  return Number.isFinite(tail) && tail % 2 === 0 ? 'cash' : 'finance';
-}

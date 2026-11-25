@@ -8,7 +8,7 @@ import { ensureCrmSchema } from '../_crm-schema.js';
 import { normalizePhone } from '../_phone-utils.js';
 import { processLeadImportEvent } from '../_crm-lead-import.js';
 import { createNotification, notificationDedupe } from '../_notifications.js';
-import { formPurchasePreference, undecidedFormService } from './form-lead-routing.js';
+import { formPurchasePreference } from './form-lead-routing.js';
 
 const trim = (value: unknown, limit = 200) => String(value ?? '').trim().slice(0, limit);
 
@@ -81,11 +81,12 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
       const sourceCode = crmSourceForForm(row.source);
       const carName = findAnswer(row, ['السيارة', 'السياره', 'الماركة', 'ماركة'], ['vehicle', 'car']);
       const purchasePreference = formPurchasePreference(row.answers, row.answer_labels);
-      let serviceKey: 'cash' | 'finance' = purchasePreference === 'cash' ? 'cash' : 'finance';
+      // All new marketing-form leads enter finance sales. The customer's
+      // submitted preference is retained as metadata, not a routing decision.
+      const serviceKey = 'finance' as const;
       if (!prior) {
-        // Marketing forms alone choose an import department from the submitted answer.
-        // An undecided customer's intake is balanced between the available cash and
-        // finance teams. Never create an unassigned CRM lead when a team has no staff.
+        // Require an active finance representative in a physical branch. Never
+        // fall back to cash sales or create an unassigned lead when unavailable.
         const eligibleTeams = await sql<{department_code: string}[]>`
           select distinct d.code as department_code
           from core.users u
@@ -93,7 +94,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
           join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
           where u.is_active=true and coalesce(u.is_archived,false)=false
             and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
-            and d.code in ('cash_sales','finance_sales')
+            and d.code='finance_sales'
             and exists (
               select 1 from core.user_system_branches usb
               join core.branches b on b.id=usb.branch_id and b.is_active=true
@@ -111,7 +112,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
           join core.departments d on d.id=ud.department_id and d.is_active=true
           where u.is_active=true and coalesce(u.is_archived,false)=false
             and u.can_receive_leads=true and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
-            and d.code in ('cash_sales','finance_sales')
+            and d.code='finance_sales'
             and not exists (select 1 from core.user_system_departments x where x.user_id=u.id and x.system_code='crm')
             and exists (
               select 1 from core.user_branches ub
@@ -119,22 +120,8 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string) {
               where ub.user_id=u.id and b.code not in ('online','website')
             )
         `;
-        const available = new Set(eligibleTeams.map(team => team.department_code));
-        // Explicit cash intake may fall back to the finance team, while an
-        // undecided customer is routed only to departments with their own staff.
-        const hasCashTeam = available.has('cash_sales');
-        const canFinance = available.has('finance_sales');
-        const canCash = hasCashTeam || canFinance;
-        if (purchasePreference === 'cash') serviceKey = 'cash';
-        else if (purchasePreference === 'finance') serviceKey = 'finance';
-        else {
-          const preferred = undecidedFormService(row.id);
-          serviceKey = preferred === 'cash'
-            ? (hasCashTeam ? 'cash' : 'finance')
-            : (canFinance ? 'finance' : 'cash');
-        }
-        if ((serviceKey === 'cash' && !canCash) || (serviceKey === 'finance' && !canFinance)) {
-          throw new Error('لا يوجد مندوب نشط مؤهل لاستقبال ليد الفورم في القسم المحدد');
+        if (!eligibleTeams.some(team => team.department_code === 'finance_sales')) {
+          throw new Error('لا يوجد مندوب تمويل نشط مؤهل لاستقبال ليد الفورم');
         }
       }
       const eventId = `marketing-form:${row.id}`;

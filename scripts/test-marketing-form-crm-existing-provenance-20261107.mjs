@@ -4,65 +4,133 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const code = ts.transpileModule(readFileSync(new URL('../server/marketing/lead-forms-crm.ts', import.meta.url), 'utf8'), {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  reportDiagnostics: true,
-});
-assert.equal((code.diagnostics || []).filter(d => d.category === ts.DiagnosticCategory.Error).length, 0);
+function load(path, modules = {}) {
+  const code = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    reportDiagnostics: true,
+  });
+  assert.equal((code.diagnostics || []).filter(d => d.category === ts.DiagnosticCategory.Error).length, 0);
+  const module = { exports: {} };
+  new Function('require','module','exports',code.outputText)(name => {
+    if (!Object.hasOwn(modules, name)) throw new Error(`Unexpected import ${name}`);
+    return modules[name];
+  }, module, module.exports);
+  return module.exports;
+}
+const routing = load('../server/marketing/form-lead-routing.ts');
+const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const crmId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
-for (const priorExists of [true, false]) {
+async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExists = false,
+  teams = ['cash_sales', 'finance_sales'], status = 'pending', race = false } = {}) {
   const form = {
-    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', form_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-    name: 'عميل', phone: '966505050000', source: 'Meta',
-    campaign: 'حملة اختبار', medium: 'paid', ad_id: '1', answers: {}, answer_labels: {},
-    crm_status: 'pending', crm_lead_id: null, created_at: '2026-11-07T12:00:00Z',
+    id, form_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Test customer',
+    phone: '966505050000', source, campaign: 'Test campaign', medium: 'paid', ad_id: '1',
+    answers, answer_labels, crm_status: status,
+    crm_lead_id: ['linked', 'existing'].includes(status) ? crmId : null,
+    created_at: '2026-11-07T12:00:00Z',
   };
   let eligibilityChecks = 0;
   let importCalls = 0;
   let notificationCalls = 0;
   let persistedStatus = '';
   let importedPayload = null;
+  let storedPayload = null;
   const sql = async (parts, ...values) => {
     const query = parts.join('?').replace(/\s+/g, ' ').toLowerCase();
     if (query.includes('from marketing.form_leads')) return [{ ...form }];
-    if (query.includes('select id::text from crm.leads')) return priorExists ? [{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }] : [];
+    if (query.includes('select id::text from crm.leads')) return priorExists ? [{ id: crmId }] : [];
     if (query.includes('select distinct d.code as department_code')) {
       eligibilityChecks++;
-      return [{ department_code: 'cash_sales' }, { department_code: 'finance_sales' }];
+      assert.equal((query.match(/d\.code='finance_sales'/g) || []).length, 2);
+      assert.doesNotMatch(query, /cash_sales/);
+      return teams.map(department_code => ({ department_code }));
     }
-    if (query.includes('insert into integrations.inbound_events')) return [];
+    if (query.includes('insert into integrations.inbound_events')) { storedPayload = values[1]; return []; }
     if (query.includes('update marketing.form_leads set crm_status=')) {
-      persistedStatus = values[0];
+      persistedStatus = query.includes("crm_status='failed'") ? 'failed' : values[0];
       return [];
     }
     throw new Error(`Unexpected SQL ${query.slice(0,100)}`);
   };
   sql.json = data => data;
-  const modules = {
+  const bridge = load('../server/marketing/lead-forms-crm.ts', {
     '../_db.js': { getSql: () => sql, withDatabaseAdvisoryLock: async (_key, work) => work() },
     '../_crm-schema.js': { ensureCrmSchema: async () => {} },
     '../_phone-utils.js': { normalizePhone: number => String(number).replace(/\D/g, '') },
     '../_crm-lead-import.js': { processLeadImportEvent: async (route, event, payload) => {
       importCalls++;
       assert.equal(route, 'marketing-form');
-      assert.equal(event, 'marketing-form:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      assert.equal(event, `marketing-form:${id}`);
       importedPayload = payload;
-      return { lead: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }, existedBefore: priorExists, createLead: !priorExists };
+      assert.deepEqual(payload, storedPayload);
+      return { lead: { id: crmId }, existedBefore: priorExists || race, createLead: !(priorExists || race) };
     } },
     '../_notifications.js': { createNotification: async () => { notificationCalls++; }, notificationDedupe: () => 'test' },
-    './form-lead-routing.js': { formPurchasePreference: () => 'cash', undecidedFormService: () => 'cash' },
-  };
-  const module = { exports: {} };
-  new Function('require','module','exports',code.outputText)(name => {
-    if (!Object.hasOwn(modules, name)) throw new Error(`Unexpected import ${name}`);
-    return modules[name];
-  }, module, module.exports);
-  const result = await module.exports.syncMarketingFormLeadToCrm(form.id);
-  assert.equal(importCalls, 1, 'Both new and existing leads must use the protected shared import path');
-  assert.equal(importedPayload.sourceCode, 'meta_lead');
-  assert.equal(eligibilityChecks, priorExists ? 0 : 1, 'Previously-registered customers must not depend on available sales staff');
-  assert.equal(result.status, priorExists ? 'existing' : 'linked');
-  assert.equal(persistedStatus, result.status);
-  assert.equal(notificationCalls, priorExists ? 0 : 1);
+    './form-lead-routing.js': routing,
+  });
+  let result, error;
+  try { result = await bridge.syncMarketingFormLeadToCrm(form.id); } catch (e) { error = e; }
+  return { result, error, eligibilityChecks, importCalls, notificationCalls, persistedStatus, importedPayload };
 }
-console.log('PASS: existing Meta forms log provenance without new distribution; brand-new forms still use eligibility and notifications');
+
+// All form sources and all purchase preferences route to finance. Preserve
+// the original purchase answer and existing source-mapping behavior.
+const sources = [ ['Meta','meta_lead'], ['facebook','facebook_lead'], ['instagram','instagram_lead'],
+  ['snapchat','snapchat_lead'], ['tiktok','tiktok_lead'], ['google','website'], ['direct','website'] ];
+const choices = [ [{ purchase: 'cash' }, {}, 'cash'], [{ purchase: 'finance' }, {}, 'finance'], [{}, {}, 'undecided'],
+  [{ custom: 'cash' }, { custom: '\u0643\u064a\u0641 \u062a\u0641\u0636\u0644 \u0627\u0644\u0634\u0631\u0627\u0621\u061f' }, 'cash'] ];
+for (const [source, sourceCode] of sources) {
+  for (const [answers, answer_labels, preference] of choices) {
+    for (const teams of [['cash_sales','finance_sales'], ['finance_sales']]) {
+      const r = await run({ source, answers, answer_labels, teams });
+      assert.ifError(r.error);
+      assert.equal(r.result.status, 'linked');
+      assert.equal(r.importedPayload.serviceKey, 'finance');
+      assert.equal(r.importedPayload.raw.intakeServiceKey, 'finance');
+      assert.equal(r.importedPayload.purchasePreference, preference);
+      assert.deepEqual(r.importedPayload.raw.answers, answers);
+      assert.equal(r.importedPayload.sourceCode, sourceCode);
+      assert.equal(r.eligibilityChecks, 1);
+      assert.equal(r.importCalls, 1);
+      assert.equal(r.notificationCalls, 1);
+      assert.equal(r.persistedStatus, 'linked');
+    }
+  }
+}
+console.log('PASS: 56 new form scenarios route to finance and preserve sources and submitted answers');
+
+for (const teams of [['cash_sales'], []]) {
+  for (const [answers, answer_labels] of choices) {
+    const r = await run({ teams, answers, answer_labels });
+    assert.ok(r.error, 'No finance team must never fall back to cash');
+    assert.equal(r.importCalls, 0);
+    assert.equal(r.notificationCalls, 0);
+    assert.equal(r.persistedStatus, 'failed');
+  }
+}
+console.log('PASS: no cash fallback; failed sync remains available for retry');
+
+for (const teams of [['finance_sales'], []]) {
+  const r = await run({ priorExists: true, teams, answers: { purchase: 'cash' } });
+  assert.ifError(r.error);
+  assert.equal(r.result.status, 'existing');
+  assert.equal(r.eligibilityChecks, 0);
+  assert.equal(r.importCalls, 1);
+  assert.equal(r.notificationCalls, 0);
+  assert.equal(r.persistedStatus, 'existing');
+  assert.equal(r.importedPayload.sourceCode, 'meta_lead');
+}
+for (const status of ['linked', 'existing']) {
+  const r = await run({ status });
+  assert.ifError(r.error);
+  assert.equal(r.result.status, status);
+  assert.equal(r.importCalls, 0);
+  assert.equal(r.eligibilityChecks, 0);
+  assert.equal(r.notificationCalls, 0);
+}
+const raced = await run({ race: true });
+assert.ifError(raced.error);
+assert.equal(raced.result.status, 'existing');
+assert.equal(raced.notificationCalls, 0);
+console.log('PASS: previous customers retain provenance-only import; completed sync and race are protected');
