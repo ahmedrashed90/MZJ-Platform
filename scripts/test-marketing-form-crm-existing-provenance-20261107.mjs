@@ -18,6 +18,7 @@ function load(path, modules = {}) {
   return module.exports;
 }
 const routing = load('../server/marketing/form-lead-routing.ts');
+const crmFields = load('../shared/lead-form-crm-fields.ts');
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const crmId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
@@ -36,6 +37,7 @@ async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExi
   let persistedStatus = '';
   let importedPayload = null;
   let storedPayload = null;
+  const profileCalls = [];
   const sql = async (parts, ...values) => {
     const query = parts.join('?').replace(/\s+/g, ' ').toLowerCase();
     if (query.includes('from marketing.form_leads')) return [{ ...form }];
@@ -72,10 +74,14 @@ async function run({ source = 'Meta', answers = {}, answer_labels = {}, priorExi
     } },
     '../_notifications.js': { createNotification: async () => { notificationCalls++; }, notificationDedupe: () => 'test' },
     './form-lead-routing.js': routing,
+    '../../shared/lead-form-crm-fields.js': crmFields,
+    './form-crm-profile.js': {saveMarketingFormProfile: async (leadId,row,created) => {
+      assert.equal(leadId,crmId); assert.equal(row.id,id); profileCalls.push(created);
+    }},
   });
   let result, error;
   try { result = await bridge.syncMarketingFormLeadToCrm(form.id, reviewExisting); } catch (e) { error = e; }
-  return { result, error, eligibilityChecks, importCalls, notificationCalls, persistedStatus, importedPayload };
+  return { result, error, eligibilityChecks, importCalls, notificationCalls, persistedStatus, importedPayload, profileCalls };
 }
 
 // All form sources and all purchase preferences route to finance. Preserve
@@ -99,6 +105,7 @@ for (const [source, sourceCode] of sources) {
       assert.equal(r.importCalls, 1);
       assert.equal(r.notificationCalls, 1);
       assert.equal(r.persistedStatus, 'linked');
+      assert.deepEqual(r.profileCalls,[true]);
     }
   }
 }
@@ -124,6 +131,7 @@ for (const teams of [['finance_sales'], []]) {
   assert.equal(r.notificationCalls, 0);
   assert.equal(r.persistedStatus, 'existing');
   assert.equal(r.importedPayload.sourceCode, 'meta_lead');
+  assert.deepEqual(r.profileCalls,[false]);
 }
 for (const status of ['linked', 'existing']) {
   const r = await run({ status });
@@ -143,6 +151,11 @@ const verifiedExisting = await run({ status: 'existing', priorExists: true, revi
 assert.ifError(verifiedExisting.error);
 assert.equal(verifiedExisting.result.status, 'existing');
 assert.equal(verifiedExisting.importCalls, 0);
+assert.deepEqual(verifiedExisting.profileCalls,[false]);
+const linkedReview = await run({status:'linked',reviewExisting:true});
+assert.ifError(linkedReview.error);
+assert.equal(linkedReview.importCalls,0);
+assert.deepEqual(linkedReview.profileCalls,[false]);
 const recovered = await run({ status: 'existing', priorExists: true, reviewExisting: true, repairable: true });
 assert.ifError(recovered.error);
 assert.equal(recovered.result.status, 'linked');

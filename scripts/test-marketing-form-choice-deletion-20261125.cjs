@@ -15,9 +15,10 @@ function compile(file,imports={},extra='') {
   return exports;
 }
 const design=compile('shared/lead-form-design.ts');
+const crmFields=compile('shared/lead-form-crm-fields.ts');
 const rules=compile('shared/lead-form-rules.ts');
 const forms=compile('shared/lead-forms.ts',{'./lead-form-design.js':design});
-const server=compile('server/marketing/lead-forms.ts',{'../../shared/lead-form-design.js':design,'../../shared/lead-form-rules.js':rules,'../../shared/lead-forms.js':forms,'node:crypto':require('node:crypto')},'exports.sanitize=sanitizeConfig;');
+const server=compile('server/marketing/lead-forms.ts',{'../../shared/lead-form-crm-fields.js':crmFields,'../../shared/lead-form-design.js':design,'../../shared/lead-form-rules.js':rules,'../../shared/lead-forms.js':forms,'node:crypto':require('node:crypto')},'exports.sanitize=sanitizeConfig;');
 const jsx=(type,props)=>({type,props});
 const jsxRuntime={jsx,jsxs:jsx,Fragment:'fragment'};
 function hooks(){
@@ -38,7 +39,7 @@ base.fields=[{id:'vehicle',type:'choice',label:'Vehicle',required:true,options:[
 base.design=plain(design.createTemplateDesign('steps',base.fields));
 const state=hooks();
 const icons=new Proxy({}, {get:(_,key)=>String(key)});
-const imports={'react':state,'react/jsx-runtime':jsxRuntime,'@phosphor-icons/react':icons,'../../../shared/lead-forms':forms,'../../../shared/lead-form-design':design,'../../../shared/lead-form-rules':rules,'./ConditionalChoicesEditor':{ConditionalChoicesEditor:'ConditionalChoicesEditor'}};
+const imports={'react':state,'react/jsx-runtime':jsxRuntime,'@phosphor-icons/react':icons,'../../../shared/lead-forms':forms,'../../../shared/lead-form-crm-fields':crmFields,'../../../shared/lead-form-design':design,'../../../shared/lead-form-rules':rules,'./ConditionalChoicesEditor':{ConditionalChoicesEditor:'ConditionalChoicesEditor'}};
 const editor=compile('src/marketing/lead-forms/FormVisualDesigner.tsx',imports).FormVisualDesigner;
 let config=structuredClone(base);
 const renderEditor=()=>{state.reset();return editor({config,template:'steps',onChange:next=>{config=next;}});};

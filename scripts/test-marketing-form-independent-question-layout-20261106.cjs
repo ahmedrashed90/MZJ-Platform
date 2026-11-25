@@ -20,9 +20,11 @@ const compile = (file, stubs = {}, extra = '') => {
   return exports;
 };
 const design = compile('shared/lead-form-design.ts');
+const crmFields = compile('shared/lead-form-crm-fields.ts');
 const forms = compile('shared/lead-forms.ts', {'./lead-form-design.js': design});
 const server = compile('server/marketing/lead-forms.ts', {
   '../../shared/lead-form-design.js': design,
+  '../../shared/lead-form-crm-fields.js': crmFields,
   '../../shared/lead-forms.js': forms,
   'node:crypto': require('node:crypto'),
 }, 'exports.testSanitize = sanitizeConfig;');

@@ -1,6 +1,7 @@
 /** MZJ platform forms: isolated schema/types; no dependencies on CRM or marketing workflows. */
 import type { FormDesign } from './lead-form-design.js';
 import type { ChoiceOptionRule } from './lead-form-rules.js';
+import type { FormCrmField } from './lead-form-crm-fields.js';
 export type { FormDesign, DesignBlock, DesignBlockKind } from './lead-form-design.js';
 export { createTemplateDesign, resolveFormDesign, DESIGN_BLOCK_LABELS } from './lead-form-design.js';
 export type FormTemplate = 'steps' | 'visual' | 'chat' | 'quiz' | 'minimal' | 'classic';
@@ -17,7 +18,7 @@ export const FORM_FIELD_TYPES = [
   {value:'consent',label:'الموافقة والإقرار',hint:'مربع اختيار للموافقة'},
 ] as const;
 export type FormFieldType = typeof FORM_FIELD_TYPES[number]['value'];
-export type FormField = { id: string; stepId?: string; placeholder?: string; label: string; type: FormFieldType; options: string[]; optionImages?: Record<string,string>; optionImageModes?: Record<string,'logo'|'photo'>; optionRules?: ChoiceOptionRule[]; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
+export type FormField = { id: string; crmField?: FormCrmField; stepId?: string; placeholder?: string; label: string; type: FormFieldType; options: string[]; optionImages?: Record<string,string>; optionImageModes?: Record<string,'logo'|'photo'>; optionRules?: ChoiceOptionRule[]; description?: string; required: boolean; showIf?: { fieldId: string; equals: string } | null };
 export type FormStyle = { brown: string; cream: string; welcome: string; contactTitle?: string; actionLabel: string; successTitle: string; successMessage: string; coverUrl: string; logoUrl: string; subtitle?: string; coverHeight?: number };
 export type FormConfig = { fields: FormField[]; style: FormStyle; contact?: { askName: boolean }; privacy?: { mode: 'checkbox' | 'notice' }; design?: FormDesign };
 export type SavedFormDesign = {id:string;name:string;template:FormTemplate;config:FormConfig;created_by:string|null;created_at:string;updated_at:string};

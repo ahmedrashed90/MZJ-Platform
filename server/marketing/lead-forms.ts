@@ -9,6 +9,7 @@ import { syncMarketingFormLeadToCrm } from './lead-forms-crm.js';
 import { DEFAULT_FORM_CONFIG, DEFAULT_SHEET_COLUMNS, FORM_FIELD_TYPES, FORM_TEMPLATES, AVAILABLE_SHEET_COLUMNS, type FormConfig, type FormField, type SheetColumnMapping } from '../../shared/lead-forms.js';
 import { isVisibleField, acceptsFieldAnswer, validateFormAnswer, answerLimit, multiAnswers } from '../../shared/lead-form-rules.js';
 import { DESIGN_BLOCK_LABELS, SYSTEM_DESIGN_BLOCKS, createTemplateDesign, formStepIds, fieldStepId, orderedFormFields, type FormDesign, type DesignBlock, type DesignBlockKind } from '../../shared/lead-form-design.js';
+import { sanitizeFormCrmField, resolveFormCrmField } from '../../shared/lead-form-crm-fields.js';
 import { DEFAULT_LEAD_FORM_PIXELS, validateLeadFormPixels, getPublicLeadFormPixels } from '../../shared/lead-form-pixels.js';
 
 const clean = (v: unknown, max = 250) => String(v ?? '').trim().slice(0, max);
@@ -116,7 +117,8 @@ function sanitizeConfig(input: unknown): FormConfig {
     }
     const rawStepId=clean((f as any).stepId,45);
     const stepId=/^[a-zA-Z0-9_-]{1,45}$/.test(rawStepId)&&!['contact','success','__proto__','constructor','prototype'].includes(rawStepId)?rawStepId:undefined;
-    fields.push({ id, ...(stepId&&stepId!==id?{stepId}:{}), ...((f as any).placeholder!==undefined?{placeholder:clean((f as any).placeholder,140)}:{}), label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: ['choice','multi','dropdown'].includes(type)?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
+    const crmField=sanitizeFormCrmField((f as any).crmField);
+    fields.push({ id, ...(crmField?{crmField}:{}), ...(stepId&&stepId!==id?{stepId}:{}), ...((f as any).placeholder!==undefined?{placeholder:clean((f as any).placeholder,140)}:{}), label: clean((f as any).label, 120) || `السؤال ${index+1}`, type, options: ['choice','multi','dropdown'].includes(type)?options:[], optionImages, optionImageModes, optionRules, description:clean((f as any).description,200), required: (f as any).required !== false, showIf });
   }
   if (!fields.length) throw new FormInputError('أضف سؤالًا واحدًا على الأقل');
   const design=sanitizeDesign(obj.design,fields);
@@ -355,6 +357,7 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const rawAnswers: Record<string,unknown> = params.answers && typeof params.answers==='object' && !Array.isArray(params.answers) ? params.answers : {};
   const answers: Record<string,string>={};
   const answerLabels: Record<string,string>={};
+  const answerCrmFields: Record<string,string>={};
   for (const field of fields) {
     if (!isVisibleField(field,answers) || !acceptsFieldAnswer(field,answers,publishedConfig.design)) continue;
     const rawValue=rawAnswers[field.id];
@@ -363,7 +366,7 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
     if(value.length>answerLimit(field))return fail(res,400,`الإجابة أطول من الحد المسموح: ${field.label}`);
     const invalid=validateFormAnswer(field,value,answers);
     if(invalid)return fail(res,400,invalid);
-    if (value) { answers[field.id]=field.type==='multi'?JSON.stringify(multiAnswers(value)):value; answerLabels[field.id]=field.label; }
+    if (value) { answers[field.id]=field.type==='multi'?JSON.stringify(multiAnswers(value)):value; answerLabels[field.id]=field.label; answerCrmFields[field.id]=resolveFormCrmField(field.id,field.label,field.crmField); }
   }
   // Count submissions by IP to limit automated abuse without storing raw addresses.
   const hash=ipHash(req);
@@ -377,8 +380,8 @@ async function handlePublic(req: VercelRequest,res: VercelResponse,action: strin
   const [visit] = await sql<any[]>`select source,campaign,medium,ad_id from marketing.form_visits where form_id=${form.id}::uuid and visitor_key=${visitorKey}`;
   const info = visit || { source:meta.source,campaign:meta.campaign,medium:meta.medium,ad_id:meta.adId };
   const [lead] = await sql<{id:string;sheet_status:string;created:boolean}[]>`
-    insert into marketing.form_leads(form_id,submission_key,name,phone,answers,answer_labels,source,campaign,medium,ad_id,sheet_status,crm_status,ip_hash)
-    values(${form.id}::uuid,${key},${name},${phone},${sql.json(answers)},${sql.json(answerLabels)},${info.source},${info.campaign},${info.medium},${info.ad_id},${form.sheet_id?'pending':'not_configured'},'pending',${hash})
+    insert into marketing.form_leads(form_id,submission_key,name,phone,answers,answer_labels,answer_crm_fields,source,campaign,medium,ad_id,sheet_status,crm_status,ip_hash)
+    values(${form.id}::uuid,${key},${name},${phone},${sql.json(answers)},${sql.json(answerLabels)},${sql.json(answerCrmFields)},${info.source},${info.campaign},${info.medium},${info.ad_id},${form.sheet_id?'pending':'not_configured'},'pending',${hash})
     on conflict(form_id,submission_key) do update set submission_key=excluded.submission_key
     returning id::text,sheet_status,(xmax=0) as created`;
   // Public submission succeeds as soon as the form lead is stored; CRM errors are

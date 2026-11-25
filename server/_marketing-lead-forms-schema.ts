@@ -72,6 +72,7 @@ create table if not exists marketing.form_leads (
   sheet_error text,
   sheet_synced_at timestamptz,
   answer_labels jsonb not null default '{}'::jsonb,
+  answer_crm_fields jsonb not null default '{}'::jsonb,
   crm_status text not null default 'not_requested' check(crm_status in ('not_requested','pending','linked','existing','failed')),
   crm_lead_id uuid,
   crm_error text,
@@ -81,6 +82,7 @@ create table if not exists marketing.form_leads (
   unique(form_id,submission_key)
 );
 alter table marketing.form_leads add column if not exists answer_labels jsonb not null default '{}'::jsonb;
+alter table marketing.form_leads add column if not exists answer_crm_fields jsonb not null default '{}'::jsonb;
 alter table marketing.form_leads add column if not exists crm_status text not null default 'not_requested';
 alter table marketing.form_leads add column if not exists crm_lead_id uuid;
 alter table marketing.form_leads add column if not exists crm_error text;
@@ -95,13 +97,13 @@ export function ensureMarketingLeadFormsSchema() {
   if (!ready) ready = (async () => {
     const sql = getSql();
     const [check] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.lead_forms') is not null and to_regclass('marketing.form_visits') is not null and to_regclass('marketing.form_leads') is not null and to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null and to_regclass('marketing.form_pixel_settings') is not null
-      and (select count(*)=5 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
-        and column_name in ('answer_labels','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
+      and (select count(*)=6 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
+        and column_name in ('answer_labels','answer_crm_fields','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
     if (check?.ok) return;
     await withDatabaseAdvisoryLock('mzj:marketing-lead-forms:20261025', async () => {
       const [again] = await sql<{ ok: boolean }[]>`select to_regclass('marketing.form_step_events') is not null and to_regclass('marketing.form_design_templates') is not null and to_regclass('marketing.form_pixel_settings') is not null
-      and (select count(*)=5 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
-        and column_name in ('answer_labels','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
+      and (select count(*)=6 from information_schema.columns where table_schema='marketing' and table_name='form_leads'
+        and column_name in ('answer_labels','answer_crm_fields','crm_status','crm_lead_id','crm_error','crm_synced_at')) as ok`;
       if (again?.ok) return;
       await runSqlScript(FORM_SCHEMA_SQL);
     });

@@ -14,9 +14,11 @@ function moduleFrom(file,extra='',requireStub=()=>({})) {
   return exported;
 }
 const design=moduleFrom('shared/lead-form-design.ts');
+const crmFields=moduleFrom('shared/lead-form-crm-fields.ts');
 const base=moduleFrom('shared/lead-forms.ts','',id=>id.includes('lead-form-design')?design:{});
 const rules=moduleFrom('shared/lead-form-rules.ts');
 const server=moduleFrom('server/marketing/lead-forms.ts','\nexports.sanitizeConfigForTest=sanitizeConfig;',id=>{
+  if(id.includes('shared/lead-form-crm-fields'))return crmFields;
   if(id.includes('shared/lead-form-design'))return design;
   if(id.includes('shared/lead-form-rules'))return rules;
   if(id.includes('shared/lead-forms'))return base;

@@ -65,6 +65,7 @@ create table if not exists marketing.form_leads (
   sheet_error text,
   sheet_synced_at timestamptz,
   answer_labels jsonb not null default '{}'::jsonb,
+  answer_crm_fields jsonb not null default '{}'::jsonb,
   crm_status text not null default 'not_requested' check(crm_status in ('not_requested','pending','linked','existing','failed')),
   crm_lead_id uuid,
   crm_error text,
@@ -79,6 +80,7 @@ create index if not exists marketing_form_leads_sync_idx on marketing.form_leads
 
 -- Additive form-side bridge fields for existing installations. No CRM schema changes.
 alter table marketing.form_leads add column if not exists answer_labels jsonb not null default '{}'::jsonb;
+alter table marketing.form_leads add column if not exists answer_crm_fields jsonb not null default '{}'::jsonb;
 alter table marketing.form_leads add column if not exists crm_status text not null default 'not_requested';
 alter table marketing.form_leads add column if not exists crm_lead_id uuid;
 alter table marketing.form_leads add column if not exists crm_error text;

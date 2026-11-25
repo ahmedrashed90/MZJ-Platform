@@ -10,13 +10,15 @@ import { processLeadImportEvent } from '../_crm-lead-import.js';
 import { isRecoverableMarketingFormLead } from '../_crm-lifecycle.js';
 import { createNotification, notificationDedupe } from '../_notifications.js';
 import { formPurchasePreference } from './form-lead-routing.js';
+import { formCrmAnswers } from '../../shared/lead-form-crm-fields.js';
+import { saveMarketingFormProfile } from './form-crm-profile.js';
 
 const trim = (value: unknown, limit = 200) => String(value ?? '').trim().slice(0, limit);
 
 type FormLeadToSync = {
   id: string; form_id: string; name: string; phone: string;
   source: string; campaign: string; medium: string; ad_id: string;
-  answers: Record<string, string>; answer_labels: Record<string, string>;
+  answers: Record<string, string>; answer_labels: Record<string, string>; answer_crm_fields?: Record<string,unknown>;
   crm_status: string; crm_lead_id: string | null; created_at: string;
 };
 
@@ -31,17 +33,6 @@ export function crmSourceForForm(utmSource: unknown) {
   return 'website';
 }
 
-function findAnswer(row: FormLeadToSync, labels: string[], ids: string[]) {
-  const answers = row.answers && typeof row.answers === 'object' ? row.answers : {};
-  for (const id of ids) {
-    if (trim(answers[id])) return trim(answers[id], 160);
-  }
-  for (const [id, label] of Object.entries(row.answer_labels || {})) {
-    if (labels.some(phrase => String(label).includes(phrase)) && trim(answers[id])) return trim(answers[id], 160);
-  }
-  return '';
-}
-
 /**
  * Idempotent per submitted form lead and customer phone. Existing CRM customers
  * are linked, never re-created, reallocated, or reset to "عميل جديد".
@@ -51,7 +42,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
   await ensureCrmSchema();
   const [initial] = await sql<FormLeadToSync[]>`
     select id::text,form_id::text,name,phone,source,campaign,medium,ad_id,
-      answers,answer_labels,crm_status,crm_lead_id::text,created_at
+      answers,answer_labels,answer_crm_fields,crm_status,crm_lead_id::text,created_at
     from marketing.form_leads where id=${formLeadId}::uuid limit 1
   `;
   if (!initial) throw new Error('ليد الفورم غير موجود');
@@ -61,14 +52,19 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
   return withDatabaseAdvisoryLock(`mzj:marketing-form-crm:${phone}`, async () => {
     const [row] = await sql<FormLeadToSync[]>`
       select id::text,form_id::text,name,phone,source,campaign,medium,ad_id,
-        answers,answer_labels,crm_status,crm_lead_id::text,created_at
+        answers,answer_labels,answer_crm_fields,crm_status,crm_lead_id::text,created_at
       from marketing.form_leads where id=${formLeadId}::uuid limit 1
     `;
     if (!row) throw new Error('ليد الفورم غير موجود');
     if (row.crm_status === 'linked' || row.crm_status === 'existing') {
       const repairable = reviewExisting && row.crm_status === 'existing' && row.crm_lead_id
         && await isRecoverableMarketingFormLead(sql, row.crm_lead_id, `marketing-form:${row.id}`, crmSourceForForm(row.source));
-      if (!repairable) return { status: row.crm_status, leadId: row.crm_lead_id };
+      if (!repairable) {
+        // Explicit admin review can sync saved answers to a completed link,
+        // without repeating CRM classification, distribution or notifications.
+        if (reviewExisting && row.crm_lead_id) await saveMarketingFormProfile(row.crm_lead_id,row,false);
+        return { status: row.crm_status, leadId: row.crm_lead_id };
+      }
     }
 
     try {
@@ -82,7 +78,8 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
       // so their NEW platform appears in source_history and lead_events.
       // They bypass team eligibility and never enter the classification branch.
       const sourceCode = crmSourceForForm(row.source);
-      const carName = findAnswer(row, ['السيارة', 'السياره', 'الماركة', 'ماركة'], ['vehicle', 'car']);
+      const carName = formCrmAnswers(row.answers,row.answer_labels,row.answer_crm_fields)
+        .find(answer => answer.field==='car_type' && typeof answer.profileValue==='string')?.profileValue || '';
       const purchasePreference = formPurchasePreference(row.answers, row.answer_labels);
       // All new marketing-form leads enter finance sales. The customer's
       // submitted preference is retained as metadata, not a routing decision.
@@ -131,7 +128,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
       const raw = {
         formLeadId: row.id, formId: row.form_id, formSource: row.source,
         campaignName: row.campaign, medium: row.medium, adId: row.ad_id,
-        answers: row.answers, answerLabels: row.answer_labels,
+        answers: row.answers, answerLabels: row.answer_labels, answerCrmFields: row.answer_crm_fields || {},
         purchasePreference, intakeServiceKey: serviceKey,
       };
       const payload = {
@@ -151,6 +148,7 @@ export async function syncMarketingFormLeadToCrm(formLeadId: string, reviewExist
       const result = await processLeadImportEvent('marketing-form', eventId, payload);
       const crmLeadId = trim(result.lead?.id, 60);
       if (!crmLeadId) throw new Error('لم يتم إنشاء ليد في CRM');
+      await saveMarketingFormProfile(crmLeadId,row,!result.existedBefore);
       // Another integration can register this phone after our initial lookup.
       // The import processor resolves that race under its shared phone lock:
       // report an existing link rather than claiming a new CRM customer.

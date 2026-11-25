@@ -14,6 +14,7 @@ function moduleFrom(file, extra='', fakeRequire=()=>({})){
   return module.exports;
 }
 const design=moduleFrom('shared/lead-form-design.ts');
+const crmFields=moduleFrom('shared/lead-form-crm-fields.ts');
 const fieldList=[{id:'vehicle'},{id:'purchase'},{id:'timeline'}];
 const templates=['steps','visual','chat','quiz','minimal','classic'];
 const signatures=[];
@@ -35,6 +36,7 @@ assert.equal(resolved.screens.contact.some(b=>b.kind==='contact'),true);
 assert.equal(design.resolveFormDesign(undefined,'chat',fieldList).choices,'pills');
 const shared=moduleFrom('shared/lead-forms.ts','',id=>id.includes('lead-form-design')?design:{});
 const server=moduleFrom('server/marketing/lead-forms.ts','\nexports.__sanitizeConfig=sanitizeConfig;\n',id=>{
+  if(id.includes('shared/lead-form-crm-fields'))return crmFields;
   if(id.includes('shared/lead-form-design'))return design;
   if(id.includes('shared/lead-forms'))return shared;
   if(id==='node:crypto')return require('node:crypto');
