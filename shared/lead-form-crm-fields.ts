@@ -6,6 +6,7 @@ export const FORM_CRM_FIELDS = [
   { value: 'age', label: 'العمر' },
   { value: 'salary', label: 'الراتب' },
   { value: 'obligation', label: 'الالتزام إن وجد' },
+  { value: 'job', label: 'الوظيفة' },
   { value: 'salary_bank', label: 'نزول الراتب على أي بنك' },
   { value: 'location', label: 'المكان' },
   { value: 'car_model', label: 'الموديل' },
@@ -40,11 +41,26 @@ function normalized(value: unknown): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+/** The job target is a semantic mapping, not a database column. CRM stores
+ * the administrator's existing custom field under its actual definition key. */
+export function isJobProfileLabel(label: unknown): boolean {
+  return /^(?:الوظيفه|وظيفه|نوع الوظيفه|نوع وظيفه|طبيعه الوظيفه|job|job type|employment|employment type|occupation)$/u.test(normalized(label));
+}
+function isJobQuestion(label: unknown): boolean {
+  const text = normalized(label);
+  return isJobProfileLabel(label) || /^(?:(?:ما|اي|ايه|وش|ماهي|ما هي|حدد|اختر|اختار) )?(?:(?:نوع|طبيعه) )?(?:وظيفتك|وظيفه العميل|وظيفه|الوظيفه|عملك|قطاع عملك|قطاع العمل)$/u.test(text)
+    || /^(?:what is your job|what is your occupation|what is your employment type|what type of job|what is your job type)$/u.test(text);
+}
+
 /** Infer existing forms without republishing. Specific and non-profile questions
  * take precedence over broad keywords (e.g. بنك الراتب, موعد شراء السيارة). */
 export function resolveFormCrmField(id: unknown, label: unknown, configured?: unknown): ResolvedFormCrmField {
   const explicit = sanitizeFormCrmField(configured);
-  if (explicit && explicit !== 'auto') return explicit;
+  // Job questions were historically saved as notes because no job target
+  // existed. Promote those snapshots/configurations to the new mapping.
+  if (explicit && explicit !== 'auto' && explicit !== 'notes') return explicit;
+  if (isJobQuestion(label) || (!normalized(label) && /^(?:job|employment|occupation|job type|employment type)$/u.test(normalized(id)))) return 'job';
+  if (explicit === 'notes') return explicit;
   const text = normalized(label);
   const key = normalized(id);
   const has = (pattern: RegExp) => pattern.test(text);
@@ -64,7 +80,7 @@ export function resolveFormCrmField(id: unknown, label: unknown, configured?: un
     obligation:'obligation', obligations:'obligation', 'monthly obligations':'obligation',
     bank:'salary_bank', 'salary bank':'salary_bank', city:'location', location:'location',
     model:'car_model', 'car model':'car_model', category:'car_category', 'car category':'car_category',
-    color:'color', colour:'color', timeline:'notes', job:'notes', employment:'notes', purchase:'notes',
+    color:'color', colour:'color', timeline:'notes', job:'job', employment:'job', occupation:'job', 'job type':'job', 'employment type':'job', purchase:'notes',
   };
   return Object.hasOwn(aliases, key) ? aliases[key] : 'notes';
 }

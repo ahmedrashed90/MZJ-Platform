@@ -14,11 +14,16 @@ const mapping=load('shared/lead-form-crm-fields.ts');
 const {resolveFormCrmField:resolve,exactFormCrmNumber:num,formCrmAnswers:parse}=mapping;
 for(const [label,field] of [
  ['ما السيارة اللي ترغب فيها؟','car_type'],['إيه السيارة اللي بتدور عليها؟','car_type'],['الماركة','car_type'],
- ['متى تتوقع تشتري السيارة؟','notes'],['ما نوع وظيفتك؟','notes'],['كم راتبك الشهري؟','salary'],
+ ['متى تتوقع تشتري السيارة؟','notes'],['ما نوع وظيفتك؟','job'],['كم راتبك الشهري؟','salary'],
  ['كم إجمالي التزاماتك الشهرية؟ (تشمل تابي وتمارا)','obligation'],['ما البنك اللي ينزل عليه راتبك؟','salary_bank'],
  ['ما عمرك؟','age'],['المدينة','location'],['موديل السيارة','car_model'],['الفئة','car_category'],['اللون','color'],['أي سؤال جديد','notes'],
 ])assert.equal(resolve('field_123',label),field,label);
-assert.equal(resolve('vehicle','ما نوع وظيفتك؟'),'notes');
+assert.equal(resolve('vehicle','ما نوع وظيفتك؟'),'job');
+assert.equal(resolve('j','ما نوع وظيفتك','notes'),'job','Legacy notes mapping must be promoted');
+assert.equal(resolve('x','سؤال مخصص','job'),'job');
+assert.equal(resolve('x','اسم جهة العمل'),'notes');
+assert.equal(resolve('x','متى تتوقع تشتري السيارة؟','notes'),'notes');
+assert.equal(mapping.sanitizeFormCrmField('job'),'job');
 assert.equal(resolve('x','كم راتبك الشهري؟','notes'),'notes');
 assert.equal(resolve('x','الدخل','salary'),'salary');
 assert.equal(resolve('x','كيف تفضل الدفع؟','department_code'),'notes');
@@ -56,6 +61,11 @@ const fieldsKeys=['age','salary','obligation','salary_bank','location','car_type
 let db;
 let failEvent=false;
 let transactions=0;
+// The existing tests model a deployment with no configured job field. New
+// cases exercise the real generated custom key and legacy note migrations.
+let jobDefinitions=[];
+const jobKey='custom_4d91ba20cefe';
+const jobDefinition={field_key:jobKey,label:'الوظيفة',field_type:'text',options:[],is_active:true,is_system:false,department_keys:['finance']};
 function fresh(current={}){db={current:{notes:'[قديم] ملاحظة المندوب',department_code:'finance_sales',assigned_to:'rep',branch_code:'hall',status_label:'عميل جديد',...current},events:[]};}
 const sql={begin:async work=>{
  transactions++;
@@ -63,7 +73,8 @@ const sql={begin:async work=>{
  const tx=async(parts,...values)=>{
   const q=parts.join('?').replace(/\s+/g,' ').trim().toLowerCase();
   if(q.includes('from crm.leads l')&&q.includes('for update of l')){assert.equal(values[1],leadId);assert.match(q,/r\.metadata->>'eventkey'=\?/);return draft.current?[{...draft.current}]:[];}
-  if(q.startsWith('select id::text,details')){const event=draft.events.find(e=>e.formLeadId===values[1]);return event?[{id:'1',finance_ranges_version:event.financeRangesVersion==null?null:String(event.financeRangesVersion)}]:[];}
+  if(q.startsWith('select id::text,details')){const event=draft.events.find(e=>e.formLeadId===values[1]);return event?[{id:'1',finance_ranges_version:event.financeRangesVersion==null?null:String(event.financeRangesVersion),job_profile_version:event.jobProfileVersion==null?null:String(event.jobProfileVersion)}]:[];}
+  if(q.includes('from crm.customer_field_definitions')){assert.match(q,/is_active=true and is_system=false/);assert.match(q,/'finance'=any\(department_keys\)/);return jobDefinitions.filter(d=>d.is_active&&!d.is_system&&(!d.department_keys.length||d.department_keys.includes('finance')));}
   if(q.startsWith('update crm.lead_events set')){assert.equal(values[1],'1');assert.equal(values[2],leadId);Object.assign(draft.events[0],values[0]);return [];}
   if(q.startsWith('update crm.leads set extra_data=')){assert.equal(values[4],leadId);draft.current.extra_data={...draft.current.extra_data,...values[0]};draft.current.notes=values[1];if(values[2])draft.current.credit_limit=null;if(values[3])draft.current.credit_qualified=null;return [];}
   if(q.startsWith('update crm.leads set')){
@@ -86,6 +97,20 @@ const sql={begin:async work=>{
  const result=await work(tx);db=draft;return result;
 }};
 const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:()=>sql},'../../shared/lead-form-crm-fields.js':mapping});
+assert.equal(profile.findJobField([{...jobDefinition,field_key:'mzj_form_salary_range'}]),undefined);
+assert.equal(profile.findJobField([{...jobDefinition,field_key:'__proto__'}]),undefined);
+// Strictly typecheck the actual profile + shared mapper, replacing only the
+// unavailable postgres library boundary with a typed transaction interface.
+const compileOptions={target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.NodeNext,moduleResolution:ts.ModuleResolutionKind.NodeNext,strict:true,noEmit:true,skipLibCheck:true,types:[]};
+const compilerHost=ts.createCompilerHost(compileOptions);
+const realFile=compilerHost.getSourceFile.bind(compilerHost);
+compilerHost.getSourceFile=(name,version,...args)=>{
+ if(path.resolve(name)===path.join(root,'server/_db.ts'))return ts.createSourceFile(name,`type JSONValue = string | number | boolean | null | readonly JSONValue[] | { [key:string]: JSONValue }; interface Transaction { <T=unknown[]>(strings:TemplateStringsArray,...values:unknown[]):Promise<T>; json(value:JSONValue):unknown; } export declare function getSql():{begin<T>(work:(tx:Transaction)=>Promise<T>):Promise<T>};`,version,true);
+ return realFile(name,version,...args);
+};
+const profileDiagnostics=ts.getPreEmitDiagnostics(ts.createProgram([path.join(root,'server/marketing/form-crm-profile.ts')],compileOptions,compilerHost));
+assert.equal(profileDiagnostics.length,0,profileDiagnostics.map(d=>ts.flattenDiagnosticMessageText(d.messageText,' ')).join('\n'));
+console.log('PASS strict TypeScript check of profile and mapper with typed SQL boundary');
 (async()=>{
  fresh({car_name:'أكسنت',car_type:'أكسنت'});
  await profile.saveMarketingFormProfile(leadId,row,true);
@@ -138,7 +163,7 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  assert.equal(await profile.saveMarketingFormProfile(leadId,reported,false),true);
  assert.deepEqual(db,recoveredSnapshot);
  // Legacy linked lead: move only the generated lines, once; preserve manual notes.
- const oldAnswers=parse(reported.answers,reported.answer_labels).filter(a=>['salary','obligation','notes'].includes(a.field));
+ const oldAnswers=parse(reported.answers,reported.answer_labels).filter(a=>['salary','obligation','notes','job'].includes(a.field));
  const oldNote=profile.formProfileNote(oldAnswers,reported.created_at);
  fresh({same_submission:true,notes:'[قديم] ملاحظة المندوب\n\n'+oldNote+'\n\n[لاحق] ملاحظة أخرى',extra_data:{other:'keep'},credit_limit:1200,credit_qualified:true});
  db.events.push({formLeadId:reported.id});
@@ -146,13 +171,73 @@ const profile=load('server/marketing/form-crm-profile.ts',{'../_db.js':{getSql:(
  assert.equal(db.current.extra_data.mzj_form_salary_range,reported.answers.s);
  assert.equal(db.current.extra_data.mzj_form_obligation_range,reported.answers.o);
  assert.equal(db.current.extra_data.other,'keep');assert.equal(db.current.credit_limit,null);assert.equal(db.current.credit_qualified,null);
- assert.equal(db.current.notes,'[قديم] ملاحظة المندوب\n\n'+profile.formProfileNote(oldAnswers.filter(a=>a.field==='notes'),reported.created_at)+'\n\n[لاحق] ملاحظة أخرى');
+ assert.equal(db.current.notes,'[قديم] ملاحظة المندوب\n\n'+profile.formProfileNote(oldAnswers.filter(a=>a.field==='notes'||a.field==='job'),reported.created_at)+'\n\n[لاحق] ملاحظة أخرى');
  assert.equal(db.events.length,1);assert.equal(db.events[0].financeRangesVersion,2);
  // A representative's later explicit change or clear must not be undone by re-sync.
  delete db.current.extra_data.mzj_form_salary_range;db.current.salary=8500;
  const edited=structuredClone(db);await profile.saveMarketingFormProfile(leadId,reported,false);assert.deepEqual(db,edited);
  fresh({same_submission:true,salary:9000,notes:oldNote});db.events.push({formLeadId:reported.id});
  await profile.saveMarketingFormProfile(leadId,reported,false);assert.equal(db.current.salary,9000);assert.ok(db.current.notes.includes(reported.answers.s));assert.ok(!db.current.notes.includes(reported.answers.o));
+ // Existing CRM custom field: save the selected job under its real key.
+ jobDefinitions=[jobDefinition];
+ fresh({same_submission:true,extra_data:{unrelated:'keep'},credit_limit:1400,credit_qualified:true});
+ const jobRow={...row,answers:{j:'قطاع خاص (يشترط راتب معتمد)',t:'خلال شهرين'},answer_crm_fields:{j:'notes',t:'notes'}};
+ await profile.saveMarketingFormProfile(leadId,jobRow,true);
+ assert.equal(db.current.extra_data[jobKey],jobRow.answers.j);
+ assert.equal(db.current.extra_data.unrelated,'keep');
+ assert.ok(!db.current.notes.includes(jobRow.answers.j));
+ assert.ok(db.current.notes.includes(jobRow.answers.t));
+ assert.equal(db.current.credit_limit,1400);assert.equal(db.current.credit_qualified,true);
+ assert.equal(db.current.assigned_to,'rep');assert.equal(db.current.department_code,'finance_sales');
+ assert.equal(db.events[0].jobProfileVersion,1);
+ const jobSaved=structuredClone(db);await profile.saveMarketingFormProfile(leadId,jobRow,false);assert.deepEqual(db,jobSaved);
+ // A manual clear must not be undone on re-sync.
+ delete db.current.extra_data[jobKey];const jobCleared=structuredClone(db);
+ await profile.saveMarketingFormProfile(leadId,jobRow,false);assert.deepEqual(db,jobCleared);
+ // Legacy job-only upgrade even though financeRangesVersion is already 2.
+ const originalJobNote=profile.formProfileNote(parse(jobRow.answers,jobRow.answer_labels,jobRow.answer_crm_fields),jobRow.created_at);
+ fresh({same_submission:true,notes:'[قديم] ملاحظة المندوب\n\n'+originalJobNote+'\n\n[لاحق] ملاحظة يدوية',extra_data:{unrelated:'keep',mzj_form_salary_range:'من 6000 إلى 10000 ريال'},credit_limit:1400,credit_qualified:true});
+ db.events.push({formLeadId:jobRow.id,financeRangesVersion:2});
+ await profile.saveMarketingFormProfile(leadId,jobRow,false);
+ assert.equal(db.current.extra_data[jobKey],jobRow.answers.j);
+ assert.ok(!db.current.notes.includes(jobRow.answers.j));
+ assert.ok(db.current.notes.includes(jobRow.answers.t));
+ assert.ok(db.current.notes.includes('[لاحق] ملاحظة يدوية'));
+ assert.equal(db.current.extra_data.mzj_form_salary_range,'من 6000 إلى 10000 ريال');
+ assert.equal(db.current.credit_limit,1400);assert.equal(db.events[0].jobProfileVersion,1);
+ const upgradedJob=structuredClone(db);await profile.saveMarketingFormProfile(leadId,jobRow,false);assert.deepEqual(db,upgradedJob);
+ // Preserve the manually entered value and conflicting historical answer.
+ fresh({same_submission:true,notes:originalJobNote,extra_data:{[jobKey]:'عسكري'}});
+ db.events.push({formLeadId:jobRow.id,financeRangesVersion:2});
+ await profile.saveMarketingFormProfile(leadId,jobRow,false);
+ assert.equal(db.current.extra_data[jobKey],'عسكري');assert.equal(db.current.notes,originalJobNote);
+ assert.equal(db.events[0].jobProfileVersion,1);
+ // A repeat customer must not have an existing profile changed or reassigned.
+ fresh({same_submission:false,extra_data:{[jobKey]:'عسكري'}});
+ assert.equal(await profile.saveMarketingFormProfile(leadId,jobRow,false),false);
+ assert.equal(db.current.extra_data[jobKey],'عسكري');assert.ok(db.current.notes.includes(jobRow.answers.j));
+ assert.equal(db.current.assigned_to,'rep');
+ // Missing, inactive, cash-only or ambiguous configured fields keep the answer
+ // in notes, with no phantom custom key. When the field is available, retry.
+ for(const definitions of [[],[{...jobDefinition,is_active:false}],[{...jobDefinition,department_keys:['cash']}],[jobDefinition,{...jobDefinition,field_key:'custom_other'}]]) {
+   jobDefinitions=definitions;fresh({same_submission:true});
+   await profile.saveMarketingFormProfile(leadId,jobRow,true);
+   assert.equal(db.current.extra_data?.[jobKey],undefined);assert.ok(db.current.notes.includes(jobRow.answers.j));
+   assert.equal(db.events[0].jobProfileVersion,undefined);
+   jobDefinitions=[jobDefinition];await profile.saveMarketingFormProfile(leadId,jobRow,false);
+   assert.equal(db.current.extra_data[jobKey],jobRow.answers.j);assert.ok(!db.current.notes.includes(jobRow.answers.j));
+ }
+ // A select field uses the configured option value so the drawer displays it.
+ jobDefinitions=[{...jobDefinition,field_type:'select',options:[{value:'private',label:jobRow.answers.j}]}];
+ fresh({same_submission:true});await profile.saveMarketingFormProfile(leadId,jobRow,true);
+ assert.equal(db.current.extra_data[jobKey],'private');assert.ok(!db.current.notes.includes(jobRow.answers.j));
+ jobDefinitions=[{...jobDefinition,field_type:'select',options:[{value:'gov',label:'موظف حكومي'}]}];
+ fresh({same_submission:true});await profile.saveMarketingFormProfile(leadId,jobRow,true);
+ assert.equal(db.current.extra_data[jobKey],undefined);assert.ok(db.current.notes.includes(jobRow.answers.j));
+ jobDefinitions=[jobDefinition];fresh({same_submission:true});
+ const multiJob={...jobRow,answers:{j:JSON.stringify(['عسكري','موظف حكومي'])}};
+ await profile.saveMarketingFormProfile(leadId,multiJob,true);assert.equal(db.current.extra_data[jobKey],undefined);assert.ok(db.current.notes.includes('عسكري، موظف حكومي'));
+ console.log('PASS custom job field discovery, exact choice, legacy notes migration, retry, manual protection, fallback, select compatibility and repeat customer isolation');
  const parsed=parse({x:'1000',y:'بنك الرياض',z:'4000'},{x:'سؤال مخصص',y:'اسم البنك',z:'راتبك'},{x:'salary',y:'notes',z:'salary'});
  const plan=profile.planFormProfile(parsed,{},true);
  assert.equal(plan.fields.salary,1000);assert.deepEqual(plan.notes.map(a=>a.id),['y','z']);
