@@ -581,7 +581,8 @@ commit;`;
 
 /** schema-22: an approved date change becomes the canonical executor deadline.
  * Existing work_items.due_on was NOT NULL, so an approved removal needs this
- * nullable column. New task creation still validates a real date. The plan
+ * nullable column. New task creation requires a real date except for the
+ * named strategy-assignment exception. The plan
  * override keeps a pending/applied marker, preventing re-application on later
  * unrelated approvals and preserving review as the only commit boundary. */
 export const MARKETING_WORKFLOW_APPROVED_EXECUTOR_DATES_SQL = `begin;

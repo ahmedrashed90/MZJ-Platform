@@ -55,6 +55,13 @@ try {
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,payload);assert.equal(r.status,201);assert.equal(mock.calls.length,1);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,vehicles:[{vin:'SENSITIVE'}]});assert.equal(r.status,400);assert.equal(mock.calls.length,1);
   r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,items:[{...payload.items[0],dueOn:'2026-02-31'}]});assert.equal(r.status,400);
+  // A deliberate Clear must reach the real workflow, which validates the
+  // selected employee against the database before inserting a nullable date.
+  r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,items:[{...payload.items[0],dueOn:''}]});
+  assert.equal(r.status,201);assert.equal(mock.calls.at(-1).items[0].dueOn,'');
+  for(const invalidDate of [null,undefined,' ','invalid']){
+    r=await req('POST','assignments',process.env.MZJ_STRATEGY_ASSIGN_KEY,{...payload,items:[{...payload.items[0],dueOn:invalidDate}]});assert.equal(r.status,400);
+  }
   r=await req('GET','agenda-products',process.env.MZJ_STRATEGY_READ_KEY);
   assert.equal(r.status,200);assert.deepEqual(r.result.products,[]);
   const agenda={requestKey:uuid(9),sourcePlanId:'plan-test',name:'Agenda',

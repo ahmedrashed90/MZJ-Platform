@@ -727,4 +727,31 @@ test('Bulk tracking stages update only selected vehicle IDs and log each changed
   assert(page.includes('تحديد الكل'));assert(page.includes('تم الانتهاء للمحدد'));
 });
 test('Only permitted campaign deletions show an admin confirmation',()=>{const page=read('src/marketing/pages/MarketingDatabasePage.tsx');assert(page.includes("hasPermission(user, 'marketing.campaign.delete')"));assert(page.includes("row.kind === 'campaign' && canDeleteCampaign"));assert(page.includes('className="mkw-confirm-delete"'));});
+// The integration is the only creation path that permits a cleared deadline, and
+// the name must come from the employee row matched against the requested IDs.
+test('Only Ahmed Nagi can receive undated strategy assignments; SQL stores NULL',async()=>{
+ const reservationId=uid(601),typeId=uid(602),photoId=uid(603),departmentId=uid(604),clientKey=uid(605),formatId=uid(606);
+ const body={reservationId,typeId,name:'Strategy date test',items:[{clientKey,departmentId,assigneeId:photoId,mediaKind:'video',ideaName:'Test',idea:'Brief',deliveryMode:'drive_link',dueOn:'',formatIds:[formatId]}]};
+ const marker={planId:'plan',ideaCodes:['V01'],requestKey:uid(607),clientKeys:[clientKey],itemIdeaCodes:['V01']};
+ const prefix=()=>[step('select * from marketing.work_reservations',[{id:reservationId,task_number:601,created_at:'2026-11-26',used_at:null}]),step('select id from marketing.campaign_types',[{id:typeId}]),step('insert into marketing.work_tasks')];
+ const employee=name=>step('select u.id,u.full_name from core.users',[{id:photoId,full_name:name}],values=>assert.deepEqual(values,[departmentId,photoId]));
+ const suffix=expected=>[step('from marketing.production_dimensions',[{id:formatId,width:1080,height:1920}]),step('from marketing.platform_post_types',[]),step('insert into marketing.work_items',[{id:uid(608)}],(values,query)=>{assert.equal(values[8],expected);assert(query.includes('?::date'));}),step('insert into marketing.work_history',[],values=>{assert.equal(values[2],'created');assert.equal(values[6].dueOn,expected);}),step('insert into marketing.work_history',[],values=>assert.equal(values[2],'strategy_assigned')),step('update marketing.work_reservations')];
+ for(const name of ['احمد ناجي','أحمد ناجي']){
+   const db=scriptedSql([...prefix(),employee(name),...suffix(null)]);
+   const res=await api.createTask(db,body,admin,marker);assert(res.ok);db.assertDone();
+ }
+ const dated=structuredClone(body);dated.items[0].dueOn='2027-12-01';
+ for(const name of ['أحمد ناجي','مصور آخر']){
+   const db=scriptedSql([...prefix(),employee(name),...suffix('2027-12-01')]);
+   assert((await api.createTask(db,dated,admin,marker)).ok);db.assertDone();
+ }
+ for(const name of ['مصور آخر','أحمد ناجي الآخر','محمد ناجي']){
+   const db=scriptedSql([...prefix(),employee(name)]);
+   await assert.rejects(()=>api.createTask(db,body,admin,marker),/Invalid assignment delivery date/);db.assertDone();
+   assert(!db.calls.some(call=>call.query.includes('insert into marketing.work_items')));
+ }
+ const native=scriptedSql(prefix());await assert.rejects(()=>api.createTask(native,body,admin));native.assertDone();
+ const invalid=structuredClone(body);invalid.items[0].dueOn='2027-02-31';
+ const bad=scriptedSql(prefix());await assert.rejects(()=>api.createTask(bad,invalid,admin,marker));bad.assertDone();
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS: '+name);}catch(e){failed++;console.error('FAIL: '+name+'\n'+e.stack);}}console.log(`${tests.length-failed}/${tests.length} workflow checks passed (domain + mocked SQL boundary; no live DB/provider).`);process.exitCode=failed?1:0;})();

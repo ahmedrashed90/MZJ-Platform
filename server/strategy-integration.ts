@@ -74,7 +74,7 @@ function normalizeAssignment(body: Record<string, unknown>): StrategyWorkflowTas
     if (!isUuid(clientKey) || !isUuid(departmentId) || !isUuid(assigneeId) || clientKeys.has(clientKey) ||
         (mediaKind !== 'image' && mediaKind !== 'video') || (deliveryMode !== 'files' && deliveryMode !== 'drive_link') ||
         (entry.ideaCode !== undefined && !mappedCodes.has(ideaCode)) || !ideaName || !idea ||
-        !/^20\d\d-\d\d-\d\d$/.test(dueOn) || !Number.isFinite(Date.parse(`${dueOn}T12:00:00Z`)) || new Date(`${dueOn}T12:00:00Z`).toISOString().slice(0,10)!==dueOn ||
+        (entry.dueOn !== '' && (!/^20\d\d-\d\d-\d\d$/.test(dueOn) || !Number.isFinite(Date.parse(`${dueOn}T12:00:00Z`)) || new Date(`${dueOn}T12:00:00Z`).toISOString().slice(0,10)!==dueOn)) ||
         !Array.isArray(formatIds) || !formatIds.length || formatIds.length > 30 || !formatIds.every(isUuid) || new Set(formatIds).size !== formatIds.length) {
       throw Error('Invalid assignment item values');
     }

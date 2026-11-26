@@ -320,7 +320,7 @@ async function taskSummary(db: any, user: SessionUser, taskId: string) {
     if (String((error as {code?:string})?.code || '') !== '42P01') throw error;
   }
   const readiness = workReadiness(items);
-  const dates = items.map(i => workDate(i.due_on)).sort();
+  const dates = items.map(i => workDate(i.due_on)).filter(Boolean).sort();
   const [type] = await db`select name from marketing.campaign_types where id=${task.type_id}::uuid`;
   const canReviewFormats = hasPermission(user, 'marketing.task.review');
   const [dimensionSchema] = canReviewFormats
@@ -416,13 +416,19 @@ async function reserveTask(sql: Sql, body: Row, user: SessionUser) {
   return { ok: true, reservation: { ...row, task_no: `TSK-${String(row.task_number).padStart(6, '0')}` } };
 }
 async function validateAssignee(db: any, departmentId: string, userId: string) {
-  const [row] = await db`select u.id from core.users u join core.user_system_departments usd on usd.user_id=u.id
+  const [row] = await db`select u.id,u.full_name from core.users u join core.user_system_departments usd on usd.user_id=u.id
     join core.user_systems us on us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true
     join marketing.departments d on d.id=usd.department_id and d.is_active=true
     join core.departments cd on cd.id=d.id and cd.system_code='marketing' and cd.is_active=true
     where usd.system_code='marketing' and d.id=${departmentId}::uuid and u.id=${userId}::uuid and u.is_active=true
       and coalesce(u.is_archived,false)=false and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'`;
   if (!row) throw new Error(`${W.assignee}: ${W.invalid}`);
+  return row;
+}
+/** Resolve the exception from the active, validated employee's database name, not client data. */
+function optionalStrategyAssignmentDate(name: unknown): boolean {
+  return String(name ?? '').normalize('NFKC').replace(/[\u064b-\u065f\u0670\u0640]/g,'')
+    .replace(/[إأآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').trim().replace(/\s+/g,' ').toLowerCase()==='احمد ناجي';
 }
 async function validateFormats(db: any, kind: 'image' | 'video', ids: string[]): Promise<WorkFormat[]> {
   if (!ids.length || ids.length > 150) throw new Error(W.selectFormats);
@@ -488,9 +494,14 @@ async function createTask(sql: Sql, body: Row, user: SessionUser, strategyMarker
       clientKeys.add(clientKey);
       const kind = input.mediaKind === 'image' || input.mediaKind === 'video' ? input.mediaKind : null;
       const deliveryMode = strategyMarker && input.deliveryMode === 'drive_link' ? 'drive_link' : 'files';
-      const idea = text(input.idea, 20000), dueOn = text(input.dueOn, 10), fileIds = [...new Set(list(input.ideaFileIds).map(id))];
-      if (!kind || !isWorkDate(dueOn) || (!idea && !fileIds.length)) throw new Error(W.requiredFields);
-      await validateAssignee(tx, departmentId, assigneeId);
+      const idea = text(input.idea, 20000), requestedDueOn = text(input.dueOn, 10), fileIds = [...new Set(list(input.ideaFileIds).map(id))];
+      if (!kind || (!idea && !fileIds.length)) throw new Error(W.requiredFields);
+      const clearRequested = Boolean(strategyMarker && input.dueOn === '');
+      if (!clearRequested && !isWorkDate(requestedDueOn)) throw new Error(W.requiredFields);
+      const assignee = await validateAssignee(tx, departmentId, assigneeId);
+      if (clearRequested && !optionalStrategyAssignmentDate(assignee.full_name))
+        throw new Error('Invalid assignment delivery date: موعد التسليم اختياري لأحمد ناجي فقط');
+      const dueOn = clearRequested ? null : requestedDueOn;
       const formats = await validateProductionFormats(tx, kind, list(input.formatIds));
       const [item] = await tx<any[]>`insert into marketing.work_items(task_id,client_key,department_id,assigned_to,media_kind,idea_name,idea,formats,due_on,sort_order,delivery_mode,creative_treatment)
         values(${reservationId}::uuid,${clientKey}::uuid,${departmentId}::uuid,${assigneeId}::uuid,${kind},
