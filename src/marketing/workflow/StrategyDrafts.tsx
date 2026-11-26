@@ -9,7 +9,7 @@ import type { CampaignGoalOption } from '../../../shared/marketing-campaign-goal
 import { campaignReportPlatformCode, type CampaignReportPayload, type CampaignReportRow } from '../../../shared/campaign-report';
 import type { WorkPlanLine } from '../../../shared/marketing-workflow';
 import { PlanExecutorDates } from './PlanExecutorDates';
-import { TaskDetail } from './TaskDetail';
+import { RatingStars, TaskDetail } from './TaskDetail';
 import { groupDraftIdeas, ideaTaskCategory } from './strategyIdeaCategories';
 import './strategyDrafts.css';
 
@@ -568,7 +568,10 @@ export function StrategyProductsTab({ search }: { search: string }) {
         <td>{row.ideaName}{row.ideaCode && <small className="mkw-muted" style={{ display: 'block' }}>كود الفكرة: <span dir="ltr">{row.ideaCode}</span></small>}</td>
         <td>{row.itemStatus ? <Status value={row.itemStatus}/> : <span className="mkw-muted">—</span>}</td>
         <td className="mkw-sp-readiness"><span><b style={{ width: `${Math.max(0, Math.min(100, row.readiness || 0))}%` }}/></span><small>{Math.round(row.readiness || 0)}%</small></td>
-        <td>{row.ratingPercentage == null ? <span className="mkw-muted">—</span> : <strong dir="ltr">{row.ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>}</td>
+        <td>{row.ratingPercentage == null ? <span className="mkw-muted">—</span> : <span className="mkw-sp-rating">
+          <strong dir="ltr">{row.ratingPercentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%</strong>
+          <RatingStars percentage={row.ratingPercentage}/>
+        </span>}</td>
         <td>{row.approvedOn ? showDate(row.approvedOn) : <span className="mkw-muted">لم يُنفذ (التسليم {showDate(row.dueOn)})</span>}</td>
         <td>{(row.publishDates?.length ? row.publishDates : row.publishOn ? [row.publishOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.publishDates?.length && !row.publishOn && '—'}</td>
         <td>{(row.fundingDates?.length ? row.fundingDates : row.fundingOn ? [row.fundingOn] : []).map(date => <div key={date}>{showDate(date)}</div>)}{!row.fundingDates?.length && !row.fundingOn && '—'}</td>

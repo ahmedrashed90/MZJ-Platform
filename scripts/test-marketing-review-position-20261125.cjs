@@ -39,6 +39,13 @@ const fixture={itemStatus:'approved',ratingPercentage:92.5,itemId:'requirement-1
 const element=(type,props)=>({type,props:props||{}});
 const detail=()=>null;
 const status=()=>null;
+const Star=()=>null;
+const ratingDomain=load('shared/marketing-workflow.ts',{});
+const {RatingStars}=load('src/marketing/workflow/TaskDetail.tsx',{
+ 'react/jsx-runtime':{jsx:element,jsxs:element},
+ '@phosphor-icons/react':{Star},
+ '../../../shared/marketing-workflow':ratingDomain,
+});
 let productRows=[fixture];
 const productOrder=load('src/marketing/workflow/strategyProductOrder.ts',{});
 const {StrategyProductsTab}=load('src/marketing/workflow/StrategyDrafts.tsx',{
@@ -46,7 +53,7 @@ const {StrategyProductsTab}=load('src/marketing/workflow/StrategyDrafts.tsx',{
  'react/jsx-runtime':{jsx:element,jsxs:element},
  './api':{useWorkQuery:()=>({data:{rows:productRows},reload:async()=>{}}),showDate:String},
  './components':{W:{noData:'empty'},WorkAlert:()=>null,Empty:()=>null,Status:status},
- './strategyProductOrder':productOrder,'./TaskDetail':{TaskDetail:detail},
+ './strategyProductOrder':productOrder,'./TaskDetail':{TaskDetail:detail,RatingStars},
 });
 function find(node, predicate) {
  if(Array.isArray(node))return node.flatMap(n=>find(n,predicate));
@@ -59,12 +66,29 @@ const headers=find(view,n=>n.type==='th').map(nodeText);
 assert.deepEqual(headers.slice(headers.indexOf('اسم الفكرة'),headers.indexOf('اسم الفكرة')+4),['اسم الفكرة','الحالة','الجاهزية','التقييم']);
 assert.equal(find(view,n=>n.type===status)[0].props.value,'approved');
 assert.ok(find(view,n=>n.type==='strong').some(n=>nodeText(n)==='92.5%'));
+assert.equal(find(view,n=>n.type===RatingStars)[0].props.percentage,92.5);
+// The Products tab must use the existing five-star scale, not a new calculation.
+for(const [percentage,filled,css] of [[0,1,'unsuitable'],[49.99,1,'unsuitable'],[50,2,'weak'],[60,3,'acceptable'],[72.22,3,'acceptable'],[89.99,3,'acceptable'],[90,4,'good'],[99.99,4,'good'],[100,5,'excellent']]){
+ productRows=[{...fixture,ratingPercentage:percentage}];
+ const ratingCell=find(StrategyProductsTab({search:''}),n=>n.type==='td')[11];
+ const [starsNode]=find(ratingCell,n=>n.type===RatingStars);
+ assert.ok(starsNode);assert.equal(starsNode.props.percentage,percentage);
+ const rendered=RatingStars(starsNode.props);
+ assert.equal(rendered.props.className,`mkw-rating-stars is-${css}`);
+ const stars=find(rendered,n=>n.type===Star);
+ assert.equal(stars.length,5);assert.equal(stars.filter(n=>n.props.weight==='fill').length,filled);
+ assert.equal(stars.filter(n=>n.props.weight==='regular').length,5-filled);
+ assert.equal(nodeText(find(ratingCell,n=>n.type==='strong')[0]),`${percentage.toLocaleString('ar-SA-u-nu-latn',{maximumFractionDigits:2})}%`);
+}
+console.log('PASS: products rating reuses the existing five-star levels, preserves the percentage and handles all thresholds');
 productRows=[{...fixture,ratingPercentage:0},{...fixture,itemId:'unrated',ratingPercentage:null,itemStatus:'submitted'}];
 const mixed=StrategyProductsTab({search:''});
 assert.ok(find(mixed,n=>n.type==='strong').some(n=>nodeText(n)==='0%'));
 assert.equal(find(mixed,n=>n.type==='tr').length,4);
 const bodyRows=find(mixed,n=>n.type==='tbody').flatMap(n=>find(n,n=>n.type==='tr'));
 assert.equal(nodeText(find(bodyRows[1],n=>n.type==='td')[11]),'—');
+assert.equal(find(find(bodyRows[1],n=>n.type==='td')[11],n=>n.type===RatingStars).length,0);
+assert.equal(find(find(bodyRows[0],n=>n.type==='td')[11],n=>n.type===RatingStars)[0].props.percentage,0);
 productRows=[fixture];
 console.log('PASS: strategy products column order, real status, percentage rating, zero rating and unrated placeholder');
 const [button]=find(view,n=>n.type==='button'&&n.props.className==='mkw-assignment-open');

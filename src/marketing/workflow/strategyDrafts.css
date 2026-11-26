@@ -19,6 +19,7 @@
 .mkw-sp-readiness span { display:block; height:7px; border-radius:99px; background:var(--surface-soft); border:1px solid var(--line); overflow:hidden; }
 .mkw-sp-readiness b { display:block; height:100%; background:var(--brand); }
 .mkw-sp-readiness small { color:var(--muted); font-size:.75rem; }
+.mkw-sp-rating { display:inline-flex; flex-direction:column; align-items:center; gap:4px; white-space:nowrap; }
 
 /* Strategy-origin draft editor: full-screen, with NO detached fixed footer. */
 /* The agenda and campaign draft editor share this single full-screen workspace.
